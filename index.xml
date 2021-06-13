@@ -306,8 +306,8 @@ Branch <span style="color:#e6db74">&#39;main&#39;</span> set up to track remote 
       <pubDate>Wed, 09 Jun 2021 07:33:40 +0700</pubDate>
       
       <guid>https://fahmifj.github.io/writeups/hackthebox/htb-cereal/</guid>
-      <description>Chain XSS, SSRF, and Deserialization to land a foothold</description>
-      <content:encoded><![CDATA[<p>Cereal is a hard difficulty Windows machine that features a misconfigured web server which exposes source code of the currently hosted web application. A deleted JWT secrets is found in the source code, which can be used to forge my own JWT token and bypass the login page. After reviewing the source code, the web app is found to be vulnerable to a deserialization attack. There is also a XSS vulnerability in one of the package used by the application. Chaining these vulnerabilities allows me to gain a foothold in the system.</p>
+      <description>Doing code reviews in order to chain XSS, SSRF, and Deserialization vulnerabilities to gain a foothold</description>
+      <content:encoded><![CDATA[<p>Cereal is a hard difficulty Windows machine that features a misconfigured web server which exposes source code of the currently hosted web application. A deleted JWT secrets is found in the source code, which can be used to forge my own JWT token and bypass the application login page. After reviewing the source code, the web app is found to be vulnerable to a deserialization attack. There is also a XSS vulnerability in one of the package used by the application. Chaining these vulnerabilities allows me to gain a foothold in the system.</p>
 <h3 id="skills-learned">Skills Learned</h3>
 <ul>
 <li>Code review</li>
@@ -378,7 +378,7 @@ $ echo <span style="color:#e6db74">&#39;10.10.10.217 cereal.htb source.cereal.ht
 <p>Following the redirection ends up at a login form.</p>
 <p><div class="img-container"><img src="imgs/image-20210605110703967.png" alt="image-20210605110703967"  /></div>
 </p>
-<p>Tried a few common credentials but doesn&rsquo;t seem to work here.</p>
+<p>I tried a few common credentials but doesn&rsquo;t seem to work here.</p>
 <p>Inspecting the source reveals that this site is a react based application.</p>
 <p><div class="img-container"><img src="imgs/image-20210609080804206.png" alt="image-20210609080804206"  /></div>
 </p>
@@ -486,7 +486,7 @@ $ mkdir loot/source-cereal-git <span style="color:#f92672">&amp;&amp;</span> ./g
 <p><div class="img-container"><img src="imgs/image-20210605121727689.png" alt="image-20210605121727689"  /></div>
 </p>
 <p>Aside from the author&rsquo;s names, one commit with the message &ldquo;Security fixes&rdquo; caught my attention.</p>
-<p>I immediately run <code>git diff 8f2a 7bd9</code>  to compare the first commit with the security fixes which reveals a deleted JWT secret.</p>
+<p>I immediately run <code>git diff 8f2a 7bd9</code> to compare the first commit with the security fixes and that reveals a deleted JWT secret.</p>
 <p><div class="img-container"><img src="imgs/image-20210609090452619.png" alt="image-20210609090452619"  /></div>
 </p>
 <p>It looks like the security fixes include prevention against deserialization attacks which I&rsquo;ll note that as well as the secret:</p>
@@ -495,7 +495,7 @@ $ mkdir loot/source-cereal-git <span style="color:#f92672">&amp;&amp;</span> ./g
 </ul>
 <h3 id="source-code-analysis-1">Source Code Analysis #1</h3>
 <blockquote>
-<p>I pointed my explanation (or at least how I understand it xD) with lines beginning with // &lt;== or  # &lt;== in the snippet code.</p>
+<p>I pointed my sh*tty explanation or at least how I understand it with <code>// &lt;==</code> or  <code># &lt;==</code> in the code snippet. Please, don&rsquo;t bully me for this.</p>
 </blockquote>
 <h4 id="app-overview">App Overview</h4>
 <p>The app consist of ASP.NET (back-end)  and React (front-end).</p>
@@ -532,7 +532,7 @@ React client
 </code></pre></div><p>Looking into the <code>appsettings.js</code>, I could obtain the following information:</p>
 <ul>
 <li>There is IP whitelist</li>
-<li>There are  two rules that looks like limiting requests to <code>/requests</code> endpoint, but it&rsquo;ll reset after certain period.</li>
+<li>There are two rules that looks like limiting requests and it&rsquo;ll reset after certain period. One of them is limiting a post request to an endpoint called <code>/requests</code>.</li>
 </ul>
 <div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-json" data-lang="json">{
 <span style="color:#960050;background-color:#1e0010">...&lt;SNIP&gt;...</span>
@@ -565,30 +565,29 @@ React client
 }
 
 </code></pre></div><h4 id="authentication-vulnerability">Authentication Vulnerability</h4>
-<p>The app initialization starts with <code>Startup.cs</code>, scrolling through the file source code, I could see there is a potential authentication bypass.</p>
-<p>On the following snippet code, the app uses JWT for authentication but there is no validation on the issuer and the audience (<a href="https://curity.io/resources/learn/jwt-best-practices/#4-always-check-the-issuer">this can cause security issue</a>).</p>
+<p>Looking into the <code>Startup.cs</code> file, I could see the application there is a potential authentication bypass. On the following code snippet, the application clearly doesn&rsquo;t validate the issuer and the audience of a JWT token, and <a href="https://curity.io/resources/learn/jwt-best-practices/#4-always-check-the-issuer">this can raise a security issue</a>.</p>
 <div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-csharp" data-lang="csharp">...&lt;SNIP&gt;...
-            <span style="color:#66d9ef">var</span> key = Encoding.ASCII.GetBytes(<span style="color:#e6db74">&#34;*&#34;</span>);
-            services.AddAuthentication(x =&gt;
-            {
-                x.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
-                x.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
-            })
-            .AddJwtBearer(x =&gt;
-            {
-                x.RequireHttpsMetadata = <span style="color:#66d9ef">false</span>;
-                x.SaveToken = <span style="color:#66d9ef">true</span>;
-                x.TokenValidationParameters = <span style="color:#66d9ef">new</span> TokenValidationParameters
-                {
-                    ValidateIssuerSigningKey = <span style="color:#66d9ef">true</span>,
-                    IssuerSigningKey = <span style="color:#66d9ef">new</span> SymmetricSecurityKey(key),
-                    ValidateIssuer = <span style="color:#66d9ef">false</span>, <span style="color:#75715e">// &lt;== No validation
-</span><span style="color:#75715e"></span>                    ValidateAudience = <span style="color:#66d9ef">false</span> <span style="color:#75715e">// &lt;== No validation
-</span><span style="color:#75715e"></span>                };
-            });
+    <span style="color:#66d9ef">var</span> key = Encoding.ASCII.GetBytes(<span style="color:#e6db74">&#34;*&#34;</span>);
+    services.AddAuthentication(x =&gt;
+    {
+        x.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
+        x.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
+    })
+    .AddJwtBearer(x =&gt;
+    {
+        x.RequireHttpsMetadata = <span style="color:#66d9ef">false</span>;
+        x.SaveToken = <span style="color:#66d9ef">true</span>;
+        x.TokenValidationParameters = <span style="color:#66d9ef">new</span> TokenValidationParameters
+        {
+            ValidateIssuerSigningKey = <span style="color:#66d9ef">true</span>,
+            IssuerSigningKey = <span style="color:#66d9ef">new</span> SymmetricSecurityKey(key),
+            ValidateIssuer = <span style="color:#66d9ef">false</span>, <span style="color:#75715e">// &lt;== No validation
+</span><span style="color:#75715e"></span>            ValidateAudience = <span style="color:#66d9ef">false</span> <span style="color:#75715e">// &lt;== No validation
+</span><span style="color:#75715e"></span>        };
+    });
 ...&lt;SNIP&gt;...
 </code></pre></div><p>The JWT token itself is forged at <code>Services/UserService.cs</code>:</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-c#" data-lang="c#"> <span style="color:#66d9ef">public</span> User Authenticate(<span style="color:#66d9ef">string</span> username, <span style="color:#66d9ef">string</span> password)
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-csharp" data-lang="csharp"> <span style="color:#66d9ef">public</span> User Authenticate(<span style="color:#66d9ef">string</span> username, <span style="color:#66d9ef">string</span> password)
         {
             <span style="color:#66d9ef">using</span> (<span style="color:#66d9ef">var</span> db = <span style="color:#66d9ef">new</span> CerealContext())
             {
@@ -615,9 +614,9 @@ React client
 
                 <span style="color:#66d9ef">return</span> user.WithoutPassword();
             }
-</code></pre></div><p>When the user is trying to authenticate, the code snippet above checks if the user credentials match with the one in database. If the credentials is match, the app will generate a JWT token for that user.  The token contains at least the user&rsquo;s ID and expiration time (7 days).</p>
-<p>The user model is defined in here <code>Models/User.cs</code>:</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-c#" data-lang="c#">...&lt;SNIP&gt;...
+</code></pre></div><p>When the user is trying to authenticate, the code snippet above checks if the user credentials match with the one in database. If the credentials is match, the app will generate a JWT token for that user.</p>
+<p>The user model is defined in here <code>Models/User.cs</code>. From here, I can assume each JWT token contains at least a user&rsquo;s ID, expiration time (7 days), Username, and Token.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-csharp" data-lang="csharp">...&lt;SNIP&gt;...
     <span style="color:#66d9ef">public</span> <span style="color:#66d9ef">class</span> <span style="color:#a6e22e">User</span>
     {
 <span style="color:#a6e22e">        [Key]</span>
@@ -629,7 +628,7 @@ React client
         <span style="color:#66d9ef">public</span> <span style="color:#66d9ef">string</span> Token { <span style="color:#66d9ef">get</span>; <span style="color:#66d9ef">set</span>; }
     }
 ...&lt;SNIP&gt;...
-</code></pre></div><p>In <code>ClientApp/src/LoginPage/LoginPage.jsx</code> , the authentication process doesn&rsquo;t need the server validation since it checks the browser&rsquo;s local storage first.</p>
+</code></pre></div><p>Interestingly, in <code>ClientApp/src/LoginPage/LoginPage.jsx</code>, the authentication process doesn&rsquo;t look like it need the server/back-end validation since it checks the browser&rsquo;s local storage first.</p>
 <blockquote>
 <p>It&rsquo;ll ask the server if we press the login button (POST request).</p>
 </blockquote>
@@ -759,7 +758,7 @@ $ go run main.go
 <p><div class="img-container"><img src="imgs/image-20210609120019771.png" alt="image-20210609120019771"  /></div>
 </p>
 <p>Back into the request controller, there is a comment inside the <code>Get</code> function that points out about deserialization (previously seen at comparing the commit logs):</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-c#" data-lang="c#">...&lt;SNIP&gt;...
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-csharp" data-lang="csharp">...&lt;SNIP&gt;...
 <span style="color:#a6e22e">        [Authorize(Policy = &#34;RestrictIP&#34;)]</span>
 <span style="color:#a6e22e">        [HttpGet(&#34;{id}&#34;)]</span>
         <span style="color:#66d9ef">public</span> IActionResult Get(<span style="color:#66d9ef">int</span> id)
@@ -780,12 +779,12 @@ $ go run main.go
             }
         }
 </code></pre></div><p>The <code>Get</code> function can only be accessed if the request IP is in the whitelist (defined in <code>appsettings.json</code> ) and it takes one parameter called <code>id</code> (GET <code>/requests/{id}</code>).</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-c#" data-lang="c#"><span style="color:#a6e22e">[Authorize(Policy = &#34;RestrictIP&#34;)]</span>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-csharp" data-lang="csharp"><span style="color:#a6e22e">[Authorize(Policy = &#34;RestrictIP&#34;)]</span>
 <span style="color:#a6e22e">[HttpGet(&#34;{id}&#34;)]</span>
 </code></pre></div><p>This code blocks the gadget classes used for .NET deserialization attack.</p>
 <div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell"><span style="color:#66d9ef">if</span> <span style="color:#f92672">(</span>json.ToLower<span style="color:#f92672">()</span>.Contains<span style="color:#f92672">(</span><span style="color:#e6db74">&#34;objectdataprovider&#34;</span><span style="color:#f92672">)</span> <span style="color:#f92672">||</span> json.ToLower<span style="color:#f92672">()</span>.Contains<span style="color:#f92672">(</span><span style="color:#e6db74">&#34;windowsidentity&#34;</span><span style="color:#f92672">)</span> <span style="color:#f92672">||</span> json.ToLower<span style="color:#f92672">()</span>.Contains<span style="color:#f92672">(</span><span style="color:#e6db74">&#34;system&#34;</span><span style="color:#f92672">))</span>
 </code></pre></div><p>But, there is a class called <code>DownloadHelper</code> that has a function which can be used to send a download request:</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-c#" data-lang="c#">...&lt;SNIP&gt;...
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-csharp" data-lang="csharp">...&lt;SNIP&gt;...
     <span style="color:#66d9ef">public</span> <span style="color:#66d9ef">class</span> <span style="color:#a6e22e">DownloadHelper</span>
     {
         <span style="color:#66d9ef">private</span> String <span style="color:#ae81ff">_</span>URL;
