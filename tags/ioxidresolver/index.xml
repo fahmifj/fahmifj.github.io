@@ -13,7 +13,7 @@
       
       <guid>https://fahmifj.github.io/writeups/hackthebox/htb-apt/</guid>
       <description>Learn remote computer network interface enumeration via MSRPC and exploiting NTLMv1</description>
-      <content:encoded><![CDATA[<p>APT is an insane difficulty Windows machine from HackTheBox where deep understanding of Windows enumeration and internals is required. It starts with enumeration on RPC services to get a list of MSRPC interfaces. One of the interface called IObjectExporter has a method named <em>ServerAlive()</em> can be abused to reveals the IPv6 address of the machine. There is a share contains a backup file of AD database and it can be extracted to obtain users' hashes. Brute-force attack is performed to obtain one valid credentials from those hashes. With that credentials, I&rsquo;m able to query to the registry to find another set of credentials which can be used to gain a foothold on the system. A PowerShell history reveals that the machine is configured to accept NTLMv1 authentication, which is then exploited to get Administrator access.</p>
+      <content:encoded><![CDATA[<p>APT is an insane difficulty Windows machine from HackTheBox and it starts with enumeration on RPC services to get a list of MSRPC interfaces. One of the interface called IObjectExporter has a method named <em>ServerAlive()</em> can be abused to reveals the IPv6 address of the machine. There is a share contains a backup file of AD database and it can be extracted to obtain users' hashes. Brute-force attack is performed to obtain one valid credentials from those hashes. With that credentials, I&rsquo;m able to query to the registry to find another set of credentials which can be used to gain a foothold on the system. A PowerShell history reveals that the machine is configured to accept NTLMv1 authentication, which is then exploited to get Administrator access.</p>
 <h3 id="skills-learned">Skills Learned</h3>
 <ul>
 <li>RPC enumeration</li>
@@ -74,7 +74,7 @@ Connection<span style="color:#f92672">:</span> <span style="color:#ae81ff">keep-
 Upgrade-Insecure-Requests<span style="color:#f92672">:</span> <span style="color:#ae81ff">1</span>
 </code></pre></div><h4 id="directory-brute-force---gobuster">Directory Brute Force - Gobuster</h4>
 <p>Nothing really interesting.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «apt» «10.10.14.72» 
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@iamf «apt» «10.10.14.72» 
 $ gobuster dir -u http://10.10.10.213/ -x html,txt,bak -w /opt/SecLists/Discovery/Web-Content/raft-large-directories.txt
 
 ...&lt;SNIP&gt;...
@@ -89,10 +89,9 @@ $ gobuster dir -u http://10.10.10.213/ -x html,txt,bak -w /opt/SecLists/Discover
 /index.html           <span style="color:#f92672">(</span>Status: 200<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>Size: 14879<span style="color:#f92672">]</span>                                
 /clients.html         <span style="color:#f92672">(</span>Status: 200<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>Size: 12146<span style="color:#f92672">]</span>                                
 </code></pre></div><h3 id="tcp-135---msrpc">TCP 135 - MSRPC</h3>
-<p>Remote Procedure Call (RPC) allows applications to invoke a function (or procedure or subroutine) of a remote computer without having to understand the network’s details, and MSRPC is Microsoft’s enhanced version of <a href="https://en.wikipedia.org/wiki/DCE/RPChttps://en.wikipedia.org/wiki/DCE/RPC">DCE/RPC</a>.</p>
-<p>MSRPC works together with the Distributed Component Object Model (DCOM). DCOM provides a mechanism for exposing application objects and it consists of a set of RPC interfaces that can be implemented over any RPC Transport (think DCOM as object-oriented extension to RPC).</p>
+<p>Remote Procedure Call (RPC) allows applications to invoke a function (or procedure or subroutine) of a remote computer without having to understand the network’s details, and MSRPC is Microsoft’s enhanced version of <a href="https://en.wikipedia.org/wiki/DCE/RPChttps://en.wikipedia.org/wiki/DCE/RPC">DCE/RPC</a>. MSRPC works together with the Distributed Component Object Model (DCOM). DCOM provides a mechanism for exposing application objects and it consists of a set of RPC interfaces that can be implemented over any RPC Transport.</p>
 <p>DCOM and RPC endpoint mapper sit on this port (both of them run on the shared process of <code>svchost.exe</code>). RPC endpoint mapper maintains the <strong>database of endpoints</strong> that clients use to map an interface to endpoints. There is a tool called <code>rpcdump.py</code> from Impacket that can be used to dump those endpoints:</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «apt» «10.10.14.72»
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@iamf «apt» «10.10.14.72»
 $ rpcdump.py -port <span style="color:#ae81ff">135</span> <span style="color:#e6db74">&#39;10.10.10.213&#39;</span>
 
 <span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Retrieving endpoint list from 10.10.10.213
@@ -109,8 +108,8 @@ Bindings:
 <span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Received <span style="color:#ae81ff">265</span> endpoints.
 </code></pre></div><p>Those <code>ncacn_http</code>, <code>ncacn_np</code>, <code>ncacn_ip_tcp</code> are called as protocol string/protocol sequence. It is the language that a network operating system uses <em>to talk over</em> the network to other computers [<a href="https://www.google.com/url?sa=t&amp;rct=j&amp;q=&amp;esrc=s&amp;source=web&amp;cd=&amp;cad=rja&amp;uact=8&amp;ved=2ahUKEwi8veDouNHwAhVbAXIKHYarCu4QFjAAegQIAhAD&amp;url=https%3A%2F%2Fdocs.microsoft.com%2Fen-us%2Fwindows%2Fwin32%2Frpc%2Fselecting-a-protocol-sequence&amp;usg=AOvVaw14KDvhbl4W2VCPGweUBVzP">source</a>].</p>
 <h4 id="scan-for-listening-rpc-interfaces">Scan for Listening RPC Interfaces</h4>
-<p>With <code>rpcmap.py</code>, also from Impacket, I could get a list of currently listening RPC interfaces that are accessible over TCP.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «apt» «10.10.14.72»
+<p>A tool called <code>rpcmap.py</code>, also from Impacket, can be used to get a list of currently listening RPC interfaces that are accessible over TCP.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@iamf «apt» «10.10.14.72»
 $ rpcmap.py <span style="color:#e6db74">&#39;ncacn_ip_tcp:10.10.10.213[135]&#39;</span> -brute-uuid | tee rpc-enum/rpc-services
 
 ...&lt;SNIP&gt;...
@@ -679,7 +678,7 @@ CmdTool<span style="color:#960050;background-color:#1e0010">:</span> Failed with
 <span style="color:#f92672">[</span>SMB<span style="color:#f92672">]</span> NTLMv1 Username : HTB<span style="color:#ae81ff">\A</span>PT$
 <span style="color:#f92672">[</span>SMB<span style="color:#f92672">]</span> NTLMv1 Hash     : APT$::HTB:95ACA8C7248774CB427E1AE5B8D5CE6830A49B5BB858D384:95ACA8C7248774CB427E1AE5B8D5CE6830A49B5BB858D384:1122334455667788
 </code></pre></div><p>When there is no credentials are specified explicitly, Windows uses the current credentials.</p>
-<p>However, because Windows Defender is already running as SYSTEM (builtin localsystem), (afaik) it can not be downgraded to a lower privilege for authentication. It also won’t authenticate as SYSTEM as well. Instead, it uses the machine/computer account for authentication. LocalSystem and NetworkService credentials use computer account for authentication.</p>
+<p>However, because Windows Defender is already running as SYSTEM (built-in local system), (afaik) it can not be downgraded to a lower privilege for authentication. It won’t authenticate using SYSTEM as well. Instead, it uses the machine/computer account for authentication. LocalSystem and NetworkService credentials use computer account for authentication.</p>
 <h4 id="cracking-ntlmv1-hash">Cracking NTLMv1 hash</h4>
 <p>I can submit the hash to <a href="https://crack.sh/">https://crack.sh/</a> with the following format.</p>
 <pre><code>NTHASH:95ACA8C7248774CB427E1AE5B8D5CE6830A49B5BB858D384

