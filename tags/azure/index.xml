@@ -1,0 +1,171 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>Azure on Ef&#39;s log</title>
+    <link>https://fahmifj.github.io/tags/azure/</link>
+    <description>Recent content in Azure on Ef&#39;s log</description>
+    <generator>Hugo -- gohugo.io</generator>
+    <lastBuildDate>Sun, 04 Jul 2021 19:45:21 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/azure/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>Setup a Samba Server in Azure and Make It Accessible Over Internet</title>
+      <link>https://fahmifj.github.io/blog/setup-a-samba-server-in-azure-and-make-it-accessible-over-internet/</link>
+      <pubDate>Sun, 04 Jul 2021 19:45:21 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/blog/setup-a-samba-server-in-azure-and-make-it-accessible-over-internet/</guid>
+      <description>Last month, I was asked to setup a Samba/SMB server that is accessible over the Internet. Because it will only be used temporarily, I decided to use an Azure Virtual Machine (VM) instead of buying a dedicated VPS.
+In this post, I’ll share my documentation on how to setup an SMB server on Azure.
+Before proceeding further, I&amp;rsquo;ll state that:
+ Exposing an SMB Server directly to the Internet is not recommended, or not considered to be &amp;lsquo;best practice&amp;rsquo;.</description>
+      <content:encoded><![CDATA[<p>Last month, I was asked to setup a Samba/SMB server that is accessible over the Internet. Because it will only be used temporarily, I decided to use an Azure Virtual Machine (VM) instead of buying a dedicated VPS.</p>
+<p>In this post, I’ll share my documentation on how to setup an SMB server on Azure.</p>
+<p>Before proceeding further, I&rsquo;ll state that:</p>
+<blockquote>
+<p>Exposing an SMB Server directly to the Internet is not recommended, or not considered to be &lsquo;best practice&rsquo;. The safest way to make it accessible over the Internet is by setting up a VPN server and putting the SMB inside the VPN network.</p>
+</blockquote>
+<h3 id="goals--outcomes">Goals &amp; Outcomes</h3>
+<p>The goal here is exactly the same as what’s written in the title, but by the end of this post, you will be able to:</p>
+<ul>
+<li>Deploy an Ubuntu server in Azure</li>
+<li>Setup and Configure an SMB server</li>
+<li>Exposing SMB server over Internet</li>
+</ul>
+<h3 id="prerequisites">Prerequisites</h3>
+<p>The one and only prerequisite:</p>
+<ul>
+<li>Azure Account</li>
+</ul>
+<p>Also, since this post won&rsquo;t be detailed step by step, I&rsquo;ll assume that you have:</p>
+<ul>
+<li>Basic knowledge of Azure, at least menu navigation and creating a resource group.</li>
+<li>Basic knowledge of Linux</li>
+</ul>
+<h2 id="vm-configuration--deploy">VM Configuration &amp; Deploy</h2>
+<p>At this step, I already have a resource group called <code>IAMF_SMB-TEST</code> and I&rsquo;ll be creating a VM instance inside this resource. It&rsquo;s a small server used by 4-5 users, so B1s will be enough. You&rsquo;re free to customize the VM.</p>
+<p>The VM details of mine can be seen in the following image:</p>
+<p><img class="img-container" src="imgs/image-20210513170545346.png" alt="image-20210513170545346"  />
+</p>
+<p>For authentication to the server, I&rsquo;ll be using an SSH public key here instead of a password. The account for server administration is called <code>azure-smb</code>. Since the authentication is SSH, this VM will have an SSH port open publicly (internet).</p>
+<p><img class="img-container" src="imgs/image-20210513170638603.png" alt="image-20210513170638603"  />
+</p>
+<p>In the following section, I&rsquo;ll use a standard SSD and leave the other settings at their defaults.</p>
+<p><img class="img-container" src="imgs/image-20210513170710958.png" alt="image-20210513170710958"  />
+</p>
+<p>In the <strong>Networking</strong> section, I&rsquo;ll just create a new virtual network. See the following image for details:</p>
+<p><img class="img-container" src="imgs/image-20210513170824172.png" alt="image-20210513170824172"  />
+</p>
+<p>In the <strong>Management</strong> section, because it will be temporary, I&rsquo;ll just disable the boot diagnostics.</p>
+<p><img class="img-container" src="imgs/image-20210513171009570.png" alt="image-20210513171009570"  />
+</p>
+<p>I&rsquo;ll leave the <strong>Advanced</strong> with the default settings and skip the <strong>Tags</strong> section.</p>
+<p>The last section is <strong>Review + Create</strong>, which basically reviews the VM configuration. After I finish the review, I&rsquo;ll press the <strong>Create</strong> button.</p>
+<p><img class="img-container" src="imgs/image-20210513171153896.png" alt="image-20210513171153896"  />
+</p>
+<p>When the <strong>Create</strong> button is clicked, the VM will be automatically deployed.</p>
+<p><img class="img-container" src="imgs/image-20210513171501031.png" alt="image-20210513171501031"  />
+</p>
+<h2 id="vm-login-via-ssh">VM Login via SSH</h2>
+<p>The next step is to login to the deployed VM instance with the previously defined username via SSH. The public IP of the VM instance can be found at the <code>Dashboard</code> &gt; <code>RESOURCE_GROUP_NAME</code> &gt; <code>PUBLIC_IP_NAME</code>. In my case, it is <code>Dashboard</code> &gt; <code>IAMF_SMB-TEST</code> &gt; <code>smb-server-ip</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">$ ssh -i private_key azure-smb@PUBLIC_IP_ADDRESS
+</code></pre></div><p><img class="img-container" src="imgs/image-20210513171606268.png" alt="image-20210513171606268"  />
+</p>
+<h2 id="smb-configuration">SMB Configuration</h2>
+<h3 id="installation-and-initial-setup">Installation and Initial Setup</h3>
+<p>First thing first, let&rsquo;s update the repository list.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">azure-smb@smb-server:~$ sudo apt update
+</code></pre></div><p>After that, install <code>Samba</code> with the following command.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">azure-smb@smb-server:~$ sudo apt install samba
+</code></pre></div><p>Once the installation is done, check the Samba service daemon status.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">azure-smb@smb-server:~$ sudo systemctl status smbd
+● smbd.service - Samba SMB Daemon
+   Loaded: loaded <span style="color:#f92672">(</span>/lib/systemd/system/smbd.service; enabled; vendor preset: enabled<span style="color:#f92672">)</span>
+   Active: active <span style="color:#f92672">(</span>running<span style="color:#f92672">)</span> since Thu 2021-05-13 10:17:45 UTC; 3min 48s ago
+     Docs: man:smbd<span style="color:#f92672">(</span>8<span style="color:#f92672">)</span>
+           man:samba<span style="color:#f92672">(</span>7<span style="color:#f92672">)</span>
+           man:smb.conf<span style="color:#f92672">(</span>5<span style="color:#f92672">)</span>
+ Main PID: <span style="color:#ae81ff">2098</span> <span style="color:#f92672">(</span>smbd<span style="color:#f92672">)</span>
+   Status: <span style="color:#e6db74">&#34;smbd: ready to serve connections...&#34;</span>
+    Tasks: <span style="color:#ae81ff">4</span> <span style="color:#f92672">(</span>limit: 1056<span style="color:#f92672">)</span>
+   CGroup: /system.slice/smbd.service
+           ├─2098 /usr/sbin/smbd --foreground --no-process-group
+           ├─2123 /usr/sbin/smbd --foreground --no-process-group
+           ├─2124 /usr/sbin/smbd --foreground --no-process-group
+           └─2129 /usr/sbin/smbd --foreground --no-process-group
+
+May <span style="color:#ae81ff">13</span> 10:17:44 smb-server systemd<span style="color:#f92672">[</span>1<span style="color:#f92672">]</span>: Starting Samba SMB Daemon...
+May <span style="color:#ae81ff">13</span> 10:17:45 smb-server systemd<span style="color:#f92672">[</span>1<span style="color:#f92672">]</span>: Started Samba SMB Daemon.
+</code></pre></div><p>Samba is ready, and now let&rsquo;s configure the share folder.</p>
+<h3 id="shares-configuration">Shares Configuration</h3>
+<p>First, let&rsquo;s create a backup file of the original configuration, so we can reset it to the default configuration, just in case something goes wrong.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">azure-smb@smb-server:~$ sudo cp /etc/samba/smb.conf<span style="color:#f92672">{</span>,.backup<span style="color:#f92672">}</span>
+</code></pre></div><p>Now create a share folder name it <code>sambashare</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">azure-smb@smb-server:~$ mkdir sambashare
+</code></pre></div><p>Then open the samba configuration file with a text editor like <code>nano</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">azure-smb@smb-server:~$ sudo nano /etc/samba/smb.conf
+</code></pre></div><p>Go straight to the bottom of the file and add the following lines.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell"><span style="color:#f92672">[</span>sambashare<span style="color:#f92672">]</span>
+    comment <span style="color:#f92672">=</span> Samba Share
+    path <span style="color:#f92672">=</span> /home/azure-smb/sambashare
+    read only <span style="color:#f92672">=</span> no
+    browsable <span style="color:#f92672">=</span> yes
+</code></pre></div><p>Details for configuring share can be read <a href="https://www.samba.org/samba/docs/current/man-html/smb.conf.5.html">here</a> or <a href="https://web.mit.edu/rhel-doc/5/RHEL-5-manual/Deployment_Guide-en-US/s1-samba-configuring.html">here</a>.</p>
+<p>Save the file and restart the SMB daemon with the following command:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">azure-smb@smb-server:~$ sudo service smbd restart
+</code></pre></div><p>Lastly, update the firewall to allow network traffic for Samba/SMB.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">azure-smb@smb-server:~$ sudo ufw allow samba
+</code></pre></div><p>This is the basic configuration of creating a Samba share, but from here you can create another share with more complex configuration. Here are my references:</p>
+<ul>
+<li><a href="https://linuxize.com/post/how-to-install-and-configure-samba-on-ubuntu-18-04/">https://linuxize.com/post/how-to-install-and-configure-samba-on-ubuntu-18-04/</a></li>
+<li><a href="https://confluence.jaytaala.com/display/TKB/Create+samba+share+writeable+by+all%2C+group%2C+or+only+a+user">https://confluence.jaytaala.com/display/TKB/Create+samba+share+writeable+by+all%2C+group%2C+or+only+a+user</a></li>
+<li><a href="https://www.digitalocean.com/community/tutorials/how-to-set-up-a-samba-share-for-a-small-organization-on-ubuntu-16-04">https://www.digitalocean.com/community/tutorials/how-to-set-up-a-samba-share-for-a-small-organization-on-ubuntu-16-04</a></li>
+</ul>
+<h3 id="add-samba-user">Add Samba User</h3>
+<p>Currently, our Linux account for administering the server is <code>azure-smb</code> and we can&rsquo;t use this account password to access the SMB shares yet. Instead, we need to create a password and bind it to <code>azure-smb</code>.</p>
+<p>But now, let&rsquo;s just create a dedicated user for SMB called <code>user1</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">azure-smb@smb-server:~$ sudo useradd --system -s /usr/sbin/nologin user1
+</code></pre></div><p>Assign <code>user1</code> to be the owner of the share</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">azure-smb@smb-server:~$ sudo chown user1 /home/azure-smb/sambashare
+</code></pre></div><p>After that, create a Samba password for <code>user1</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">azure-smb@smb-server:~$ sudo smbpasswd -a user1
+New SMB password: 
+Retype new SMB password: 
+Added user user1.
+</code></pre></div><p>Finally, enable the user.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">azure-smb@smb-server:~$ sudo smbpasswd -e user1
+Enabled user user1.
+</code></pre></div><h2 id="expose-to-internet">Expose to Internet</h2>
+<h3 id="allow-inbound-connection">Allow Inbound Connection</h3>
+<p>Now if we want to make it available on the Internet, we have to go back to the Azure Portal to open the SMB port (445) on the NIC Public IP and allow inbound connection through that port. The connection is then forwarded to our SMB port on the NIC Private IP.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">PUBLIC_IP:445 --&gt; PRIVATE_IP:445
+</code></pre></div><p>To do that open up the Networking settings of the SMB VM and click on **Add inbound port rule **button.</p>
+<p><img class="img-container" src="imgs/image-20210513173838694.png" alt="image-20210513173838694"  />
+</p>
+<p>On the new Windows, configure the rule to allow any source (incoming IP) and any source port (incoming port) to connect to the SMB port (445). The details configuration is as follows:</p>
+<p><img class="img-container" src="imgs/image-20210513173858659.png" alt="image-20210513173858659"  />
+</p>
+<p>At the bottom, the configuration is as follows:</p>
+<p><img class="img-container" src="imgs/image-20210513173929271.png" alt="image-20210513173929271"  />
+</p>
+<p>When you&rsquo;re done, click on the <strong>Add</strong> button and it will be listed in the <strong>Inbound port rules</strong> section.</p>
+<p><img class="img-container" src="imgs/image-20210513174018895.png" alt="image-20210513174018895"  />
+</p>
+<h3 id="test-access">Test Access</h3>
+<p>We can use <code>Nmap</code> to check the SMB port.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">$ nmap -p445 -sV VM_PUBLIC_IP
+</code></pre></div><p><img class="img-container" src="imgs/image-20210513174227862.png" alt="image-20210513174227862"  />
+</p>
+<p>To interact with the SMB server via CLI, you can use <code>smbclient</code>. Install it with:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">$ sudo apt install smbclient
+</code></pre></div><p>Once it installed, connect to the share with following command:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">$ smbclient //<span style="color:#f92672">[</span>IP<span style="color:#f92672">]</span>/<span style="color:#f92672">[</span>sharename<span style="color:#f92672">]</span> 
+</code></pre></div><p>Adding <code>-N -L</code> can list all the available shares.</p>
+<p><img class="img-container" src="imgs/image-20210513174416250.png" alt="image-20210513174416250"  />
+</p>
+<p>You can also provide the password directly in the terminal:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">$ smbclient //<span style="color:#f92672">[</span>IP<span style="color:#f92672">]</span>/<span style="color:#f92672">[</span>sharename<span style="color:#f92672">]</span> -U <span style="color:#f92672">[</span>username<span style="color:#f92672">]</span> <span style="color:#f92672">[</span>password<span style="color:#f92672">]</span>
+$ smbclient //<span style="color:#f92672">[</span>IP<span style="color:#f92672">]</span>/<span style="color:#f92672">[</span>sharename<span style="color:#f92672">]</span> -U <span style="color:#e6db74">&#39;username%password&#39;</span>
+</code></pre></div><p>And that&rsquo;s all. It is not that detailed, but I hope you will find it useful.</p>
+]]></content:encoded>
+    </item>
+    
+  </channel>
+</rss>
