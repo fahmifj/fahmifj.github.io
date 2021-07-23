@@ -75,7 +75,7 @@ Host script results:
 
 Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
 Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 71.11 seconds
-</code></pre></div><p><code>nmap</code> identified the domain name as <code>active.htb</code> and the OS version to be Windows Server 2008, which most likely vulnerable to ZeroLogon (CVE-2020-1472) as well as PrintNightmare (CVE-2021-1675/CVE-2021-34527). But, I&rsquo;ll consider these vulns as alternative methods and put them in separate post.</p>
+</code></pre></div><p><code>nmap</code> identified the domain name as <code>active.htb</code> and the OS version to be Windows Server 2008, which most likely vulnerable to ZeroLogon (CVE-2020-1472) as well as PrintNightmare (CVE-2021-1675/CVE-2021-34527). But, I&rsquo;ll consider these vulns as alternative methods and put them in separate post (see: <a href="https://fahmifj.github.io/blog/play-with-printnightmare/">PrintNightmare</a>).</p>
 <h2 id="enumeration">Enumeration</h2>
 <h3 id="tcp-53---dns">TCP 53 - DNS</h3>
 <p>There is no zone transfer in this machine.</p>
@@ -197,7 +197,7 @@ getting file \SVC_TGS\Desktop\user.txt of size 34 as /tmp/smbmore.uhunaP (0.1 Ki
 <h3 id="shell-as-nt-authoritysystem">Shell as NT Authority\SYSTEM</h3>
 <h4 id="ldap---spn-enumeration">LDAP - SPN enumeration</h4>
 <p>With <code>SVC_TGS</code> credentials, I&rsquo;m able to access the LDAP service.</p>
-<p>It was found that the administrator has <code>servicePrincipalName</code> attribute.</p>
+<p>It was found that the administrator has <code>servicePrincipalName</code> (SPN) attribute.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «active» «10.10.14.83» 
 $ ldapsearch -LLL -x -D <span class="s1">&#39;SVC_TGS@active.htb&#39;</span> -w <span class="s1">&#39;GPPstillStandingStrong2k18&#39;</span> -h 10.10.10.100 -b <span class="s2">&#34;dc=active,dc=htb&#34;</span> <span class="s2">&#34;(&amp;(objectClass=user)(objectCategory=user)(servicePrincipalName=*))&#34;</span> 
 dn: <span class="nv">CN</span><span class="o">=</span>Administrator,CN<span class="o">=</span>Users,DC<span class="o">=</span>active,DC<span class="o">=</span>htb
@@ -212,15 +212,15 @@ servicePrincipalName: active/CIFS:445
 objectCategory: <span class="nv">CN</span><span class="o">=</span>Person,CN<span class="o">=</span>Schema,CN<span class="o">=</span>Configuration,DC<span class="o">=</span>active,DC<span class="o">=</span>htb
 ...<span class="o">[</span>SNIP<span class="o">]</span>...
 </code></pre></div><h4 id="kerberoasting">Kerberoasting</h4>
-<p><strong>Kerberoasting</strong> is an attack against Kerberos to steal a Service Ticket. The attack is well explained in <a href="https://luemmelsec.github.io/Kerberoasting-VS-AS-REP-Roasting/">this blog</a> and <a href="https://hebo.gitbook.io/hackbook/active-directory/kerberoasting#0x02-%E5%9F%BA%E6%9C%AC%E6%A6%82%E5%BF%B5">this one</a>.</p>
-<p>The following image created by <a href="http://www.diva-portal.se/smash/get/diva2:1358687/FULLTEXT01.pdf">David Freimannis</a> shows an overview of Kerberos authentication process. The red box indicates the <strong>Kerberoasting</strong> attack.</p>
+<p>If a Service Principal Name is registered into a user account, the account is vulnerable to an attack called <strong>Kerberoasting</strong>. It is an attack against Kerberos which steals a Service Ticket.</p>
+<p>The attack is well explained in <a href="https://luemmelsec.github.io/Kerberoasting-VS-AS-REP-Roasting/">this blog</a> and <a href="https://hebo.gitbook.io/hackbook/active-directory/kerberoasting#0x02-%E5%9F%BA%E6%9C%AC%E6%A6%82%E5%BF%B5">this one</a>, but I will try to give an overview using the following image created by <a href="http://www.diva-portal.se/smash/get/diva2:1358687/FULLTEXT01.pdf">David Freimannis</a>. The <strong>Kerberoasting</strong> attack indicated by a red box.</p>
 <p><img class="img-container" src="imgs/image-20210715120848088.png" alt="image-20210715120848088"  title="Kerberos Mechanism"  />
 </p>
 <center><small>Taken from “Vulnerability Assessment of Authentication Methods in a Large-Scale Computer System” by David Freimanis</small></center>
 <p>In the image above, step number 4, the client/user will obtains a Ticket Granting Service (TGS) ticket. This ticket is encrypted with NTLM hash (derived from password) of a service account. If the client itself has been compromised, an attacker could easily steal the ticket and attempt an offline brute-force to recover the password from the ticket.</p>
-<p>For example, let&rsquo;s start from step 3 and say we want to access a CIFS service. The server (KDC) then searches for SPN of the CIFS service, which in this case is <code>active/CIFS:445</code> and <strong>it is tied</strong> to the Administrator account. Once the SPN is found, server will issue a TGS ticket encrypted with NTLM hash of the Administrator account and send the ticket to the client. Now that we have the TGS ticket, but instead of using the ticket to authenticate to the CIFS service, we keep that ticket and attempt a brute-force against it to obtain the administrator password.</p>
+<p>In this case, let&rsquo;s start from step 3, and say we want to access a CIFS service. The server (KDC) then searches for SPN of the CIFS service, which is <code>active/CIFS:445</code>, and it is registered to the administrator account. Once the SPN is found, server will issue a TGS ticket encrypted with NTLM hash of the administrator account and send the ticket to the client. Now that we have the TGS ticket, but instead of using this ticket to authenticate to the CIFS service, we keep that ticket and attempt a brute-force against it to recover the administrator password.</p>
 <blockquote>
-<p>If the SPN is tied to a computer account, it would be almost impossible to crack the TGS ticket since a computer account password is a random 128 character.</p>
+<p>If the SPN is registered to a computer account, it would be almost impossible to crack the TGS ticket since a computer account password is a random 128 character.</p>
 </blockquote>
 <p>There are several tools out there that can be used to perform a Kerberoasting attack, but I&rsquo;ll use the one from Impacket called <code>Impacket-GetUserSPNs</code>. The tool captures the ticket and automatically formats it into hashcat crackable format.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «active» «10.10.14.75» 
