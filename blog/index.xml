@@ -7,6 +7,189 @@
     <generator>Hugo -- gohugo.io</generator>
     <lastBuildDate>Mon, 24 May 2021 19:58:39 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/blog/index.xml" rel="self" type="application/rss+xml" />
     <item>
+      <title>Windows Services: Start a Service During Its Creation</title>
+      <link>https://fahmifj.github.io/blog/start-a-windows-service-during-its-creation/</link>
+      <pubDate>Thu, 12 Aug 2021 01:55:50 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/blog/start-a-windows-service-during-its-creation/</guid>
+      <description>Eksplorasi Windows Service</description>
+      <content:encoded><![CDATA[<p>Tahun lalu (ternyata udah setahun), saya sempat baca dua buah postingan blog yang membahas soal Windows Service (selanjutkan akan disebut Service). Post pertama merupakan bagian dari seri &ldquo;beyond root&rdquo;-nya 0xdf, bisa dibaca <a href="https://0xdf.gitlab.io/2020/06/01/resolute-more-beyond-root.html#reverse-powershell">disini</a>. Sedangkan post kedua adalah post dari VbScrub, bisa di baca <a href="thttps://vbscrub.com/2020/06/02/windows-createservice-api-bypasses-service-permissions/">disini</a>. Di post pertama, sebenarnya 0xdf <em>ngulik</em> soal psexec-nya Impacket, tapi masih terkait dengan Service. Hubungan post pertama dengan post kedua adalah si VbScrub melanjutkan <em>kulikan</em>-nya 0xdf dan membahas lebih detail tentang Service-nya.</p>
+<p>Berkat kedua postingan tersebut, jadi mulai lihat-lihat dokumentasi API Windows tentang Service.</p>
+<blockquote>
+<p>*Ngulik itu sebangsa ngoprek 😅</p>
+</blockquote>
+<p>Pada Windows, Service sendiri adalah sebutan suatu program yang berjalan di belakang layar. Untuk Linux/Unix-like, sebutannya adalah Daemon. Contohnya: Windows Update, Firewall, Audio processing seperti Realtek misalnya, dll.</p>
+<p><img class="img-container" src="imgs/image-20210812024145951.png" alt="image-20210812024145951"  />
+</p>
+<h2 id="creation-of-a-service">Creation of a Service</h2>
+<p>Sebelum melanjutkan tentang kedua postingan tadi, ada baiknya kita tahu dulu cara membuat sebuah Service dan bagaimana prosesnya di belakang layar.</p>
+<p>Windows menyediakan sebuah command-line utility bernama <code>sc.exe</code> untuk mengelola hal-hal terkait Service. Kita bisa menggunakan utility tersebut untuk membuat sebuah Service, misalnya:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ sc.exe create MyService <span class="nv">binPath</span><span class="o">=</span><span class="s2">&#34;C:\program.exe&#34;</span>
+</code></pre></div><ul>
+<li>MyService = Nama service</li>
+<li>binPath = Lokasi executable program (+ argument)</li>
+</ul>
+<p>Kedua argumen diatas wajib di suplai.</p>
+<p>Pembuatan service akan berhasil jika perintah tersebut diketikkan pada elevated (admin) terminal (cmd), atau si user memiliki hak CreateService (diizinkan untuk membuat Service).</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">C:<span class="se">\U</span>sers<span class="se">\f</span>ahmi&gt;sc create MyService <span class="nv">binPath</span><span class="o">=</span><span class="s2">&#34;C:\myservice\nc.exe&#34;</span>
+<span class="o">[</span>SC<span class="o">]</span> CreateService SUCCESS
+</code></pre></div><p>Jika bukan eleveated atau tanpa hak untuk membuat Service, maka hasilnya:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">C:<span class="se">\U</span>sers<span class="se">\f</span>ahmi&gt;sc.exe create MyService <span class="nv">binPath</span><span class="o">=</span><span class="s2">&#34;C:\myservice\nc.exe&#34;</span>
+<span class="o">[</span>SC<span class="o">]</span> OpenSCManager FAILED 5:
+
+Access is denied.
+</code></pre></div><p>Untuk mengetahui proses pembuatan service, kita bisa mengacu ke kode dalam bahasa C pada <a href="https://docs.microsoft.com/en-us/windows/win32/services/installing-a-service">dokumentasi Microsoft</a>. Secara garis besar, proses pembuatan Service adalah seperti berikut:</p>
+<ol>
+<li>Program membuat koneksi ke Service Control Manager (SCM) dengan memanggil fungsi <a href="https://docs.microsoft.com/en-us/windows/win32/api/winsvc/nf-winsvc-openscmanagerw">OpenSCManager</a>. Fungsi ini mengembalikan (return value) sesuatu yang disebut <strong>handle</strong> (selanjutnya kita sebut handle SCM) dengan level akses tertentu, detailnya bisa dilihat <a href="https://docs.microsoft.com/en-us/windows/win32/services/service-security-and-access-rights?redirectedfrom=MSDN#access-rights-for-the-service-control-manager">disini</a>.
+<ul>
+<li>Jika mode elevated, maka akses handlenya adalah SC_MANAGER_ALL_ACCESS (berdasarkan dokumentasi)</li>
+<li>Jika hak CreateService, maka akses handlenya adalah SC_MANAGER_CREATE_SERVICE (berdasarkan post VbScrub)</li>
+<li>Jika tidak keduanya, maka pesan galat <code>OpenSCManager FAILED</code> ditampilkan dan program exit.</li>
+</ul>
+</li>
+<li>Handle SCM bersama dengan argumen &ldquo;nama service&rdquo; dan &ldquo;binPath&rdquo; akan di suplai ke fungsi  <a href="https://docs.microsoft.com/en-us/windows/win32/api/winsvc/nf-winsvc-createservicew">CreateService</a> untuk membuat service. Fungsi <code>CreateService</code> ini punya nilai kembali berupa <strong>handle</strong> (kita sebut handle SVC) dengan level akses tertentu juga, detailnya bisa dilihat <a href="https://docs.microsoft.com/en-us/windows/win32/services/service-security-and-access-rights?redirectedfrom=MSDN#access-rights-for-a-service">disini</a>.
+<ul>
+<li>Disini user dengan hak CreateService <strong>bisa menentukan level akses</strong> handle SVC.</li>
+</ul>
+</li>
+<li>Di tahap ini, pesan sukses ditampilkan, lalu handle SCM dan handle SVC <u>ditutup</u> lalu program exit.</li>
+</ol>
+<p>Sekarang kita beralih ke kontrolnya.</p>
+<h2 id="service-control">Service Control</h2>
+<p>Secara default, normal user <strong>tidak punya akses</strong> untuk membuat Service apalagi mengontrol (Start, Stop, Config) suatu service.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">C:<span class="se">\U</span>sers<span class="se">\f</span>ahmi&gt;sc start myService
+<span class="o">[</span>SC<span class="o">]</span> StartService: OpenService FAILED 5:
+
+Access is denied.
+</code></pre></div><p>Kita ambil contoh dari sisi user pada saat menjalankan sebuah service, prosesnya secara garis besar adalah seperti berikut:</p>
+<ol>
+<li>Membuat koneksi ke SCM database dan mendapatkan handle SCM dengan level akses tertentu</li>
+<li>Handle SCM kemudian disuplai ke fungsi <a href="https://docs.microsoft.com/en-us/windows/win32/api/winsvc/nf-winsvc-openservicew">OpenService</a>. Fungsi ini mengembalikan handle SVC dengan level akses tertentu.</li>
+<li>Handle SVC lalu disuplai ke <a href="https://docs.microsoft.com/en-us/windows/win32/api/winsvc/nf-winsvc-startservicew">StartService</a> untuk mulai menjalankan service.</li>
+</ol>
+<p>Dari ketiga tahap dari proses menjalankan service tersebut, tentu saja normal user akan mendapatkan galat berupa &ldquo;Access Denied&rdquo;.</p>
+<h4 id="start-a-service-using-createservice-service-handle">Start a Service using CreateService Service Handle</h4>
+<p>Nah, jika melihat kembali tahap 2 dari <u>pembuatan Service</u>, selain admin, user dengan hak CreateService, bisa menentukan level akses dari handle SVC. Handle ini juga merefleksikan hak kontrol kita terhadap suatu service.  Jadi, jika saat pembuatan Service A, level akses yang suplai adalah SERVICE_ALL_ACCESS (full kontrol), maka handle SVC A pun akan memiliki hak akses yang sama terhadap Service A.</p>
+<p>Lalu, kira-kira apa jadinya jika suplai handle SVC A tersebut tidak ditutup seperti seharusnya, melainkan dilanjut dan disuplai ke fungsi <code>StartService</code> ?  Hal inilah yang dilakukan oleh 0xdf dan VbScrub!</p>
+<p>VbScrub juga menuliskan sebuah code untuk mendemonstrasikan temuannya, <a href="https://github.com/VbScrub/ServiceInstallerTest">disini</a>. Tapi, lebih gampangnya kita simak potongan code bahasa C untuk pembuatan/instalasi sebuah service dari Microsoft berikut.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-c" data-lang="c"><span class="n">VOID</span> <span class="nf">SvcInstall</span><span class="p">()</span>
+<span class="p">{</span>
+    <span class="n">SC_HANDLE</span> <span class="n">schSCManager</span><span class="p">;</span>
+    <span class="n">SC_HANDLE</span> <span class="n">schService</span><span class="p">;</span>
+    <span class="n">TCHAR</span> <span class="n">szPath</span><span class="p">[</span><span class="n">MAX_PATH</span><span class="p">];</span>
+
+    <span class="k">if</span><span class="p">(</span> <span class="o">!</span><span class="n">GetModuleFileName</span><span class="p">(</span> <span class="s">&#34;&#34;</span><span class="p">,</span> <span class="n">szPath</span><span class="p">,</span> <span class="n">MAX_PATH</span> <span class="p">)</span> <span class="p">)</span>
+    <span class="p">{</span>
+        <span class="n">printf</span><span class="p">(</span><span class="s">&#34;Cannot install service (%d)</span><span class="se">\n</span><span class="s">&#34;</span><span class="p">,</span> <span class="n">GetLastError</span><span class="p">());</span>
+        <span class="k">return</span><span class="p">;</span>
+    <span class="p">}</span>
+    
+     <span class="c1">// Creation of a Service: STEP 1
+</span><span class="c1"></span>    <span class="c1">// Get a handle to the SCM database.
+</span><span class="c1"></span>    <span class="n">schSCManager</span> <span class="o">=</span> <span class="n">OpenSCManager</span><span class="p">(</span>
+        <span class="nb">NULL</span><span class="p">,</span>                    <span class="c1">// local computer
+</span><span class="c1"></span>        <span class="nb">NULL</span><span class="p">,</span>                    <span class="c1">// ServicesActive database
+</span><span class="c1"></span>        <span class="n">SC_MANAGER_ALL_ACCESS</span><span class="p">);</span>  <span class="c1">// full access rights
+</span><span class="c1"></span>
+    <span class="k">if</span> <span class="p">(</span><span class="nb">NULL</span> <span class="o">==</span> <span class="n">schSCManager</span><span class="p">)</span>
+    <span class="p">{</span>
+        <span class="n">printf</span><span class="p">(</span><span class="s">&#34;OpenSCManager failed (%d)</span><span class="se">\n</span><span class="s">&#34;</span><span class="p">,</span> <span class="n">GetLastError</span><span class="p">());</span>
+        <span class="k">return</span><span class="p">;</span>
+    <span class="p">}</span>
+     <span class="c1">// Creation of a Service: STEP 2
+</span><span class="c1"></span>    <span class="c1">// Create the service
+</span><span class="c1"></span>    <span class="n">schService</span> <span class="o">=</span> <span class="n">CreateService</span><span class="p">(</span>
+        <span class="n">schSCManager</span><span class="p">,</span>              <span class="c1">// SCM database
+</span><span class="c1"></span>        <span class="n">SVCNAME</span><span class="p">,</span>                   <span class="c1">// name of service
+</span><span class="c1"></span>        <span class="n">SVCNAME</span><span class="p">,</span>                   <span class="c1">// service name to display
+</span><span class="c1"></span>        <span class="n">SERVICE_ALL_ACCESS</span><span class="p">,</span>        <span class="c1">// desired access
+</span><span class="c1"></span>        <span class="n">SERVICE_WIN32_OWN_PROCESS</span><span class="p">,</span> <span class="c1">// service type
+</span><span class="c1"></span>        <span class="n">SERVICE_DEMAND_START</span><span class="p">,</span>      <span class="c1">// start type
+</span><span class="c1"></span>        <span class="n">SERVICE_ERROR_NORMAL</span><span class="p">,</span>      <span class="c1">// error control type
+</span><span class="c1"></span>        <span class="n">szPath</span><span class="p">,</span>                    <span class="c1">// path to service&#39;s binary
+</span><span class="c1"></span>        <span class="nb">NULL</span><span class="p">,</span>                      <span class="c1">// no load ordering group
+</span><span class="c1"></span>        <span class="nb">NULL</span><span class="p">,</span>                      <span class="c1">// no tag identifier
+</span><span class="c1"></span>        <span class="nb">NULL</span><span class="p">,</span>                      <span class="c1">// no dependencies
+</span><span class="c1"></span>        <span class="nb">NULL</span><span class="p">,</span>                      <span class="c1">// LocalSystem account
+</span><span class="c1"></span>        <span class="nb">NULL</span><span class="p">);</span>                     <span class="c1">// no password
+</span><span class="c1"></span>
+    <span class="k">if</span> <span class="p">(</span><span class="n">schService</span> <span class="o">==</span> <span class="nb">NULL</span><span class="p">)</span>
+    <span class="p">{</span>
+        <span class="n">printf</span><span class="p">(</span><span class="s">&#34;CreateService failed (%d)</span><span class="se">\n</span><span class="s">&#34;</span><span class="p">,</span> <span class="n">GetLastError</span><span class="p">());</span>
+        <span class="n">CloseServiceHandle</span><span class="p">(</span><span class="n">schSCManager</span><span class="p">);</span>
+        <span class="k">return</span><span class="p">;</span>
+    <span class="p">}</span>
+    <span class="k">else</span> <span class="n">printf</span><span class="p">(</span><span class="s">&#34;Service installed successfully</span><span class="se">\n</span><span class="s">&#34;</span><span class="p">);</span>
+
+    <span class="c1">// Creation of a Service: STEP 3
+</span><span class="c1"></span>    <span class="n">CloseServiceHandle</span><span class="p">(</span><span class="n">schService</span><span class="p">);</span>
+    <span class="n">CloseServiceHandle</span><span class="p">(</span><span class="n">schSCManager</span><span class="p">);</span>
+<span class="p">}</span>
+</code></pre></div><p>Dan bandingkan dengan code berikut yang saya tulis dalam bahasa Go.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="kn">package</span> <span class="nx">main</span>
+
+<span class="kd">func</span> <span class="nf">main</span><span class="p">()</span> <span class="p">{</span>
+	<span class="c1">// Creation of a Service: STEP 1
+</span><span class="c1"></span>	<span class="c1">// Connect to scm to get a handle to create a service
+</span><span class="c1"></span>	<span class="nx">scmHandle</span><span class="p">,</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">windows</span><span class="p">.</span><span class="nf">OpenSCManager</span><span class="p">(</span><span class="kc">nil</span><span class="p">,</span> <span class="kc">nil</span><span class="p">,</span> <span class="nx">windows</span><span class="p">.</span><span class="nx">SC_MANAGER_CREATE_SERVICE</span><span class="p">)</span>
+	<span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+		<span class="nx">fmt</span><span class="p">.</span><span class="nf">Print</span><span class="p">(</span><span class="s">&#34;Error cannot create a service&#34;</span><span class="p">,</span> <span class="nx">err</span><span class="p">)</span>
+		<span class="nx">os</span><span class="p">.</span><span class="nf">Exit</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+	<span class="p">}</span>
+
+	<span class="c1">// define service
+</span><span class="c1"></span>	<span class="nx">serviceName</span><span class="p">,</span> <span class="nx">_</span> <span class="o">:=</span> <span class="nx">windows</span><span class="p">.</span><span class="nf">UTF16PtrFromString</span><span class="p">(</span><span class="s">&#34;MyService&#34;</span><span class="p">)</span>
+	<span class="nx">serviceExecPath</span><span class="p">,</span> <span class="nx">_</span> <span class="o">:=</span> <span class="nx">windows</span><span class="p">.</span><span class="nf">UTF16PtrFromString</span><span class="p">(</span><span class="s">`C:\myservicec\ncat.exe -e cmd.exe localhost 9000`</span><span class="p">)</span>
+
+	<span class="c1">// Creation of a ervice: STEP 2
+</span><span class="c1"></span>	<span class="c1">// Create a service
+</span><span class="c1"></span>	<span class="nx">svcHandle</span><span class="p">,</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">windows</span><span class="p">.</span><span class="nf">CreateService</span><span class="p">(</span>
+		<span class="nx">scmHandle</span><span class="p">,</span>                         <span class="c1">// SCM database
+</span><span class="c1"></span>		<span class="nx">serviceName</span><span class="p">,</span>                       <span class="c1">// name of service
+</span><span class="c1"></span>		<span class="kc">nil</span><span class="p">,</span>                               <span class="c1">// service name to display
+</span><span class="c1"></span>		<span class="nx">windows</span><span class="p">.</span><span class="nx">SERVICE_ALL_ACCESS</span><span class="p">,</span>        <span class="c1">// desired access
+</span><span class="c1"></span>		<span class="nx">windows</span><span class="p">.</span><span class="nx">SERVICE_WIN32_OWN_PROCESS</span><span class="p">,</span> <span class="c1">// service type
+</span><span class="c1"></span>		<span class="nx">windows</span><span class="p">.</span><span class="nx">SERVICE_DEMAND_START</span><span class="p">,</span>      <span class="c1">// start type
+</span><span class="c1"></span>		<span class="nx">windows</span><span class="p">.</span><span class="nx">SERVICE_ERROR_NORMAL</span><span class="p">,</span>      <span class="c1">// error control type
+</span><span class="c1"></span>		<span class="nx">serviceExecPath</span><span class="p">,</span>                   <span class="c1">// path to service&#39;s binary
+</span><span class="c1"></span>		<span class="kc">nil</span><span class="p">,</span>                               <span class="c1">// no load ordering group
+</span><span class="c1"></span>		<span class="kc">nil</span><span class="p">,</span>                               <span class="c1">// no tag identifier
+</span><span class="c1"></span>		<span class="kc">nil</span><span class="p">,</span>                               <span class="c1">// no dependencies
+</span><span class="c1"></span>		<span class="kc">nil</span><span class="p">,</span>                               <span class="c1">// LocalSystem account
+</span><span class="c1"></span>		<span class="kc">nil</span><span class="p">,</span>                               <span class="c1">// no password
+</span><span class="c1"></span>	<span class="p">)</span>
+	<span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+		<span class="nx">fmt</span><span class="p">.</span><span class="nf">Print</span><span class="p">(</span><span class="s">&#34;err&#34;</span><span class="p">,</span> <span class="nx">err</span><span class="p">)</span>
+		<span class="nx">os</span><span class="p">.</span><span class="nf">Exit</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+	<span class="p">}</span>
+
+	<span class="c1">// Creation of a Service: STEP 3
+</span><span class="c1"></span>	<span class="c1">// Don&#39;t close the svcHandle, instead send it to StartService
+</span><span class="c1"></span>	<span class="k">if</span> <span class="nx">windows</span><span class="p">.</span><span class="nf">StartService</span><span class="p">(</span><span class="nx">svcHandle</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="kc">nil</span><span class="p">);</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+		<span class="nx">fmt</span><span class="p">.</span><span class="nf">Print</span><span class="p">(</span><span class="s">&#34;Error Starting service&#34;</span><span class="p">,</span> <span class="nx">err</span><span class="p">)</span>
+		<span class="nx">os</span><span class="p">.</span><span class="nf">Exit</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+	<span class="p">}</span>
+    <span class="c1">// Creation of a Service: STEP 4
+</span><span class="c1"></span>    <span class="c1">// Finally close the handles
+</span><span class="c1"></span>    <span class="nx">windows</span><span class="p">.</span><span class="nf">CloseServiceHandle</span><span class="p">(</span><span class="nx">svcHandle</span><span class="p">)</span>
+    <span class="nx">windows</span><span class="p">.</span><span class="nf">CloseHandle</span><span class="p">(</span><span class="nx">scmHandle</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div><p>Pada potongan code C tahap 3, handle SCM dan handle SVC ditutup, sedangkan pada potongan code Go, handle SVC digunakan untuk menjalankan service yang baru saja dibuat.</p>
+<p>Hasilnya*? SYSTEM!</p>
+<p><img class="img-container" src="imgs/image-20210813011334034.png" alt="image-20210813011334034"  />
+</p>
+<p>Programnya versi argumen, bisa di cek <a href="https://github.com/fahmifj/winapi-go">disini</a>.</p>
+<h4 id="jadi--">Jadi &hellip; ?</h4>
+<p>Seperti di postnya, VbScrub bilang hal ini kemungkinan bukan security issue.</p>
+<p>Tapi kalau balik lagi dan mengacu ke <a href="https://docs.microsoft.com/en-us/windows/win32/services/service-security-and-access-rights?">dokumentasi Microsoft</a>-nya, bisa disimpulkan secara gak langsung kalau user dengan hak CreateService masih termasuk admin.</p>
+<p><img class="img-container" src="imgs/image-20210812194031337.png" alt="image-20210812194031337"  />
+</p>
+<p>Entahlah, yang jelas disini kita butuh hak CreateService (SC_MANAGER_CREATE_SERVICE) dan custom compiled program jika tidak mau menunggu reboot, karena pembuatan service menggunakan <code>sc.exe</code>  sudah pasti handle SVCnya ditutup. Jadi setidaknya, start up type si Service harus dibuat jadi <code>automatic on boot</code>.</p>
+<p>Sekian~</p>
+]]></content:encoded>
+    </item>
+    
+    <item>
       <title>Windows 10 Troubleshoot: Permissions</title>
       <link>https://fahmifj.github.io/blog/windows-10-troubleshoot-permissions/</link>
       <pubDate>Wed, 21 Jul 2021 07:07:50 +0700</pubDate>
@@ -907,232 +1090,6 @@ Enabled user user1.
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ smbclient //<span class="o">[</span>IP<span class="o">]</span>/<span class="o">[</span>sharename<span class="o">]</span> -U <span class="o">[</span>username<span class="o">]</span> <span class="o">[</span>password<span class="o">]</span>
 $ smbclient //<span class="o">[</span>IP<span class="o">]</span>/<span class="o">[</span>sharename<span class="o">]</span> -U <span class="s1">&#39;username%password&#39;</span>
 </code></pre></div><p>And that&rsquo;s all. It is not that detailed, but I hope you will find it useful.</p>
-]]></content:encoded>
-    </item>
-    
-    <item>
-      <title>Building Virtual Home Lab for Pentesting</title>
-      <link>https://fahmifj.github.io/blog/building-virtual-home-lab-for-pentesting/</link>
-      <pubDate>Thu, 17 Jun 2021 14:04:24 +0700</pubDate>
-      
-      <guid>https://fahmifj.github.io/blog/building-virtual-home-lab-for-pentesting/</guid>
-      <description>My documentation on building a small pentesting lab</description>
-      <content:encoded><![CDATA[<p>This is my personal documentation on setting up a pentesting lab in a virtual environment to learn some AD attack scenarios, network pivoting, and C2 (command &amp; control) with <code>metasploit</code>.</p>
-<h2 id="prerequisites">Prerequisites</h2>
-<h3 id="knowledge">Knowledge</h3>
-<ul>
-<li>Virtualization and VirtualBox</li>
-<li>Windows OS and Server Installation</li>
-<li>Basics knowledge of Windows/Windows Server (Desktop/GUI version)/</li>
-<li>Basics knowledge of Active Directory:
-<ul>
-<li>AD Domain</li>
-<li>Principle name</li>
-<li>DNS</li>
-</ul>
-</li>
-<li>Basics knowledge of Networking (routing).</li>
-</ul>
-<h3 id="hardware">Hardware</h3>
-<p>The following are the main specifications that I recommend, the list is sorted by priority.</p>
-<ul>
-<li>Storage: 256 GB minimum, SSD is a must for server, or use high speed USB 3.1/ type C drive.</li>
-<li>RAM: 8 GB of minimum, 16 GB recommended dual channel.</li>
-<li>CPU: AMD Ryzen 3 or Intel i3 6th (minimum), AMD Ryzen 5+ with H prefix or i5+ 6th gen with K/H prefix. (recommended).
-<ul>
-<li>4th gen of i7 is still worth though.</li>
-</ul>
-</li>
-</ul>
-<p>For me, I used a single MSI laptop with the minimum requirements except for the CPU.</p>
-<h3 id="software">Software</h3>
-<ul>
-<li>VirtualBox (<a href="https://www.virtualbox.org/wiki/Downloads">Download</a>)</li>
-<li>Kali Linux image file (<a href="https://www.offensive-security.com/kali-linux-vm-vmware-virtualbox-image-download/#1572305786534-030ce714-cc3b">Download</a>)</li>
-<li>Windows 10 evaluation image file (<a href="https://www.microsoft.com/en-us/evalcenter/">Download</a>)</li>
-<li>Windows Server 2019 evaluation image file (<a href="https://www.microsoft.com/en-us/evalcenter/">Download</a>)</li>
-</ul>
-<h2 id="topology">Topology</h2>
-<p>I know it&rsquo;s bad.</p>
-<p><img class="img-container" src="imgs/topology.jpg" alt=""  />
-</p>
-<p>So, for pivoting, I removed the Windows 10 inside network range of  <code>10.10.10.100/28</code> from AD Domain.</p>
-<blockquote>
-<p>It&rsquo;s NIC (Network Interface Card) not NC</p>
-</blockquote>
-<h2 id="setup">Setup</h2>
-<h3 id="vm-system-configuration">VM System Configuration</h3>
-<h4 id="system">System</h4>
-<p>Initial for installation</p>
-<ul>
-<li>Server: 2424 MB of RAM</li>
-<li>Client: x2 1280 MB of RAM</li>
-</ul>
-<p>After installation (removed style/desktop/disable junk service)</p>
-<ul>
-<li>Server: 1280 MB of RAM</li>
-<li>Client: 1024 MB of RAM</li>
-<li>Attacking machine: 1024MB of RAM</li>
-</ul>
-<p>Trust me, I use 8 GB to host these VM. 😂</p>
-<ul>
-<li>Windows 2019 = Server</li>
-<li>Windows 10 = Client</li>
-<li>Kali Linux/Armed Ubuntu = Attacker</li>
-</ul>
-<p>For initial setup, the two clients can <strong>stay inside</strong> <code>192.168.1.0/24</code> network.</p>
-<h4 id="network">Network</h4>
-<p>Server Adapter 1:</p>
-<p><img class="img-container" src="imgs/image-20210617143401181.png" alt="image-20210617143401181"  />
-</p>
-<h3 id="setting-up-server">Setting up Server</h3>
-<h4 id="initial-setup">Initial setup</h4>
-<ul>
-<li>Admin credentials: <code>administrator:p@$$w0rd!</code></li>
-<li>PC Name: <code>server19-DC</code> (restart after)</li>
-<li>Network (Static):
-<ul>
-<li>Adapter 1: 192.168.1.100/24</li>
-<li>Adapter 2: 10.10.10.100/28</li>
-</ul>
-</li>
-</ul>
-<h4 id="promote-to-domain-controller">Promote to Domain Controller</h4>
-<ul>
-<li>Server Manager &gt; Manage &gt; Add Roles and Features.</li>
-<li>Add Roles and Features Wizard:
-<ul>
-<li>Installation type: &ldquo;<strong>Role-based or feature-based installation</strong>&rdquo;</li>
-<li>Server selection: <code>server19-DC</code></li>
-<li>Server roles: <strong>&ldquo;Active Directory Domain Services&rdquo;</strong> and check the <strong>&ldquo;Include management tools&rdquo;</strong>.</li>
-<li>Features: Check the <strong>&ldquo;Group Policy Management&rdquo;</strong></li>
-<li>Confirmation:  Check on <strong>&ldquo;Restart destination server automatically if required&rdquo;</strong></li>
-<li>Close after it&rsquo;s done.</li>
-</ul>
-</li>
-<li>Server Manager &gt; Notification flag &gt; Click on <strong>&ldquo;Promote this server to a domain controller&rdquo;</strong></li>
-<li>Active Directory Domain Services Configuration Wizard:
-<ul>
-<li>Deployment configuration: <strong>&ldquo;Add a new forest&rdquo;</strong> and set <strong>&ldquo;server19.local&rdquo;</strong> as root domain name</li>
-<li>Domain controller options: set <strong>&ldquo;Windows Server 2016&rdquo;</strong> as FFL (Forest Functional Level) and DFL (Domain Functional Level). Checklist DNS server and set the same admin password for DSRM password.</li>
-<li>Additional options: set NetBIOS domain name to <code>SERVER19</code></li>
-<li>Let the rest options in default state until installation section.</li>
-<li>Restart after installation complete.</li>
-</ul>
-</li>
-</ul>
-<p><img class="img-container" src="imgs/server19logon.jpg" alt=""  />
-</p>
-<h4 id="domain-accounts">Domain Accounts</h4>
-<ul>
-<li>John Smith
-<ul>
-<li>User logon name: <code>jsmith@server19.local</code></li>
-<li>Password: <code>jsmith@123</code></li>
-</ul>
-</li>
-<li>Carl Smith
-<ul>
-<li>User logon name: <code>cmisth@server19.local</code></li>
-<li>Password: <code>@csmith@</code></li>
-</ul>
-</li>
-</ul>
-<p>All password is set to never expires.</p>
-<h4 id="service-account">Service Account</h4>
-<p>Fake SQL Service</p>
-<ul>
-<li>User logon name: <code>SQLService@server19.local</code></li>
-<li>Password: <code>Mysql@Password123</code></li>
-</ul>
-<p>Set service principle name:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">setspn -a SERVER19-DC/SQLService.SERVER19.local:60111 SERVER19\SQLService
-setspn -T SERVER19.local -Q */*
-</code></pre></div><h4 id="configure-file-sharing-smb">Configure File Sharing (SMB):</h4>
-<ul>
-<li>Server manager &gt; File and Storage Services &gt; Shares &gt; Task &gt; New Share.</li>
-<li>New Share Wizard:
-<ul>
-<li>Profile: SMB Share Quick</li>
-<li>Share Location: <code>C:\Shares\DATA</code> (Create the Shares folder in C:)</li>
-<li>Other Settings: Allow caching of share</li>
-<li>Permission: Leave it default</li>
-<li>Confirmation and create.</li>
-</ul>
-</li>
-</ul>
-<h3 id="setting-up-client">Setting up Client</h3>
-<h4 id="initial-setup-1">Initial setup</h4>
-<ul>
-<li>Client 1:
-<ul>
-<li>IP: 192.168.1.101 (static)</li>
-<li>PC name: NESCOFFEE</li>
-</ul>
-</li>
-<li>Client 2:
-<ul>
-<li>IP: 192.168.1.102 (static)</li>
-<li>PC name: MILO</li>
-</ul>
-</li>
-</ul>
-<h4 id="local-accounts">Local Accounts</h4>
-<p>Same with domain accounts, but add an <code>L</code> at the end of username/password.</p>
-<ul>
-<li>Username: <code>cmisthL</code>, password: <code>jsmithL@123</code></li>
-<li>Username: <code>jsmithL</code>, password: <code>@csmith@</code></li>
-</ul>
-<h4 id="join-domain">Join Domain</h4>
-<p>Client 1:</p>
-<ul>
-<li>Use Server&rsquo;s IP as DNS server: <code>192.168.1.100</code></li>
-<li>Hit <code>Win+I</code>, type &ldquo;access&rdquo;, click on <strong>Connect</strong>.</li>
-<li>Microsoft account window:
-<ul>
-<li>Click on <strong>&ldquo;Join this device to a local Active Directory domain&rdquo;</strong> under the alternate actions.</li>
-<li>Use the server administrator password to join.</li>
-<li>Skip the <strong>Add an account</strong> section</li>
-<li>Restart</li>
-</ul>
-</li>
-</ul>
-<p>Client 2 has the same steps</p>
-<h4 id="local-admin">Local Admin:</h4>
-<ul>
-<li>Set John Smith (<code>jsmith@server19.local</code>) as local administrator for NESCOFFEE.</li>
-<li>Set Carl Smith (<code>cmisth@server19.local</code>) as local administrator for MILO.</li>
-</ul>
-<h3 id="setting-up-attacking-machine">Setting up Attacking Machine</h3>
-<ul>
-<li>Put it on the same network</li>
-<li>Set static IP: 192.168.1.10</li>
-</ul>
-<h2 id="ad-attack-scenarios">AD Attack Scenarios</h2>
-<p>Here are some attack scenarios:</p>
-<ul>
-<li>LLMNR Poisoning - <a href="https://www.aptive.co.uk/blog/llmnr-nbt-ns-spoofing/">https://www.aptive.co.uk/blog/llmnr-nbt-ns-spoofing/</a></li>
-<li>AS-REP Roasting
-<ul>
-<li>Example attacks: <a href="/tags/asrep-roasting">ASREP-Roasting tags</a></li>
-</ul>
-</li>
-<li>Kerberoasting  - <a href="https://pentestlab.blog/2018/06/12/kerberoast/">https://pentestlab.blog/2018/06/12/kerberoast/</a></li>
-<li>Take Over IPv6 DNS - <a href="https://blog.fox-it.com/2018/01/11/mitm6-compromising-ipv4-networks-via-ipv6/">https://blog.fox-it.com/2018/01/11/mitm6-compromising-ipv4-networks-via-ipv6/</a></li>
-<li>DCSync
-<ul>
-<li>Example attacks: <a href="/tags/dcsync/">DCSync tags</a></li>
-</ul>
-</li>
-</ul>
-<p>Attack scenario(s) that requires two clients online + server:</p>
-<ul>
-<li>SMB Relay - <a href="https://akimboviper.gitbook.io/pentest-everything/everything/everything-windows/attacking-windows/relay-attacks/smb-relay">https://akimboviper.gitbook.io/pentest-everything/everything/everything-windows/attacking-windows/relay-attacks/smb-relay</a>
-<ul>
-<li>Example attacks: <a href="/writeups/hackthebox/htb-apt/">HackTheBox - APT</a></li>
-</ul>
-</li>
-</ul>
 ]]></content:encoded>
     </item>
     
