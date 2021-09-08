@@ -14,7 +14,7 @@
       <guid>https://fahmifj.github.io/blog/start-a-windows-service-during-its-creation/</guid>
       <description>Eksplorasi Windows Service</description>
       <content:encoded><![CDATA[<p>Tahun lalu (ternyata udah setahun), saya sempat baca dua buah postingan blog yang membahas soal Windows Service (selanjutkan akan disebut service). Post pertama merupakan bagian dari seri &ldquo;beyond root&rdquo;-nya <a href="https://twitter.com/0xdf_">0xdf</a>, bisa dibaca <a href="https://0xdf.gitlab.io/2020/06/01/resolute-more-beyond-root.html#reverse-powershell">disini</a>. Sedangkan post kedua adalah post dari <a href="https://twitter.com/VbScrub">VbScrub</a>, bisa di baca <a href="https://vbscrub.com/2020/06/02/windows-createservice-api-bypasses-service-permissions/">disini</a>. Di post pertama, sebenarnya 0xdf <em>ngulik</em> soal psexec-nya Impacket, tapi masih terkait dengan Service. Hubungan post pertama dengan post kedua adalah si VbScrub melanjutkan <em>kulikan</em>-nya 0xdf dan membahas lebih detail tentang Service-nya.</p>
-<p>Berkat kedua postingan tersebut, jadi mulai lihat-lihat dokumentasi API Windows tentang Service.</p>
+<p>Berkat kedua postingan tersebut, jadi ikutan untuk lihat-lihat dokumentasi API Windows service.</p>
 <blockquote>
 <p>*Ngulik itu sebangsa ngoprek 😅</p>
 </blockquote>
@@ -23,22 +23,22 @@
 </p>
 <h2 id="creation-of-a-service">Creation of a Service</h2>
 <p>Sebelum melanjutkan tentang kedua postingan tadi, ada baiknya kita tahu dulu cara membuat sebuah service dan bagaimana prosesnya di belakang layar.</p>
-<p>Windows menyediakan sebuah command-line utility bernama <code>sc.exe</code> untuk mengelola hal-hal terkait Service. Kita bisa menggunakan utility tersebut untuk membuat sebuah Service, misalnya:</p>
+<p>Nah, Windows sendiri menyediakan sebuah command-line utility bernama <code>sc.exe</code> untuk mengelola hal-hal terkait Service. Kita bisa menggunakan utility tersebut untuk membuat sebuah Service, misalnya:</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ sc.exe create MyService <span class="nv">binPath</span><span class="o">=</span><span class="s2">&#34;C:\program.exe&#34;</span>
 </code></pre></div><ul>
 <li>MyService = Nama service</li>
 <li>binPath = Lokasi executable program (+ argument)</li>
 </ul>
-<p>Kedua argumen diatas wajib disuplai.</p>
-<p>Pembuatan service akan berhasil jika perintah tersebut diketikkan pada elevated (admin) terminal (cmd), atau si user memiliki hak CreateService (diizinkan untuk membuat service).</p>
+<p>Kedua argumen diatas wajib disuplai (minimal).</p>
+<p>Pembuatan service <code>MyService</code> akan berhasil jika perintah tersebut diketikkan pada elevated (admin) terminal , atau si user memiliki hak CreateService (diizinkan untuk membuat service).</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">C:<span class="se">\U</span>sers<span class="se">\f</span>ahmi&gt;sc create MyService <span class="nv">binPath</span><span class="o">=</span><span class="s2">&#34;C:\myservice\nc.exe&#34;</span>
 <span class="o">[</span>SC<span class="o">]</span> CreateService SUCCESS
-</code></pre></div><p>Jika bukan elevated atau tanpa hak untuk membuat service, maka hasilnya:</p>
+</code></pre></div><p>Jika bukan elevated atau tanpa hak untuk membuat service, maka hasilnya adalah &ldquo;Access is denied&rdquo;.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">C:<span class="se">\U</span>sers<span class="se">\f</span>ahmi&gt;sc.exe create MyService <span class="nv">binPath</span><span class="o">=</span><span class="s2">&#34;C:\myservice\nc.exe&#34;</span>
 <span class="o">[</span>SC<span class="o">]</span> OpenSCManager FAILED 5:
 
 Access is denied.
-</code></pre></div><p>Sedangkan, untuk mengetahui proses pembuatan/instalasi sebuah service dibelakang layar, kita bisa mengacu ke kode dalam bahasa C pada <a href="https://docs.microsoft.com/en-us/windows/win32/services/installing-a-service">dokumentasi Microsoft</a> berikut.</p>
+</code></pre></div><p>Sedangkan untuk mengetahui tahap pembuatan/instalasi sebuah service dibelakang layar, kita bisa mengacu ke kode dalam bahasa C pada <a href="https://docs.microsoft.com/en-us/windows/win32/services/installing-a-service">dokumentasi Microsoft</a> berikut.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-c" data-lang="c"><span class="n">VOID</span> <span class="nf">SvcInstall</span><span class="p">()</span>
 <span class="p">{</span>
     <span class="n">SC_HANDLE</span> <span class="n">schSCManager</span><span class="p">;</span>
@@ -92,29 +92,30 @@ Access is denied.
 </span><span class="c1"></span>    <span class="n">CloseServiceHandle</span><span class="p">(</span><span class="n">schService</span><span class="p">);</span>
     <span class="n">CloseServiceHandle</span><span class="p">(</span><span class="n">schSCManager</span><span class="p">);</span>
 <span class="p">}</span>
-</code></pre></div><p>Secara garis besar, proses pembuatan service adalah seperti berikut:</p>
+</code></pre></div><p>Secara garis besar, tahap pembuatan service adalah seperti berikut:</p>
 <ol>
-<li>Program membuat koneksi ke Service Control Manager (SCM) dengan memanggil fungsi <a href="https://docs.microsoft.com/en-us/windows/win32/api/winsvc/nf-winsvc-openscmanagerw">OpenSCManager</a>. Fungsi ini mengembalikan (return value) sesuatu yang disebut <strong>handle</strong> (selanjutnya kita sebut <a href="https://docs.microsoft.com/en-us/windows/win32/services/scm-handles">handle SCM</a>) dengan level akses tertentu, detailnya bisa dilihat <a href="https://docs.microsoft.com/en-us/windows/win32/services/service-security-and-access-rights?redirectedfrom=MSDN#access-rights-for-the-service-control-manager">disini</a>.</li>
-<li>Handle SCM bersama dengan argumen lain seperti &ldquo;nama service&rdquo; dan &ldquo;binPath&rdquo; akan disuplai ke fungsi  <a href="https://docs.microsoft.com/en-us/windows/win32/api/winsvc/nf-winsvc-createservicew">CreateService</a> untuk membuat service. Fungsi <code>CreateService</code> ini punya nilai kembali berupa <strong>handle</strong> (kita sebut handle SVC) dengan level akses tertentu juga, detailnya bisa dilihat <a href="https://docs.microsoft.com/en-us/windows/win32/services/service-security-and-access-rights?redirectedfrom=MSDN#access-rights-for-a-service">disini</a>.</li>
+<li>Program membuat koneksi ke Service Control Manager (SCM) dengan memanggil fungsi <a href="https://docs.microsoft.com/en-us/windows/win32/api/winsvc/nf-winsvc-openscmanagerw">OpenSCManager</a>. Fungsi ini mengembalikan sesuatu (return value) yang disebut <strong>handle</strong> (selanjutnya disebut <a href="https://docs.microsoft.com/en-us/windows/win32/services/scm-handles">handle SCM</a>). Handle SCM ini memegang level akses tertentu terhadap SCM, detailnya bisa dilihat <a href="https://docs.microsoft.com/en-us/windows/win32/services/service-security-and-access-rights?redirectedfrom=MSDN#access-rights-for-the-service-control-manager">disini</a>.</li>
+<li>Handle SCM bersama dengan argumen lainnya yang disuplai seperti &ldquo;nama service&rdquo; dan &ldquo;binPath&rdquo; akan di-passing ke fungsi  <a href="https://docs.microsoft.com/en-us/windows/win32/api/winsvc/nf-winsvc-createservicew">CreateService()</a> untuk membuat service. Fungsi <code>CreateService()</code> ini memiliki return value berupa <strong>handle</strong> (kita sebut handle SVC) dengan level akses tertentu juga, detailnya bisa dilihat <a href="https://docs.microsoft.com/en-us/windows/win32/services/service-security-and-access-rights?redirectedfrom=MSDN#access-rights-for-a-service">disini</a>.</li>
 <li>Di tahap ini, pesan sukses ditampilkan, lalu handle SCM dan handle SVC <u>ditutup</u> dan program keluar.</li>
 </ol>
-<p>Berdasarkan dokumentasi, akses handle SCM adalah SC_MANAGER_ALL_ACCESS (perlu elevated process). Dan untuk user dengan hak CreateService, akses handlenya adalah SC_MANAGER_CREATE_SERVICE.</p>
+<p>Kalau kita mengacu pada dokumentasi Microsoft, akses handle SCM adalah <code>SC_MANAGER_ALL_ACCESS</code> (perlu elevated process). Sedangkan untuk user dengan hak CreateService, akses handlenya adalah <code>SC_MANAGER_CREATE_SERVICE</code>.</p>
+<p>Handle SCM menentukan apakah kita dapat melakukan read write access pada SCM dan handle SVC menentukan apakah kita dapat mengontrol suatu service. Didapatkannya handle SVC sendiri bergantung pada level akses handle SCM.</p>
 <h2 id="service-control">Service Control</h2>
-<p>Service yang berhasil dibuat oleh user dalam mode elevated atau user dengan hak CreateService tidak akan bisa dikontrol (start, stop) oleh normal user karena ya secara default, normal user <strong>tidak punya akses</strong> untuk itu.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">C:<span class="se">\U</span>sers<span class="se">\f</span>ahmi&gt;sc start myService
+<p>Service yang berhasil dibuat oleh user menggunakan <code>sc.exe</code> dalam mode elevated atau user dengan hak CreateService tidak akan bisa dikontrol (start, stop) oleh <u>normal user</u> karena ya secara default, normal user <strong>tidak punya akses</strong>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">C:<span class="se">\U</span>sers<span class="se">\f</span>ahmi&gt;sc start MyService
 <span class="o">[</span>SC<span class="o">]</span> StartService: OpenService FAILED 5:
 
 Access is denied.
-</code></pre></div><p>Pada saat menjalankan sebuah service seperti diatas, prosesnya secara garis besar adalah seperti berikut:</p>
+</code></pre></div><p>Tahapan saat menjalankan sebuah service seperti diatas sendiri, secara garis besar adalah seperti berikut:</p>
 <ol>
 <li>Membuat koneksi ke SCM database dan mendapatkan handle SCM dengan level akses tertentu</li>
-<li>Handle SCM kemudian disuplai ke fungsi <a href="https://docs.microsoft.com/en-us/windows/win32/api/winsvc/nf-winsvc-openservicew">OpenService</a>. Fungsi ini mengembalikan handle SVC dengan level akses tertentu.</li>
-<li>Handle SVC lalu disuplai ke <a href="https://docs.microsoft.com/en-us/windows/win32/api/winsvc/nf-winsvc-startservicew">StartService</a> untuk mulai menjalankan service.</li>
+<li>Handle SCM kemudian di-passing ke fungsi <a href="https://docs.microsoft.com/en-us/windows/win32/api/winsvc/nf-winsvc-openservicew">OpenService()</a>. Fungsi ini mengembalikan handle SVC dengan level akses tertentu.</li>
+<li>Handle SVC yang didapat dipassing ke <a href="https://docs.microsoft.com/en-us/windows/win32/api/winsvc/nf-winsvc-startservicew">StartService</a> untuk mulai menjalankan service.</li>
 </ol>
-<p>Dari ketiga tahap proses menjalankan service tersebut, normal user akan mendapatkan galat berupa &ldquo;Access is denied&rdquo; pada tahap 2 karena tidak handle SVC tidak didapatkan dan handle SCMnya hanya sebatas level user.</p>
+<p>Dari ketiga tahap  menjalankan service tersebut, normal user akan mendapatkan galat berupa &ldquo;Access is denied&rdquo; pada tahap 2 karena handle SVC tidak didapatkan dan handle SCMnya hanya sebatas level user.</p>
 <h4 id="start-a-service-using-createservice-service-handle">Start a Service using CreateService Service Handle</h4>
-<p>Kalau kita lihat kembali ke proses pembuatan service, tepatnya pada tahap 2 fungsi CreateSevice dipanggil, si pembuat (level admin atau user dengan hak CreateService) service bisa <strong>menentukan level akses</strong> dirinya terhadap service yang dibuat dan handle SVC yang dikembalikan oleh fungsi tersebut memiliki level akses yang sama.</p>
-<p>Jadi, jika saat pembuatan service A, level akses yang disuplai adalah SERVICE_ALL_ACCESS (full kontrol), maka handle SVC A pun akan memiliki level akses yang sama terhadap Service A, yaitu full kontrol. Tapi, di proses selanjutnya handle SVC ini ditutup.</p>
+<p>Kalau kita lihat kembali ke proses pembuatan service, tepatnya pada tahap 2 fungsi <code>CreateSevice()</code> dipanggil, ternyata si pembuat (level admin atau user dengan hak CreateService) service bisa <strong>menentukan level akses</strong> dirinya terhadap service yang dibuat dan handle SVC yang dikembalikan oleh fungsi tersebut akan memiliki level akses yang sama.</p>
+<p>Jadi, jika saat pembuatan service A, level akses yang disuplai adalah <code>SERVICE_ALL_ACCESS</code> (full kontrol), maka handle SVC A pun akan memiliki level akses yang sama terhadap Service A, yaitu full kontrol. Sayangnya handle SVC A ini ditutup berbarengan dengan handle SCM (tahap 3 pembuatan service).</p>
 <p>Lalu, kira-kira apa jadinya jika handle SVC A tersebut tidak ditutup seperti seharusnya, melainkan dilanjut dan disuplai ke fungsi <code>StartService</code>? Hal inilah yang dilakukan oleh 0xdf dan VbScrub!</p>
 <p>VbScrub juga menuliskan sebuah code untuk mendemonstrasikan temuannya <a href="https://github.com/VbScrub/ServiceInstallerTest">disini</a> sedangkan berikut adalah code yang saya tulis dalam bahasa Go.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="kn">package</span> <span class="nx">main</span>
@@ -171,7 +172,9 @@ Access is denied.
 <p>SYSTEM!</p>
 <p><div class="img-container"><img src="imgs/image-20210813011334034.png" alt="image-20210813011334034"  /></div>
 </p>
+<blockquote>
 <p>Programnya versi argumen, bisa di cek <a href="https://github.com/fahmifj/winapi-go">disini</a>.</p>
+</blockquote>
 <p><em>Tapi, kenapa harus custom code?</em></p>
 <p>Karena <code>sc.exe</code> sendiri tidak menyediakan opsi untuk meng-assign <code>SERVICE_ALL_ACCESS</code> pada service yang akan dibuat. Ditambah, setelah proses pembuatan service, handle-handlenya ditutup.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">C:<span class="se">\U</span>sers<span class="se">\f</span>ahmi&gt;sc create
@@ -198,11 +201,10 @@ NOTE: The option name includes the equal sign.
  <span class="nv">DisplayName</span><span class="o">=</span> &lt;display name&gt;
  <span class="nv">password</span><span class="o">=</span> &lt;password&gt;
 </code></pre></div><h4 id="jadi--">Jadi &hellip; ?</h4>
-<p>Seperti di postnya, VbScrub bilang hal ini kemungkinan bukan security issue.</p>
-<p>Tapi kalau balik lagi dan mengacu ke <a href="https://docs.microsoft.com/en-us/windows/win32/services/service-security-and-access-rights?">dokumentasi Microsoft</a>-nya, bisa disimpulkan secara gak langsung kalau user dengan hak CreateService masih termasuk admin.</p>
+<p>Seperti di postnya, VbScrub bilang hal ini kemungkinan bukan security issue. Tapi kalau balik lagi dan mengacu ke <a href="https://docs.microsoft.com/en-us/windows/win32/services/service-security-and-access-rights?">dokumentasi Microsoft</a>-nya, bisa disimpulkan secara tidak langsung kalau user dengan hak CreateService ini masih termasuk admin.</p>
 <p><div class="img-container"><img src="imgs/image-20210812194031337.png" alt="image-20210812194031337"  /></div>
 </p>
-<p>Intinya disini kita butuh hak CreateService (SC_MANAGER_CREATE_SERVICE) dan custom compiled program jika tidak mau menunggu reboot, karena pembuatan service menggunakan <code>sc.exe</code>  sudah pasti handle SVCnya ditutup. Jadi setidaknya, start up type si service harus di set ke <code>automatic on boot</code>.</p>
+<p>Intinya disini kita butuh hak CreateService (SC_MANAGER_CREATE_SERVICE) dan custom compiled program jika tidak mau menunggu reboot, karena pembuatan service menggunakan <code>sc.exe</code>  sudah pasti handle SVCnya ditutup. Jadi setidaknya, &ldquo;start up type&rdquo; si service harus di set ke <code>automatic on boot</code>.</p>
 <p>Sekian~</p>
 <hr>
 <h2 id="references">References</h2>
@@ -233,7 +235,7 @@ Setelah vakum lama dari blogging, diakhir tahun 2019 baru mulai lagi pakai Mediu
 <p>Udah satu tahun lebih nulis di <a href="https://fahmifj.medium.com/">Medium</a>, ternyata jenuh juga sama <em>minimalist</em>-nya Medium. <em>Formatting</em>-nya terbatas apalagi untuk <em>paste-paste</em> kode, dan terakhir kampret momennya itu sering <em>error</em> pas akhir-akhir mau di &ldquo;Publish&rdquo;. Jadi dibuatlah blog ini, walau tadinya sih iseng coba-coba pakai <em>static-site generator</em> tapi ternyata enak dan gampang di-<em>manage</em>-nya.</p>
 <p>Isi blognya?</p>
 <p>Untuk saat ini isinya baru coretan-coretan kaya gini dan mindahin <em>write-up</em> HackTheBox dari Medium yang juga dipoles ulang biar lebih jelas alurnya. Mungkin ditambah sama write-up dari TryHackMe sampai VulnHub yang fokusnya ke boot2root terutama mesin-mesin yang ada di list <a href="https://docs.google.com/spreadsheets/u/1/d/1dwSMIAPIam0PuRBkCiDI88pU3yzrqqHkDtBngUHNCw8/htmlview#">OSCP-likenya TJNull</a> sih. Yah, pokoknya <em>gak</em> jauh-jauh dari IT deh.</p>
-<p>Wah panjang juga ya &ndash;&quot;, mungkin <em>stop</em> sampai sini dulu~</p>
+<p>Wah panjang juga ya &ndash;&quot;, mungkin sampai sini dulu~</p>
 ]]></content:encoded>
     </item>
     

