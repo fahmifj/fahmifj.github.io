@@ -5,7 +5,152 @@
     <link>https://fahmifj.github.io/</link>
     <description>Recent content on Ef&#39;s log</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Sat, 30 Oct 2021 17:36:39 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/index.xml" rel="self" type="application/rss+xml" />
+    <lastBuildDate>Mon, 01 Nov 2021 14:51:02 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>Hugo Site Deployment With Github Actions</title>
+      <link>https://fahmifj.github.io/blog/hugo-deployment-with-github-actions/</link>
+      <pubDate>Mon, 01 Nov 2021 14:51:02 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/blog/hugo-deployment-with-github-actions/</guid>
+      <description>This post a continuation from my previous post about Hugo Setup and Deployment.
+Let&amp;rsquo;s sum up what we did previously:
+ We created a site and generated the site&amp;rsquo;s HTML files (under /public folder) using Hugo. We uploaded these HTML files to a GitHub repository called my-blog, and then we hosted the site by enabling GitHub Pages on that repo. Lastly, we wrote a deployment script written in bash which can automatically generate and push the static HTML files to the GitHub repository.</description>
+      <content:encoded><![CDATA[<p>This post a continuation from my previous post about <a href="https://fahmifj.github.io/blog/hugo-setup-and-deployment/">Hugo Setup and Deployment</a>.</p>
+<p>Let&rsquo;s sum up what we did previously:</p>
+<ul>
+<li>We created a site and generated the site&rsquo;s HTML files (under <code>/public</code> folder) using Hugo.</li>
+<li>We uploaded these HTML files to a GitHub repository called <code>my-blog</code>, and then we hosted the site by enabling GitHub Pages on that repo.</li>
+<li>Lastly, we wrote a deployment script written in bash which can automatically generate and push the static HTML files to the GitHub repository.</li>
+</ul>
+<p>Using that way, we generate the site&rsquo;s static HTML files and then we push these newly generated files to the repository. So, there will be a bunch of HTML files generated on our machine over time, and we&rsquo;re going to upload them all each time we wish to update the site. That&rsquo;s why this is a waste.</p>
+<p>So to avoid that, we&rsquo;ll employ GitHub actions! Well, it basically does the same thing as we did, but, instead of using our own machine, we&rsquo;ll let GitHub VM/Docker instances do it for us.</p>
+<p>I know that there are a lot of similar tutorials out there, but let me finish what I&rsquo;ve started!</p>
+<h4 id="goals">Goals</h4>
+<ul>
+<li>Automate Site Deployment using GitHub Actions (I&rsquo;ll try to explain about it!)</li>
+</ul>
+<h4 id="prerequisites">Prerequisites</h4>
+<ul>
+<li>Familiarity with CLI and Git!</li>
+</ul>
+<h2 id="clean-up-site">Clean Up Site</h2>
+<p>Let&rsquo;s start by reviewing the previous site structure, here&rsquo;s where we (I) left it:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>my-blog<span class="o">)</span>$ tree -a -L <span class="m">2</span> -I <span class="s2">&#34;\.git&#34;</span>
+.
+├── .gitmodules
+├── archetypes
+│   └── default.md
+├── config.yml
+├── content
+│   └── post
+├── data
+├── deploy.sh
+├── layouts
+├── public <span class="c1"># &lt;-- All files under this folder are hosted using GitHub Pages,</span>
+│   ├── 404.html
+│   ├── assets
+│   ├── categories
+│   ├── en
+│   ├── fa
+│   ├── fr
+│   ├── index.html
+│   ├── index.json
+│   ├── index.xml
+│   ├── page
+│   ├── post
+│   ├── robots.txt
+│   ├── series
+│   ├── sitemap.xml
+│   └── tags
+├── resources
+│   └── _gen
+├── static
+└── themes
+    └── PaperMod
+
+<span class="m">20</span> directories, <span class="m">10</span> files
+</code></pre></div><p>Since we&rsquo;re going to use GitHub Actions, we&rsquo;ll now ignore the public folder and remove all of its content including the git repository inside it:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>my-blog<span class="o">)</span>$ rm ./public/* -r f
+<span class="o">(</span>my-blog<span class="o">)</span>$ rm ./public/.git -rf
+</code></pre></div><p>And remove these public folder lines from our submodule.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>my-blog<span class="o">)</span>$ cat .git/config
+...
+<span class="o">[</span>submodule <span class="s2">&#34;public&#34;</span><span class="o">]</span>
+        <span class="nv">url</span> <span class="o">=</span> https://github.com/your-username/my-blog.git
+        <span class="nv">active</span> <span class="o">=</span> <span class="nb">true</span>
+...
+<span class="o">(</span>my-blog<span class="o">)</span>$ cat .gitmodules
+...
+<span class="o">[</span>submodule <span class="s2">&#34;public&#34;</span><span class="o">]</span>
+        <span class="nv">url</span> <span class="o">=</span> https://github.com/your-username/my-blog.git
+        <span class="nv">active</span> <span class="o">=</span> <span class="nb">true</span>
+...
+</code></pre></div><p>Clean any cached content from the <code>public</code> folder.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>my-blog<span class="o">)</span>$ git rm --cached ./public -f
+</code></pre></div><p>Then go create another GitHub repository with the format <code>your-username.github.io</code>, and set it as the remote repository of our blog.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>my-blog<span class="o">)</span>$ git remote add origin https://github.com/your-username/your-username.github.io.git
+</code></pre></div><p>For the <code>config.yaml</code>, make sure you&rsquo;ve pointed the baseURL value with:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-yaml" data-lang="yaml"><span class="nt">baseURL</span><span class="p">:</span><span class="w"> </span><span class="s2">&#34;https://your-username.github.io/&#34;</span><span class="w">
+</span></code></pre></div><h2 id="add-github-actions">Add GitHub Actions</h2>
+<p>On the previous post, we automated several things: site build, commit, and push our site to GitHub using a bash script. We can call the execution of this script as a <strong>workflow</strong> that runs a single <strong>job</strong>, it is to deploy our site. Each command executed within the deployment script (build, commit, push) can be referred as a <strong>step</strong>.</p>
+<p>GitHub Actions are basically the advanced version of the deployment script we created. It&rsquo;s event-driven, which means we can set a specific event to trigger a workflow. In this case, we&rsquo;ll create an event that will trigger the site deployment each time we push a new commit to the main branch.</p>
+<p>A workflow file for GitHub Actions must be written in YAML syntax, and it&rsquo;s placed under a special directory called <code>.github/workflows/[here].yml</code>, so let&rsquo;s create the folder first inside our site repository.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>my-blog<span class="o">)</span>$ mkdir -p ./.github/workflows
+</code></pre></div><p>We&rsquo;ll save the following code under the workflow directory with a name <code>gh-pages.yml</code> (<code>./.github/workflows/gh-pages.yml</code>).</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-yaml" data-lang="yaml"><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l">github pages</span><span class="w">
+</span><span class="w">
+</span><span class="w"></span><span class="nt">on</span><span class="p">:</span><span class="w">
+</span><span class="w">  </span><span class="nt">push</span><span class="p">:</span><span class="w">
+</span><span class="w">    </span><span class="nt">branches</span><span class="p">:</span><span class="w">
+</span><span class="w">      </span>- <span class="l">main </span><span class="w"> </span><span class="c"># Set a branch to deploy</span><span class="w">
+</span><span class="w">
+</span><span class="w"></span><span class="nt">jobs</span><span class="p">:</span><span class="w">
+</span><span class="w">  </span><span class="nt">deploy</span><span class="p">:</span><span class="w">
+</span><span class="w">    </span><span class="nt">runs-on</span><span class="p">:</span><span class="w"> </span><span class="l">ubuntu-18.04</span><span class="w">
+</span><span class="w">    </span><span class="nt">steps</span><span class="p">:</span><span class="w">
+</span><span class="w">      </span>- <span class="nt">uses</span><span class="p">:</span><span class="w"> </span><span class="l">actions/checkout@v2</span><span class="w">
+</span><span class="w">        </span><span class="nt">with</span><span class="p">:</span><span class="w">
+</span><span class="w">          </span><span class="nt">submodules</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="w">  </span><span class="c"># Fetch Hugo themes (true OR recursive)</span><span class="w">
+</span><span class="w">          </span><span class="nt">fetch-depth</span><span class="p">:</span><span class="w"> </span><span class="m">0</span><span class="w">    </span><span class="c"># Fetch all history for .GitInfo and .Lastmod</span><span class="w">
+</span><span class="w">
+</span><span class="w">      </span>- <span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l">Setup Hugo</span><span class="w">
+</span><span class="w">        </span><span class="nt">uses</span><span class="p">:</span><span class="w"> </span><span class="l">peaceiris/actions-hugo@v2</span><span class="w">
+</span><span class="w">        </span><span class="nt">with</span><span class="p">:</span><span class="w">
+</span><span class="w">          </span><span class="nt">hugo-version</span><span class="p">:</span><span class="w"> </span><span class="s1">&#39;latest&#39;</span><span class="w">
+</span><span class="w">          </span><span class="nt">extended</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="w">
+</span><span class="w">        
+</span><span class="w">      </span>- <span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l">Build </span><span class="w">
+</span><span class="w">        </span><span class="nt">run</span><span class="p">:</span><span class="w"> </span><span class="l">hugo --minify --cleanDestinationDir</span><span class="w">
+</span><span class="w">
+</span><span class="w">      </span>- <span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l">Deploy</span><span class="w">
+</span><span class="w">        </span><span class="nt">uses</span><span class="p">:</span><span class="w"> </span><span class="l">peaceiris/actions-gh-pages@v3</span><span class="w">
+</span><span class="w">        </span><span class="nt">with</span><span class="p">:</span><span class="w">
+</span><span class="w">          </span><span class="nt">github_token</span><span class="p">:</span><span class="w"> </span><span class="l">${{ secrets.GITHUB_TOKEN }}</span><span class="w">
+</span><span class="w">          </span><span class="nt">publish_dir</span><span class="p">:</span><span class="w"> </span><span class="l">./public</span><span class="w">
+</span></code></pre></div><p>You can study the code yourself, because I&rsquo;m not the one who created it 😅. But, to make sure that the public folder always get cleaned first before build, I added <code>--cleanDestinationDir</code> option.</p>
+<p>Let&rsquo;s commit this workflow and push it to GitHub.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>my-blog<span class="o">)</span>$ git add ./.github/workflows/gh-pages.yml
+<span class="o">(</span>my-blog<span class="o">)</span>$ git commit -m <span class="s2">&#34;Add gh-pages.yml&#34;</span>
+<span class="o">(</span>my-blog<span class="o">)</span>$ git push -u origin main
+</code></pre></div><h2 id="trigger-the-workflow">Trigger the Workflow!</h2>
+<p>We can create a new post, then add some text to it.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>my-blog<span class="o">)</span>$ hugo new post/test-gh-actions.md
+<span class="o">(</span>my-blog<span class="o">)</span>$ <span class="nb">echo</span> <span class="s1">&#39;Test GH Action&#39;</span> &gt;&gt; content/post/test-gh-actions.md
+</code></pre></div><p>Finally, commit the change and push it.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>my-blog<span class="o">)</span>$ git commit -m <span class="s2">&#34;Trigger build&#34;</span>
+</code></pre></div><p>To observe the deployment process/workflow, just navigate to your site repository and click on the action menu (<code>https://github.com/your-username/your-username.github.io/actions</code>).</p>
+<p>That&rsquo;s it!</p>
+<h2 id="my-current-deployment">My Current Deployment</h2>
+<p>A bit off topic, but I&rsquo;ll show you my current deployment process, not in detail, but it should give you an idea of it was like.</p>
+<p>My deployment process a little bit different, because I&rsquo;ve separated my blog into two: blog-core, and the full static HTML site (it&rsquo;s this site). The blog-core is a private repo, and the full static HTML is a public repository. The blog-core repo contains my draft, notes, and other (a lot of them), which is only available for me locally because of <code>.gitignore</code>.</p>
+<p>When a new commit is pushed on the blog-core, GitHub Actions will be triggered to generate the static HTML files. The newly generated HTML files are then pushed to the static site repo. I had to include my secret token in the blog-core so that GitHub Actions could use the token to authenticate itself.</p>
+<p><div class="img-container"><img src="imgs/image-20211102111943965.png" alt="image-20211102111943965"  /></div>
+</p>
+<p>Note: these are not the real commands.</p>
+<p>I&rsquo;ll separate this section in a dedicated post later!</p>
+]]></content:encoded>
+    </item>
+    
     <item>
       <title>HackTheBox - Explore</title>
       <link>https://fahmifj.github.io/hackthebox/explore/</link>
@@ -269,7 +414,8 @@ drwxr-xr-x  <span class="m">3</span> root shell   <span class="m">8192</span> 20
 -rw-------  <span class="m">1</span> root root    <span class="m">2824</span> 2020-03-24 23:39 build.prop
 ...<span class="o">[</span>SNIP<span class="o">]</span>...
 drwxr-xr-x  <span class="m">2</span> root shell   <span class="m">8192</span> 2020-03-25 00:26 xbin
-</code></pre></div><p>The existence of <code>/system/xbin</code> or <code>/system/xbin/su</code>  indicates there was a Busybox installed or this was a rooted device back then, so I&rsquo;m guessing that the only way to establish a root shell from here is through <code>adb</code> (android debug bridge) on port 5555.</p>
+</code></pre></div><p>When I was an active XDA member (2011~2013), the existence of <code>/system/xbin</code> or <code>/system/xbin/su</code>  indicated that the device was rooted back then (I just found out that this method<sup id="fnref:2"><a href="#fn:2" class="footnote-ref" role="doc-noteref">2</a></sup> is still used today).</p>
+<p>Typically people who rooted their device has a debug mode enabled, therefore, I&rsquo;m guessing that the only way to gain a root shell from here is through <code>adb</code> (android debug bridge) on port 5555.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">:/ $ netstat -tlpn
 Active Internet connections <span class="o">(</span>only servers<span class="o">)</span>
 Proto Recv-Q Send-Q Local Address           Foreign Address         State       PID/Program Name
@@ -297,9 +443,9 @@ tcp6       <span class="m">0</span>      <span class="m">0</span> ::ffff:10.10.1
 * daemon not running<span class="p">;</span> starting now at tcp:5037
 * daemon started successfully
 restarting in TCP mode port: <span class="m">5555</span>
-explore on main › adb connect localhost:5555
+explore › adb connect localhost:5555
 connected to localhost:5555
-explore on main › adb devices
+explore › adb devices
 List of devices attached
 localhost:5555  device
 </code></pre></div><p>But it when I want to get a shell, it returns with</p>
@@ -328,6 +474,9 @@ f04fc...<span class="o">[</span>SNIP<span class="o">]</span>...
 <ol>
 <li id="fn:1" role="doc-endnote">
 <p><a href="https://developer.android.com/studio/command-line/adb">https://developer.android.com/studio/command-line/adb</a>&#160;<a href="#fnref:1" class="footnote-backref" role="doc-backlink">&#x21a9;&#xfe0e;</a></p>
+</li>
+<li id="fn:2" role="doc-endnote">
+<p><a href="https://stackoverflow.com/questions/57588643/how-to-detect-whether-the-device-is-rooted-or-not">https://stackoverflow.com/questions/57588643/how-to-detect-whether-the-device-is-rooted-or-not</a>&#160;<a href="#fnref:2" class="footnote-backref" role="doc-backlink">&#x21a9;&#xfe0e;</a></p>
 </li>
 </ol>
 </section>
@@ -1520,74 +1669,6 @@ drwxr-xr-x <span class="m">4</span> root root <span class="m">4096</span> Mar <s
 bash-5.0# cat root.txt
 64348...<span class="o">[</span>SNIP<span class="o">]</span>...
 </code></pre></div>]]></content:encoded>
-    </item>
-    
-    <item>
-      <title>Revamp Blog</title>
-      <link>https://fahmifj.github.io/blog/revamp-blog/</link>
-      <pubDate>Fri, 15 Oct 2021 07:28:41 +0700</pubDate>
-      
-      <guid>https://fahmifj.github.io/blog/revamp-blog/</guid>
-      <description>Mod the PaperMod</description>
-      <content:encoded><![CDATA[<p>Belakangan ini saya agak telat nulis write-up, tapi kemarin sudah &ldquo;terlunaskan&rdquo;.  Alasan telatnya adalah satu minggu yang lalu saya mencoba  <del>memindahkan VHD lab pentest ke volume baru tapi akhirnya corrupt</del> sedikit me-<em>revamp</em> blog ini.</p>
-<p>Sebagai catatan sendiri dan mungkin berguna untuk yang mampir, di postingan ini saya hanya akan membahas sedikit bagian yang mencolok yang saya ubah. Desain kasarnya bisa dilihat digambar berikut.</p>
-<p><div class="img-container"><img src="imgs/image-20211015074555598.png" alt="image-20211015074555598"  /></div>
-<small>The power of Ms. Paint</small></p>
-<h2 id="r1-float-the-toc">R1: Float the ToC</h2>
-<p>Tulisan yang saya posting umumnya adalah &lsquo;semacam&rsquo; <em>walkthrough</em>, tentunya <em>floating</em> ToC (Table of Content) adalah salah satu hal yang diperlukan oleh pembaca (kalau ada yang baca) untuk loncat-loncat antar <em>section</em>. Sayangnya ToC bawaan tema dasar blog ini, yaitu <a href="https://github.com/adityatelange/hugo-PaperMod/">PaperMod</a>, bukan <em>floating</em>.</p>
-<p>Solusi yang terpikirkan tanpa penggantian tema atau pengunaan plugin yang keduanya jelas berat di JavaScript, dan juga tanpa mengacak-ngacak tema dasar adalah dengan membagi dua area konten setelah header menjadi area ToC dan area konten teks yang rasio-nya adalah <strong>3:7</strong>. Kedua area ini dibungkus oleh satu kontainer flex.</p>
-<p><div class="img-container"><img src="imgs/image-20211015105411374.png" alt="image-20211015105411374"  /></div>
-</p>
-<p>Supaya area konten tetap dengan lebar 100%, hal selanjutnya adalah mengeluarkan si area ToC ini dari kontainer dengan meminuskan properti <em>margin-left</em>-nya sebesar lebarnya sendiri (-1*0.3*100%).</p>
-<p><div class="img-container"><img src="imgs/image-20211015111941266.png" alt="image-20211015111941266"  /></div>
-</p>
-<p>Sisanya hanya tinggal menyesuaikan tampilan dan posisi dari ToC tersebut.</p>
-<p>Desain ToC ini <del>nyolong</del> terinspirasi dari blognya <a href="https://0xdf.gitlab.io/">0xdf</a> yang pakai <a href="https://afeld.github.io/bootstrap-toc/">bootstrap toc</a>.</p>
-<h2 id="r2-add-latest-posts">R2: Add Latest Posts</h2>
-<p>Selanjutnya adalah &ldquo;Latests Posts&rdquo; berikut.</p>
-<p><div class="img-container"><img src="imgs/image-20211015132036300.png" alt="image-20211015132036300"  /></div>
-</p>
-<p>Penambahan Latests Posts sebenarnya hanya sekadar <em>copy paste</em> template halaman arsip yang dibuat ke template parsial lalu dipanggil di  <code>layouts/list.html</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="o">...</span>
-<span class="p">{{</span><span class="o">-</span> <span class="k">if</span> <span class="p">(</span><span class="nx">and</span> <span class="p">.</span><span class="nx">Site</span><span class="p">.</span><span class="nx">Params</span><span class="p">.</span><span class="nx">profileMode</span><span class="p">.</span><span class="nx">enabled</span> <span class="p">.</span><span class="nx">IsHome</span><span class="p">)</span> <span class="p">}}</span>
-
-<span class="p">{{</span><span class="o">-</span> <span class="nx">partial</span> <span class="s">&#34;c_profilemode.html&#34;</span> <span class="p">.</span> <span class="p">}}</span>
-<span class="p">{{</span><span class="o">-</span> <span class="nx">partial</span> <span class="s">&#34;c_latest_posts.html&#34;</span> <span class="p">.</span> <span class="p">}}</span>
-
-<span class="o">...</span>
-</code></pre></div><p>Kode templatenya (struktur html/style css bisa di inspect) :</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go">  <span class="p">{{</span> <span class="k">range</span> <span class="nx">first</span> <span class="mi">5</span> <span class="p">(.</span><span class="nx">Site</span><span class="p">.</span><span class="nx">RegularPages</span><span class="p">)</span> <span class="p">}}</span> <span class="cm">/* index 0 = newest */</span>
-  <span class="p">{{</span> <span class="p">.</span><span class="nx">Title</span> <span class="p">}}</span>
-  <span class="o">...</span>
-  <span class="p">{{</span> <span class="p">.</span><span class="nx">Date</span><span class="p">.</span><span class="nx">Format</span> <span class="s">&#34;Jan 02&#34;</span> <span class="p">}}</span>
-  <span class="o">...</span>
-  <span class="p">{{</span><span class="o">-</span> <span class="nx">printf</span> <span class="s">&#34;%d min&#34;</span> <span class="p">.</span><span class="nx">ReadingTime</span> <span class="p">}}</span>
-  <span class="o">...</span>
-  <span class="p">{{</span><span class="o">-</span> <span class="nx">end</span> <span class="p">}}</span>
-</code></pre></div><p>Desain untuk &ldquo;Latests Posts&rdquo;  ini <del>nyolong</del> terinspirasi dari tema <a href="https://github.com/Track3/hermit">Hermit</a>, <a href="https://faultable.dev/">faultable.dev</a>, dan <a href="https://www.taniarascia.com/">taniarascia.com</a>.</p>
-<h2 id="r3-show-tags-in-a-post-entry">R3: Show Tags in a Post Entry</h2>
-<p>Penambahan tag postingan pada <em>post entry</em> simplenya adalah untuk memberi gambaran kasar tentang isi dari suatu postingan.</p>
-<p>Untuk menampilkan tag di setiap <em>post entry</em>, saya perlu mengubah sedikit urutan struktur HTML yang tentu bisa diinspect sendiri.</p>
-<p><div class="img-container"><img src="imgs/image-20211015144040968.png" alt="image-20211015144040968"  /></div>
-</p>
-<p>Kode yang digunakan untuk menampilkan tag beserta tautannya merupakan modifikasi dari kode yang ada pada dokumentasi Hugo ini: <a href="https://gohugo.io/templates/taxonomy-templates/#example-comma-delimit-tags-in-a-single-page-template">Taxonomy Templates | Hugo (gohugo.io)</a>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="p">{{</span> <span class="err">$</span><span class="nx">taxo</span> <span class="o">:=</span> <span class="s">&#34;tags&#34;</span> <span class="p">}}</span>
-<span class="p">{{</span> <span class="nx">with</span> <span class="p">.</span><span class="nx">Param</span> <span class="err">$</span><span class="nx">taxo</span> <span class="p">}}</span>
-	<span class="p">{{</span> <span class="err">$</span><span class="nx">tag_limit</span> <span class="o">:=</span> <span class="mi">7</span> <span class="p">}}</span>
-	<span class="p">{{</span> <span class="k">if</span> <span class="nf">ne</span> <span class="p">(</span><span class="nx">len</span> <span class="p">.)</span> <span class="mi">0</span> <span class="p">}}</span>
-		<span class="p">{{</span> <span class="k">range</span> <span class="err">$</span><span class="nx">k</span><span class="p">,</span> <span class="err">$</span><span class="nx">v</span> <span class="o">:=</span> <span class="p">.</span> <span class="p">}}</span>
-		<span class="p">{{</span><span class="o">-</span> <span class="k">if</span> <span class="nf">lt</span> <span class="p">(</span><span class="nx">add</span> <span class="err">$</span><span class="nx">k</span> <span class="mi">1</span><span class="p">)</span> <span class="err">$</span><span class="nx">tag_limit</span> <span class="p">}}</span>
-			<span class="p">{{</span><span class="o">-</span> <span class="k">if</span> <span class="nf">and</span> <span class="p">(</span><span class="nx">gt</span> <span class="err">$</span><span class="nx">k</span> <span class="mi">0</span><span class="p">)</span> <span class="p">}}</span><span class="err">·</span><span class="o">&amp;</span><span class="nx">nbsp</span><span class="p">;{{</span> <span class="nx">end</span> <span class="o">-</span><span class="p">}}</span> 
-			<span class="p">{{</span> <span class="nx">with</span> <span class="err">$</span><span class="p">.</span><span class="nx">Site</span><span class="p">.</span><span class="nf">GetPage</span> <span class="p">(</span><span class="nx">printf</span> <span class="s">&#34;/%s/%s&#34;</span> <span class="err">$</span><span class="nx">taxo</span> <span class="err">$</span><span class="nx">v</span><span class="p">)</span> <span class="o">-</span><span class="p">}}</span>
-			<span class="p">&lt;</span><span class="nx">a</span> <span class="nx">href</span><span class="p">=</span><span class="s">&#34;{{ .Permalink }}&#34;</span><span class="p">&gt;{{</span> <span class="err">$</span><span class="nx">v</span> <span class="p">}}&lt;</span><span class="o">/</span><span class="nx">a</span><span class="p">&gt;</span>
-			<span class="p">{{</span> <span class="nx">end</span> <span class="p">}}</span>
-			<span class="p">{{</span><span class="o">-</span> <span class="nx">end</span> <span class="o">-</span><span class="p">}}</span>
-		<span class="p">{{</span><span class="o">-</span> <span class="nx">end</span> <span class="p">}}</span>
-	<span class="p">{{</span><span class="o">-</span> <span class="nx">end</span> <span class="o">-</span><span class="p">}}</span>
-<span class="p">{{</span> <span class="nx">end</span> <span class="p">}}</span>
-</code></pre></div><h2 id="to-be-contd">To be cont&rsquo;d</h2>
-<p>Selain 3 hal diatas, ada beberapa fitur bawaan yang diotak atik seperti pagination yang di-<em>disable</em>, fitur <em>search</em>, navigation bar, atau bahkan sekadar iseng <em>mainin</em> animasi CSS pseudo selector yang  <del>nyolong</del> terinspirasi dari <a href="https://yui540.design/">yui540</a> dan <a href="https://sai-chan.com/">sai-chan</a>. Tapi karena masih berantakan juga strukturnya, contohnya halaman CTF, jadi mungkin dilanjut dilain waktu.</p>
-]]></content:encoded>
     </item>
     
   </channel>

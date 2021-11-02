@@ -5,7 +5,152 @@
     <link>https://fahmifj.github.io/tags/tutorial/</link>
     <description>Recent content in Tutorial on Ef&#39;s log</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Sun, 04 Jul 2021 19:45:21 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/tutorial/index.xml" rel="self" type="application/rss+xml" />
+    <lastBuildDate>Mon, 01 Nov 2021 14:51:02 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/tutorial/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>Hugo Site Deployment With Github Actions</title>
+      <link>https://fahmifj.github.io/blog/hugo-deployment-with-github-actions/</link>
+      <pubDate>Mon, 01 Nov 2021 14:51:02 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/blog/hugo-deployment-with-github-actions/</guid>
+      <description>This post a continuation from my previous post about Hugo Setup and Deployment.
+Let&amp;rsquo;s sum up what we did previously:
+ We created a site and generated the site&amp;rsquo;s HTML files (under /public folder) using Hugo. We uploaded these HTML files to a GitHub repository called my-blog, and then we hosted the site by enabling GitHub Pages on that repo. Lastly, we wrote a deployment script written in bash which can automatically generate and push the static HTML files to the GitHub repository.</description>
+      <content:encoded><![CDATA[<p>This post a continuation from my previous post about <a href="https://fahmifj.github.io/blog/hugo-setup-and-deployment/">Hugo Setup and Deployment</a>.</p>
+<p>Let&rsquo;s sum up what we did previously:</p>
+<ul>
+<li>We created a site and generated the site&rsquo;s HTML files (under <code>/public</code> folder) using Hugo.</li>
+<li>We uploaded these HTML files to a GitHub repository called <code>my-blog</code>, and then we hosted the site by enabling GitHub Pages on that repo.</li>
+<li>Lastly, we wrote a deployment script written in bash which can automatically generate and push the static HTML files to the GitHub repository.</li>
+</ul>
+<p>Using that way, we generate the site&rsquo;s static HTML files and then we push these newly generated files to the repository. So, there will be a bunch of HTML files generated on our machine over time, and we&rsquo;re going to upload them all each time we wish to update the site. That&rsquo;s why this is a waste.</p>
+<p>So to avoid that, we&rsquo;ll employ GitHub actions! Well, it basically does the same thing as we did, but, instead of using our own machine, we&rsquo;ll let GitHub VM/Docker instances do it for us.</p>
+<p>I know that there are a lot of similar tutorials out there, but let me finish what I&rsquo;ve started!</p>
+<h4 id="goals">Goals</h4>
+<ul>
+<li>Automate Site Deployment using GitHub Actions (I&rsquo;ll try to explain about it!)</li>
+</ul>
+<h4 id="prerequisites">Prerequisites</h4>
+<ul>
+<li>Familiarity with CLI and Git!</li>
+</ul>
+<h2 id="clean-up-site">Clean Up Site</h2>
+<p>Let&rsquo;s start by reviewing the previous site structure, here&rsquo;s where we (I) left it:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>my-blog<span class="o">)</span>$ tree -a -L <span class="m">2</span> -I <span class="s2">&#34;\.git&#34;</span>
+.
+├── .gitmodules
+├── archetypes
+│   └── default.md
+├── config.yml
+├── content
+│   └── post
+├── data
+├── deploy.sh
+├── layouts
+├── public <span class="c1"># &lt;-- All files under this folder are hosted using GitHub Pages,</span>
+│   ├── 404.html
+│   ├── assets
+│   ├── categories
+│   ├── en
+│   ├── fa
+│   ├── fr
+│   ├── index.html
+│   ├── index.json
+│   ├── index.xml
+│   ├── page
+│   ├── post
+│   ├── robots.txt
+│   ├── series
+│   ├── sitemap.xml
+│   └── tags
+├── resources
+│   └── _gen
+├── static
+└── themes
+    └── PaperMod
+
+<span class="m">20</span> directories, <span class="m">10</span> files
+</code></pre></div><p>Since we&rsquo;re going to use GitHub Actions, we&rsquo;ll now ignore the public folder and remove all of its content including the git repository inside it:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>my-blog<span class="o">)</span>$ rm ./public/* -r f
+<span class="o">(</span>my-blog<span class="o">)</span>$ rm ./public/.git -rf
+</code></pre></div><p>And remove these public folder lines from our submodule.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>my-blog<span class="o">)</span>$ cat .git/config
+...
+<span class="o">[</span>submodule <span class="s2">&#34;public&#34;</span><span class="o">]</span>
+        <span class="nv">url</span> <span class="o">=</span> https://github.com/your-username/my-blog.git
+        <span class="nv">active</span> <span class="o">=</span> <span class="nb">true</span>
+...
+<span class="o">(</span>my-blog<span class="o">)</span>$ cat .gitmodules
+...
+<span class="o">[</span>submodule <span class="s2">&#34;public&#34;</span><span class="o">]</span>
+        <span class="nv">url</span> <span class="o">=</span> https://github.com/your-username/my-blog.git
+        <span class="nv">active</span> <span class="o">=</span> <span class="nb">true</span>
+...
+</code></pre></div><p>Clean any cached content from the <code>public</code> folder.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>my-blog<span class="o">)</span>$ git rm --cached ./public -f
+</code></pre></div><p>Then go create another GitHub repository with the format <code>your-username.github.io</code>, and set it as the remote repository of our blog.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>my-blog<span class="o">)</span>$ git remote add origin https://github.com/your-username/your-username.github.io.git
+</code></pre></div><p>For the <code>config.yaml</code>, make sure you&rsquo;ve pointed the baseURL value with:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-yaml" data-lang="yaml"><span class="nt">baseURL</span><span class="p">:</span><span class="w"> </span><span class="s2">&#34;https://your-username.github.io/&#34;</span><span class="w">
+</span></code></pre></div><h2 id="add-github-actions">Add GitHub Actions</h2>
+<p>On the previous post, we automated several things: site build, commit, and push our site to GitHub using a bash script. We can call the execution of this script as a <strong>workflow</strong> that runs a single <strong>job</strong>, it is to deploy our site. Each command executed within the deployment script (build, commit, push) can be referred as a <strong>step</strong>.</p>
+<p>GitHub Actions are basically the advanced version of the deployment script we created. It&rsquo;s event-driven, which means we can set a specific event to trigger a workflow. In this case, we&rsquo;ll create an event that will trigger the site deployment each time we push a new commit to the main branch.</p>
+<p>A workflow file for GitHub Actions must be written in YAML syntax, and it&rsquo;s placed under a special directory called <code>.github/workflows/[here].yml</code>, so let&rsquo;s create the folder first inside our site repository.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>my-blog<span class="o">)</span>$ mkdir -p ./.github/workflows
+</code></pre></div><p>We&rsquo;ll save the following code under the workflow directory with a name <code>gh-pages.yml</code> (<code>./.github/workflows/gh-pages.yml</code>).</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-yaml" data-lang="yaml"><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l">github pages</span><span class="w">
+</span><span class="w">
+</span><span class="w"></span><span class="nt">on</span><span class="p">:</span><span class="w">
+</span><span class="w">  </span><span class="nt">push</span><span class="p">:</span><span class="w">
+</span><span class="w">    </span><span class="nt">branches</span><span class="p">:</span><span class="w">
+</span><span class="w">      </span>- <span class="l">main </span><span class="w"> </span><span class="c"># Set a branch to deploy</span><span class="w">
+</span><span class="w">
+</span><span class="w"></span><span class="nt">jobs</span><span class="p">:</span><span class="w">
+</span><span class="w">  </span><span class="nt">deploy</span><span class="p">:</span><span class="w">
+</span><span class="w">    </span><span class="nt">runs-on</span><span class="p">:</span><span class="w"> </span><span class="l">ubuntu-18.04</span><span class="w">
+</span><span class="w">    </span><span class="nt">steps</span><span class="p">:</span><span class="w">
+</span><span class="w">      </span>- <span class="nt">uses</span><span class="p">:</span><span class="w"> </span><span class="l">actions/checkout@v2</span><span class="w">
+</span><span class="w">        </span><span class="nt">with</span><span class="p">:</span><span class="w">
+</span><span class="w">          </span><span class="nt">submodules</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="w">  </span><span class="c"># Fetch Hugo themes (true OR recursive)</span><span class="w">
+</span><span class="w">          </span><span class="nt">fetch-depth</span><span class="p">:</span><span class="w"> </span><span class="m">0</span><span class="w">    </span><span class="c"># Fetch all history for .GitInfo and .Lastmod</span><span class="w">
+</span><span class="w">
+</span><span class="w">      </span>- <span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l">Setup Hugo</span><span class="w">
+</span><span class="w">        </span><span class="nt">uses</span><span class="p">:</span><span class="w"> </span><span class="l">peaceiris/actions-hugo@v2</span><span class="w">
+</span><span class="w">        </span><span class="nt">with</span><span class="p">:</span><span class="w">
+</span><span class="w">          </span><span class="nt">hugo-version</span><span class="p">:</span><span class="w"> </span><span class="s1">&#39;latest&#39;</span><span class="w">
+</span><span class="w">          </span><span class="nt">extended</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="w">
+</span><span class="w">        
+</span><span class="w">      </span>- <span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l">Build </span><span class="w">
+</span><span class="w">        </span><span class="nt">run</span><span class="p">:</span><span class="w"> </span><span class="l">hugo --minify --cleanDestinationDir</span><span class="w">
+</span><span class="w">
+</span><span class="w">      </span>- <span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l">Deploy</span><span class="w">
+</span><span class="w">        </span><span class="nt">uses</span><span class="p">:</span><span class="w"> </span><span class="l">peaceiris/actions-gh-pages@v3</span><span class="w">
+</span><span class="w">        </span><span class="nt">with</span><span class="p">:</span><span class="w">
+</span><span class="w">          </span><span class="nt">github_token</span><span class="p">:</span><span class="w"> </span><span class="l">${{ secrets.GITHUB_TOKEN }}</span><span class="w">
+</span><span class="w">          </span><span class="nt">publish_dir</span><span class="p">:</span><span class="w"> </span><span class="l">./public</span><span class="w">
+</span></code></pre></div><p>You can study the code yourself, because I&rsquo;m not the one who created it 😅. But, to make sure that the public folder always get cleaned first before build, I added <code>--cleanDestinationDir</code> option.</p>
+<p>Let&rsquo;s commit this workflow and push it to GitHub.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>my-blog<span class="o">)</span>$ git add ./.github/workflows/gh-pages.yml
+<span class="o">(</span>my-blog<span class="o">)</span>$ git commit -m <span class="s2">&#34;Add gh-pages.yml&#34;</span>
+<span class="o">(</span>my-blog<span class="o">)</span>$ git push -u origin main
+</code></pre></div><h2 id="trigger-the-workflow">Trigger the Workflow!</h2>
+<p>We can create a new post, then add some text to it.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>my-blog<span class="o">)</span>$ hugo new post/test-gh-actions.md
+<span class="o">(</span>my-blog<span class="o">)</span>$ <span class="nb">echo</span> <span class="s1">&#39;Test GH Action&#39;</span> &gt;&gt; content/post/test-gh-actions.md
+</code></pre></div><p>Finally, commit the change and push it.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>my-blog<span class="o">)</span>$ git commit -m <span class="s2">&#34;Trigger build&#34;</span>
+</code></pre></div><p>To observe the deployment process/workflow, just navigate to your site repository and click on the action menu (<code>https://github.com/your-username/your-username.github.io/actions</code>).</p>
+<p>That&rsquo;s it!</p>
+<h2 id="my-current-deployment">My Current Deployment</h2>
+<p>A bit off topic, but I&rsquo;ll show you my current deployment process, not in detail, but it should give you an idea of it was like.</p>
+<p>My deployment process a little bit different, because I&rsquo;ve separated my blog into two: blog-core, and the full static HTML site (it&rsquo;s this site). The blog-core is a private repo, and the full static HTML is a public repository. The blog-core repo contains my draft, notes, and other (a lot of them), which is only available for me locally because of <code>.gitignore</code>.</p>
+<p>When a new commit is pushed on the blog-core, GitHub Actions will be triggered to generate the static HTML files. The newly generated HTML files are then pushed to the static site repo. I had to include my secret token in the blog-core so that GitHub Actions could use the token to authenticate itself.</p>
+<p><div class="img-container"><img src="imgs/image-20211102111943965.png" alt="image-20211102111943965"  /></div>
+</p>
+<p>Note: these are not the real commands.</p>
+<p>I&rsquo;ll separate this section in a dedicated post later!</p>
+]]></content:encoded>
+    </item>
+    
     <item>
       <title>Exposing a Samba Server to the Internet in Azure</title>
       <link>https://fahmifj.github.io/blog/setup-a-samba-server-in-azure/</link>
@@ -172,25 +317,24 @@ $ smbclient //<span class="o">[</span>IP<span class="o">]</span>/<span class="o"
       
       <guid>https://fahmifj.github.io/blog/hugo-setup-and-deployment/</guid>
       <description>A quick tutorial about setting up a site using Hugo</description>
-      <content:encoded><![CDATA[<p>Looking back at my first post in Bahasa Indonesia, I said that I was using Hugo to build this blog. So in this post, I’d like to share how to create your own!</p>
+      <content:encoded><![CDATA[<p>Looking back at my first post in Bahasa Indonesia, I said that I was using Hugo to build this blog. So, in this post, I&rsquo;ll show you how to make your own!</p>
 <h4 id="goals">Goals</h4>
 <p>Below are the main goals of this post:</p>
 <ul>
 <li>Installing Hugo</li>
-<li>Using Hugo theme</li>
-<li>Deploying Hugo site with Github</li>
+<li>Creating a Site with Hugo</li>
+<li>Deploying the site using GitHub pages</li>
 </ul>
 <h4 id="prerequisites">Prerequisites</h4>
 <p>There are some prerequisites needed to accomplish these goals:</p>
 <ul>
 <li>A GitHub account</li>
+<li>Familiarity with CLI commands and basic Git workflow</li>
 <li><a href="https://git-scm.com/downloads">Git Bash</a> for Windows users</li>
-<li>Basic knowledge of Git (commit, push, pull, creating repository, know what is local and remote repository)</li>
-<li>Basic knowledge/use of CLI (cd, ls, pwd, mv, rm, mkdir)</li>
 </ul>
 <p>If all set, then let&rsquo;s get started</p>
 <h2 id="installing-hugo">Installing Hugo</h2>
-<p>First, download Hugo executable binary at <a href="https://github.com/gohugoio/hugo/releases">https://github.com/gohugoio/hugo/releases</a>. Pick your Hugo version according to what OS you’re on. There is also the extended version, which you should use if you’re building your own theme or picking a theme that uses Sass/SCSS.</p>
+<p>First thing first, we&rsquo;ll need the Hugo executable binary, which you can grab it at <a href="https://github.com/gohugoio/hugo/releases">https://github.com/gohugoio/hugo/releases</a>. Pick your Hugo version according to what OS you’re on. There is also the extended version, which you should use if you’re building your own theme or picking a theme that uses Sass/SCSS.</p>
 <p>I will assume that you have downloaded the binary and extracted it somewhere on your system.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ ls -l
 total <span class="m">47488</span>
@@ -200,7 +344,7 @@ total <span class="m">47488</span>
 </code></pre></div><p>Let&rsquo;s test it on terminal by typing:</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ hugo.exe version
 hugo v0.82.0-9D960784+extended windows/amd64 <span class="nv">BuildDate</span><span class="o">=</span>2021-03-21T17:28:04Z <span class="nv">VendorInfo</span><span class="o">=</span>gohugoio
-</code></pre></div><p>At this time, Hugo’s binary is not available in a system-wide (it’s not accessible outside the current directory). So, let&rsquo;s make it accessible from anywhere by adding the binary location to what is known as <a href="https://en.wikipedia.org/wiki/Environment_variable">PATH variable</a>.</p>
+</code></pre></div><p>At this time, Hugo’s binary is not available in a system-wide (it’s not accessible outside the current directory). Therefore, we&rsquo;ll make it accessible from anywhere by adding the binary location to what is known as <a href="https://en.wikipedia.org/wiki/Environment_variable">PATH variable</a>.</p>
 <h4 id="windows">Windows</h4>
 <p>For Windows users, let&rsquo;s create a folder called <code>bin</code> in <code>C:/</code> .</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">C:<span class="se">\&gt;</span>mkdir bin
@@ -218,10 +362,10 @@ hugo v0.82.0-9D960784+extended windows/amd64 <span class="nv">BuildDate</span><s
                <span class="m">2</span> Dir<span class="o">(</span>s<span class="o">)</span>  57.909.837.824 bytes free
 </code></pre></div><p>After that, hit <code>Win + R</code> on your keyboard and type:</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">rundll32.exe sysdm.cpl,EditEnvironmentVariables
-</code></pre></div><p>You should see a window with &ldquo;Environment Variables&rdquo; in the title. We&rsquo;re going to edit <code>Path</code> variable, so select that <code>Path</code> variable and click on <strong>Edit</strong> button.</p>
+</code></pre></div><p>You should see a window titled &ldquo;Environment Variables&rdquo;, and we&rsquo;re going to edit the <code>Path</code> variable there.</p>
 <p><div class="img-container"><img src="imgs/image-20210613081626397.png" alt="image-20210613081626397"  /></div>
 </p>
-<p>On the Edit window, click on <strong>New</strong> button to add a new path and type <code>C:\bin</code>.</p>
+<p>On the Edit window, add a new path and type <code>C:\bin</code>.</p>
 <p><div class="img-container"><img src="imgs/image-20210613082450289.png" alt="image-20210613082450289"  /></div>
 </p>
 <p>After that, just hit all the <strong>OK</strong> button.</p>
@@ -237,14 +381,11 @@ hugo v0.82.0-9D960784+extended windows/amd64 <span class="nv">BuildDate</span><s
 </code></pre></div><p>Next, open your <code>.bashrc</code> or <code>.zshrc</code> file which is located at <code>/home/username/.(zsh|bash)rc</code> with your favorite text editor such as vim, and then simply add these lines at the top of your <code>.bashrc/.zshrc</code> file.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">PATH_HUGO=&#39;/home/username/.local/bin&#39;
 export PATH=$PATH_HUGO:$PATH
-</code></pre></div><p>Reopen your terminal and run <code>hugo version</code> from any directory and see if it&rsquo;s returns the version.</p>
+</code></pre></div><p>Re-open your terminal and run <code>hugo version</code> from any directory and see if it&rsquo;s returns the version.</p>
 <h2 id="creating-your-first-site">Creating Your First Site</h2>
-<p>We can create a site from anywhere by issuing the following command:</p>
+<p>We can create a site in anywhere by issuing the command below, but I recommend you to create a site in a specific folder such as <code>workspace</code> or something like <code>/workspace/your.blog.domain.com</code>.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ hugo new site <span class="o">[</span>site-name<span class="o">]</span>
-</code></pre></div><blockquote>
-<p>I recommend you to create a site in a specific folder such as <code>workspace</code>.</p>
-</blockquote>
-<p>For now, let&rsquo;s create a site called <code>my-blog</code>.</p>
+</code></pre></div><p>For now, let&rsquo;s call our new site <code>my-blog</code>.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ hugo new site my-blog
 Congratulations! Your new Hugo site is created in C:<span class="se">\U</span>sers<span class="se">\f</span>ahmi<span class="se">\D</span>esktop<span class="se">\t</span>est<span class="se">\m</span>y-blog.
 
@@ -268,28 +409,29 @@ Visit https://gohugo.io/ <span class="k">for</span> quickstart guide and full do
 ├── layouts
 ├── static
 └── themes
-</code></pre></div><p>Go to the <code>my-blog</code> folder and type <code>hugo server</code> in the terminal to host it locally.</p>
+</code></pre></div><p>We can host that site locally by typing <code>hugo server</code> within <code>my-blog</code> directory. By default, the site is hosted at <code>http://localhost:1313/</code> , but it&rsquo;ll be empty because we haven&rsquo;t added any content yet.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ <span class="nb">cd</span> my-blog
 $ hugo server
-</code></pre></div><p>By default, the site is hosted at <code>http://localhost:1313/</code> , but it&rsquo;ll be empty because we haven&rsquo;t added any content yet.</p>
-<h2 id="using-a-theme">Using a Theme</h2>
-<p>My blog uses a theme called <a href="https://themes.gohugo.io/hugo-papermod/">PaperMod</a>, so l&rsquo;ll be using that here, too.</p>
-<p>First, let&rsquo;s delete the previous <code>my-blog</code> and recreate it with the following command:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ hugo new site my-blog -f yml
+</code></pre></div><h2 id="using-a-theme">Using a Theme</h2>
+<p>My blog uses a theme called <a href="https://themes.gohugo.io/hugo-papermod/">PaperMod</a>, so l&rsquo;ll be using that too here.</p>
+<p>Since PaperMod prefers YAML instead of TOML, let&rsquo;s delete the previous <code>my-blog</code> and recreate it with the following command:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ rm my-blog -rf <span class="c1"># becareful with this or just delete it fro</span>
+$ hugo new site my-blog -f yml
 </code></pre></div><p>Let&rsquo;s move into <code>my-blog</code> and initialize a git repository there.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ <span class="nb">cd</span> my-blog
 $ git init
 </code></pre></div><p>After that,  go to the <code>themes</code> folder and clone the PaperMod theme there.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ <span class="nb">cd</span> themes
 <span class="o">(</span>themes<span class="o">)</span>$ git clone https://github.com/adityatelange/hugo-PaperMod PaperMod --depth<span class="o">=</span><span class="m">1</span>
-</code></pre></div><p>We’ll add the theme as a submodule of <code>my-blog</code>.</p>
+</code></pre></div><p>We&rsquo;ll add the theme as a submodule of <code>my-blog</code>, but you can skip this one if you don&rsquo;t want to</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>themes<span class="o">)</span>$ git submodule add https://github.com/adityatelange/hugo-PaperMod.git PaperMod
-</code></pre></div><p>Now, let&rsquo;s go back to the root directory (<code>my-blog</code>), then replace/overwrite our <code>config.yml</code> with <a href="https://raw.githubusercontent.com/adityatelange/hugo-PaperMod/exampleSite/config.yml">this</a>, but change the value of <code>baseUrl</code> and <code>theme</code> to these:</p>
+</code></pre></div><p>Now let&rsquo;s go back to the site root directory (<code>my-blog</code>), and then replace/overwrite our <code>config.yml</code> with <a href="https://raw.githubusercontent.com/adityatelange/hugo-PaperMod/exampleSite/config.yml">this</a>, but change the value of <code>baseUrl</code> and <code>theme</code> to these:</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-yaml" data-lang="yaml"><span class="nt">baseURL</span><span class="p">:</span><span class="w"> </span><span class="s2">&#34;&#34;</span><span class="w">
 </span><span class="w"></span><span class="nt">theme</span><span class="p">:</span><span class="w"> </span><span class="l">PaperMod</span><span class="w">
-</span></code></pre></div><p>Test it with:</p>
+</span></code></pre></div><p>Test it with</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ hugo server
-</code></pre></div><h2 id="creating-your-first-post">Creating Your First Post</h2>
+</code></pre></div><p>And visit your <code>http://localhost:1313</code></p>
+<h2 id="creating-your-first-post">Creating Your First Post</h2>
 <p>We can create a new post with by issuing the following command:</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ hugo new post/new-post.md
 </code></pre></div><p>You can edit <code>new-post.md</code> after that, the file should be under <code>my-blog/content/post/[here]</code>.</p>
@@ -308,7 +450,6 @@ total <span class="m">1</span>
 <h2 id="deploying-your-hugo-site-on-github">Deploying Your Hugo Site on GitHub</h2>
 <p>From here, thing you need to know is that when you run <code>hugo server</code>, Hugo generates all the site resources (html, image, etc.) and serves them directly from memory. But, if you just run <code>hugo</code>, Hugo generates all the site resources under <code>public</code> folder (<code>my-blog/public/[here]</code>).</p>
 <p>The files in this <code>public</code> folder are the files that we are going to host on GitHub. We can simply upload all the files in the <code>public</code> folder into a GitHub repository.</p>
-<p>I&rsquo;m not good at explaining it on English, so let&rsquo;s do that in action!</p>
 <p>But, before that, you have to change your site&rsquo;s <strong>base URL</strong> in <code>config.yml</code> to:</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-yaml" data-lang="yaml"><span class="nt">baseURL</span><span class="p">:</span><span class="w"> </span><span class="s2">&#34;https://[your_user_name].github.io/my-blog/&#34;</span><span class="w">
 </span></code></pre></div><p>For example, my username is <code>fahmifj</code> , so my config would be:</p>
@@ -346,19 +487,19 @@ Total in <span class="m">147</span> ms
 <p><div class="img-container"><img src="imgs/image-20210613101715896.png" alt="image-20210613101715896"  /></div>
 </p>
 <p>If you don&rsquo;t see it or the page returns a 404 error, then just wait for a few minutes more.</p>
-<p>From here, we learned how to deploy/host our Hugo site on GitHub. However, this is not an efficient method of updating your site, therefore let&rsquo;s write a deployment script.</p>
 <h2 id="deployment-script">Deployment Script</h2>
+<p>Finally, we&rsquo;re going to (semi) automate the deployment process using bash script.</p>
 <p>Assuming you&rsquo;re inside <code>my-blog</code> , then go to the <code>public</code> directory, do files and folders clean up and initialize a git repository there.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ <span class="nb">cd</span> public
 $ rm -rf *
 $ git init
-</code></pre></div><p>Still inside the <code>public</code> directory, set the previously created <code>my-blog</code> repository as the remote repository and run <code>git pull</code> afterwards.</p>
+</code></pre></div><p>In the same directory (<code>public</code>), set the repository you created on GitHub as the remote repository, and then run <code>git pull</code> afterwards.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>public<span class="o">)</span>$ git remote add origin https://github.com/your-username/my-blog.git
 <span class="o">(</span>public<span class="o">)</span>$ git pull origin main
 </code></pre></div><p>Return to the site root directory then add the <code>public</code> folder as a submodule.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ <span class="nb">cd</span> ../
 $ git submodule add https://github.com/your-username/my-blog.git public
-</code></pre></div><p>Now let&rsquo;s create a deployment script at the site root directory and name it as <code>deploy.sh</code>:</p>
+</code></pre></div><p>Now let&rsquo;s create a deployment script at the site root directory and name it as <code>deploy.sh</code>.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="cp">#!/bin/bash
 </span><span class="cp"></span>
 <span class="nb">echo</span> -e <span class="s2">&#34;\033[0;32mDeploying blog to GitHub...\033[0m&#34;</span>
@@ -389,12 +530,13 @@ git push -u origin main
 
 <span class="c1"># Go back to the root directory</span>
 <span class="nb">cd</span> ../
-</code></pre></div><p>In Windows, even though it is a bash script, it will work with Git Bash.</p>
-<p>Let&rsquo;s test it by creating a new post.</p>
+</code></pre></div><p>Just a reminder for Windows users, you can run the script within Git Bash or WSL.</p>
+<p>Let&rsquo;s test the deploy script by creating a new post.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ hugo new post/second-post.md
 $ <span class="nb">echo</span> <span class="s1">&#39;This is second post&#39;</span> &gt;&gt; content/post/second-post.md
-</code></pre></div><p>Don&rsquo;t forget to change the value of <code>draft</code>  from <code>true</code> to <code>false</code>!</p>
-<p>Now we can run the script, the output should looks something like this:</p>
+</code></pre></div><p>Don&rsquo;t forget to change the value of <code>draft</code>  from <code>true</code> to <code>false</code>, here is a small trick with <code>sed</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ sed -i <span class="s1">&#39;s/draft: false/draft: true/g&#39;</span>
+</code></pre></div><p>Now we can run the script, the output should look something like this:</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ ./deploy.sh
 Deploying blog to GitHub...
 Start building sites …
@@ -425,11 +567,10 @@ remote: Resolving deltas: 100% <span class="o">(</span>9/9<span class="o">)</spa
 To https://github.com/fahmifj/my-blog.git
    f7141a3..af4c483  main -&gt; main
 Branch <span class="s1">&#39;main&#39;</span> <span class="nb">set</span> up to track remote branch <span class="s1">&#39;main&#39;</span> from <span class="s1">&#39;origin&#39;</span>.
-</code></pre></div><p>If we check our repo it should be updated.</p>
+</code></pre></div><p>It should be updated if we check our repo.</p>
 <p><div class="img-container"><img src="imgs/image-20210613110105343.png" alt="image-20210613110105343"  /></div>
 </p>
-<p>That&rsquo;s how I deployed my blog at the first time.</p>
-<p>But still, this is inefficient method because it wastes your bandwidth, thus in the next post, let&rsquo;s employ GitHub action 😼.</p>
+<p>And that&rsquo;s how I deployed my blog at the first time. However, this is an inefficient method because it wastes your bandwidth. Therefore, in the next post, let&rsquo;s employ GitHub action 😼.</p>
 <p>In the meantime, try reading the following documentations:</p>
 <ul>
 <li><a href="https://gohugo.io/content-management/sections/">https://gohugo.io/content-management/sections/</a></li>
