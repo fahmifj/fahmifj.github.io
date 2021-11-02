@@ -12,30 +12,32 @@
       <pubDate>Mon, 01 Nov 2021 14:51:02 +0700</pubDate>
       
       <guid>https://fahmifj.github.io/blog/hugo-deployment-with-github-actions/</guid>
-      <description>This post a continuation from my previous post about Hugo Setup and Deployment.
-Let&amp;rsquo;s sum up what we did previously:
- We created a site and generated the site&amp;rsquo;s HTML files (under /public folder) using Hugo. We uploaded these HTML files to a GitHub repository called my-blog, and then we hosted the site by enabling GitHub Pages on that repo. Lastly, we wrote a deployment script written in bash which can automatically generate and push the static HTML files to the GitHub repository.</description>
-      <content:encoded><![CDATA[<p>This post a continuation from my previous post about <a href="https://fahmifj.github.io/blog/hugo-setup-and-deployment/">Hugo Setup and Deployment</a>.</p>
-<p>Let&rsquo;s sum up what we did previously:</p>
+      <description>Applying a small part of Continuous Deployment to your Hugo site</description>
+      <content:encoded><![CDATA[<p>This post is a continuation from my previous post about <a href="https://fahmifj.github.io/blog/hugo-setup-and-deployment/">Hugo Setup and Deployment</a>. In this post, we&rsquo;ll look into GitHub Actions.</p>
+<p>First thing first, let&rsquo;s sum up what we did previously:</p>
 <ul>
 <li>We created a site and generated the site&rsquo;s HTML files (under <code>/public</code> folder) using Hugo.</li>
 <li>We uploaded these HTML files to a GitHub repository called <code>my-blog</code>, and then we hosted the site by enabling GitHub Pages on that repo.</li>
 <li>Lastly, we wrote a deployment script written in bash which can automatically generate and push the static HTML files to the GitHub repository.</li>
 </ul>
 <p>Using that way, we generate the site&rsquo;s static HTML files and then we push these newly generated files to the repository. So, there will be a bunch of HTML files generated on our machine over time, and we&rsquo;re going to upload them all each time we wish to update the site. That&rsquo;s why this is a waste.</p>
-<p>So to avoid that, we&rsquo;ll employ GitHub actions! Well, it basically does the same thing as we did, but, instead of using our own machine, we&rsquo;ll let GitHub VM/Docker instances do it for us.</p>
+<p>So to avoid that, we&rsquo;ll employ GitHub Actions! Well, it basically does the same thing as we did, but, instead of using our own machine, we&rsquo;ll let GitHub VM/Docker instances do it for us.</p>
 <p>I know that there are a lot of similar tutorials out there, but let me finish what I&rsquo;ve started!</p>
 <h4 id="goals">Goals</h4>
+<p>The only goal of this post is:</p>
 <ul>
-<li>Automate Site Deployment using GitHub Actions (I&rsquo;ll try to explain about it!)</li>
+<li>Automate Site Deployment using GitHub Actions (I&rsquo;ll try my best to explain about it!)</li>
 </ul>
 <h4 id="prerequisites">Prerequisites</h4>
+<p>Prerequisites are still the same, they are:</p>
 <ul>
-<li>Familiarity with CLI and Git!</li>
+<li>A GitHub account</li>
+<li>Familiarity with CLI</li>
+<li>Familiarity with Git.</li>
 </ul>
-<h2 id="clean-up-site">Clean Up Site</h2>
+<h2 id="a-little-clean-up">A Little Clean Up</h2>
 <p>Let&rsquo;s start by reviewing the previous site structure, here&rsquo;s where we (I) left it:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>my-blog<span class="o">)</span>$ tree -a -L <span class="m">2</span> -I <span class="s2">&#34;\.git&#34;</span>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ tree -a -L <span class="m">2</span> -I <span class="s2">&#34;\.git&#34;</span>
 .
 ├── .gitmodules
 ├── archetypes
@@ -69,33 +71,30 @@ Let&amp;rsquo;s sum up what we did previously:
     └── PaperMod
 
 <span class="m">20</span> directories, <span class="m">10</span> files
-</code></pre></div><p>Since we&rsquo;re going to use GitHub Actions, we&rsquo;ll now ignore the public folder and remove all of its content including the git repository inside it:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>my-blog<span class="o">)</span>$ rm ./public/* -r f
-<span class="o">(</span>my-blog<span class="o">)</span>$ rm ./public/.git -rf
-</code></pre></div><p>And remove these public folder lines from our submodule.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>my-blog<span class="o">)</span>$ cat .git/config
-...
+</code></pre></div><p>We&rsquo;ll now ignore the public folder and remove all of its content including the git repository inside it, because this will be handled by GitHub Actions later.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ rm ./public/* -r f
+$ rm ./public/.git -rf
+</code></pre></div><p>If you happen to use the public folder as a submodule, remove the following lines in <code>.git/config</code> and  <code>.gitmodules</code></p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ cat .git/config
 <span class="o">[</span>submodule <span class="s2">&#34;public&#34;</span><span class="o">]</span>
         <span class="nv">url</span> <span class="o">=</span> https://github.com/your-username/my-blog.git
         <span class="nv">active</span> <span class="o">=</span> <span class="nb">true</span>
-...
-<span class="o">(</span>my-blog<span class="o">)</span>$ cat .gitmodules
-...
-<span class="o">[</span>submodule <span class="s2">&#34;public&#34;</span><span class="o">]</span>
-        <span class="nv">url</span> <span class="o">=</span> https://github.com/your-username/my-blog.git
-        <span class="nv">active</span> <span class="o">=</span> <span class="nb">true</span>
-...
 </code></pre></div><p>Clean any cached content from the <code>public</code> folder.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>my-blog<span class="o">)</span>$ git rm --cached ./public -f
-</code></pre></div><p>Then go create another GitHub repository with the format <code>your-username.github.io</code>, and set it as the remote repository of our blog.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>my-blog<span class="o">)</span>$ git remote add origin https://github.com/your-username/your-username.github.io.git
-</code></pre></div><p>For the <code>config.yaml</code>, make sure you&rsquo;ve pointed the baseURL value with:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ git rm --cached ./public -f
+</code></pre></div><p>Then go create another GitHub repository with the format <code>your-username.github.io</code> because we&rsquo;re going to use this repo as the remote repository of our blog.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ git remote add origin https://github.com/your-username/your-username.github.io.git
+</code></pre></div><p>For the <code>config.yaml</code>, changed the baseURL value with:</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-yaml" data-lang="yaml"><span class="nt">baseURL</span><span class="p">:</span><span class="w"> </span><span class="s2">&#34;https://your-username.github.io/&#34;</span><span class="w">
-</span></code></pre></div><h2 id="add-github-actions">Add GitHub Actions</h2>
+</span></code></pre></div><h2 id="add-the-theme-as-submodule">Add the Theme as Submodule</h2>
+<p>If you happen to not using submodule previously, this time we will.</p>
+<p>Run the following command to add the PaperMod theme we cloned previously as a submodule of our site.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ git submodule add https://github.com/adityatelange/hugo-PaperMod.git themes/PaperMod
+</code></pre></div><p>If you don&rsquo;t use the same theme, simply replace the url and directory parts to match yours.</p>
+<h2 id="add-github-actions">Add GitHub Actions</h2>
 <p>On the previous post, we automated several things: site build, commit, and push our site to GitHub using a bash script. We can call the execution of this script as a <strong>workflow</strong> that runs a single <strong>job</strong>, it is to deploy our site. Each command executed within the deployment script (build, commit, push) can be referred as a <strong>step</strong>.</p>
 <p>GitHub Actions are basically the advanced version of the deployment script we created. It&rsquo;s event-driven, which means we can set a specific event to trigger a workflow. In this case, we&rsquo;ll create an event that will trigger the site deployment each time we push a new commit to the main branch.</p>
 <p>A workflow file for GitHub Actions must be written in YAML syntax, and it&rsquo;s placed under a special directory called <code>.github/workflows/[here].yml</code>, so let&rsquo;s create the folder first inside our site repository.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>my-blog<span class="o">)</span>$ mkdir -p ./.github/workflows
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ mkdir -p ./.github/workflows
 </code></pre></div><p>We&rsquo;ll save the following code under the workflow directory with a name <code>gh-pages.yml</code> (<code>./.github/workflows/gh-pages.yml</code>).</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-yaml" data-lang="yaml"><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l">github pages</span><span class="w">
 </span><span class="w">
@@ -141,13 +140,21 @@ Let&amp;rsquo;s sum up what we did previously:
 </code></pre></div><p>To observe the deployment process/workflow, just navigate to your site repository and click on the action menu (<code>https://github.com/your-username/your-username.github.io/actions</code>).</p>
 <p>That&rsquo;s it!</p>
 <h2 id="my-current-deployment">My Current Deployment</h2>
-<p>A bit off topic, but I&rsquo;ll show you my current deployment process, not in detail, but it should give you an idea of it was like.</p>
+<p>A bit off topic, but I&rsquo;ll show you my current deployment process, not in detail, but it should give you an idea of how it was like.</p>
 <p>My deployment process a little bit different, because I&rsquo;ve separated my blog into two: blog-core, and the full static HTML site (it&rsquo;s this site). The blog-core is a private repo, and the full static HTML is a public repository. The blog-core repo contains my draft, notes, and other (a lot of them), which is only available for me locally because of <code>.gitignore</code>.</p>
 <p>When a new commit is pushed on the blog-core, GitHub Actions will be triggered to generate the static HTML files. The newly generated HTML files are then pushed to the static site repo. I had to include my secret token in the blog-core so that GitHub Actions could use the token to authenticate itself.</p>
 <p><div class="img-container"><img src="imgs/image-20211102111943965.png" alt="image-20211102111943965"  /></div>
 </p>
-<p>Note: these are not the real commands.</p>
-<p>I&rsquo;ll separate this section in a dedicated post later!</p>
+<p>Note: these are not the actual commands.</p>
+<p><del>I&rsquo;ll separate this section in a dedicated post later! nevermind lol</del></p>
+<p>I found the blog post that explains about this</p>
+<ul>
+<li><a href="https://victoria.dev/blog/two-ways-to-deploy-a-public-github-pages-site-from-a-private-hugo-repository/">https://victoria.dev/blog/two-ways-to-deploy-a-public-github-pages-site-from-a-private-hugo-repository/</a></li>
+</ul>
+<p>And here&rsquo;s the Github Actions that I used</p>
+<ul>
+<li><a href="https://github.com/victoriadrake/hugo-remote">https://github.com/victoriadrake/hugo-remote</a></li>
+</ul>
 ]]></content:encoded>
     </item>
     
