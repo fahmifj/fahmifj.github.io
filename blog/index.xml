@@ -5,7 +5,203 @@
     <link>https://fahmifj.github.io/blog/</link>
     <description>Recent content in Blog on Ef&#39;s log</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Mon, 01 Nov 2021 14:51:02 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/blog/index.xml" rel="self" type="application/rss+xml" />
+    <lastBuildDate>Thu, 04 Nov 2021 16:40:44 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/blog/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>DNS, DNS over HTTPS dan SSH SOCKS Proxy [ID]</title>
+      <link>https://fahmifj.github.io/blog/dns-over-https-and-ssh-socks-proxy/</link>
+      <pubDate>Thu, 04 Nov 2021 16:40:44 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/blog/dns-over-https-and-ssh-socks-proxy/</guid>
+      <description>Can we use these to bypass DNS filters and conceal ourselves from ISPs? Let&amp;#39;s try it anyway</description>
+      <content:encoded><![CDATA[<p>Saat ini sebagian besar browser-browser populer sudah memiliki fitur DNS over HTTPS (DoH). Tapi meskipun begitu, ternyata masih banyak yang belum tau tentang adanya fitur ini.</p>
+<p><em><strong>Loh tau dari mana?</strong></em></p>
+<p><em>Flashback</em> sedikit, ada beberapa teman yang setiap kali mau mengakses reddit atau web streaming anime <del>i</del>legal, mereka harus pakai VPN untuk bypass blokirannya ISP. Karena VPN-nya ini gratisan (baca: dipakai berjamaah dan di limit), sudah pasti jatuhnya lemot.</p>
+<p>Setelah mereka tau soal fitur DoH, salah satunya memberi respon berikut:</p>
+<p><div class="img-container"><img src="imgs/image-20211103210137432.png" alt="image-20211103210137432"  /></div>
+</p>
+<p>Agak risih juga sih ISP di negara ini sukanya main bloc-bloc-an.</p>
+<p>Nah di postingan ini saya akan coba bahas kenapa DoH bisa dipakai untuk mem-<em>bypass</em> website yang diblokir. Saya juga bakal cari tau apakah DoH dan SSH SOCKS Proxy sudah cukup untuk menyembunyikan kita dari ISP.</p>
+<h2 id="how-do-isps-block-websites">How do ISPs block websites?</h2>
+<p>Normalnya ketika kita mengakses sebuah situs, misal <code>www.reddit.com</code>, komputer kita akan mengirimkan sebuah kueri DNS ke sebuah DNS server (milik ISP/operator seluler yang kalian pakai) untuk menanyakan alamat IP dari domain <code>www.reddit.com</code> agar halaman situs tersebut bisa dimuat kemudian.</p>
+<p>Saat kita mengakses situs yang terdaftar di <em>blacklist</em> DNS, maka DNS tersebut memberikan alamat IP palsu dari halaman blokir milik si ISP seperti merconsuar, ipo, dll.</p>
+<p>Kita bisa liat alur-nya secara detail dengan WireShark, tetapi agar lebih simple, kita juga bisa menggunakan <code>tracert</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ tracert -4 -d -h <span class="m">5</span> www.reddit.com
+
+Tracing route to blockpage.****.id <span class="o">[</span>***.215.197.131<span class="o">]</span> 
+over a maximum of <span class="m">5</span> hops:
+
+  <span class="m">1</span>     <span class="m">2</span> ms     <span class="m">2</span> ms     <span class="m">2</span> ms  192.168.1.1 
+  <span class="m">2</span>     *        *        *     Request timed out.
+  <span class="m">3</span>    <span class="m">38</span> ms    <span class="m">32</span> ms    <span class="m">24</span> ms  10.***.44.1 
+  <span class="m">4</span>    <span class="m">26</span> ms    <span class="m">31</span> ms    <span class="m">22</span> ms  ***.215.248.78 
+  <span class="m">5</span>    <span class="m">33</span> ms    <span class="m">25</span> ms    <span class="m">27</span> ms  ***.215.248.82 
+
+Trace complete.
+</code></pre></div><blockquote>
+<p>Di hop kedua saya kurang yakin apakah modem punya Hop count juga seperti router, yang akhirnya ditampilkan  * * *.</p>
+</blockquote>
+<p>Berdasarkan hal diatas <code>www.reddit.com</code> di <em>resolve</em> ke <code>blockpage.sensor.id</code> yang alamat IPnya <code>***.215.248.131</code>. Kita bisa validasi apakah <code>***.215.248.78</code> merupakan alamat IP asli dari reddit dengan menggunakan <a href="https://toolbox.googleapps.com/apps/dig/#A/">Google Toolbox Dig</a>, dan hasilnya:</p>
+<p><div class="img-container"><img src="imgs/image-20211104095424598.png" alt="image-20211104095424598"  /></div>
+</p>
+<p>Ternyata alamat dari <code>www.reddit.com</code> adalah <code>151.101.X.140</code>, bukan <code>112.***.197.131</code>! Yah komputernya kena penipuan :/</p>
+<p>Anyway, alur <em>request</em>-nya bisa diilustrasikan seperti berikut.</p>
+<p><div class="img-container"><img src="imgs/image-20211103163418666.png" alt="image-20211103163418666"  /></div>
+</p>
+<p><em><strong>Darimana saya tau 10.19*.44.1 itu router ISP?</strong></em></p>
+<p>Nope, saya gak tau itu router atau bukan, tapi perangkat ini punya port SSH dan SNMP, jadi kemungkinan perangkat ini di monitor.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ nc -vn 10.***.44.1 <span class="m">22</span>
+Ncat: Version 5.59BETA1 <span class="o">(</span> http://nmap.org/ncat <span class="o">)</span>
+Ncat: Connected to 10.19*.44.1:22.
+SSH-2.0-OpenSSH_7.5
+$ nc -u -vn 10.***.44.1 <span class="m">161</span>
+Ncat: Version 5.59BETA1 <span class="o">(</span> http://nmap.org/ncat <span class="o">)</span>
+Ncat: Connected to 10.19*.44.1:161
+</code></pre></div><p><em><strong>Tapi kan HTTPS?</strong></em></p>
+<p>Enkripsi HTTPS/TLS itu ada di bagian kontennya. Jadi paket-paket DNS kueri yang dikirimkan untuk me-<em>resolve</em> nama domain ke sebuah alamat IP tidak masuk ke dalam enkripsi tersebut.</p>
+<blockquote>
+<p>Kueri DNS itu mendahului trafik HTTP/S</p>
+</blockquote>
+<p>Jadi misalnya ketika kita melakukan login di suatu HTTPS website, ISP gak akan tau username dan password yang kita masukkan, bentukan login page tersebut, dan bahkan sampai ke <em>endpoint</em> URLnya (<code>website.com/api/v1/login/?username=admin&amp;password=admin123</code>).</p>
+<figure>
+    <img src="imgs/image-20211104092043412.png"
+         alt="Contoh konten yang dienkripsi"/> <figcaption>
+            <p>Contoh konten yang dienkripsi
+            </p>
+        </figcaption>
+</figure>
+
+<p>Dengan kata lain, ISP hanya tau tujuan kita mau kemana, tapi dia (seharusnya) gak bisa lihat apa yang kita lakukan di tempat tujuan itu.</p>
+<p>Sampai disini, tentunya kita bisa menyimpulkan sendiri kenapa DoH bisa membuat komputer kita menghindari &ldquo;penipuan&rdquo; yang dilakukan DNS server ISP tersebut.</p>
+<p>Yap, karena kueri DNSnya dibungkus HTTPS. Jadi yang awalnya kueri DNS dikirimkan ke DNS server ISP pada port 53, sekarang kueri DNS di <em>deliver</em> melalui HTTPS ke <em>endpoint</em> DoH yang juga HTTPS, misalnya Cloudflare: <a href="https://cloudflare-dns.com/dns-query">https://cloudflare-dns.com/dns-query</a>.</p>
+<p><em><strong>Terus cloudflare-dns.com di resolve siapa?</strong></em></p>
+<p>DNSnya ISP wkwkw. Yah ketauan kan pakai DoH.</p>
+<h2 id="thou-shalt-bypass">Thou Shalt (By)Pass</h2>
+<h3 id="the-primivite-dns">The Primivite DNS</h3>
+<p>Tanpa DoH pun, sebenarnya kita bisa menghindari &ldquo;penipuan&rdquo; alamat tersebut di level cache.</p>
+<p>Sederhananya, alasan komputer kita membuat DNS kueri terlebih dahulu ke DNS server saat akan mengakses sebuah website adalah karena si komputer belum tau alamat IP dari website yang kita maksud.</p>
+<p>Setelah komputer tahu, alamat IP dan domain ini akan di simpan pada DNS resolver cache. Jadi ketika kita mengakses website yang sama, komputer kita akan mencarinya pada daftar cache terlebih dulu.</p>
+<blockquote>
+<p>Sebenarnya ada cache juga di level aplikasi/browser, tapi yasudahlah.</p>
+</blockquote>
+<p>Pada Windows, kita bisa lihat daftar DNS cache yang ada dengan menjalankan perintah:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">C:<span class="se">\&gt;</span>ifconfig /displaydns
+</code></pre></div><p>Pada dasarnya DNS server itu hanyalah sekumpulan entry yang me-<em>mapping</em> alamat IP dengan nama domain secara dinamik. Di level OS sendiri terdapat sebuah file yang merupakan bentuk primivite dari DNS bersifat statik, yaitu file <code>hosts</code>.</p>
+<p>File <code>hosts</code> Windows bisa ditemukan di <code>C:\Windows\System32\drivers\etc\hosts</code> sedangkan untuk Unix-like, file <code>hosts</code> terdapat di <code>/etc/hosts</code>. Karena saya pengguna Windows sebagai main OS, yang akan di bahas disini adalah <code>hosts</code> file Windows saja.</p>
+<figure>
+    <img src="imgs/image-20211104123812239.png"
+         alt="Windows hosts file"/> <figcaption>
+            <p>Windows hosts file
+            </p>
+        </figcaption>
+</figure>
+
+<p>Pada Windows, file <code>hosts</code> ini akan selalu di-<em>load</em> ke DNS cache, dan kita bisa memanfaatkan ini untuk memberi &lsquo;tau&rsquo; langsung komputer bahwa alamat IP <code>www.reddit.com</code> adalah <code>151.101.129.140</code> dengan menambahkan entry berikut ke dalam file <code>hosts</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">151.101.129.140 reddit.com www.reddit.com
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20211104131236469.png" alt="image-20211104131236469"  /></div>
+</p>
+<p>Jalankan perintah yang sama untuk menampilkan DNS cache.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">C:<span class="se">\&gt;</span>ipconfig /flushdns <span class="c1"># clear cache untuk menghilangkan brainwash dari DNS server ISP</span>
+C:<span class="se">\&gt;</span>ipconfig /displaydns
+</code></pre></div><p>Seharusnya saat ini <code>www.reddit.com</code> dan <code>reddit.com</code> berada di entry paling atas.</p>
+<p>Karena si komputer sudah tau alamat IP dari <code>www.reddit.com</code>, maka dia tidak perlu  lagi &ldquo;bertanya&rdquo; ke DNS server ISP.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ tracert -d www.reddit.com
+
+Tracing route to reddit.com <span class="o">[</span>151.101.129.140<span class="o">]</span>
+over a maximum of <span class="m">30</span> hops:
+
+  <span class="m">1</span>   <span class="m">120</span> ms     <span class="m">2</span> ms     <span class="m">3</span> ms  192.168.43.1
+  <span class="m">2</span>     *        *        *     Request timed out.
+  <span class="m">3</span>   <span class="m">162</span> ms    <span class="m">26</span> ms    <span class="m">26</span> ms  10.***.44.2
+  <span class="m">4</span>   <span class="m">160</span> ms    <span class="m">25</span> ms    <span class="m">30</span> ms  ***.215.36.238 
+  <span class="m">5</span>   <span class="m">187</span> ms    <span class="m">46</span> ms    <span class="m">46</span> ms  180.87.12.233
+  <span class="m">6</span>   <span class="m">186</span> ms    <span class="m">57</span> ms    <span class="m">50</span> ms  180.87.12.232
+  <span class="m">7</span>   <span class="m">191</span> ms    <span class="m">49</span> ms    <span class="m">47</span> ms  180.87.12.250
+  <span class="m">8</span>    <span class="m">49</span> ms    <span class="m">49</span> ms    <span class="m">48</span> ms  210.57.30.38
+  <span class="m">9</span>   <span class="m">188</span> ms    <span class="m">53</span> ms    <span class="m">52</span> ms  202.84.219.174
+ <span class="m">10</span>    <span class="m">70</span> ms    <span class="m">49</span> ms    <span class="m">52</span> ms  202.84.219.174
+ <span class="m">11</span>    <span class="m">60</span> ms    <span class="m">54</span> ms    <span class="m">49</span> ms  202.84.224.197
+ <span class="m">12</span>    <span class="m">83</span> ms    <span class="m">80</span> ms    <span class="m">85</span> ms  210.57.38.171
+ <span class="m">13</span>   <span class="m">205</span> ms   <span class="m">200</span> ms   <span class="m">203</span> ms  151.101.129.140 
+
+Trace complete.
+</code></pre></div><p><em><strong>Kalau untuk website lain gimana?</strong></em></p>
+<p>Google Toolbox!</p>
+<p><div class="img-container"><img src="imgs/image-20211104142819468.png" alt="image-20211104142819468"  /></div>
+</p>
+<p>Maka di <code>hosts</code> filenya:</p>
+<p><div class="img-container"><img src="imgs/image-20211104142858365.png" alt="image-20211104142858365"  /></div>
+</p>
+<h3 id="ssh-socks-proxy--doh">SSH SOCKS Proxy + DoH</h3>
+<p>Penggunaan <code>host</code> file dan DoH memang bisa mem-<em>bypass</em> Website, tapi pihak ISP tetap bisa mengetahui kita mengakses situs dan domain apa.</p>
+<p>Untuk menghindari itu, salah satu cara &lsquo;murah&rsquo; yang saya gunakan selain VPN adalah menggunakan <em>private server</em> lalu memanfaatkan fitur SOCK proxy dari SSH (jatuhnya transparan). Private server saya ini pakai Azure compute.</p>
+<p>Untuk membuat SSH SOCKS Proxy, perintahnya cukup simple:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ ssh -i az_vm.key fproxy-user@20.109.***.213 -D <span class="m">1080</span> -N
+</code></pre></div><ul>
+<li><code>-D 1080</code>: Buka SOCKS proxy di port 1080 (listen)</li>
+<li><code>-N</code>: Tanpa SSH interactive shell.</li>
+</ul>
+<p>Saat ini SOCKS proxy via SSH sudah tersedia di 127.0.0.1:1080. Konfigurasinya di browser:</p>
+<p><div class="img-container"><img src="imgs/image-20211104161049841.png" alt="image-20211104161049841"  /></div>
+</p>
+<p>Mudah kan?</p>
+<p>Btw saya pakai ekstensi browser <a href="https://addons.mozilla.org/en-US/firefox/addon/foxyproxy-standard/">FoxyProxy</a>, supaya saat <em>switch on/off</em>-nya mudah dan gak harus buka-buka settingan browser, berikut tampilannya.</p>
+<p><div class="img-container"><img src="imgs/image-20211104160902204.png" alt="image-20211104160902204"  /></div>
+</p>
+<p>Konfigurasinya? sama dengan settingan browser!</p>
+<p><div class="img-container"><img src="imgs/image-20211104090204141.png" alt="image-20211104090204141"  /></div>
+</p>
+<p>Dengan mengirimkan <em>request</em> ke <code>ifconfig.co/json</code>, saat ini IP saya adalah IP dari si private server.</p>
+<p><div class="img-container"><img src="imgs/image-20211104090145368.png" alt="image-20211104090145368"  /></div>
+</p>
+<p>Lalu ditambah dengan DoH dan di test lewat <a href="https://dnsleaktest.com/">https://dnsleaktest.com/</a>.</p>
+<p><div class="img-container"><img src="imgs/image-20211104090533201.png" alt="image-20211104090533201"  /></div>
+</p>
+<p>Sampai sini seharusnya ISP kurang lebih hanya melihat komputer saya yang mengakses si private server dengan trafik seperti berikut.</p>
+<p><div class="img-container"><img src="imgs/image-20211104152555436.png" alt="image-20211104152555436"  /></div>
+</p>
+<h2 id="conclusion">Conclusion</h2>
+<p>Jadi setidaknya ada 3 solusi di post ini yang bisa kamu coba untuk bypass filters yang diterapkan oleh ISP langganan kamu:</p>
+<ul>
+<li>Hosts file,</li>
+<li>DoH,</li>
+<li>DoH+SSH SOCKS Proxy.</li>
+</ul>
+<p>Menggunakan hosts file dan DoH hanya sebatas menghindari komputer kita dari &ldquo;penipuan&rdquo; alamat palsu oleh DNS server ISP. Sedangkan DoH+SSH SOCKS Proxy selain menghindari &ldquo;penipuan&rdquo;, tunnel yang dibuat juga mengenkripsi keseluruhan trafik web kita.</p>
+<p>Hasil <em>testing</em> ketiganya, bukan <em>testing</em> sih, bisa ditabelkan(?) seperti berikut.</p>
+<div class="force-center">
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Bypass DNS filters</th>
+<th>Hide the domain we visit ?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Hosts file</td>
+<td>Probably yes</td>
+<td>No</td>
+</tr>
+<tr>
+<td>DoH</td>
+<td>Yes, mostly</td>
+<td>No</td>
+</tr>
+<tr>
+<td>DoH + SSH SOCKS Proxy</td>
+<td>Yes, mostly, but it depends.</td>
+<td>Yes</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><em><strong>Apakah dengan ini saya sudah <del>bisa menjadi anggota</del> anonymous?</strong></em></p>
+<p>Nope, karena private server yang saya pakai pun milik sesuatu yang lebih besar dari ISP dan dua-duanya mengumpulkan data juga.</p>
+<p>Baiklah, sekian untuk postingan ini~</p>
+]]></content:encoded>
+    </item>
+    
     <item>
       <title>Hugo Site Deployment With Github Actions</title>
       <link>https://fahmifj.github.io/blog/hugo-deployment-with-github-actions/</link>
@@ -74,7 +270,7 @@
 </code></pre></div><p>We&rsquo;ll now ignore the public folder and remove all of its content including the git repository inside it, because this will be handled by GitHub Actions later.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ rm ./public/* -r f
 $ rm ./public/.git -rf
-</code></pre></div><p>If you happen to use the public folder as a submodule, remove the following lines in <code>.git/config</code> and  <code>.gitmodules</code></p>
+</code></pre></div><p>If you happen to use the <code>public</code> folder as a submodule, remove the following lines from <code>.git/config</code> and  <code>.gitmodules</code></p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">[submodule &#34;public&#34;]
         url = https://github.com/your-username/my-blog.git
         active = true
@@ -85,13 +281,13 @@ $ rm ./public/.git -rf
 </code></pre></div><p>For the <code>config.yaml</code>, changed the baseURL value with:</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-yaml" data-lang="yaml"><span class="nt">baseURL</span><span class="p">:</span><span class="w"> </span><span class="s2">&#34;https://your-username.github.io/&#34;</span><span class="w">
 </span></code></pre></div><h2 id="add-the-theme-as-submodule">Add the Theme as Submodule</h2>
-<p>If you happen to not using submodule previously, this time we will.</p>
+<p>If you happen to not using theme as submodule previously, this time we will.</p>
 <p>Run the following command to add the PaperMod theme we cloned previously as a submodule of our site.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ git submodule add https://github.com/adityatelange/hugo-PaperMod.git themes/PaperMod
 </code></pre></div><p>If you don&rsquo;t use the same theme, simply replace the url and directory parts to match yours.</p>
 <h2 id="add-github-actions">Add GitHub Actions</h2>
 <p>On the previous post, we automated several things: site build, commit, and push our site to GitHub using a bash script. We can call the execution of this script as a <strong>workflow</strong> that runs a single <strong>job</strong>, it is to deploy our site. Each command executed within the deployment script (build, commit, push) can be referred as a <strong>step</strong>.</p>
-<p>GitHub Actions are basically the advanced version of the deployment script we created. It&rsquo;s event-driven, which means we can set a specific event to trigger a workflow. In this case, we&rsquo;ll create an event that will trigger the site deployment each time we push a new commit to the main branch.</p>
+<p>GitHub Actions are basically the advanced version of the deployment script we created. It&rsquo;s event-driven, which means we can set a specific event to trigger the workflow. In this case, we&rsquo;ll create an event that will trigger the site deployment each time we push a new commit to the main branch.</p>
 <p>A workflow file for GitHub Actions must be written in YAML syntax, and it&rsquo;s placed under a special directory called <code>.github/workflows/[here].yml</code>, so let&rsquo;s create the folder first inside our site repository.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ mkdir -p ./.github/workflows
 </code></pre></div><p>We&rsquo;ll save the following code under the workflow directory with a name <code>gh-pages.yml</code> (<code>./.github/workflows/gh-pages.yml</code>).</p>
@@ -127,15 +323,16 @@ $ rm ./public/.git -rf
 </span><span class="w">          </span><span class="nt">publish_dir</span><span class="p">:</span><span class="w"> </span><span class="l">./public</span><span class="w">
 </span></code></pre></div><p>You can study the code yourself, because I&rsquo;m not the one who created it 😅. But, to make sure that the public folder always get cleaned first before build, I added <code>--cleanDestinationDir</code> option.</p>
 <p>Let&rsquo;s commit this workflow and push it to GitHub.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>my-blog<span class="o">)</span>$ git add ./.github/workflows/gh-pages.yml
-<span class="o">(</span>my-blog<span class="o">)</span>$ git commit -m <span class="s2">&#34;Add gh-pages.yml&#34;</span>
-<span class="o">(</span>my-blog<span class="o">)</span>$ git push -u origin main
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ git add ./.github/workflows/gh-pages.yml
+$ git commit -m <span class="s2">&#34;Add gh-pages.yml&#34;</span>
+$ git push -u origin main
 </code></pre></div><h2 id="trigger-the-workflow">Trigger the Workflow!</h2>
 <p>We can create a new post, then add some text to it.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>my-blog<span class="o">)</span>$ hugo new post/test-gh-actions.md
-<span class="o">(</span>my-blog<span class="o">)</span>$ <span class="nb">echo</span> <span class="s1">&#39;Test GH Action&#39;</span> &gt;&gt; content/post/test-gh-actions.md
-</code></pre></div><p>Finally, commit the change and push it.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>my-blog<span class="o">)</span>$ git commit -m <span class="s2">&#34;Trigger build&#34;</span>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ hugo new post/test-gh-actions.md
+$ <span class="nb">echo</span> <span class="s1">&#39;Test GH Action&#39;</span> &gt;&gt; content/post/test-gh-actions.md
+</code></pre></div><p>Finally, commit the change and push it to your repository to trigger the workflow</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ git commit -m <span class="s2">&#34;Trigger build&#34;</span>
+$ git push -u origin main
 </code></pre></div><p>To observe the deployment process/workflow, just navigate to your site repository and click on the action menu (<code>https://github.com/your-username/your-username.github.io/actions</code>).</p>
 <p>That&rsquo;s it!</p>
 <h2 id="my-current-deployment">My Current Deployment</h2>
@@ -249,7 +446,7 @@ $ <span class="nb">source</span> ~/.zshrc
     </item>
     
     <item>
-      <title>Windows Services: Start a Service During Its Creation</title>
+      <title>Windows Services: Start a Service During Its Creation [ID]</title>
       <link>https://fahmifj.github.io/blog/start-a-windows-service-during-its-creation/</link>
       <pubDate>Thu, 12 Aug 2021 22:04:18 +0700</pubDate>
       
@@ -475,106 +672,6 @@ NOTE: The option name includes the equal sign.
 </li>
 </ol>
 </section>
-]]></content:encoded>
-    </item>
-    
-    <item>
-      <title>Me vs Windows Permissions</title>
-      <link>https://fahmifj.github.io/blog/me-vs-windows-permissions/</link>
-      <pubDate>Wed, 21 Jul 2021 07:07:50 +0700</pubDate>
-      
-      <guid>https://fahmifj.github.io/blog/me-vs-windows-permissions/</guid>
-      <description>Facing weird error on Windows 10? Then maybe this post could help you</description>
-      <content:encoded><![CDATA[<p>Yesterday, I wanted to upgrade my Microsoft Office, and then planned to clean up my Windows laptop from unused programs, particularly the ones installed by chocolatey (Windows package manager). But, you guess it, things don&rsquo;t always go as planned.</p>
-<p>The first problem I encounter was <code>Error Code: 30015-4 (5)</code> while trying to re-install my Microsoft Office, and then several  <code>C:\ProgramData\Microsoft\Windows GetLastError:5</code> error messages. These problems were related to Windows permissions, and I suspect that they were caused by a Microsoft troubleshooter tool called <a href="https://www.microsoft.com/en-us/download/100607">SaRA</a>. The tool might have accidentally messed up the Windows permissions during the process of cleaning up my previous Microsoft Office. As a result, my Windows no longer be able to install or remove some apps.</p>
-<p>I was able to resolve these problems by manually resetting the permissions of the respective app folders back to their original state. So, I think it would be fun to post the walkthrough (it might be boring for you 😅).</p>
-<h2 id="the-problems">The Problems</h2>
-<p>The first problem I ran into was <code>Error Code: 30015-4(5)</code> during the installation of Microsoft Office.</p>
-<p><div class="img-container"><img src="imgs/image-20210721040950497.png" alt="image-20210721040950497"  title="Error Code: 30015-4 (5)"  /></div>
-</p>
-<p>I clicked on the online help, and it was pointing out to <a href="https://support.microsoft.com/en-us/office/fix-office-installation-errors-d5df89a9-0507-4b4c-92f9-22f457e630aa?ns=ocsac2rinstall&amp;version=16&amp;syslcid=1033&amp;uilcid=1033&amp;appver=cin160&amp;helpid=%225-4-30015%22&amp;ui=en-us&amp;rs=en-us&amp;ad=us">this page</a>. At the bottom of the page, it offers an &ldquo;easy fix&rdquo; tool to resolve the problem above. I downloaded and ran that tool, but the error remains 🙃.</p>
-<p><div class="img-container"><img src="imgs/image-20210721041358098.png" alt="image-20210721041358098"  title="An easy fix tool that resulted in another chaos"  /></div>
-</p>
-<p>At this point, I couldn&rsquo;t install or uninstall any applications wrapped with Windows Installer (<code>.msi</code>) anymore, including NodeJS. It&rsquo;s the same problem as the one in my <a href="https://fahmifj.github.io/blog/play-with-printnightmare/">PrintNightmare</a> post, in which my Visual Studio refuses to install the Windows SDK.</p>
-<p><div class="img-container"><img src="./imgs/image-20210718024015408.png" alt="image-20210718024015408"  /></div>
-</p>
-<p>And somehow, this also affects my laptop&rsquo;s WiFi functionality/features, such as:</p>
-<ul>
-<li>Unable to save WiFi profiles, auto-connect no longer works.</li>
-<li>Unable to turn on the mobile hotspot feature</li>
-<li>The &ldquo;Forget&rdquo; and &ldquo;Properties&rdquo; options are missing when a right-click is performed on a WiFi connection.</li>
-</ul>
-<p>The most weird one is a stack-based buffer error came from my WiFi settings.</p>
-<p><div class="img-container"><img src="imgs/image-20210721050915867.png" alt="image-20210721050915867"  title="Stack-based buffer error"  /></div>
-</p>
-<p>The stack-based buffer error raises when I clicked any currently in use Wi-Fi connection from the Wi-Fi settings.</p>
-<p><div class="img-container"><img src="imgs/image-20210721053820002.png" alt="image-20210721053820002"  title="WiFi Settings"  /></div>
-</p>
-<p>Also, the &ldquo;Forget&rdquo; and &ldquo;Properties&rdquo; options were missing. I found a similar issue <a href="https://answers.microsoft.com/en-us/windows/forum/all/windows-10-doesnt-save-wifi-network-resolved/16ae1129-e24b-4268-91c4-acc4446966fa">here</a> but the solution doesn&rsquo;t suite my environment.</p>
-<p><div class="img-container"><img src="imgs/image-20210721054401662.png" alt="image-20210721054401662"  title="Missing the Forget and the Properties options"  /></div>
-</p>
-<h2 id="finding-the-root-cause">Finding The Root Cause</h2>
-<p>Searching for <code>Error Code: 30015-4  (5)</code> on the Microsoft Support site didn&rsquo;t really help, so I started to search for the official documentation about error code, and I found <a href="https://docs.microsoft.com/en-us/windows/win32/debug/system-error-codes--0-499-">this page</a>. I couldn&rsquo;t find anything about &ldquo;30015-4&rdquo; in that page, but I think I did know what &ldquo;(5)&rdquo; meant.</p>
-<p><div class="img-container"><img src="imgs/image-20210721043547662.png" alt="image-20210721043547662"  /></div>
-</p>
-<p>At this point, it was clear that these problems were related to the system permissions (even my Wi-Fi problem).</p>
-<p>I started to investigate <code>C:\Program Files\</code> and <code>C:\Program Files (x86)\</code> (the default folder for installed apps), but no problems were found there.  So the next one is <code>C:\ProgramData</code>, where all application data is stored/created.</p>
-<p>While investigating all the folders under <code>C:\ProgramData\</code> and <code>C:\ProgramData\Microsoft</code>, I noticed that some of the folders only have my account listed in their security properties.</p>
-<p><div class="img-container"><img src="imgs/image-20210721044802348.png" alt="image-20210721044802348"  title="Bad Permissions on Office folder"  /></div>
-</p>
-<p>Normally, the folder permissions under <code>C:\ProgramData</code> should be configured similar to the image below (taken from VirtualBox folder) .</p>
-<p><div class="img-container"><img src="imgs/image-20210721045334784.png" alt="image-20210721045334784"  title="Good Permissions: Basic"  /></div>
-</p>
-<p>And here are the advanced permission settings.</p>
-<p><div class="img-container"><img src="imgs/image-20210721045624596.png" alt="image-20210721045624596"  title="Good Permissions: Advanced Settings"  /></div>
-</p>
-<p>Now I know how the default permissions look like, and I can use this as a template to fix the other folders with bad permissions.</p>
-<h2 id="fix-the-problems">Fix The Problems</h2>
-<h3 id="office-error-code-30015-4-5">Office Error Code: 30015-4 (5)</h3>
-<p>This error <code>Error Code: 30015-4 (5)</code> can be resolved by enabling the inheritance on the respective app folder, which is <code>C:\ProgramData\Microsoft\OFFICE</code>. So that the permissions of the  <code>Microsoft</code> folder will be inherited to the <code>OFFICE</code> folder. I will also remove my account, &ldquo;Fahmi FJ&rdquo;, from the permission entries.</p>
-<p><div class="img-container"><img src="imgs/image-20210721051824838.png" alt="image-20210721051824838"  title="Fix Office Error Code: 30015-4(5)"  /></div>
-</p>
-<p>If you&rsquo;re not sure about this, do check the other folders' permissions under the same parent folder. Using this case, then the parent folder is <code>C:\ProgramData\Microsoft\</code>,  and the child are any folders under <code>C:\ProgramData\Microsoft\[child]</code>.</p>
-<p>I got my Ms Office back now.</p>
-<p><div class="img-container"><img src="imgs/image-20210721053920106.png" alt="image-20210721053920106"  /></div>
-</p>
-<h3 id="getlasterror5">GetLastError:5</h3>
-<p>Any <code>GetLastError:5</code>, can be resolved using the same method as above, by enabling the inheritance to the affected application folder.</p>
-<p>In my case, I got the following error message from chocolatey and node.js:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">C:<span class="se">\P</span>rogramData<span class="se">\M</span>icrosoft<span class="se">\W</span>indows<span class="se">\S</span>tart Menu<span class="se">\P</span>rograms GetLastError: <span class="m">5</span>
-</code></pre></div><p>Then, first, I should look into the permissions of <code>Microsoft</code> folder, then <code>Windows</code> folder, and then <code>Start Menu</code> folder, and it turned out the problem is in the <code>Windows</code> folder permissions. So, to resolve this problem, I have to inherit the <code>Microsoft</code> folder permissions to the <code>Windows</code> folder, see image below.</p>
-<p><div class="img-container"><img src="imgs/image-20210721114505028.png" alt="image-20210721114505028"  /></div>
-</p>
-<p>And then, I will revert the <code>Start Menu</code> folder permissions to default, see image below.</p>
-<p><div class="img-container"><img src="imgs/image-20210721114911619.png" alt="image-20210721114911619"  /></div>
-</p>
-<p>Finally inherit the <code>Start Menu</code> folder permissions to the <code>Programs</code> folder.</p>
-<p><div class="img-container"><img src="imgs/image-20210721115022365.png" alt="image-20210721115022365"  /></div>
-</p>
-<p>Again, if you&rsquo;re not sure about this, and didn&rsquo;t want to reinstall your Windows, try install a fresh Windows on Virtual Machine / Cloud and inspect the default permission settings.</p>
-<h3 id="stack-based-and-wifi-error">Stack-based and WiFi error</h3>
-<p>This section may resolve the following problems.</p>
-<ul>
-<li>SystemSettings.exe - System Error: The system detected an overrun of a blabla..</li>
-<li>Windows won&rsquo;t remember Wi-Fi password</li>
-<li>The &ldquo;Forget&rdquo; and &ldquo;Properties&rdquo; options are missing from Wi-Fi connection.</li>
-<li>Mobile Hotspot Wi-Fi</li>
-</ul>
-<p>In my case the root cause of these problems was also the folder permission.</p>
-<p>In Windows, all Wi-Fi profiles are stored in <code>C:\ProgramData\Microsoft\Wlansvc\Profiles</code>, so if the permissions are messed up, the system is most likely to crash or partially working. In my case, my laptop is able to connect to any Wi-Fi network, but it can&rsquo;t remember the Wi-Fi profile, so I have to re-enter my Wi-Fi password every time I want to connect. This caused by the system didn&rsquo;t have write access on <code>C:\ProgramData\Microsoft\Wlansvc\Profiles</code>.</p>
-<p>But, after reverting the permissions of  the <code>Wlansvc</code> folder , the WiFi functionality/features returned back to normal.</p>
-<p><div class="img-container"><img src="imgs/image-20210721055011183.png" alt="image-20210721055011183"  /></div>
-</p>
-<p>It also fixed the missing options and auto-connect.</p>
-<p><div class="img-container"><img src="imgs/image-20210721055107535.png" alt="image-20210721055107535"  /></div>
-</p>
-<p>Also, there is no more error about &ldquo;<em>The system detected an overrun of a stack-based buffer in this  application. This overrun could potentially allow a malicious user to  gain control of this application</em>&rdquo; on the Wi-Fi settings.</p>
-<blockquote>
-<p>Padahal cuma mau reinstall Office, merembetnya kemana-mana 🙃.</p>
-</blockquote>
-<h2 id="conclusion">Conclusion</h2>
-<p>That&rsquo;s all! I hope this post helps you too.</p>
-<p>I will try to keep this post updated whenever I face the same problem related to Windows Permissions.</p>
 ]]></content:encoded>
     </item>
     
