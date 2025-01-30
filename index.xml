@@ -12,11 +12,8 @@
       <pubDate>Wed, 29 Jan 2025 20:36:34 +0700</pubDate>
       
       <guid>https://fahmifj.github.io/articles/running-gns3-on-apple-m2-orbstack/</guid>
-      <description>Lately, I&amp;rsquo;ve been switching to Macbook M2 from Windows laptop for daily driver. It was smooth until I need to migrate my virtual networking lab that rely on GNS3. I was initially hesitant about whether I could run GNS3 on my M2 machine.
-After some research, I discovered that GNS3 client is available for macOS. For hosting the server, I will use Orbstack Linux machine.
-Goals Get GNS3 server running on M2 Apple Silicon CPU.</description>
-      <content:encoded><![CDATA[<p>Lately, I&rsquo;ve been switching to Macbook M2 from Windows laptop for daily driver. It was smooth until I need to migrate my virtual networking lab that rely on GNS3. I was initially hesitant about whether I could run GNS3 on my M2 machine.</p>
-<p>After some <a href="https://www.gns3.com/community/featured/gns3-on-apple-silicon">research</a>, I discovered that GNS3 client is available for macOS. For hosting the server, I will use Orbstack Linux machine.</p>
+      <description>Lately, I&amp;rsquo;ve been switching from my Windows laptop to MacBook M2 for daily driver. It was smooth until I needed to migrate my virtual networking lab that relies on GNS3. I was initially hesitant about whether I could run GNS3 on my M2 machine. After some research, I discovered that the GNS3 client is indeed available for macOS. To host the GNS3 server, I learned that I could set it up from scratch on a Linux machine using Orbstack.</description>
+      <content:encoded><![CDATA[<p>Lately, I&rsquo;ve been switching from my Windows laptop to MacBook M2 for daily driver. It was smooth until I needed to migrate my virtual networking lab that relies on GNS3. I was initially hesitant about whether I could run GNS3 on my M2 machine. After some <a href="https://www.gns3.com/community/featured/gns3-on-apple-silicon">research</a>, I discovered that the GNS3 client is indeed available for macOS. To host the GNS3 server, I learned that I could set it up from scratch on a Linux machine using Orbstack.</p>
 <h4 id="goals">Goals</h4>
 <ul>
 <li>Get GNS3 server running on M2 Apple Silicon CPU.</li>
@@ -132,19 +129,51 @@ require_hardware_acceleration = False
 <li>Look up again under <code>/var/lib/gns3-server/GNS3/.config</code> or <code>/opt/gns3/.config</code> if you follow the step 3.</li>
 </ol>
 <p>We&rsquo;re done with the server here.</p>
-<h2 id="back-on-mac">Back On Mac</h2>
+<h2 id="connecting-gns3-client-and-server">Connecting GNS3 Client and Server</h2>
 <h3 id="1-gns3-client">1. GNS3 Client</h3>
-<p>Open the GNS3 client &gt; Settings &gt; Server, then point the GNS3 server to the Linux machine (use DNS).</p>
+<p>GNS3 Client should detect the server automatically, if not, try open <strong>the GNS3 Client &gt; Settings &gt; Server</strong> and point the GNS3 server to the Linux machine.</p>
 <p><div class="img-container"><img src="./imgs/image-20250129223723294.png" alt="image-20250129223723294"  /></div>
 </p>
+<p>Verify the connection.</p>
 <h3 id="2-install-appliances">2. Install Appliances</h3>
 <p>The network appliances now can be installed normally.</p>
-<h2 id="the-results-and-limitation">The Results and Limitation</h2>
-<p>So far, I&rsquo;ve only tested all the basic appliances and a MikroTik CHR. The internet/NAT is working as expected.</p>
+<h2 id="the-results">The results</h2>
+<h3 id="testing-initial-setup">Testing Initial Setup</h3>
+<p>So far, excluding the ATM and Frame relay switches, I&rsquo;ve tested the basic appliances and everything works as it should except for the Cloud appliance, which I&rsquo;ll dig into it in the limitation section. At this point, my network appliances couldn&rsquo;t communicate with the LAN within my Mac&rsquo;s network without NAT.</p>
 <img src="./imgs/image-20250129230112734.png" alt="image-20250129230112734" style="zoom:50%;" />
-<p>The limitation is my appliances cannot reach the mac network interfaces and that because it&rsquo;s not supported by <a href="https://github.com/orbstack/orbstack/issues/342">Orbstack</a> itself. Sometimes, the console also just hang for no reason. Therefore, for now, I will take a look for another options like UTM, or even move to PNET Lab.</p>
+<h3 id="performances">Performances</h3>
+<p>I allocated 4 CPUs and 4 GB of memory to Orbstack for the initial lab setup. Despite adding two more routers, everything runs smoothly and fast, with no choppy performance at all.</p>
+<img src="./imgs/image-20250130222443482.png" alt="image-20250130222443482" style="zoom:50%;" />
+<h3 id="dig-into-network-limitation">Dig into Network Limitation</h3>
+<p><strong>Connecting Mac LAN to GNS3 Appliances</strong></p>
+<p>Somehow, the Cloud appliance did not list the interface that the Orbstack Linux machine use to communicate with the Mac&rsquo;s network.</p>
+<img src="./imgs/image-20250130225807891.png" alt="image-20250130225807891" style="zoom:50%;" />
+<p>In the image above,  <code>virbr0</code>  and <code>gns3tap0-0</code> are the interfaces that GNS3 use for the NAT appliances (<a href="https://gns3.com/how-the-nat-node-in-gns3-works">source</a>). You can confirm this with:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">user@gns3$ sudo iptables -t nat -L
+</span></span></code></pre></div><p>The interface that I want to be listed is in the cloud was <code>eth0</code>.</p>
+<img src="./imgs/image-20250131005923115.png" alt="image-20250131005923115" style="zoom:50%;" />
+<p>I ran manually the script that populates the interfaces in the GNS3 server, but the output says that <code>eth0</code> is not allowed to be used on this server.</p>
+<img src="./imgs/image-20250131005043784.png" alt="image-20250131005043784" style="zoom:50%;" />
+<p>When I read the code again, I realized where is this problem lies on. You guys probably have noticed it. 😂</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-python" data-lang="python"><span class="line"><span class="cl"><span class="k">if</span> <span class="ow">not</span> <span class="n">sys</span><span class="o">.</span><span class="n">platform</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&#34;win&#34;</span><span class="p">):</span>
+</span></span><span class="line"><span class="cl">        <span class="n">allowed_interfaces</span> <span class="o">=</span> <span class="n">Config</span><span class="o">.</span><span class="n">instance</span><span class="p">()</span><span class="o">.</span><span class="n">get_section_config</span><span class="p">(</span><span class="s2">&#34;Server&#34;</span><span class="p">)</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&#34;allowed_interfaces&#34;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">        <span class="k">if</span> <span class="n">allowed_interfaces</span><span class="p">:</span>
+</span></span><span class="line"><span class="cl">            <span class="n">allowed_interfaces</span> <span class="o">=</span> <span class="n">allowed_interfaces</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39;,&#39;</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">        <span class="n">net_if_addrs</span> <span class="o">=</span> <span class="n">psutil</span><span class="o">.</span><span class="n">net_if_addrs</span><span class="p">()</span>
+</span></span><span class="line"><span class="cl">        <span class="k">for</span> <span class="n">interface</span> <span class="ow">in</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">net_if_addrs</span><span class="o">.</span><span class="n">keys</span><span class="p">()):</span>
+</span></span><span class="line"><span class="cl">            <span class="k">if</span> <span class="n">allowed_interfaces</span> <span class="ow">and</span> <span class="n">interface</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">allowed_interfaces</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">interface</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&#34;gns3tap&#34;</span><span class="p">):</span>
+</span></span><span class="line"><span class="cl">                <span class="n">log</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s2">&#34;Interface &#39;</span><span class="si">{}</span><span class="s2">&#39; is not allowed to be used on this server&#34;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">interface</span><span class="p">))</span>
+</span></span><span class="line"><span class="cl">                <span class="k">continue</span>
+</span></span></code></pre></div><p>Yeah, it&rsquo;s on the step 3, about the server config! I just need to add the interface I want to be allowed there. Haha.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-ini" data-lang="ini"><span class="line"><span class="cl"><span class="c1">; Only allow these interfaces to be used by GNS3, for the Cloud node for example (Linux/OSX only)</span>
+</span></span><span class="line"><span class="cl"><span class="c1">; Do not forget to allow virbr0 in order for the NAT node to work</span>
+</span></span><span class="line"><span class="cl"><span class="na">allowed_interfaces</span> <span class="o">=</span> <span class="s">virbr0,eth0 </span>
+</span></span><span class="line"><span class="cl"><span class="c1">; ^ I added eth0</span>
+</span></span></code></pre></div><p>But well, I still wait for Orbstack to fully support bridged networking.</p>
+<p>[UPDATE]</p>
+<p>Sometimes, the console also just hang for no reason. Therefore, for now, I will take a look for another options like UTM, or even move to PNET Lab.</p>
 <blockquote>
-<p>Personally, I liked Orbstack more, it basically the magic of WSL but on Mac.</p>
+<p>Personally, I liked Orbstack more, it basically the magic of WSL comes to Mac.</p>
 </blockquote>
 <p>That&rsquo;s all, see you in the next post!</p>
 ]]></content:encoded>
@@ -159,11 +188,11 @@ require_hardware_acceleration = False
       <description>Am I in the right path?</description>
       <content:encoded><![CDATA[<p>Halo semua!</p>
 <p>Kali ini, gw mau berbagi sedikit cerita tentang kehidupan gw sepanjang tahun 2024, yang kurang dari satu bulan lagi sudah mau habis masanya.</p>
-<p>Selama ini, rutinitas sehari-hari gw sekarang hampir bikin tahun ini, dan bahkan tahun sebelumnya, itu sama sekali ngga terasa. Sebagai satu makhluk yang terikat dengan waktu, gw pun mulai sedikit cemas ketika rasa dari “waktu” itu sendiri hilang. Kecemasan ini terus menghantui sewaktu gw <del>ingat umur</del> mulai melihat kembali ke rencana hidup gw, yang agaknya sudah sedikit melenceng dari target.</p>
+<p>Rutinitas sehari-hari gw hampir bikin tahun ini, dan bahkan tahun sebelumnya, itu sama sekali ngga terasa. Sebagai satu makhluk yang terikat dengan waktu, gw pun mulai sedikit cemas ketika rasa dari “waktu” itu sendiri hilang. Kecemasan ini terus menghantui sewaktu gw <del>ingat umur</del> mulai melihat kembali ke rencana hidup gw, yang agaknya sudah sedikit melenceng dari target.</p>
 <h2 id="karier">Karier</h2>
 <p>Semenjak tahun lalu, kerjaan benar-benar mendominasi hampir seluruh aktivitas harian gw. Peran gw bisa dibilang sebagai “Palugada”. Dengan peran ini, gw jadi punya banyak skill set luas dan mudah beradaptasi dengan berbagai situasi. Tapi di sisi lain, kedinamisan tersebut akan jadi single point of failure ketika gw dalam keadaan absen.</p>
-<p>Tanggung jawab gw jadi kurang berfokus, rasanya seperti bola yang bergulir kesana-kemari, sehingga gw merasa waktu untuk eksplorasi hal baru jadi terbatas. Hal inilah yang mau gw hindari. Karena hal tersebut, gw merasa stagnan dan rasanya perlu memulai sesuatu yang baru.</p>
-<p>Yap, gw sudah sampai pada keputusan untuk mengundurkan diri sejak Oktober lalu. Sebagai persiapannya, gw memutuskan untuk mencari pekerjaan tambahan di luar pekerjaan utama gw. Tentunya hal ini gw lakukan setelah jam kerja dan saat akhir pekan. <em>Workaholic</em> sekali, bukan? Tapi buat gw, ini bukan cuma soal nambah penghasilan, melainkan juga memperluas jaringan dan membuka peluang untuk berkembang lebih jauh.</p>
+<p>Tanggung jawab gw jadi kurang berfokus, rasanya seperti bola yang bergulir kesana-kemari, sehingga gw merasa waktu untuk eksplorasi hal baru jadi terbatas. Hal inilah yang mau gw hindari. Disini gw merasa stagnan dan merasa perlu untuk memulai sesuatu yang baru di tempat baru.</p>
+<p>Yap, akhirnya gw sampai pada keputusan besar untuk mengundurkan diri sejak Oktober lalu. Sebagai persiapannya, gw mulai ambil beberapa pekerjaan tambahan di luar pekerjaan utama gw. Tentunya hal ini gw lakukan setelah jam kerja dan saat akhir pekan. <em>Workaholic</em> sekali, bukan? Tapi buat gw, ini bukan cuma soal nambah penghasilan, melainkan juga memperluas jaringan dan membuka peluang untuk berkembang lebih jauh.</p>
 <p>Jadi, di penghujung tahun ini, gw benar-benar merenungkan kembali tentang kelanjutan karier gw.</p>
 <h2 id="self-development">Self-development</h2>
 <p>Meskipun gw telah terlibat cukup banyak di proyek jaringan dan server dengan tingkat kesulitan menengah, tapi sampai saat ini gw belum memiliki satu pun sertifikasi profesional di bidang tersebut. Untuk memasarkan skill ke klien, gw hanya mengandalkan testimoni dari kolega dan klien sebelumnya—semacam strategi mulut ke mulut. Karena kedua bidang yang gw tekuni itu erat kaitannya dengan privasi dan keamanan, membagikan hasil pekerjaan gw sebagai portofolio pun nggak bisa sembarangan juga sih.</p>
@@ -182,10 +211,10 @@ require_hardware_acceleration = False
 </ul>
 <p>Semoga gw bisa menyelesaikannya salah satu buku diatas sebelum tahun baru.</p>
 <h2 id="support-system">Support System?</h2>
-<p>Last, untuk hal ini, I think I&rsquo;ve I found one. Sisanya gw mau diem-diem aja. Hehe.</p>
+<p>Last, untuk hal ini, I think I&rsquo;ve I found one dan untuk saat ini mau diem-diem aja dulu. Hehe.</p>
 <h2 id="closing">Closing</h2>
 <p>Tulisan ini harapannya menjadi langkah awal dan usaha untuk kembali ke tujuan dan target awal gw. Tercapai atau tidaknya, maka itu masalah lain. Baiklah, ceritanya gw tutup sampai disini.</p>
-<p>I hope you all have a great journey this year. See you in the next post!</p>
+<p>I hope you all have a great journey this year. Sampai nanti!</p>
 ]]></content:encoded>
     </item>
     
