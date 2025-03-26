@@ -1,0 +1,376 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>tailscale on Ef&#39;s log</title>
+    <link>https://fahmifj.github.io/tags/tailscale/</link>
+    <description>Recent content in tailscale on Ef&#39;s log</description>
+    <generator>Hugo -- gohugo.io</generator>
+    <lastBuildDate>Wed, 26 Mar 2025 13:27:29 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/tailscale/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>Deploy PNETLab on Google Cloud</title>
+      <link>https://fahmifj.github.io/articles/deploy-pnetlab-on-google-cloud/</link>
+      <pubDate>Wed, 26 Mar 2025 13:27:29 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/articles/deploy-pnetlab-on-google-cloud/</guid>
+      <description>In the previous articles, I had an issue with Mac/Orbstack&amp;rsquo;s networking system, that prevented my localhost from communicating with the GNS3 appliances. Since I didn&amp;rsquo;t have enough time to troubleshoot it myself, I decided to give PNETLab a try.
+This time, I leveraged my GCP free trial to deploy the PNETLab server and used Terraform to automate the server provisioning. Then, I will use Tailscale to securely access the lab without exposing it to the Internet.</description>
+      <content:encoded><![CDATA[<p>In the previous articles, I had an issue with Mac/Orbstack&rsquo;s networking system, that prevented my localhost from communicating with the GNS3 appliances. Since I didn&rsquo;t have enough time to troubleshoot it myself, I decided to give PNETLab a try.</p>
+<p>This time, I leveraged my GCP free trial to deploy the PNETLab server and used Terraform to automate the server provisioning. Then, I will use Tailscale to securely access the lab without exposing it to the Internet.</p>
+<p><strong>Prerequisites</strong></p>
+<ul>
+<li>GCP CLI installed.</li>
+<li>Terraform installed.</li>
+<li>Tailscale account (free).</li>
+<li>Domain name.</li>
+</ul>
+<h2 id="network-diagram-overview">Network Diagram Overview</h2>
+<p>Here&rsquo;s an overview of what we going to do.</p>
+<img src="./imgs/image-20250326131830503.png" alt="image-20250326131830503" style="zoom:50%;" />
+<h2 id="preparing-gcp-project">Preparing GCP project</h2>
+<p>Before we begin, make sure that you&rsquo;ve authenticated to GCP.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ gcloud auth application-default login
+</span></span></code></pre></div><p>Once authenticated, create a project for our PNETLab deployment.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ <span class="nv">PROJECT_ID</span><span class="o">=</span>pnetlab-<span class="nv">$RANDOM</span>
+</span></span><span class="line"><span class="cl">$ <span class="nb">echo</span> <span class="nv">$PROJECT_ID</span>
+</span></span><span class="line"><span class="cl">pnetlab-xxx
+</span></span><span class="line"><span class="cl">$ gcloud projects create <span class="nv">$PROJECT_ID</span> --set-as-default
+</span></span></code></pre></div><p>Then, link the project to your billing account.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ gcloud billing accounts list              
+</span></span><span class="line"><span class="cl">ACCOUNT_ID            NAME                OPEN  MASTER_ACCOUNT_ID
+</span></span><span class="line"><span class="cl">AAAAAA-BBBBBB-CCCCCC  My Billing Account  True
+</span></span><span class="line"><span class="cl">$ gcloud billing projects link <span class="nv">$PROJECT_ID</span> --billing-account<span class="o">=</span>AAAAAA-BBBBBB-CCCCCC
+</span></span></code></pre></div><p>Last, enable Google Compute API.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ gcloud services <span class="nb">enable</span> compute.googleapis.com
+</span></span></code></pre></div><h2 id="server-deployment">Server Deployment</h2>
+<h3 id="preparing-terraform-code">Preparing Terraform Code</h3>
+<p>We&rsquo;ll use the following folder structure.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ tree
+</span></span><span class="line"><span class="cl">.
+</span></span><span class="line"><span class="cl">├── README.MD
+</span></span><span class="line"><span class="cl">├── ansible
+</span></span><span class="line"><span class="cl">└── terraform
+</span></span><span class="line"><span class="cl">    ├── terraforms.tfvars <span class="c1">#sensitive file (project_id, region, user/keys)</span>
+</span></span><span class="line"><span class="cl">    ├── main.tf 
+</span></span><span class="line"><span class="cl">    └── variables.tf
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="m">3</span> directories, <span class="m">5</span> files
+</span></span></code></pre></div><p>Within the terraform folder, initialize the terraform working directory.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ terraform init
+</span></span></code></pre></div><h4 id="terraformtfvars">terraform.tfvars</h4>
+<p><code>terraforms.tfvars</code> contains the following (make your adjustment):</p>
+<pre tabindex="0"><code>project_id      = &#34;&#34;
+region          = &#34;&#34;
+zone            = &#34;&#34;
+os_image        = &#34;projects/ubuntu-os-cloud/global/images/ubuntu-1804-bionic-v20240116a&#34;
+ssh_user        = &#34;username&#34;
+ssh_pub_user    = &#34;ssh-ed25519 AAAAC3N... root&#34;
+ssh_pub_ansible = &#34;ssh-ed25519 AAAAC3N... ansible&#34;
+</code></pre><h4 id="maintf">main.tf</h4>
+<p><code>main.tf</code> file contains the following:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-json" data-lang="json"><span class="line"><span class="cl"><span class="err">terraform</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">required_providers</span> <span class="err">{</span>
+</span></span><span class="line"><span class="cl">    <span class="err">google</span> <span class="err">=</span> <span class="err">{</span>
+</span></span><span class="line"><span class="cl">      <span class="err">source</span> <span class="err">=</span> <span class="nt">&#34;hashicorp/google&#34;</span>
+</span></span><span class="line"><span class="cl">    <span class="err">version</span> <span class="err">=</span> <span class="s2">&#34;~&gt; 4.5&#34;</span> <span class="p">}</span>
+</span></span><span class="line"><span class="cl">  <span class="err">}</span>
+</span></span><span class="line"><span class="cl"><span class="err">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">provider</span> <span class="s2">&#34;google&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">project</span> <span class="err">=</span> <span class="err">var.project_id</span>
+</span></span><span class="line"><span class="cl">  <span class="err">region</span>  <span class="err">=</span> <span class="err">var.region</span>
+</span></span><span class="line"><span class="cl">  <span class="err">zone</span>    <span class="err">=</span> <span class="err">var.zone</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">#</span> <span class="err">SETUP</span> <span class="err">NETWORK</span> <span class="err">#</span>
+</span></span><span class="line"><span class="cl"><span class="err">resource</span> <span class="s2">&#34;google_compute_network&#34;</span> <span class="s2">&#34;pnetlab_vpc&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">name</span>                    <span class="err">=</span> <span class="nt">&#34;pnetlab-vpc&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="err">auto_create_subnetworks</span> <span class="err">=</span> <span class="kc">false</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">resource</span> <span class="s2">&#34;google_compute_subnetwork&#34;</span> <span class="s2">&#34;pnetlab_subnet&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">name</span>          <span class="err">=</span> <span class="nt">&#34;pnetlab-subnet&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="err">network</span>       <span class="err">=</span> <span class="err">google_compute_network.pnetlab_vpc.id</span>
+</span></span><span class="line"><span class="cl">  <span class="err">ip_cidr_range</span> <span class="err">=</span> <span class="s2">&#34;10.10.1.0/24&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">resource</span> <span class="s2">&#34;google_compute_firewall&#34;</span> <span class="s2">&#34;allow_ssh_access&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">name</span>    <span class="err">=</span> <span class="nt">&#34;allow-ssh&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="err">network</span> <span class="err">=</span> <span class="err">google_compute_network.pnetlab_vpc.id</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">  <span class="err">allow</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="err">protocol</span> <span class="err">=</span> <span class="nt">&#34;tcp&#34;</span>
+</span></span><span class="line"><span class="cl">    <span class="err">ports</span>    <span class="err">=</span> <span class="p">[</span><span class="s2">&#34;22&#34;</span><span class="p">]</span>
+</span></span><span class="line"><span class="cl">  <span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">  <span class="err">source_ranges</span> <span class="err">=</span> <span class="p">[</span> <span class="s2">&#34;0.0.0.0/0&#34;</span> <span class="p">]</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">#</span> <span class="err">NAT</span>
+</span></span><span class="line"><span class="cl"><span class="err">resource</span> <span class="s2">&#34;google_compute_router&#34;</span> <span class="s2">&#34;pnetlab_router&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">name</span> <span class="err">=</span> <span class="nt">&#34;pnetlab-router&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="err">region</span> <span class="err">=</span> <span class="err">var.region</span>
+</span></span><span class="line"><span class="cl">  <span class="err">network</span> <span class="err">=</span> <span class="err">google_compute_network.pnetlab_vpc.id</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">resource</span> <span class="s2">&#34;google_compute_router_nat&#34;</span> <span class="s2">&#34;pnetlab_router_nat&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">name</span> <span class="err">=</span> <span class="nt">&#34;pnetlab-router-nat&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="err">region</span> <span class="err">=</span> <span class="err">var.region</span>
+</span></span><span class="line"><span class="cl">  <span class="err">router</span> <span class="err">=</span> <span class="err">google_compute_router.pnetlab_router.name</span>
+</span></span><span class="line"><span class="cl">  <span class="err">nat_ip_allocate_option</span> <span class="err">=</span> <span class="s2">&#34;AUTO_ONLY&#34;</span> <span class="err">#</span> <span class="err">use</span> <span class="err">dynamic</span> <span class="err">public</span> <span class="err">ip</span> <span class="err">for</span> <span class="err">nat</span>
+</span></span><span class="line"><span class="cl">  <span class="err">source_subnetwork_ip_ranges_to_nat</span> <span class="err">=</span> <span class="s2">&#34;ALL_SUBNETWORKS_ALL_IP_RANGES&#34;</span> <span class="err">#</span> <span class="err">nat</span> <span class="err">any</span> <span class="err">sources</span> <span class="err">ip</span> <span class="err">range</span> <span class="err">available</span> <span class="err">within</span> <span class="err">the</span> <span class="err">vpc</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">#</span> <span class="err">SETUP</span> <span class="err">EXT</span> <span class="err">DISK</span> <span class="err">#</span>
+</span></span><span class="line"><span class="cl"><span class="err">resource</span> <span class="s2">&#34;google_compute_disk&#34;</span> <span class="s2">&#34;additional_disk&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">name</span>   <span class="err">=</span> <span class="nt">&#34;pnetlab-additional-disk&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="err">type</span>   <span class="err">=</span> <span class="s2">&#34;pd-standard&#34;</span>  <span class="err">#</span> <span class="err">Choose</span> <span class="err">disk</span> <span class="err">type</span> <span class="err">(pd-standard</span><span class="p">,</span> <span class="err">pd-ssd,</span> <span class="err">etc.)</span>
+</span></span><span class="line"><span class="cl">  <span class="err">size</span> <span class="err">=</span> <span class="err">100</span> 
+</span></span><span class="line"><span class="cl">  <span class="err">lifecycle</span> <span class="err">{</span>
+</span></span><span class="line"><span class="cl">    <span class="err">prevent_destroy</span> <span class="err">=</span> <span class="err">true</span>
+</span></span><span class="line"><span class="cl">  <span class="p">}</span>
+</span></span><span class="line"><span class="cl"><span class="err">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">#</span> <span class="err">SETUP</span> <span class="err">INSTANCES</span> <span class="err">#</span>
+</span></span><span class="line"><span class="cl"><span class="err">#</span> <span class="err">ubuntu</span><span class="mi">-1804</span><span class="err">-bionic-v</span><span class="mi">20240116</span><span class="err">a</span>                                 <span class="err">ubuntu-os-cloud</span>      <span class="err">ubuntu</span><span class="mi">-1804</span><span class="err">-lts</span>
+</span></span><span class="line"><span class="cl"><span class="err">resource</span> <span class="s2">&#34;google_compute_instance&#34;</span> <span class="s2">&#34;pnetlab_server&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">name</span>         <span class="err">=</span> <span class="nt">&#34;pnetlab-server&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="err">machine_type</span> <span class="err">=</span> <span class="s2">&#34;n2-standard-2&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="err">tags</span>         <span class="err">=</span> <span class="p">[</span><span class="s2">&#34;pnetlab&#34;</span><span class="p">]</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">  <span class="err">boot_disk</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="err">initialize_params</span> <span class="err">{</span>
+</span></span><span class="line"><span class="cl">      <span class="err">image</span> <span class="err">=</span> <span class="err">var.os_image</span> <span class="err">#</span> <span class="err">cloud</span> <span class="err">image</span>
+</span></span><span class="line"><span class="cl">      <span class="err">size</span>  <span class="err">=</span> <span class="err">20</span>                 <span class="err">#</span> <span class="err">assign</span> <span class="err">20gb</span>
+</span></span><span class="line"><span class="cl">      <span class="err">type</span>  <span class="err">=</span> <span class="nt">&#34;pd-standard&#34;</span>
+</span></span><span class="line"><span class="cl">    <span class="p">}</span>
+</span></span><span class="line"><span class="cl">  <span class="p">}</span>
+</span></span><span class="line"><span class="cl">  
+</span></span><span class="line"><span class="cl">  <span class="err">#</span> <span class="err">external</span> <span class="err">disk</span> <span class="mi">100</span><span class="err">gb</span>
+</span></span><span class="line"><span class="cl">  <span class="err">attached_disk</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="err">source</span> <span class="err">=</span> <span class="err">google_compute_disk.additional_disk.id</span>
+</span></span><span class="line"><span class="cl">  <span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">  <span class="err">network_interface</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="err">network</span>    <span class="err">=</span> <span class="err">google_compute_network.pnetlab_vpc.id</span>
+</span></span><span class="line"><span class="cl">    <span class="err">subnetwork</span> <span class="err">=</span> <span class="err">google_compute_subnetwork.pnetlab_subnet.id</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">    <span class="err">#</span> <span class="err">Disable</span> <span class="err">public</span> <span class="err">IP</span>
+</span></span><span class="line"><span class="cl">    <span class="err">#</span> <span class="err">access_config</span> <span class="err">{</span>
+</span></span><span class="line"><span class="cl">    <span class="err">#</span>  <span class="err">network_tier</span> <span class="err">=</span> <span class="nt">&#34;STANDARD&#34;</span>
+</span></span><span class="line"><span class="cl">    <span class="err">#</span> <span class="p">}</span>
+</span></span><span class="line"><span class="cl">  <span class="err">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">  <span class="err">scheduling</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="err">automatic_restart</span>           <span class="err">=</span> <span class="err">true</span>
+</span></span><span class="line"><span class="cl">    <span class="err">on_host_maintenance</span>         <span class="err">=</span> <span class="nt">&#34;MIGRATE&#34;</span>
+</span></span><span class="line"><span class="cl">    <span class="err">preemptible</span>                 <span class="err">=</span> <span class="kc">false</span>
+</span></span><span class="line"><span class="cl">    <span class="err">provisioning_model</span>          <span class="err">=</span> <span class="s2">&#34;STANDARD&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">  <span class="err">advanced_machine_features</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="err">enable_nested_virtualization</span> <span class="err">=</span> <span class="err">true</span>
+</span></span><span class="line"><span class="cl">  <span class="p">}</span>
+</span></span><span class="line"><span class="cl">  
+</span></span><span class="line"><span class="cl">  <span class="err">metadata</span> <span class="err">=</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="err">ssh-keys</span> <span class="err">=</span> <span class="nt">&#34;${var.ssh_user}:${var.ssh_pub_user} \n${var.ssh_user}:${var.ssh_pub_ansible}&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="p">}</span>
+</span></span><span class="line"><span class="cl"><span class="err">}</span>
+</span></span></code></pre></div><h4 id="variablestf">variables.tf</h4>
+<p><code>variables.tf</code> define the variables we used in the <code>tfvars</code> file, it contains:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-json" data-lang="json"><span class="line"><span class="cl"><span class="err">variable</span> <span class="s2">&#34;project_id&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">type</span>        <span class="err">=</span> <span class="err">string</span>
+</span></span><span class="line"><span class="cl">  <span class="err">description</span> <span class="err">=</span> <span class="nt">&#34;Project ID&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">variable</span> <span class="s2">&#34;region&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">type</span>        <span class="err">=</span> <span class="err">string</span>
+</span></span><span class="line"><span class="cl">  <span class="err">description</span> <span class="err">=</span> <span class="nt">&#34;Project region&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="err">default</span>     <span class="err">=</span> <span class="s2">&#34;us-central&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">variable</span> <span class="s2">&#34;zone&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">type</span>        <span class="err">=</span> <span class="err">string</span>
+</span></span><span class="line"><span class="cl">  <span class="err">description</span> <span class="err">=</span> <span class="nt">&#34;Project zone&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="err">default</span>     <span class="err">=</span> <span class="s2">&#34;us-central1-a&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">variable</span> <span class="s2">&#34;os_image&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">type</span>        <span class="err">=</span> <span class="err">string</span>
+</span></span><span class="line"><span class="cl">  <span class="err">description</span> <span class="err">=</span> <span class="nt">&#34;OS family&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">variable</span> <span class="s2">&#34;ssh_user&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">type</span>        <span class="err">=</span> <span class="err">string</span>
+</span></span><span class="line"><span class="cl">  <span class="err">description</span> <span class="err">=</span> <span class="nt">&#34;The sudo user&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">variable</span> <span class="s2">&#34;ssh_pub_user&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">type</span>        <span class="err">=</span> <span class="err">string</span>
+</span></span><span class="line"><span class="cl">  <span class="err">description</span> <span class="err">=</span> <span class="nt">&#34;The public key used for authentication to an instance. Format: [public key] [username]&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">variable</span> <span class="s2">&#34;ssh_pub_ansible&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">type</span>        <span class="err">=</span> <span class="err">string</span>
+</span></span><span class="line"><span class="cl">  <span class="err">description</span> <span class="err">=</span> <span class="nt">&#34;The public key used for configuration management. Format: [public key] [username]&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span></code></pre></div><h3 id="apply-configuration">Apply Configuration</h3>
+<p>With all the resource files defined, we will run the following command in the terraform directory.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ terraform fmt         <span class="c1">#Format your Terraform files  </span>
+</span></span><span class="line"><span class="cl">$ terraform validate    <span class="c1">#Check for syntax errors  </span>
+</span></span><span class="line"><span class="cl">$ terraform plan -out pnetlab-deploy       <span class="c1">#Preview the infrastructure changes  </span>
+</span></span><span class="line"><span class="cl">$ terraform apply pnetlab-deploy -auto-approve  <span class="c1"># Deploy the resources  </span>
+</span></span></code></pre></div><p>After it finishes, check if the instance is running:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ gcloud compute instances list --filter<span class="o">=</span><span class="s2">&#34;name=pnetlab-server&#34;</span> --project<span class="o">=</span><span class="s2">&#34;</span><span class="nv">$PROJECT_ID</span><span class="s2">&#34;</span>
+</span></span></code></pre></div><h2 id="installing-pnetlab">Installing PNETLab</h2>
+<p>For this step, some are just copy-paste from the official installation guide at the <a href="https://www.pnetlab.com/pages/documentation?slug=how-to-deploy-pnetlab-box-on-google-cloud">PNETLab website</a>.</p>
+<h3 id="add-pnetlab-repository">Add PNETLab Repository</h3>
+<p>SSH into the server from the Google Cloud SSH browser. Once we logged in, add and install the pnetlab package.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ sudo su -
+</span></span><span class="line"><span class="cl">$ <span class="nb">echo</span> <span class="s2">&#34;deb [trusted=yes] http://repo.pnetlab.com ./&#34;</span> <span class="p">|</span> sudo tee -a /etc/apt/sources.list
+</span></span><span class="line"><span class="cl">$ sudo apt-get update
+</span></span><span class="line"><span class="cl">$ sudo apt-get install pnetlab
+</span></span></code></pre></div><h3 id="create-swap-memory">Create Swap Memory</h3>
+<p>Create a swap disk, allocate the size according to your need.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# fallocate -l 1G /swapfile
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# chmod <span class="m">600</span> /swapfile
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# mkswap /swapfile
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# swapon /swapfile
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# cp /etc/fstab<span class="o">{</span>,.bak<span class="o">}</span>
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# <span class="s1">&#39;/swapfile none swap sw 0 0&#39;</span> <span class="p">|</span> sudo tee -a /etc/fsta
+</span></span></code></pre></div><h3 id="configure-pnetlab-dns">Configure PNETLab DNS</h3>
+<p>Edit file <code>/etc/network/interfaces</code> add line <code>dns-nameservers 8.8.8.8</code> to the configuration of interface <code>pnet0</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-toml" data-lang="toml"><span class="line"><span class="cl"><span class="p">...</span>
+</span></span><span class="line"><span class="cl"><span class="c"># The primary network interface</span>
+</span></span><span class="line"><span class="cl"><span class="nx">iface</span> <span class="nx">eth0</span> <span class="nx">inet</span> <span class="nx">manual</span>
+</span></span><span class="line"><span class="cl"><span class="nx">auto</span> <span class="nx">pnet0</span>
+</span></span><span class="line"><span class="cl"><span class="nx">iface</span> <span class="nx">pnet0</span> <span class="nx">inet</span> <span class="nx">dhcp</span>
+</span></span><span class="line"><span class="cl">    <span class="nx">dns-nameservers</span> <span class="mf">8.8</span><span class="p">.</span><span class="mf">8.8</span>
+</span></span><span class="line"><span class="cl">    <span class="nx">bridge_ports</span> <span class="nx">eth0</span>
+</span></span><span class="line"><span class="cl">    <span class="nx">bridge_stp</span> <span class="nx">off</span>
+</span></span><span class="line"><span class="cl"><span class="p">...</span>
+</span></span></code></pre></div><p>And restart the networking service.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# sudo service networking restart
+</span></span></code></pre></div><h3 id="configure-additional-disk">Configure Additional Disk</h3>
+<p>Time to add the additional disk we defined in the terraform resource. The purpose of this disk is to store all the pnetlab project files as well as the images later.</p>
+<p>In my case, the additional disk is available at <code>/dev/sdb</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# lsblk
+</span></span><span class="line"><span class="cl">NAME    MAJ:MIN RM  SIZE RO TYPE MOUNTPOINT
+</span></span><span class="line"><span class="cl">loop0     7:0    <span class="m">0</span> 40.4M  <span class="m">1</span> loop /snap/snapd/20671
+</span></span><span class="line"><span class="cl">loop1     7:1    <span class="m">0</span>  368M  <span class="m">1</span> loop /snap/google-cloud-cli/203
+</span></span><span class="line"><span class="cl">loop2     7:2    <span class="m">0</span> 63.9M  <span class="m">1</span> loop /snap/core20/2105
+</span></span><span class="line"><span class="cl">sda       8:0    <span class="m">0</span>   20G  <span class="m">0</span> disk 
+</span></span><span class="line"><span class="cl">├─sda1    8:1    <span class="m">0</span> 19.9G  <span class="m">0</span> part /
+</span></span><span class="line"><span class="cl">├─sda14   8:14   <span class="m">0</span>    4M  <span class="m">0</span> part 
+</span></span><span class="line"><span class="cl">└─sda15   8:15   <span class="m">0</span>  106M  <span class="m">0</span> part /boot/efi
+</span></span><span class="line"><span class="cl">sdb       8:16   <span class="m">0</span>  100G  <span class="m">0</span> disk 
+</span></span></code></pre></div><p>We&rsquo;ll create an LVM disk out of it.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# vgcreate /dev/vg01 /dev/sdb
+</span></span><span class="line"><span class="cl">  Volume group <span class="s2">&#34;vg01&#34;</span> successfully created
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# lvcreate -l 100%FREE --name lv01 vg01 
+</span></span><span class="line"><span class="cl">  Logical volume <span class="s2">&#34;lv01&#34;</span> created.
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# mkfs.ext4 /dev/vg01/lv01 
+</span></span><span class="line"><span class="cl">mke2fs 1.44.1 <span class="o">(</span>24-Mar-2018<span class="o">)</span>
+</span></span><span class="line"><span class="cl">Discarding device blocks: <span class="k">done</span>                            
+</span></span><span class="line"><span class="cl">Creating filesystem with <span class="m">26213376</span> 4k blocks and <span class="m">6553600</span> inodes
+</span></span><span class="line"><span class="cl">Filesystem UUID: f1173542-f07c-493f-89e6-188439880465
+</span></span><span class="line"><span class="cl">Superblock backups stored on blocks: 
+</span></span><span class="line"><span class="cl">  32768, 98304, 163840, 229376, 294912, 819200, 884736, 1605632, 2654208, 
+</span></span><span class="line"><span class="cl">  4096000, 7962624, 11239424, 20480000, <span class="m">23887872</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">Allocating group tables: <span class="k">done</span>                            
+</span></span><span class="line"><span class="cl">Writing inode tables: <span class="k">done</span>                            
+</span></span><span class="line"><span class="cl">Creating journal <span class="o">(</span><span class="m">131072</span> blocks<span class="o">)</span>: <span class="k">done</span>
+</span></span><span class="line"><span class="cl">Writing superblocks and filesystem accounting information: <span class="k">done</span>
+</span></span></code></pre></div><p>Then we set a mount point for the volume we just created.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# mkdir /mnt/unetlab
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# mount /dev/vg01/lv01 /mnt/unetlab
+</span></span></code></pre></div><p>Edit the <code>/etc/fstab</code> file and add the following line to mount <code>/mnt/unetlab</code> on boot:</p>
+<pre tabindex="0"><code>/dev/vg01/lv01  /mnt/unetlab  ext4  defaults  0  0
+</code></pre><p>Now we&rsquo;ll create a new directory for PNETLab project files and image files in our newly mounted disk.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# mkdir /mnt/unetlab/addons
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# mkdir /mnt/unetlab/labs
+</span></span></code></pre></div><p>Next, we&rsquo;ll remove the old directories for project files and image files, and replace them with symbolic links pointing to the new directories on the mounted disk.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# rm -rf /opt/unetlab/addons/ 
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# rm -rf /opt/unetlab/labs/
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# ln -s /mnt/unetlab/addons/ /opt/unetlab/
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# ln -s /mnt/unetlab/labs/ /opt/unetlab/
+</span></span></code></pre></div><p>Change ownership of the new labs directory to ensure PNETLab&rsquo;s services can access it back.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# chown -R www-data:www-data /mnt/unetlab/labs/
+</span></span></code></pre></div><h3 id="configure-tailscale-vpn">Configure Tailscale VPN</h3>
+<p>We will register the server as a Tailscale node, so make sure you already generated an auth key in the Tailscale <a href="https://login.tailscale.com/admin/settings/keys">admin&rsquo;s console</a>.</p>
+<p>First, install Tailscale by executing the install script.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# curl -fsSL https://tailscale.com/install.sh <span class="p">|</span> sh 
+</span></span></code></pre></div><p>We will configure the server as a subnet router or simply a router. This will allow direct access to the PNETLab QEMU/Docker appliances from your local network via the Tailscale network. To achieve this, we must allow IP forwarding in the server.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# <span class="nb">echo</span> <span class="s1">&#39;net.ipv4.ip_forward = 1&#39;</span> <span class="p">|</span> sudo tee -a /etc/sysctl.d/99-tailscale.conf
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# <span class="nb">echo</span> <span class="s1">&#39;net.ipv6.conf.all.forwarding = 1&#39;</span> <span class="p">|</span> sudo tee -a /etc/sysctl.d/99-tailscale.conf
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# sudo sysctl -p /etc/sysctl.d/99-tailscale.conf
+</span></span></code></pre></div><p>Next, to register the server as a node in your Tailscale network and a subnet router, run the following command, replacing <code>tskey-auth-XXXXX</code> with your actual auth key and <code>10.0.10.0/24</code> with your PNETLab local network:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# tailscale up --auth-key<span class="o">=</span>tskey-auth-XXXXX  --advertise-route<span class="o">=</span>10.0.10.0/24
+</span></span></code></pre></div><blockquote>
+<p>In my case, <code>10.0.10.0/24</code> is my docker network, therefore I can communicate with all the docker appliances in this network locally via the pnetlab server that act as a gateway.</p>
+</blockquote>
+<p>Revisit your Tailscale&rsquo;s admin console. You should see a <code>Subnets</code> label on the pnetlab node.</p>
+<img src="./imgs/image-20250326110623945.png" alt="image-20250326110623945" style="zoom:50%;" />
+<p>Open the node settings, select &ldquo;<strong>edit route settings&hellip;</strong>&rdquo; and tick your network there.</p>
+<img src="./imgs/image-20250326100421964.png" alt="image-20250326100421964" style="zoom: 50%;" />
+<p>Save and exit.</p>
+<h3 id="update-grub-config">Update Grub Config</h3>
+<p>Remove the default grub config.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# rm /etc/default/grub.d/50-cloudimg-settings.cfg
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# update-grub
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# reboot
+</span></span></code></pre></div><h3 id="update-version-optional">Update Version (Optional)</h3>
+<p>After the installation completed, we can directly upgrade PNETLab to the latest version. Since it&rsquo;s an optional, I will just put the official guide link on how to upgrade the lab version: <a href="https://pnetlab.com/pages/releases">go here</a>.</p>
+<h2 id="configure-domain-name">Configure Domain Name</h2>
+<p>I&rsquo;d like to get rid of the self-signed warning and use a custom domain name when accessing PNETLab.  To do so, we will obtain a LetsEncrypt&rsquo;s certificate to replace the self-signed one and then configure a new DNS record: <code>pnetlab.yourdomain.com</code>. The DNS will be pointing to your Tailscale node&rsquo;s IP.</p>
+<p>For this step, I will assume that you already own a domain.</p>
+<h3 id="use-letsencrypt-ssl-on-pnetlab">Use LetsEncrypt SSL on PNETLab</h3>
+<p>On the pnetlab server, install <code>certbot</code> and prepare the work folder.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# sudo apt install -y certbot
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# mkdir letsencrypt/work letsencrypt/config letsencrypt/logs
+</span></span></code></pre></div><p>Run the following command to obtain a Let&rsquo;s Encrypt certificate and  complete the ACME DNS challenge with your DNS provider/hosting (NameCheap, Hostinger, etc).</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# certbot certonly --agree-tos --email admin@yourdomain.com --manual --preferred-challenges<span class="o">=</span>dns -d <span class="se">\*</span>.yourdomain.com --config-dir ./letsencrypt/config --work-dir ./letsencrypt/work --logs-dir ./letsencrypt/logs
+</span></span></code></pre></div><p>Next, edit <code>/etc/apache2/sites-available/pnetlabs.conf</code> and change these values with your certificate path.</p>
+<pre tabindex="0"><code>SSLCertificateFile   /path/to/your/cert/cert1.pem
+SSLCertificateKeyFile /path/to/your/certkey/privkey1.pem
+</code></pre><p>Restart the apache services</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# systemctl restart apache2
+</span></span></code></pre></div><h3 id="create-dns-a-record">Create DNS A record</h3>
+<p>Go to your DNS hosting provider and add a new records with the following data:</p>
+<ul>
+<li>Type: A</li>
+<li>Hostname/Domain Name: <code>pnetlab.yourdomain.com</code></li>
+<li>IPv4: Pnetlab-Tailscale-IP</li>
+</ul>
+<p>Here&rsquo;s an example of using Cloudflare DNS management for your reference.</p>
+<img src="./imgs/image-20250326102815535.png" alt="image-20250326102815535" style="zoom: 33%;" />
+<blockquote>
+<p><code>100.126.1.2</code> is the tailscale node IP of my pnetlab server.</p>
+</blockquote>
+<p>Verify if your domain is mapped correctly using the <code>dig</code> command or <a href="https://toolbox.googleapps.com/apps/dig/#A/">Google Toolbox</a>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ dig pnetlab.gcp.fahmifj.space                         
+</span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...
+</span></span><span class="line"><span class="cl"><span class="p">;;</span> QUESTION SECTION:
+</span></span><span class="line"><span class="cl"><span class="p">;</span>pnetlab.fahmifj.space.	IN	A
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="p">;;</span> ANSWER SECTION:
+</span></span><span class="line"><span class="cl">pnetlab.fahmifj.space. 300	IN	A	100.126.1.2
+</span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...
+</span></span></code></pre></div><p>Once you done and get connected to Tailscale network, you should be able to access PNETLab from <code>pnetlab.yourdomain.com</code>.</p>
+<h2 id="troubleshoot">Troubleshoot</h2>
+<h3 id="cannot-install-packages">Cannot install packages</h3>
+<p>Try disable/comment this whole url line from the repository.</p>
+<pre tabindex="0"><code>#deb [trusted=yes] http://i-share.top/repo ./
+#deb [trusted=yes] http://repo.pnetlab.com ./
+</code></pre><h3 id="cloud-appliance-dhcp-not-working">Cloud Appliance: DHCP not working</h3>
+<p>Verify <code>udhcpd</code> service is running and enabled.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ service udhcpd status
+</span></span><span class="line"><span class="cl">$ cat /etc/default/udhcpd <span class="p">|</span> grep ENABLED
+</span></span></code></pre></div><p>Restart and update it if necessary and see if it&rsquo;s working.</p>
+]]></content:encoded>
+    </item>
+    
+  </channel>
+</rss>

