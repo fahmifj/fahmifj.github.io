@@ -7,60 +7,66 @@
     <generator>Hugo -- gohugo.io</generator>
     <lastBuildDate>Wed, 26 Mar 2025 13:27:29 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/terraform/index.xml" rel="self" type="application/rss+xml" />
     <item>
-      <title>Deploy PNETLab on Google Cloud</title>
+      <title>Deploying PNETLab on Google Cloud</title>
       <link>https://fahmifj.github.io/articles/deploy-pnetlab-on-google-cloud/</link>
       <pubDate>Wed, 26 Mar 2025 13:27:29 +0700</pubDate>
       
       <guid>https://fahmifj.github.io/articles/deploy-pnetlab-on-google-cloud/</guid>
-      <description>In the previous article, I had an issue with Mac/Orbstack&amp;rsquo;s networking system, that prevented my localhost from communicating with the GNS3 appliances. Since I didn&amp;rsquo;t have enough time to troubleshoot it myself, I decided to give PNETLab a try.
-This time, I leveraged my GCP free trial to deploy the PNETLab server and used Terraform to automate the server provisioning. Then, I will use Tailscale to securely access the lab without exposing it to the Internet.</description>
-      <content:encoded><![CDATA[<p>In the previous article, I had an issue with Mac/Orbstack&rsquo;s networking system, that prevented my localhost from communicating with the GNS3 appliances. Since I didn&rsquo;t have enough time to troubleshoot it myself, I decided to give PNETLab a try.</p>
-<p>This time, I leveraged my GCP free trial to deploy the PNETLab server and used Terraform to automate the server provisioning. Then, I will use Tailscale to securely access the lab without exposing it to the Internet.</p>
+      <description>In the previous article, I had an issue with either Mac or Orbstack&amp;rsquo;s networking system, that prevented my localhost from communicating with the GNS3 appliances. Instead of spending more time troubleshooting, I decided to give PNETLab a try, a web-based network emulator that can run entirely on a cloud server.
+In this article, I’ll show how to deploy PNETLab on Google Cloud using Terraform to automate the setup, and Tailscale to securely access the lab without exposing it to the public Internet.</description>
+      <content:encoded><![CDATA[<p>In the previous article, I had an issue with either Mac or Orbstack&rsquo;s networking system, that prevented my localhost from communicating with the GNS3 appliances. Instead of spending more time troubleshooting, I decided to give PNETLab a try, a web-based network emulator that can run entirely on a cloud server.</p>
+<p>In this article, I’ll show how to deploy PNETLab on Google Cloud using Terraform to automate the setup, and Tailscale to securely access the lab without exposing it to the public Internet.</p>
 <p><strong>Goals</strong></p>
 <ul>
-<li>Automate PNETLab Deployment with Terraform.</li>
+<li>Automate PNETLab server deployment with Terraform.</li>
 <li>Secure access to the lab without exposing it to the public internet.</li>
 <li>Configure a domain for easy access to the lab.</li>
 </ul>
 <p><strong>Prerequisites</strong></p>
 <ul>
+<li>GCP &amp; Twingate accounts.</li>
 <li>GCP CLI installed.</li>
 <li>Terraform installed.</li>
-<li>Tailscale account (free).</li>
-<li>Domain name.</li>
+<li>Own a domain name (optional).</li>
 </ul>
-<h2 id="network-diagram-overview">Network Diagram Overview</h2>
-<p>Here&rsquo;s an overview of what we going to do.</p>
-<img src="./imgs/image-20250326131830503.png" alt="image-20250326131830503" style="zoom:50%;" />
-<h2 id="preparing-gcp-project">Preparing GCP project</h2>
-<p>Before we begin, make sure that you&rsquo;ve authenticated to GCP.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ gcloud auth application-default login
-</span></span></code></pre></div><p>Once authenticated, create a project for our PNETLab deployment.</p>
+<p><strong>Network Diagram Overview</strong></p>
+<p>Here’s an overview of what we’re going to build:</p>
+<img src="./imgs/image-20251028001404879.png" alt="image-20251028001404879" style="zoom:50%;" />
+<h2 id="1-prepare-the-gcp-project">1. Prepare the GCP Project</h2>
+<h3 id="create-a-project">Create a Project</h3>
+<p>Before we begin, make sure that you&rsquo;ve <a href="https://docs.cloud.google.com/sdk/gcloud/reference/auth/login">authenticated to GCP</a>. Once done, create a project for our PNETLab deployment.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ <span class="nv">PROJECT_ID</span><span class="o">=</span>pnetlab-<span class="nv">$RANDOM</span>
 </span></span><span class="line"><span class="cl">$ <span class="nb">echo</span> <span class="nv">$PROJECT_ID</span>
 </span></span><span class="line"><span class="cl">pnetlab-xxx
-</span></span><span class="line"><span class="cl">$ gcloud projects create <span class="nv">$PROJECT_ID</span> --set-as-default
-</span></span></code></pre></div><p>Then, link the project to your billing account.</p>
+</span></span><span class="line"><span class="cl">$ mkdir <span class="nv">$PROJECT_ID</span>
+</span></span><span class="line"><span class="cl">$ <span class="nb">cd</span> <span class="nv">$PROJECT_ID</span>
+</span></span><span class="line"><span class="cl">$ gcloud projects create <span class="nv">$PROJECT_ID</span>
+</span></span><span class="line"><span class="cl">$ gcloud config <span class="nb">set</span> project <span class="nv">$PROJECT_ID</span>
+</span></span></code></pre></div><p>Then, link the project to your <a href="https://cloud.google.com/billing/docs/how-to/create-billing-account">billing account</a>.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ gcloud billing accounts list              
 </span></span><span class="line"><span class="cl">ACCOUNT_ID            NAME                OPEN  MASTER_ACCOUNT_ID
 </span></span><span class="line"><span class="cl">AAAAAA-BBBBBB-CCCCCC  My Billing Account  True
 </span></span><span class="line"><span class="cl">$ gcloud billing projects link <span class="nv">$PROJECT_ID</span> --billing-account<span class="o">=</span>AAAAAA-BBBBBB-CCCCCC
-</span></span></code></pre></div><p>Last, enable Google Compute API.</p>
+</span></span></code></pre></div><h3 id="enable-the-compute-api">Enable the Compute API</h3>
+<p>Before you can use Google Cloud&rsquo;s compute resources, we need to enable the Compute API which allows your project to access and manage VM instances.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ gcloud services <span class="nb">enable</span> compute.googleapis.com
-</span></span></code></pre></div><h2 id="server-deployment">Server Deployment</h2>
-<h3 id="preparing-terraform-code">Preparing Terraform Code</h3>
+</span></span></code></pre></div><blockquote>
+<p>Note: I&rsquo;m using GCP&rsquo;s free trial credits for this setup, if you&rsquo;re on a paid account, the steps remain the same.</p>
+</blockquote>
+<h2 id="2-server-deployment">2. Server Deployment</h2>
+<h3 id="terraform-folder-structure">Terraform Folder Structure</h3>
 <p>We&rsquo;ll use the following folder structure.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ tree
 </span></span><span class="line"><span class="cl">.
 </span></span><span class="line"><span class="cl">├── README.MD
-</span></span><span class="line"><span class="cl">├── ansible
 </span></span><span class="line"><span class="cl">└── terraform
-</span></span><span class="line"><span class="cl">    ├── terraforms.tfvars <span class="c1">#sensitive file (project_id, region, user/keys)</span>
-</span></span><span class="line"><span class="cl">    ├── main.tf 
+</span></span><span class="line"><span class="cl">    ├── terraforms.tfvars <span class="c1"># sensitive informations goes here (project_id, region, user/keys)</span>
+</span></span><span class="line"><span class="cl">    ├── main.tf <span class="c1"># defined gcp resources</span>
 </span></span><span class="line"><span class="cl">    └── variables.tf
 </span></span><span class="line"><span class="cl">
 </span></span><span class="line"><span class="cl"><span class="m">3</span> directories, <span class="m">5</span> files
-</span></span></code></pre></div><p>Within the terraform folder, initialize the terraform working directory.</p>
+</span></span></code></pre></div><h3 id="preparing-terraform-code">Preparing Terraform Code</h3>
+<p>Within the terraform folder, initialize the terraform working directory.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ terraform init
 </span></span></code></pre></div><h4 id="terraformtfvars">terraform.tfvars</h4>
 <p><code>terraforms.tfvars</code> contains the following (make your adjustment):</p>
@@ -221,23 +227,29 @@ ssh_pub_ansible = &#34;ssh-ed25519 AAAAC3N... ansible&#34;
 </span></span><span class="line"><span class="cl">  <span class="err">type</span>        <span class="err">=</span> <span class="err">string</span>
 </span></span><span class="line"><span class="cl">  <span class="err">description</span> <span class="err">=</span> <span class="nt">&#34;The public key used for configuration management. Format: [public key] [username]&#34;</span>
 </span></span><span class="line"><span class="cl"><span class="p">}</span>
-</span></span></code></pre></div><h3 id="apply-configuration">Apply Configuration</h3>
+</span></span></code></pre></div><h3 id="run-code">Run Code</h3>
 <p>With all the resource files defined, we will run the following command in the terraform directory.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ terraform fmt         <span class="c1">#Format your Terraform files  </span>
 </span></span><span class="line"><span class="cl">$ terraform validate    <span class="c1">#Check for syntax errors  </span>
 </span></span><span class="line"><span class="cl">$ terraform plan -out pnetlab-deploy       <span class="c1">#Preview the infrastructure changes  </span>
 </span></span><span class="line"><span class="cl">$ terraform apply pnetlab-deploy -auto-approve  <span class="c1"># Deploy the resources  </span>
-</span></span></code></pre></div><p>After it finishes, check if the instance is running:</p>
+</span></span></code></pre></div><h3 id="verify-deployment">Verify Deployment</h3>
+<p>After it finishes, check if the instance is running:</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ gcloud compute instances list --filter<span class="o">=</span><span class="s2">&#34;name=pnetlab-server&#34;</span> --project<span class="o">=</span><span class="s2">&#34;</span><span class="nv">$PROJECT_ID</span><span class="s2">&#34;</span>
-</span></span></code></pre></div><h2 id="installing-pnetlab">Installing PNETLab</h2>
-<p>For this step, some are just copy-paste from the official installation guide at the <a href="https://www.pnetlab.com/pages/documentation?slug=how-to-deploy-pnetlab-box-on-google-cloud">PNETLab website</a>.</p>
-<h3 id="add-pnetlab-repository">Add PNETLab Repository</h3>
-<p>SSH into the server from the Google Cloud SSH browser. Once we logged in, add and install the pnetlab package.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ sudo su -
-</span></span><span class="line"><span class="cl">$ <span class="nb">echo</span> <span class="s2">&#34;deb [trusted=yes] http://repo.pnetlab.com ./&#34;</span> <span class="p">|</span> sudo tee -a /etc/apt/sources.list
-</span></span><span class="line"><span class="cl">$ sudo apt-get update
-</span></span><span class="line"><span class="cl">$ sudo apt-get install pnetlab
-</span></span></code></pre></div><h3 id="create-swap-memory">Create Swap Memory</h3>
+</span></span></code></pre></div><h2 id="3-pnetlab-installation">3. PNETLab Installation</h2>
+<h3 id="accessing-the-instance">Accessing the Instance</h3>
+<p>SSH into the instance using <code>gcloud</code> cli.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ gcloud compute ssh INSTANCE_NAME --zone<span class="o">=</span>YOUR_ZONE
+</span></span></code></pre></div><h3 id="install-pnetlab">Install PNETLab</h3>
+<p>Add pnetlab repository with the following command.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ <span class="nb">echo</span> <span class="s2">&#34;deb [trusted=yes] http://repo.pnetlab.com ./&#34;</span> <span class="p">|</span> sudo tee -a /etc/apt/sources.list
+</span></span></code></pre></div><p>Update the repository and install pnetlab.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# apt-get update
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# apt-get install pnetlab
+</span></span></code></pre></div><blockquote>
+<p>Note: I switched my user to root with <code>$ sudo su -</code></p>
+</blockquote>
+<h3 id="create-swap-memory">Create Swap Memory</h3>
 <p>Create a swap disk, allocate the size according to your need.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# fallocate -l 1G /swapfile
 </span></span><span class="line"><span class="cl">root@pnetlab-server:~# chmod <span class="m">600</span> /swapfile
@@ -304,42 +316,57 @@ ssh_pub_ansible = &#34;ssh-ed25519 AAAAC3N... ansible&#34;
 </span></span><span class="line"><span class="cl">root@pnetlab-server:~# ln -s /mnt/unetlab/labs/ /opt/unetlab/
 </span></span></code></pre></div><p>Change ownership of the new labs directory to ensure PNETLab&rsquo;s services can access it back.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# chown -R www-data:www-data /mnt/unetlab/labs/
-</span></span></code></pre></div><h3 id="configure-tailscale-vpn">Configure Tailscale VPN</h3>
-<p>We will register the server as a Tailscale node, but before that, make sure you already generated an auth key in the Tailscale <a href="https://login.tailscale.com/admin/settings/keys">admin&rsquo;s console</a>.</p>
-<p>First, install Tailscale by executing the install script.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# curl -fsSL https://tailscale.com/install.sh <span class="p">|</span> sh 
-</span></span></code></pre></div><p>We will configure the server as a <a href="https://tailscale.com/kb/1019/subnets">subnet router.</a> This will allow direct access to the PNETLab QEMU/Docker appliances from your local network via the Tailscale network. Yes, that&rsquo;s correct! We simply turning the server into a <strong>router</strong>.</p>
-<p>To achieve that, we first need to enable IP forwarding on the server.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# <span class="nb">echo</span> <span class="s1">&#39;net.ipv4.ip_forward = 1&#39;</span> <span class="p">|</span> sudo tee -a /etc/sysctl.d/99-tailscale.conf
-</span></span><span class="line"><span class="cl">root@pnetlab-server:~# <span class="nb">echo</span> <span class="s1">&#39;net.ipv6.conf.all.forwarding = 1&#39;</span> <span class="p">|</span> sudo tee -a /etc/sysctl.d/99-tailscale.conf
-</span></span><span class="line"><span class="cl">root@pnetlab-server:~# sudo sysctl -p /etc/sysctl.d/99-tailscale.conf
-</span></span></code></pre></div><p>Next, to register the server as a node in your Tailscale network and  configure it as a subnet router, run the following command, replacing <code>tskey-auth-XXXXX</code> with your actual auth key and <code>10.0.10.0/24</code> with your designated local network on the PNETLAB server:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# tailscale up --auth-key<span class="o">=</span>tskey-auth-XXXXX  --advertise-route<span class="o">=</span>10.0.10.0/24
-</span></span></code></pre></div><blockquote>
-<p>In my case, <code>10.0.10.0/24</code> is my docker network, therefore I can communicate with all the docker appliances in this network locally via the pnetlab server that act as a gateway.</p>
-</blockquote>
-<p>Revisit your Tailscale&rsquo;s admin console. You should see a <code>Subnets</code> label on the pnetlab node.</p>
-<img src="./imgs/image-20250326110623945.png" alt="image-20250326110623945" style="zoom:50%;" />
-<p>Open the node settings, select &ldquo;<strong>edit route settings&hellip;</strong>&rdquo; and tick your network there.</p>
-<img src="./imgs/image-20250326100421964.png" alt="image-20250326100421964" style="zoom: 50%;" />
-<p>Save and exit.</p>
-<h3 id="update-grub-config">Update Grub Config</h3>
+</span></span></code></pre></div><h3 id="update-grub-config">Update Grub Config</h3>
 <p>Remove the default grub config.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# rm /etc/default/grub.d/50-cloudimg-settings.cfg
 </span></span><span class="line"><span class="cl">root@pnetlab-server:~# update-grub
 </span></span><span class="line"><span class="cl">root@pnetlab-server:~# reboot
 </span></span></code></pre></div><h3 id="update-version-optional">Update Version (Optional)</h3>
-<p>After the installation completed, we can directly upgrade PNETLab to the latest version. Since it&rsquo;s an optional, I will just put the official guide link on how to upgrade the lab version: <a href="https://pnetlab.com/pages/releases">go here</a>.</p>
-<h2 id="configure-domain-name">Configure Domain Name</h2>
-<p>I&rsquo;d like to get rid of the self-signed warning and use a custom domain name when accessing PNETLab.  To do so, we will obtain a LetsEncrypt&rsquo;s certificate to replace the self-signed one and then configure a new DNS record: <code>pnetlab.yourdomain.com</code>. The DNS will be pointing to your Tailscale node&rsquo;s IP.</p>
-<p>For this step, I will assume that you already own a domain.</p>
-<h3 id="use-letsencrypt-ssl-on-pnetlab">Use LetsEncrypt SSL on PNETLab</h3>
-<p>On the pnetlab server, install <code>certbot</code> and prepare the work folder.</p>
+<p>After the installation completed, we can directly upgrade PNETLab to the latest version. It&rsquo;s an optional, so I will just put the official guide link on how to upgrade the lab version: <a href="https://pnetlab.com/pages/releases">go here</a>.</p>
+<h3 id="restart-and-verify">Restart and Verify</h3>
+<p>Once all the steps above are complete, restart the server and verify if the pnetlab service is running using the following command and check these ports: <code>80</code>, <code>443</code> for pnetlab web services and <code>4822</code> for guacamole proxy.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# netstat -tlpn  
+</span></span></code></pre></div><h2 id="4-setup-tailscale-vpn">4. Setup Tailscale VPN</h2>
+<p>For this step, I will assume that you already generated an auth key in the Tailscale <a href="https://login.tailscale.com/admin/settings/keys">admin&rsquo;s console</a>.</p>
+<h3 id="install-tailscale">Install Tailscale</h3>
+<p>First, install Tailscale by executing the install script.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# curl -fsSL https://tailscale.com/install.sh <span class="p">|</span> sh 
+</span></span></code></pre></div><h3 id="configure-subnet-router">Configure Subnet Router</h3>
+<p>We will configure the instance as a <a href="https://tailscale.com/kb/1019/subnets">subnet router</a>, simply turning the server into a <strong>router</strong>. This will enable direct access between PNETLab appliances network and our local network via the Tailscale network.</p>
+<p>To achieve that, we first need to enable IP forwarding on the server.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# <span class="nb">echo</span> <span class="s1">&#39;net.ipv4.ip_forward = 1&#39;</span> <span class="p">|</span> sudo tee -a /etc/sysctl.d/99-tailscale.conf
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# <span class="nb">echo</span> <span class="s1">&#39;net.ipv6.conf.all.forwarding = 1&#39;</span> <span class="p">|</span> sudo tee -a /etc/sysctl.d/99-tailscale.conf
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# sudo sysctl -p /etc/sysctl.d/99-tailscale.conf
+</span></span></code></pre></div><p>To register your instance as a node in your Tailscale network and enable it to act as a subnet router, run the following command:</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# tailscale up --auth-key<span class="o">=</span>tskey-auth-XXXXX  --advertise-route<span class="o">=</span>10.0.10.0/24
+</span></span></code></pre></div><blockquote>
+<p>Note:</p>
+<ul>
+<li>
+<p>Replace <code>tskey-auth-XXXXX</code> with your actual auth key and <code>10.0.10.0/24</code> with your designated local network on the PNETLAB server:</p>
+</li>
+<li>
+<p>The <code>--advertise-routes=10.0.10.0/24</code> option tells the instance to advertise the subnet <code>10.0.10.0/24</code> to your Tailscale network. Once advertised, other devices in your Tailscale network can route traffic to this subnet through this instance.</p>
+</li>
+</ul>
+</blockquote>
+<p>Revisit your Tailscale&rsquo;s admin console. You should see a <code>Subnets</code> label on the pnetlab node.</p>
+<img src="./imgs/image-20250326110623945.png" alt="image-20250326110623945" style="zoom:50%;" />
+<p>Open the node settings, select &ldquo;<strong>edit route settings&hellip;</strong>&rdquo; and tick your network there.</p>
+<img src="./imgs/image-20250326100421964.png" alt="image-20250326100421964" style="zoom: 50%;" />
+<h3 id="verify-routing">Verify Routing</h3>
+<p>To verify, you can simply ping any interface IP of the instance that you have advertised. The image below is an example of mine, where I&rsquo;m pinging the Docker interface.</p>
+<img src="./imgs/image-20251028003923861.png" alt="image-20251028003923861" style="zoom:50%;" />
+<h2 id="5-configure-domain-name">5. Configure Domain Name</h2>
+<p>We can use a custom domain name to access PNETLab. To do so, we will obtain a LetsEncrypt&rsquo;s certificate to replace the self-signed one and then configure a new DNS record: <code>pnetlab.yourdomain.com</code>. This record will be pointing to Tailscale IP of our instance.</p>
+<p>For this step, I will assume that you already own a domain and know how to complete an ACME DNS challenge (proving control over a domain).</p>
+<h3 id="obtain-letsencrypt-ssl">Obtain LetsEncrypt SSL</h3>
+<p>Within the instance, install <code>certbot</code> and prepare the work folder.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# sudo apt install -y certbot
 </span></span><span class="line"><span class="cl">root@pnetlab-server:~# mkdir letsencrypt/work letsencrypt/config letsencrypt/logs
-</span></span></code></pre></div><p>Run the following command to obtain a Let&rsquo;s Encrypt certificate and  complete the ACME DNS challenge with your DNS provider/hosting (NameCheap, Hostinger, etc).</p>
+</span></span></code></pre></div><p>We can obtain a Let&rsquo;s Encrypt certificate with the following command.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# certbot certonly --agree-tos --email admin@yourdomain.com --manual --preferred-challenges<span class="o">=</span>dns -d <span class="se">\*</span>.yourdomain.com --config-dir ./letsencrypt/config --work-dir ./letsencrypt/work --logs-dir ./letsencrypt/logs
-</span></span></code></pre></div><p>The certificate should be available at <code>./letsencrypt/config/live/yourdomain.com</code></p>
+</span></span></code></pre></div><p>Complete the ACME DNS challenge on your DNS provider (NameCheap, Hostinger, etc). After successful validation, the CA (Let&rsquo;s Encrypt) will issue the certificate, which should be available at <code>./letsencrypt/config/live/yourdomain.com</code>.</p>
 <p>Next, edit <code>/etc/apache2/sites-available/pnetlabs.conf</code> and change these values with your certificate path.</p>
 <pre tabindex="0"><code>SSLCertificateFile   /path/to/your/cert/cert1.pem
 SSLCertificateKeyFile /path/to/your/certkey/privkey1.pem
@@ -352,7 +379,7 @@ SSLCertificateKeyFile /path/to/your/certkey/privkey1.pem
 <li>Hostname/Domain Name: <code>pnetlab.yourdomain.com</code></li>
 <li>IPv4: <code>pnetlab-tailscale-ip</code></li>
 </ul>
-<p>Here&rsquo;s an example of using Cloudflare DNS management for your reference.</p>
+<p>Here&rsquo;s an example of mine, where I&rsquo;m using Cloudflare for DNS management.</p>
 <img src="./imgs/image-20250326102815535.png" alt="image-20250326102815535" style="zoom: 33%;" />
 <blockquote>
 <p><code>100.126.1.2</code> is the tailscale node IP of my pnetlab server.</p>
@@ -367,10 +394,8 @@ SSLCertificateKeyFile /path/to/your/certkey/privkey1.pem
 </span></span><span class="line"><span class="cl">pnetlab.fahmifj.space. 300	IN	A	100.126.1.2
 </span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...
 </span></span></code></pre></div><p>Once you done and get connected to Tailscale network, you should be able to access PNETLab at <code>pnetlab.yourdomain.com</code>.</p>
-<h2 id="conclusion">Conclusion</h2>
-<p>We&rsquo;ve completed all the necessary steps to deploy a PNETLab server on Google Cloud. With this setup, we can do our networking stuff in the lab safely without exposing it to the internet. But, of course it doesn&rsquo;t stop here, you have to start importing the appliances into the lab.</p>
-<p>That&rsquo;s all, see you in the next post!</p>
-<h2 id="troubleshoot">Troubleshoot</h2>
+<h2 id="6-troubleshoot">6. Troubleshoot</h2>
+<p>If you happen to meet these errors, try the following solutions.</p>
 <h3 id="cannot-install-packages">Cannot install packages</h3>
 <p>Try disable/comment this whole url line from the repository.</p>
 <pre tabindex="0"><code>#deb [trusted=yes] http://i-share.top/repo ./
@@ -379,7 +404,10 @@ SSLCertificateKeyFile /path/to/your/certkey/privkey1.pem
 <p>Verify <code>udhcpd</code> service is running and enabled.</p>
 <div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ service udhcpd status
 </span></span><span class="line"><span class="cl">$ cat /etc/default/udhcpd <span class="p">|</span> grep ENABLED
-</span></span></code></pre></div><p>Restart and update it if necessary and see if it&rsquo;s working.</p>
+</span></span></code></pre></div><p>Update to enabled and restart and see if it&rsquo;s working.</p>
+<h2 id="conclusion">Conclusion</h2>
+<p>We&rsquo;ve completed all the necessary steps to deploy a PNETLab server on Google Cloud. With this setup, we can do our networking stuff in the lab safely without exposing it to the internet.</p>
+<p>That&rsquo;s all, see you in the next post!</p>
 ]]></content:encoded>
     </item>
     
