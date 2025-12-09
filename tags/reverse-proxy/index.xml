@@ -1,0 +1,131 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>Reverse-proxy on Ef&#39;s log</title>
+    <link>https://fahmifj.github.io/tags/reverse-proxy/</link>
+    <description>Recent content in Reverse-proxy on Ef&#39;s log</description>
+    <generator>Hugo -- gohugo.io</generator>
+    <lastBuildDate>Sat, 06 Dec 2025 15:33:48 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/reverse-proxy/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>Mirroring My Blog Using Cloudflare Workers</title>
+      <link>https://fahmifj.github.io/notes/mirror-blog-using-cloudflare-workers/</link>
+      <pubDate>Sat, 06 Dec 2025 15:33:48 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/notes/mirror-blog-using-cloudflare-workers/</guid>
+      <description>Initially, I wanted to host my Hugo site on a custom domain that I own (fahmifj.space) than using the GitHub Pages domain (fahmifj.github.io). But, proceeding this action would likely break the current blog&amp;rsquo;s SEO, because search engines already indexed the GH Pages domain.
+This time, I want to keep this GitHub pages domain co exist with my custom domain without breaking the SEO. The GH pages will still be my primary site, while custom domain is the secondary.</description>
+      <content:encoded><![CDATA[<p>Initially, I wanted to host my Hugo site on a custom domain that I own (<code>fahmifj.space</code>) than using the GitHub Pages domain (<code>fahmifj.github.io</code>). But, proceeding this action would likely break the current blog&rsquo;s SEO, because search engines already indexed the GH Pages domain.</p>
+<p>This time, I want to keep this GitHub pages domain co exist with my custom domain without breaking the SEO. The GH pages will still be my primary site, while custom domain is the secondary. Both are going to serve the same contents without domain redirection (stays on the domain you typed).</p>
+<p>In short, what I want is like a mirror site.</p>
+<p>Although I&rsquo;m not really concerned about SEO, i think it&rsquo;s a great opportunity to learn something from this case.</p>
+<h2 id="cloudflare-workers-as-reverse-proxy">Cloudflare Workers as Reverse Proxy</h2>
+<p>In Cloudflare, there is a feature called Workers. It&rsquo;s similar to Google Cloud Functions, where we can write and run serverless code. Using this feature, I can write a proxy/middleware for fetching my GitHub Pages content and then serve it back on my custom domain.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">                       ┌──────────────────────────┐
+</span></span><span class="line"><span class="cl">                       │   fahmifj.github.io      │
+</span></span><span class="line"><span class="cl">                       │    (upstream hosting)    │
+</span></span><span class="line"><span class="cl">                       └──────────┬───────────────┘
+</span></span><span class="line"><span class="cl">                                  │ GitHub Pages origin
+</span></span><span class="line"><span class="cl">                                  ▼
+</span></span><span class="line"><span class="cl">                          Cloudflare Worker
+</span></span><span class="line"><span class="cl">                          (proxy + rewrite)
+</span></span><span class="line"><span class="cl">                                  │
+</span></span><span class="line"><span class="cl">                                  ▼
+</span></span><span class="line"><span class="cl">                            fahmifj.space
+</span></span><span class="line"><span class="cl">                           (custom domain)
+</span></span></code></pre></div><h3 id="create-worker-v1">Create Worker (v1)</h3>
+<p>I will create a worker where it functions as a content fetcher.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-javascript" data-lang="javascript"><span class="line"><span class="cl"><span class="kr">export</span> <span class="k">default</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="kr">async</span> <span class="nx">fetch</span><span class="p">(</span><span class="nx">request</span><span class="p">)</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="kr">const</span> <span class="nx">url</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">URL</span><span class="p">(</span><span class="nx">request</span><span class="p">.</span><span class="nx">url</span><span class="p">);</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">    <span class="c1">// Force everything to fetch from GitHub Pages 
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>    <span class="nx">url</span><span class="p">.</span><span class="nx">hostname</span> <span class="o">=</span> <span class="s2">&#34;fahmifj.github.io&#34;</span><span class="p">;</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">    <span class="kr">const</span> <span class="nx">response</span> <span class="o">=</span> <span class="kr">await</span> <span class="nx">fetch</span><span class="p">(</span><span class="nx">url</span><span class="p">.</span><span class="nx">toString</span><span class="p">(),</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">      <span class="nx">headers</span><span class="o">:</span> <span class="nx">request</span><span class="p">.</span><span class="nx">headers</span><span class="p">,</span>
+</span></span><span class="line"><span class="cl">      <span class="nx">redirect</span><span class="o">:</span> <span class="s2">&#34;follow&#34;</span>
+</span></span><span class="line"><span class="cl">    <span class="p">});</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">    <span class="c1">// Copy GitHub response and serve it
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>    <span class="k">return</span> <span class="k">new</span> <span class="nx">Response</span><span class="p">(</span><span class="nx">response</span><span class="p">.</span><span class="nx">body</span><span class="p">,</span> <span class="nx">response</span><span class="p">);</span>
+</span></span><span class="line"><span class="cl">  <span class="p">}</span>
+</span></span><span class="line"><span class="cl"><span class="p">};</span>
+</span></span></code></pre></div><p>The results:</p>
+<p><div class="img-container"><img src="./imgs/image-20251208204713163.png" alt="image-20251208204713163"  /></div>
+</p>
+<h3 id="custom-domain-worker">Custom Domain Worker</h3>
+<p>I will add custom domain to my worker (Workers &amp; Pages → My Worker → Settings → Domain &amp; Routers).</p>
+<img src="./imgs/image-20251209003601514.png" alt="image-20251209003601514" style="zoom: 50%;" />
+<p>And now I can see that <code>fahmifj.space</code> serving the same content as <code>fahmifj.github.io</code>.</p>
+<h3 id="worker-with-url-rewriter-v2">Worker with URL Rewriter (v2)</h3>
+<p>Hugo builds my site with absolute URL, and that is based on my GH Pages domain, which is <code>fahmifj.github.io</code>. Because of it, most of link click in my custom domain will land users back to GH Pages domain.</p>
+<p>Therefore, I have to make an adjustment on the worker to rewrite all the GitHub Pages links and replace it to my custom domain. I also  add a condition to block search engines indexing bot and a regex where it removes canonical link before the contents are served on the custom domain.</p>
+<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-javascript" data-lang="javascript"><span class="line"><span class="cl"><span class="kr">export</span> <span class="k">default</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="kr">async</span> <span class="nx">fetch</span><span class="p">(</span><span class="nx">request</span><span class="p">)</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="kr">const</span> <span class="nx">upstream</span> <span class="o">=</span> <span class="s2">&#34;fahmifj.github.io&#34;</span><span class="p">;</span> <span class="c1">// GitHub Pages domain
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>    <span class="kr">const</span> <span class="nx">host</span> <span class="o">=</span> <span class="s2">&#34;fahmifj.space&#34;</span><span class="p">;</span>  <span class="c1">// Custom domain
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>    
+</span></span><span class="line"><span class="cl">    <span class="kr">const</span> <span class="nx">url</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">URL</span><span class="p">(</span><span class="nx">request</span><span class="p">.</span><span class="nx">url</span><span class="p">);</span>
+</span></span><span class="line"><span class="cl">   
+</span></span><span class="line"><span class="cl">    <span class="c1">// Prevent indexing by googlebot
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>    <span class="kr">const</span> <span class="nx">ua</span> <span class="o">=</span> <span class="nx">request</span><span class="p">.</span><span class="nx">headers</span><span class="p">.</span><span class="nx">get</span><span class="p">(</span><span class="s2">&#34;user-agent&#34;</span><span class="p">)</span> <span class="o">||</span> <span class="s2">&#34;&#34;</span><span class="p">;</span>
+</span></span><span class="line"><span class="cl">    <span class="k">if</span> <span class="p">(</span><span class="nx">ua</span><span class="p">.</span><span class="nx">includes</span><span class="p">(</span><span class="s2">&#34;googlebot&#34;</span><span class="p">,</span> <span class="s2">&#34;bingbot&#34;</span><span class="p">,</span> <span class="s2">&#34;slurp&#34;</span><span class="p">,</span> <span class="s2">&#34;duckduckbot&#34;</span><span class="p">,</span> <span class="s2">&#34;baiduspider&#34;</span><span class="p">,</span> <span class="s2">&#34;yandex&#34;</span><span class="p">))</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">      <span class="k">return</span> <span class="k">new</span> <span class="nx">Response</span><span class="p">(</span><span class="s2">&#34;Not for indexing&#34;</span><span class="p">,</span> <span class="p">{</span> <span class="nx">status</span><span class="o">:</span> <span class="mi">403</span> <span class="p">});</span>
+</span></span><span class="line"><span class="cl">    <span class="p">}</span>
+</span></span><span class="line"><span class="cl">    
+</span></span><span class="line"><span class="cl">    <span class="c1">// Do not serve sitemap
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>    <span class="k">if</span> <span class="p">(</span><span class="nx">url</span><span class="p">.</span><span class="nx">pathname</span> <span class="o">===</span> <span class="s2">&#34;/sitemap.xml&#34;</span><span class="p">)</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">      <span class="k">return</span> <span class="k">new</span> <span class="nx">Response</span><span class="p">(</span><span class="s2">&#34;&#34;</span><span class="p">,</span> <span class="p">{</span> <span class="nx">status</span><span class="o">:</span> <span class="mi">404</span> <span class="p">});</span>
+</span></span><span class="line"><span class="cl">    <span class="p">}</span>
+</span></span><span class="line"><span class="cl">    
+</span></span><span class="line"><span class="cl">    <span class="nx">url</span><span class="p">.</span><span class="nx">hostname</span> <span class="o">=</span> <span class="nx">upstream</span><span class="p">;</span>
+</span></span><span class="line"><span class="cl">    
+</span></span><span class="line"><span class="cl">    <span class="c1">// Fetch upstream content
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>    <span class="kr">const</span> <span class="nx">res</span> <span class="o">=</span> <span class="kr">await</span> <span class="nx">fetch</span><span class="p">(</span><span class="nx">url</span><span class="p">.</span><span class="nx">toString</span><span class="p">(),</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">      <span class="nx">headers</span><span class="o">:</span> <span class="nx">request</span><span class="p">.</span><span class="nx">headers</span><span class="p">,</span>
+</span></span><span class="line"><span class="cl">      <span class="nx">redirect</span><span class="o">:</span> <span class="s2">&#34;follow&#34;</span><span class="p">,</span>
+</span></span><span class="line"><span class="cl">    <span class="p">});</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">    <span class="c1">// Only HTML needs rewriting, leave CSS and JS as is
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>    <span class="kr">const</span> <span class="nx">contentType</span> <span class="o">=</span> <span class="nx">res</span><span class="p">.</span><span class="nx">headers</span><span class="p">.</span><span class="nx">get</span><span class="p">(</span><span class="s2">&#34;content-type&#34;</span><span class="p">)</span> <span class="o">||</span> <span class="s2">&#34;&#34;</span><span class="p">;</span>
+</span></span><span class="line"><span class="cl">    <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="nx">contentType</span><span class="p">.</span><span class="nx">includes</span><span class="p">(</span><span class="s2">&#34;text/html&#34;</span><span class="p">))</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">      <span class="k">return</span> <span class="nx">res</span><span class="p">;</span>
+</span></span><span class="line"><span class="cl">    <span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">    <span class="c1">// Read HTML response
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>    <span class="kd">let</span> <span class="nx">html</span> <span class="o">=</span> <span class="kr">await</span> <span class="nx">res</span><span class="p">.</span><span class="nx">text</span><span class="p">();</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">    <span class="c1">//  Rewrite all URLs from upstream → custom domain
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>    <span class="nx">html</span> <span class="o">=</span> <span class="nx">html</span><span class="p">.</span><span class="nx">replaceAll</span><span class="p">(</span><span class="sb">`https://</span><span class="si">${</span><span class="nx">upstream</span><span class="si">}</span><span class="sb">`</span><span class="p">,</span> <span class="sb">`https://</span><span class="si">${</span><span class="nx">host</span><span class="si">}</span><span class="sb">`</span><span class="p">);</span>
+</span></span><span class="line"><span class="cl">    <span class="nx">html</span> <span class="o">=</span> <span class="nx">html</span><span class="p">.</span><span class="nx">replaceAll</span><span class="p">(</span><span class="sb">`http://</span><span class="si">${</span><span class="nx">upstream</span><span class="si">}</span><span class="sb">`</span><span class="p">,</span> <span class="sb">`https://</span><span class="si">${</span><span class="nx">host</span><span class="si">}</span><span class="sb">`</span><span class="p">);</span>
+</span></span><span class="line"><span class="cl">    <span class="nx">html</span> <span class="o">=</span> <span class="nx">html</span><span class="p">.</span><span class="nx">replaceAll</span><span class="p">(</span><span class="sb">`</span><span class="si">${</span><span class="nx">upstream</span><span class="si">}</span><span class="sb">`</span><span class="p">,</span> <span class="nx">host</span><span class="p">);</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">    <span class="c1">// Remove canonical &lt;link&gt; tag (so GitHub Pages stays canonical)
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>    <span class="nx">html</span> <span class="o">=</span> <span class="nx">html</span><span class="p">.</span><span class="nx">replace</span><span class="p">(</span>
+</span></span><span class="line"><span class="cl">      <span class="sr">/&lt;link[^&gt;]+rel=[&#34;&#39;]?canonical[&#34;&#39;]?[^&gt;]*&gt;/gi</span><span class="p">,</span>
+</span></span><span class="line"><span class="cl">      <span class="s2">&#34;&#34;</span>
+</span></span><span class="line"><span class="cl">    <span class="p">);</span>
+</span></span><span class="line"><span class="cl">    
+</span></span><span class="line"><span class="cl">    <span class="c1">// Add no-index header (no crawling on my custom domain)
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>    <span class="kr">const</span> <span class="nx">newHeaders</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">Headers</span><span class="p">(</span><span class="nx">res</span><span class="p">.</span><span class="nx">headers</span><span class="p">);</span>
+</span></span><span class="line"><span class="cl">    <span class="nx">newHeaders</span><span class="p">.</span><span class="nx">set</span><span class="p">(</span><span class="s2">&#34;X-Robots-Tag&#34;</span><span class="p">,</span> <span class="s2">&#34;noindex, nofollow&#34;</span><span class="p">);</span>
+</span></span><span class="line"><span class="cl">    
+</span></span><span class="line"><span class="cl">    <span class="c1">// Return modified HTML
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>    <span class="k">return</span> <span class="k">new</span> <span class="nx">Response</span><span class="p">(</span><span class="nx">html</span><span class="p">,</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">      <span class="nx">status</span><span class="o">:</span> <span class="nx">res</span><span class="p">.</span><span class="nx">status</span><span class="p">,</span>
+</span></span><span class="line"><span class="cl">      <span class="nx">headers</span><span class="o">:</span> <span class="nx">newHeaders</span>
+</span></span><span class="line"><span class="cl">    <span class="p">});</span>
+</span></span><span class="line"><span class="cl">  <span class="p">}</span>
+</span></span><span class="line"><span class="cl"><span class="p">};</span>
+</span></span></code></pre></div><h2 id="conclusion">Conclusion</h2>
+<p>I have achieved my goal by making GH Pages domain coexist with my custom domain which basically I&rsquo;m just creating a mirror site of my blog.</p>
+<p>Some of you might think that i am so weird to keep using GitHub pages even though I already have a custom domain. Well. the reason is simple, i want to my blog to stay alive as long as possible by using the free service by GitHub itself.</p>
+<p>In short, I think using GitHub Pages as my canonical means I don&rsquo;t have to worry about maintaining a domain for SEO stability. GitHub handles everything and the canonical URL stays consistent.</p>
+<p>But if I used my custom domain as the canonical source, then I would be responsible for maintaining that domain (or even server). The custom domain can expire in one or two year and I might forget renewing it or even I decide to switch to another TLD, then it&rsquo;s gonna affect the SEO.</p>
+<p>This way, I will still have the freedom to change my custom domain in the future without having to worry about SEO.</p>
+<p>Okay that&rsquo;s it. See you!</p>
+]]></content:encoded>
+    </item>
+    
+  </channel>
+</rss>
