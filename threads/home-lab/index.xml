@@ -1,0 +1,1313 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>Home Lab on Ef&#39;s log</title>
+    <link>https://fahmifj.github.io/threads/home-lab/</link>
+    <description>Recent content in Home Lab on Ef&#39;s log</description>
+    <generator>Hugo -- gohugo.io</generator>
+    <lastBuildDate>Wed, 26 Mar 2025 13:27:29 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/threads/home-lab/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>Deploying PNETLab on Google Cloud</title>
+      <link>https://fahmifj.github.io/blog/deploy-pnetlab-on-gcp/</link>
+      <pubDate>Wed, 26 Mar 2025 13:27:29 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/blog/deploy-pnetlab-on-gcp/</guid>
+      <description>In the previous article, I had an issue with either Mac or Orbstack&amp;rsquo;s networking system, that prevented my localhost from communicating with the GNS3 appliances. Instead of spending more time troubleshooting, I decided to give PNETLab a try, a web-based network emulator that can run entirely on a cloud server.
+In this article, I’ll show how to deploy PNETLab on Google Cloud using Terraform to automate the setup, and Tailscale to securely access the lab without exposing it to the public Internet.</description>
+      <content:encoded><![CDATA[<p>In the <a href="/articles/running-gns3-on-apple-m2-orbstack/"target="_blank" rel="noopener noreferrer"
+>previous article</a>, I had an issue with either Mac or Orbstack&rsquo;s networking system, that prevented my localhost from communicating with the GNS3 appliances. Instead of spending more time troubleshooting, I decided to give PNETLab a try, a web-based network emulator that can run entirely on a cloud server.</p>
+<p>In this article, I’ll show how to deploy PNETLab on Google Cloud using Terraform to automate the setup, and Tailscale to securely access the lab without exposing it to the public Internet.</p>
+<p><strong>Goals</strong></p>
+<ul>
+<li>Automate PNETLab server deployment with Terraform.</li>
+<li>Secure access to the lab without exposing it to the public internet.</li>
+<li>Configure a domain for easy access to the lab.</li>
+</ul>
+<p><strong>Prerequisites</strong></p>
+<ul>
+<li>GCP &amp; Twingate accounts.</li>
+<li>GCP CLI installed.</li>
+<li>Terraform installed.</li>
+<li>Own a domain name (optional).</li>
+</ul>
+<p><strong>Network Diagram Overview</strong></p>
+<p>Here’s an overview of what we’re going to build:</p>
+<img src="./imgs/image-20251028001404879.png" alt="image-20251028001404879" style="zoom:50%;" />
+<h2 id="prepare-the-gcp-project">Prepare the GCP Project</h2>
+<h3 id="create-a-project">Create a Project</h3>
+<p>Before we begin, make sure that you&rsquo;ve <a href="https://docs.cloud.google.com/sdk/gcloud/reference/auth/login"target="_blank" rel="noopener noreferrer"
+>authenticated to GCP</a>. Once done, create a project for our PNETLab deployment.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ <span class="nv">PROJECT_ID</span><span class="o">=</span>pnetlab-<span class="nv">$RANDOM</span>
+</span></span><span class="line"><span class="cl">$ <span class="nb">echo</span> <span class="nv">$PROJECT_ID</span>
+</span></span><span class="line"><span class="cl">pnetlab-xxx
+</span></span><span class="line"><span class="cl">$ mkdir <span class="nv">$PROJECT_ID</span>
+</span></span><span class="line"><span class="cl">$ <span class="nb">cd</span> <span class="nv">$PROJECT_ID</span>
+</span></span><span class="line"><span class="cl">$ gcloud projects create <span class="nv">$PROJECT_ID</span>
+</span></span><span class="line"><span class="cl">$ gcloud config <span class="nb">set</span> project <span class="nv">$PROJECT_ID</span></span></span></code></pre>
+</figure><p>Then, link the project to your <a href="https://cloud.google.com/billing/docs/how-to/create-billing-account"target="_blank" rel="noopener noreferrer"
+>billing account</a>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ gcloud billing accounts list              
+</span></span><span class="line"><span class="cl">ACCOUNT_ID            NAME                OPEN  MASTER_ACCOUNT_ID
+</span></span><span class="line"><span class="cl">AAAAAA-BBBBBB-CCCCCC  My Billing Account  True
+</span></span><span class="line"><span class="cl">$ gcloud billing projects link <span class="nv">$PROJECT_ID</span> --billing-account<span class="o">=</span>AAAAAA-BBBBBB-CCCCCC</span></span></code></pre>
+</figure><h3 id="enable-the-compute-api">Enable the Compute API</h3>
+<p>Before you can use Google Cloud&rsquo;s compute resources, we need to enable the Compute API which allows your project to access and manage VM instances.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ gcloud services <span class="nb">enable</span> compute.googleapis.com</span></span></code></pre>
+</figure><blockquote>
+<p>Note: I&rsquo;m using GCP&rsquo;s free trial credits for this setup, if you&rsquo;re on a paid account, the steps remain the same.</p>
+</blockquote>
+<h2 id="instance-deployment">Instance Deployment</h2>
+<h3 id="preparing-terraform-code">Preparing Terraform Code</h3>
+<p>We&rsquo;ll use the following folder structure.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ tree
+</span></span><span class="line"><span class="cl">.
+</span></span><span class="line"><span class="cl">├── README.MD
+</span></span><span class="line"><span class="cl">└── terraform
+</span></span><span class="line"><span class="cl">    ├── terraforms.tfvars <span class="c1"># sensitive informations goes here (project_id, region, user/keys)</span>
+</span></span><span class="line"><span class="cl">    ├── main.tf <span class="c1"># defined gcp resources</span>
+</span></span><span class="line"><span class="cl">    └── variables.tf
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="m">1</span> directories, <span class="m">4</span> files</span></span></code></pre>
+</figure><p>Within the terraform folder, initialize the terraform working directory.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ terraform init</span></span></code></pre>
+</figure><h4 id="terraformtfvars">terraform.tfvars</h4>
+<p><code>terraforms.tfvars</code> contains the following (make your adjustment):</p>
+<figure class="highlight">
+    <pre tabindex="0"><code class="language-" data-lang="">project_id      = &#34;&#34;
+region          = &#34;&#34;
+zone            = &#34;&#34;
+os_image        = &#34;projects/ubuntu-os-cloud/global/images/ubuntu-1804-bionic-v20240116a&#34;
+ssh_user        = &#34;username&#34;
+ssh_pub_user    = &#34;ssh-ed25519 AAAAC3N... root&#34;
+ssh_pub_ansible = &#34;ssh-ed25519 AAAAC3N... ansible&#34;</code></pre>
+</figure><h4 id="maintf">main.tf</h4>
+<p><code>main.tf</code> file contains the following:</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-json" data-lang="json"><span class="line"><span class="cl"><span class="err">terraform</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">required_providers</span> <span class="err">{</span>
+</span></span><span class="line"><span class="cl">    <span class="err">google</span> <span class="err">=</span> <span class="err">{</span>
+</span></span><span class="line"><span class="cl">      <span class="err">source</span> <span class="err">=</span> <span class="nt">&#34;hashicorp/google&#34;</span>
+</span></span><span class="line"><span class="cl">    <span class="err">version</span> <span class="err">=</span> <span class="s2">&#34;~&gt; 4.5&#34;</span> <span class="p">}</span>
+</span></span><span class="line"><span class="cl">  <span class="err">}</span>
+</span></span><span class="line"><span class="cl"><span class="err">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">provider</span> <span class="s2">&#34;google&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">project</span> <span class="err">=</span> <span class="err">var.project_id</span>
+</span></span><span class="line"><span class="cl">  <span class="err">region</span>  <span class="err">=</span> <span class="err">var.region</span>
+</span></span><span class="line"><span class="cl">  <span class="err">zone</span>    <span class="err">=</span> <span class="err">var.zone</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">#</span> <span class="err">SETUP</span> <span class="err">NETWORK</span> <span class="err">#</span>
+</span></span><span class="line"><span class="cl"><span class="err">resource</span> <span class="s2">&#34;google_compute_network&#34;</span> <span class="s2">&#34;pnetlab_vpc&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">name</span>                    <span class="err">=</span> <span class="nt">&#34;pnetlab-vpc&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="err">auto_create_subnetworks</span> <span class="err">=</span> <span class="kc">false</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">resource</span> <span class="s2">&#34;google_compute_subnetwork&#34;</span> <span class="s2">&#34;pnetlab_subnet&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">name</span>          <span class="err">=</span> <span class="nt">&#34;pnetlab-subnet&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="err">network</span>       <span class="err">=</span> <span class="err">google_compute_network.pnetlab_vpc.id</span>
+</span></span><span class="line"><span class="cl">  <span class="err">ip_cidr_range</span> <span class="err">=</span> <span class="s2">&#34;10.10.1.0/24&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">resource</span> <span class="s2">&#34;google_compute_firewall&#34;</span> <span class="s2">&#34;allow_ssh_access&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">name</span>    <span class="err">=</span> <span class="nt">&#34;allow-ssh&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="err">network</span> <span class="err">=</span> <span class="err">google_compute_network.pnetlab_vpc.id</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">  <span class="err">allow</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="err">protocol</span> <span class="err">=</span> <span class="nt">&#34;tcp&#34;</span>
+</span></span><span class="line"><span class="cl">    <span class="err">ports</span>    <span class="err">=</span> <span class="p">[</span><span class="s2">&#34;22&#34;</span><span class="p">]</span>
+</span></span><span class="line"><span class="cl">  <span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">  <span class="err">source_ranges</span> <span class="err">=</span> <span class="p">[</span> <span class="s2">&#34;0.0.0.0/0&#34;</span> <span class="p">]</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">#</span> <span class="err">NAT</span>
+</span></span><span class="line"><span class="cl"><span class="err">resource</span> <span class="s2">&#34;google_compute_router&#34;</span> <span class="s2">&#34;pnetlab_router&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">name</span> <span class="err">=</span> <span class="nt">&#34;pnetlab-router&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="err">region</span> <span class="err">=</span> <span class="err">var.region</span>
+</span></span><span class="line"><span class="cl">  <span class="err">network</span> <span class="err">=</span> <span class="err">google_compute_network.pnetlab_vpc.id</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">resource</span> <span class="s2">&#34;google_compute_router_nat&#34;</span> <span class="s2">&#34;pnetlab_router_nat&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">name</span> <span class="err">=</span> <span class="nt">&#34;pnetlab-router-nat&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="err">region</span> <span class="err">=</span> <span class="err">var.region</span>
+</span></span><span class="line"><span class="cl">  <span class="err">router</span> <span class="err">=</span> <span class="err">google_compute_router.pnetlab_router.name</span>
+</span></span><span class="line"><span class="cl">  <span class="err">nat_ip_allocate_option</span> <span class="err">=</span> <span class="s2">&#34;AUTO_ONLY&#34;</span> <span class="err">#</span> <span class="err">use</span> <span class="err">dynamic</span> <span class="err">public</span> <span class="err">ip</span> <span class="err">for</span> <span class="err">nat</span>
+</span></span><span class="line"><span class="cl">  <span class="err">source_subnetwork_ip_ranges_to_nat</span> <span class="err">=</span> <span class="s2">&#34;ALL_SUBNETWORKS_ALL_IP_RANGES&#34;</span> <span class="err">#</span> <span class="err">nat</span> <span class="err">any</span> <span class="err">sources</span> <span class="err">ip</span> <span class="err">range</span> <span class="err">available</span> <span class="err">within</span> <span class="err">the</span> <span class="err">vpc</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">#</span> <span class="err">SETUP</span> <span class="err">EXT</span> <span class="err">DISK</span> <span class="err">#</span>
+</span></span><span class="line"><span class="cl"><span class="err">resource</span> <span class="s2">&#34;google_compute_disk&#34;</span> <span class="s2">&#34;additional_disk&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">name</span>   <span class="err">=</span> <span class="nt">&#34;pnetlab-additional-disk&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="err">type</span>   <span class="err">=</span> <span class="s2">&#34;pd-standard&#34;</span>  <span class="err">#</span> <span class="err">Choose</span> <span class="err">disk</span> <span class="err">type</span> <span class="err">(pd-standard</span><span class="p">,</span> <span class="err">pd-ssd,</span> <span class="err">etc.)</span>
+</span></span><span class="line"><span class="cl">  <span class="err">size</span> <span class="err">=</span> <span class="err">100</span> 
+</span></span><span class="line"><span class="cl">  <span class="err">lifecycle</span> <span class="err">{</span>
+</span></span><span class="line"><span class="cl">    <span class="err">prevent_destroy</span> <span class="err">=</span> <span class="err">true</span>
+</span></span><span class="line"><span class="cl">  <span class="p">}</span>
+</span></span><span class="line"><span class="cl"><span class="err">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">#</span> <span class="err">SETUP</span> <span class="err">INSTANCES</span> <span class="err">#</span>
+</span></span><span class="line"><span class="cl"><span class="err">#</span> <span class="err">ubuntu</span><span class="mi">-1804</span><span class="err">-bionic-v</span><span class="mi">20240116</span><span class="err">a</span>                                 <span class="err">ubuntu-os-cloud</span>      <span class="err">ubuntu</span><span class="mi">-1804</span><span class="err">-lts</span>
+</span></span><span class="line"><span class="cl"><span class="err">resource</span> <span class="s2">&#34;google_compute_instance&#34;</span> <span class="s2">&#34;pnetlab_server&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">name</span>         <span class="err">=</span> <span class="nt">&#34;pnetlab-server&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="err">machine_type</span> <span class="err">=</span> <span class="s2">&#34;n2-standard-2&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="err">tags</span>         <span class="err">=</span> <span class="p">[</span><span class="s2">&#34;pnetlab&#34;</span><span class="p">]</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">  <span class="err">boot_disk</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="err">initialize_params</span> <span class="err">{</span>
+</span></span><span class="line"><span class="cl">      <span class="err">image</span> <span class="err">=</span> <span class="err">var.os_image</span> <span class="err">#</span> <span class="err">cloud</span> <span class="err">image</span>
+</span></span><span class="line"><span class="cl">      <span class="err">size</span>  <span class="err">=</span> <span class="err">20</span>                 <span class="err">#</span> <span class="err">assign</span> <span class="err">20gb</span>
+</span></span><span class="line"><span class="cl">      <span class="err">type</span>  <span class="err">=</span> <span class="nt">&#34;pd-standard&#34;</span>
+</span></span><span class="line"><span class="cl">    <span class="p">}</span>
+</span></span><span class="line"><span class="cl">  <span class="p">}</span>
+</span></span><span class="line"><span class="cl">  
+</span></span><span class="line"><span class="cl">  <span class="err">#</span> <span class="err">external</span> <span class="err">disk</span> <span class="mi">100</span><span class="err">gb</span>
+</span></span><span class="line"><span class="cl">  <span class="err">attached_disk</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="err">source</span> <span class="err">=</span> <span class="err">google_compute_disk.additional_disk.id</span>
+</span></span><span class="line"><span class="cl">  <span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">  <span class="err">network_interface</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="err">network</span>    <span class="err">=</span> <span class="err">google_compute_network.pnetlab_vpc.id</span>
+</span></span><span class="line"><span class="cl">    <span class="err">subnetwork</span> <span class="err">=</span> <span class="err">google_compute_subnetwork.pnetlab_subnet.id</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">    <span class="err">#</span> <span class="err">Disable</span> <span class="err">public</span> <span class="err">IP</span>
+</span></span><span class="line"><span class="cl">    <span class="err">#</span> <span class="err">access_config</span> <span class="err">{</span>
+</span></span><span class="line"><span class="cl">    <span class="err">#</span>  <span class="err">network_tier</span> <span class="err">=</span> <span class="nt">&#34;STANDARD&#34;</span>
+</span></span><span class="line"><span class="cl">    <span class="err">#</span> <span class="p">}</span>
+</span></span><span class="line"><span class="cl">  <span class="err">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">  <span class="err">scheduling</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="err">automatic_restart</span>           <span class="err">=</span> <span class="err">true</span>
+</span></span><span class="line"><span class="cl">    <span class="err">on_host_maintenance</span>         <span class="err">=</span> <span class="nt">&#34;MIGRATE&#34;</span>
+</span></span><span class="line"><span class="cl">    <span class="err">preemptible</span>                 <span class="err">=</span> <span class="kc">false</span>
+</span></span><span class="line"><span class="cl">    <span class="err">provisioning_model</span>          <span class="err">=</span> <span class="s2">&#34;STANDARD&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">  <span class="err">advanced_machine_features</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="err">enable_nested_virtualization</span> <span class="err">=</span> <span class="err">true</span>
+</span></span><span class="line"><span class="cl">  <span class="p">}</span>
+</span></span><span class="line"><span class="cl">  
+</span></span><span class="line"><span class="cl">  <span class="err">metadata</span> <span class="err">=</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="err">ssh-keys</span> <span class="err">=</span> <span class="nt">&#34;${var.ssh_user}:${var.ssh_pub_user} \n${var.ssh_user}:${var.ssh_pub_ansible}&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="p">}</span>
+</span></span><span class="line"><span class="cl"><span class="err">}</span></span></span></code></pre>
+</figure><h4 id="variablestf">variables.tf</h4>
+<p><code>variables.tf</code> define the variables we used in the <code>tfvars</code> file, it contains:</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-json" data-lang="json"><span class="line"><span class="cl"><span class="err">variable</span> <span class="s2">&#34;project_id&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">type</span>        <span class="err">=</span> <span class="err">string</span>
+</span></span><span class="line"><span class="cl">  <span class="err">description</span> <span class="err">=</span> <span class="nt">&#34;Project ID&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">variable</span> <span class="s2">&#34;region&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">type</span>        <span class="err">=</span> <span class="err">string</span>
+</span></span><span class="line"><span class="cl">  <span class="err">description</span> <span class="err">=</span> <span class="nt">&#34;Project region&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="err">default</span>     <span class="err">=</span> <span class="s2">&#34;us-central&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">variable</span> <span class="s2">&#34;zone&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">type</span>        <span class="err">=</span> <span class="err">string</span>
+</span></span><span class="line"><span class="cl">  <span class="err">description</span> <span class="err">=</span> <span class="nt">&#34;Project zone&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="err">default</span>     <span class="err">=</span> <span class="s2">&#34;us-central1-a&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">variable</span> <span class="s2">&#34;os_image&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">type</span>        <span class="err">=</span> <span class="err">string</span>
+</span></span><span class="line"><span class="cl">  <span class="err">description</span> <span class="err">=</span> <span class="nt">&#34;OS family&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">variable</span> <span class="s2">&#34;ssh_user&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">type</span>        <span class="err">=</span> <span class="err">string</span>
+</span></span><span class="line"><span class="cl">  <span class="err">description</span> <span class="err">=</span> <span class="nt">&#34;The sudo user&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">variable</span> <span class="s2">&#34;ssh_pub_user&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">type</span>        <span class="err">=</span> <span class="err">string</span>
+</span></span><span class="line"><span class="cl">  <span class="err">description</span> <span class="err">=</span> <span class="nt">&#34;The public key used for authentication to an instance. Format: [public key] [username]&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">variable</span> <span class="s2">&#34;ssh_pub_ansible&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">type</span>        <span class="err">=</span> <span class="err">string</span>
+</span></span><span class="line"><span class="cl">  <span class="err">description</span> <span class="err">=</span> <span class="nt">&#34;The public key used for configuration management. Format: [public key] [username]&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span></span></span></code></pre>
+</figure><h3 id="run-code">Run Code</h3>
+<p>With all the resource files defined, we will run the following command in the terraform directory.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ terraform fmt         <span class="c1"># Format your Terraform files  </span>
+</span></span><span class="line"><span class="cl">$ terraform validate    <span class="c1"># Check for syntax errors  </span>
+</span></span><span class="line"><span class="cl">$ terraform plan -out pnetlab-deploy       <span class="c1">#Preview the infrastructure changes  </span>
+</span></span><span class="line"><span class="cl">$ terraform apply pnetlab-deploy -auto-approve  <span class="c1"># Deploy the resources  </span></span></span></code></pre>
+</figure><h3 id="verify-deployment">Verify Deployment</h3>
+<p>After it finishes, check if the instance is running:</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ gcloud compute instances list --filter<span class="o">=</span><span class="s2">&#34;name=pnetlab-server&#34;</span> --project<span class="o">=</span><span class="s2">&#34;</span><span class="nv">$PROJECT_ID</span><span class="s2">&#34;</span></span></span></code></pre>
+</figure><h2 id="pnetlab-installation">PNETLab Installation</h2>
+<h3 id="install-pnetlab">Install PNETLab</h3>
+<p>SSH into the instance using <code>gcloud</code> cli.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ gcloud compute ssh INSTANCE_NAME --zone<span class="o">=</span>YOUR_ZONE</span></span></code></pre>
+</figure><p>Add pnetlab repository with the following command.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ <span class="nb">echo</span> <span class="s2">&#34;deb [trusted=yes] http://repo.pnetlab.com ./&#34;</span> <span class="p">|</span> sudo tee -a /etc/apt/sources.list</span></span></code></pre>
+</figure><p>Update the repository and install pnetlab.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# apt-get update
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# apt-get install pnetlab</span></span></code></pre>
+</figure><blockquote>
+<p>Note: I switched my user to root with <code>$ sudo su -</code></p>
+</blockquote>
+<h3 id="configure-the-instance">Configure the Instance</h3>
+<h4 id="swap">Swap</h4>
+<p>Create a swap disk, allocate the size according to your need.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# fallocate -l 1G /swapfile
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# chmod <span class="m">600</span> /swapfile
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# mkswap /swapfile
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# swapon /swapfile
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# cp /etc/fstab<span class="o">{</span>,.bak<span class="o">}</span>
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# <span class="s1">&#39;/swapfile none swap sw 0 0&#39;</span> <span class="p">|</span> sudo tee -a /etc/fstab</span></span></code></pre>
+</figure><h4 id="dns">DNS</h4>
+<p>Edit file <code>/etc/network/interfaces</code> add line <code>dns-nameservers 8.8.8.8</code> to the configuration of interface <code>pnet0</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-toml" data-lang="toml"><span class="line"><span class="cl"><span class="p">...</span>
+</span></span><span class="line"><span class="cl"><span class="c"># The primary network interface</span>
+</span></span><span class="line"><span class="cl"><span class="nx">iface</span> <span class="nx">eth0</span> <span class="nx">inet</span> <span class="nx">manual</span>
+</span></span><span class="line"><span class="cl"><span class="nx">auto</span> <span class="nx">pnet0</span>
+</span></span><span class="line"><span class="cl"><span class="nx">iface</span> <span class="nx">pnet0</span> <span class="nx">inet</span> <span class="nx">dhcp</span>
+</span></span><span class="line"><span class="cl">    <span class="nx">dns-nameservers</span> <span class="mf">8.8</span><span class="p">.</span><span class="mf">8.8</span>
+</span></span><span class="line"><span class="cl">    <span class="nx">bridge_ports</span> <span class="nx">eth0</span>
+</span></span><span class="line"><span class="cl">    <span class="nx">bridge_stp</span> <span class="nx">off</span>
+</span></span><span class="line"><span class="cl"><span class="p">...</span></span></span></code></pre>
+</figure><p>And restart the networking service.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# sudo service networking restart</span></span></code></pre>
+</figure><h4 id="disk">Disk</h4>
+<p>Time to add the additional disk we defined in the terraform resource. The purpose of this disk is to store all the pnetlab project files as well as the images later.</p>
+<p>In my case, the additional disk is available at <code>/dev/sdb</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# lsblk
+</span></span><span class="line"><span class="cl">NAME    MAJ:MIN RM  SIZE RO TYPE MOUNTPOINT
+</span></span><span class="line"><span class="cl">loop0     7:0    <span class="m">0</span> 40.4M  <span class="m">1</span> loop /snap/snapd/20671
+</span></span><span class="line"><span class="cl">loop1     7:1    <span class="m">0</span>  368M  <span class="m">1</span> loop /snap/google-cloud-cli/203
+</span></span><span class="line"><span class="cl">loop2     7:2    <span class="m">0</span> 63.9M  <span class="m">1</span> loop /snap/core20/2105
+</span></span><span class="line"><span class="cl">sda       8:0    <span class="m">0</span>   20G  <span class="m">0</span> disk 
+</span></span><span class="line"><span class="cl">├─sda1    8:1    <span class="m">0</span> 19.9G  <span class="m">0</span> part /
+</span></span><span class="line"><span class="cl">├─sda14   8:14   <span class="m">0</span>    4M  <span class="m">0</span> part 
+</span></span><span class="line"><span class="cl">└─sda15   8:15   <span class="m">0</span>  106M  <span class="m">0</span> part /boot/efi
+</span></span><span class="line"><span class="cl">sdb       8:16   <span class="m">0</span>  100G  <span class="m">0</span> disk </span></span></code></pre>
+</figure><p>We&rsquo;ll create an LVM disk out of it.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# vgcreate /dev/vg01 /dev/sdb
+</span></span><span class="line"><span class="cl">  Volume group <span class="s2">&#34;vg01&#34;</span> successfully created
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# lvcreate -l 100%FREE --name lv01 vg01 
+</span></span><span class="line"><span class="cl">  Logical volume <span class="s2">&#34;lv01&#34;</span> created.
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# mkfs.ext4 /dev/vg01/lv01 
+</span></span><span class="line"><span class="cl">mke2fs 1.44.1 <span class="o">(</span>24-Mar-2018<span class="o">)</span>
+</span></span><span class="line"><span class="cl">Discarding device blocks: <span class="k">done</span>                            
+</span></span><span class="line"><span class="cl">Creating filesystem with <span class="m">26213376</span> 4k blocks and <span class="m">6553600</span> inodes
+</span></span><span class="line"><span class="cl">Filesystem UUID: f1173542-f07c-493f-89e6-188439880465
+</span></span><span class="line"><span class="cl">Superblock backups stored on blocks: 
+</span></span><span class="line"><span class="cl">  32768, 98304, 163840, 229376, 294912, 819200, 884736, 1605632, 2654208, 
+</span></span><span class="line"><span class="cl">  4096000, 7962624, 11239424, 20480000, <span class="m">23887872</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">Allocating group tables: <span class="k">done</span>                            
+</span></span><span class="line"><span class="cl">Writing inode tables: <span class="k">done</span>                            
+</span></span><span class="line"><span class="cl">Creating journal <span class="o">(</span><span class="m">131072</span> blocks<span class="o">)</span>: <span class="k">done</span>
+</span></span><span class="line"><span class="cl">Writing superblocks and filesystem accounting information: <span class="k">done</span></span></span></code></pre>
+</figure><p>Then we set a mount point for the volume we just created.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# mkdir /mnt/unetlab
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# mount /dev/vg01/lv01 /mnt/unetlab</span></span></code></pre>
+</figure><p>Edit the <code>/etc/fstab</code> file and add the following line to mount <code>/mnt/unetlab</code> on boot:</p>
+<figure class="highlight">
+    <pre tabindex="0"><code class="language-" data-lang="">/dev/vg01/lv01  /mnt/unetlab  ext4  defaults  0  0</code></pre>
+</figure><p>Now we&rsquo;ll create a new directory for PNETLab project files and image files in our newly mounted disk.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# mkdir /mnt/unetlab/addons
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# mkdir /mnt/unetlab/labs</span></span></code></pre>
+</figure><p>Next, we&rsquo;ll remove the old directories for project files and image files, and replace them with symbolic links pointing to the new directories on the mounted disk.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# rm -rf /opt/unetlab/addons/ 
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# rm -rf /opt/unetlab/labs/
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# ln -s /mnt/unetlab/addons/ /opt/unetlab/
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# ln -s /mnt/unetlab/labs/ /opt/unetlab/</span></span></code></pre>
+</figure><p>Change ownership of the new labs directory to ensure PNETLab&rsquo;s services can access it back.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# chown -R www-data:www-data /mnt/unetlab/labs/</span></span></code></pre>
+</figure><h4 id="grub">Grub</h4>
+<p>Remove the default grub config.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# rm /etc/default/grub.d/50-cloudimg-settings.cfg
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# update-grub
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# reboot</span></span></code></pre>
+</figure><h4 id="restart-and-verify">Restart and Verify</h4>
+<p>Once all the steps above are complete, restart the server and verify if the pnetlab service is running using the following command and check these ports: <code>80</code>, <code>443</code> for pnetlab web services and <code>4822</code> for guacamole proxy.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# netstat -tlpn  </span></span></code></pre>
+</figure><h3 id="update-version-optional">Update Version (Optional)</h3>
+<p>After the installation completed, we can directly upgrade PNETLab to the latest version. It&rsquo;s an optional, so I will just put the official guide link on how to upgrade the lab version: <a href="https://pnetlab.com/pages/releases"target="_blank" rel="noopener noreferrer"
+>go here</a>.</p>
+<h2 id="setup-tailscale-vpn">Setup Tailscale VPN</h2>
+<p>For this step, I will assume that you already generated an auth key in the Tailscale <a href="https://login.tailscale.com/admin/settings/keys"target="_blank" rel="noopener noreferrer"
+>admin console</a>.</p>
+<h3 id="install-tailscale">Install Tailscale</h3>
+<p>First, install Tailscale by executing the install script.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# curl -fsSL https://tailscale.com/install.sh <span class="p">|</span> sh </span></span></code></pre>
+</figure><h3 id="configure-subnet-router">Configure Subnet Router</h3>
+<p>We will configure the instance as a <a href="https://tailscale.com/kb/1019/subnets"target="_blank" rel="noopener noreferrer"
+>subnet router</a>, simply turning the server into a <strong>router</strong>. This will enable direct access between PNETLab appliances network and our local network via the Tailscale network.</p>
+<p>To achieve that, we first need to enable IP forwarding on the server.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# <span class="nb">echo</span> <span class="s1">&#39;net.ipv4.ip_forward = 1&#39;</span> <span class="p">|</span> sudo tee -a /etc/sysctl.d/99-tailscale.conf
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# <span class="nb">echo</span> <span class="s1">&#39;net.ipv6.conf.all.forwarding = 1&#39;</span> <span class="p">|</span> sudo tee -a /etc/sysctl.d/99-tailscale.conf
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# sudo sysctl -p /etc/sysctl.d/99-tailscale.conf</span></span></code></pre>
+</figure><p>To register your instance as a node in your Tailscale network and enable it to act as a subnet router, run the following command:</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# tailscale up --auth-key<span class="o">=</span>tskey-auth-XXXXX  --advertise-route<span class="o">=</span>10.0.10.0/24</span></span></code></pre>
+</figure><blockquote>
+<p>Note:</p>
+<ul>
+<li>
+<p>Replace <code>tskey-auth-XXXXX</code> with your actual auth key and <code>10.0.10.0/24</code> with your designated local network on the PNETLAB server:</p>
+</li>
+<li>
+<p>The <code>--advertise-routes=10.0.10.0/24</code> option tells the instance to advertise the subnet <code>10.0.10.0/24</code> to your Tailscale network. Once advertised, other devices in your Tailscale network can route traffic to this subnet through this instance.</p>
+</li>
+</ul>
+</blockquote>
+<p>Revisit your Tailscale&rsquo;s admin console. You should see a <code>Subnets</code> label on the pnetlab node.</p>
+<img src="./imgs/image-20250326110623945.png" alt="image-20250326110623945" style="zoom:50%;" />
+<p>Open the node settings, select &ldquo;<strong>edit route settings&hellip;</strong>&rdquo; and tick your network there.</p>
+<img src="./imgs/image-20250326100421964.png" alt="image-20250326100421964" style="zoom: 50%;" />
+<h3 id="verify-routing">Verify Routing</h3>
+<p>To verify, you can simply ping any interface IP of the instance that you have advertised. The image below is an example of mine, where I&rsquo;m pinging the Docker interface.</p>
+<img src="./imgs/image-20251028003923861.png" alt="image-20251028003923861" style="zoom:50%;" />
+<h2 id="configure-domain-name">Configure Domain Name</h2>
+<p>We can use a custom domain name to access PNETLab. To do so, we will obtain a LetsEncrypt&rsquo;s certificate to replace the self-signed one and then configure a new DNS record: <code>pnetlab.yourdomain.com</code>. This record will be pointing to Tailscale IP of our instance.</p>
+<p>For this step, I will assume that you already own a domain and know how to complete an ACME DNS challenge (proving control over a domain).</p>
+<h3 id="obtain-letsencrypt-ssl">Obtain LetsEncrypt SSL</h3>
+<p>Within the instance, install <code>certbot</code> and prepare the work folder.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# sudo apt install -y certbot
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# mkdir letsencrypt/work letsencrypt/config letsencrypt/logs</span></span></code></pre>
+</figure><p>We can obtain a Let&rsquo;s Encrypt certificate with the following command.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# certbot certonly --agree-tos --email admin@yourdomain.com --manual --preferred-challenges<span class="o">=</span>dns -d <span class="se">\*</span>.yourdomain.com --config-dir ./letsencrypt/config --work-dir ./letsencrypt/work --logs-dir ./letsencrypt/logs</span></span></code></pre>
+</figure><p>Complete the ACME DNS challenge on your DNS provider (NameCheap, Hostinger, etc). After successful validation, the CA (Let&rsquo;s Encrypt) will issue the certificate, which should be available at <code>./letsencrypt/config/live/yourdomain.com</code>.</p>
+<p>Next, edit <code>/etc/apache2/sites-available/pnetlabs.conf</code> and change these values with your certificate path.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">SSLCertificateFile   /path/to/your/cert/cert1.pem
+</span></span><span class="line"><span class="cl">SSLCertificateKeyFile /path/to/your/certkey/privkey1.pem</span></span></code></pre>
+</figure><p>Restart the apache services</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# systemctl restart apache2</span></span></code></pre>
+</figure><h3 id="create-dns-a-record">Create DNS A record</h3>
+<p>Go to your DNS hosting provider and add a new records with the following data:</p>
+<ul>
+<li>Type: <code>A</code></li>
+<li>Hostname/Domain Name: <code>pnetlab.yourdomain.com</code></li>
+<li>IPv4: <code>pnetlab-tailscale-ip</code></li>
+</ul>
+<p>Here&rsquo;s an example of mine, where I&rsquo;m using Cloudflare for DNS management.</p>
+<img src="./imgs/image-20250326102815535.png" alt="image-20250326102815535" style="zoom: 33%;" />
+<blockquote>
+<p><code>100.126.1.2</code> is the tailscale node IP of my pnetlab server.</p>
+</blockquote>
+<p>Verify if your domain is mapped correctly using the <code>dig</code> command or <a href="https://toolbox.googleapps.com/apps/dig/#A/"target="_blank" rel="noopener noreferrer"
+>Google Toolbox</a>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ dig pnetlab.gcp.fahmifj.space                         
+</span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...
+</span></span><span class="line"><span class="cl"><span class="p">;;</span> QUESTION SECTION:
+</span></span><span class="line"><span class="cl"><span class="p">;</span>pnetlab.fahmifj.space.	IN	A
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="p">;;</span> ANSWER SECTION:
+</span></span><span class="line"><span class="cl">pnetlab.fahmifj.space. 300	IN	A	100.126.1.2
+</span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...</span></span></code></pre>
+</figure><p>Once you done and get connected to Tailscale network, you should be able to access PNETLab at <code>pnetlab.yourdomain.com</code>.</p>
+<h2 id="troubleshoot">Troubleshoot</h2>
+<p>If you happen to meet these errors, try the following solutions.</p>
+<h3 id="cannot-install-packages">Cannot install packages</h3>
+<p>Try disable/comment this whole url line from the repository.</p>
+<figure class="highlight">
+    <pre tabindex="0"><code class="language-" data-lang="">#deb [trusted=yes] http://i-share.top/repo ./
+#deb [trusted=yes] http://repo.pnetlab.com ./</code></pre>
+</figure><h3 id="cloud-appliance-dhcp-not-working">Cloud Appliance: DHCP not working</h3>
+<p>Verify <code>udhcpd</code> service is running and enabled.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ service udhcpd status
+</span></span><span class="line"><span class="cl">$ cat /etc/default/udhcpd <span class="p">|</span> grep ENABLED</span></span></code></pre>
+</figure><p>Update to enabled and restart and see if it&rsquo;s working.</p>
+<h2 id="conclusion">Conclusion</h2>
+<p>We&rsquo;ve completed all the necessary steps to deploy a PNETLab server on Google Cloud. With this setup, we can do our networking stuff in the lab safely without exposing it to the internet.</p>
+<p>That&rsquo;s all, see you in the next post!</p>
+]]></content:encoded>
+    </item>
+    
+    <item>
+      <title>How to Run GNS3 Server on Apple M2 Using OrbStack</title>
+      <link>https://fahmifj.github.io/blog/running-gns3-on-apple-m2-orbstack/</link>
+      <pubDate>Wed, 29 Jan 2025 20:36:34 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/blog/running-gns3-on-apple-m2-orbstack/</guid>
+      <description>Lately, I&amp;rsquo;ve been switching from my Windows laptop to MacBook M2 for daily driver. It was smooth until I needed to migrate my virtual networking lab that relies on GNS3. It&amp;rsquo;s for my preparation before taking another Mikrotik&amp;rsquo;s certification. I was initially hesitant about whether I could run GNS3 on my M2 machine. After some research, I discovered that the GNS3 client is indeed available for macOS. To host the GNS3 server, I learned that I could set it up from scratch on a Linux machine using Orbstack.</description>
+      <content:encoded><![CDATA[<p>Lately, I&rsquo;ve been switching from my Windows laptop to MacBook M2 for daily driver. It was smooth until I needed to migrate my virtual networking lab that relies on GNS3. It&rsquo;s for my preparation before taking another Mikrotik&rsquo;s certification. I was initially hesitant about whether I could run GNS3 on my M2 machine. After some <a href="https://www.gns3.com/community/featured/gns3-on-apple-silicon"target="_blank" rel="noopener noreferrer"
+>research</a>, I discovered that the GNS3 client is indeed available for macOS. To host the GNS3 server, I learned that I could set it up from scratch on a Linux machine using Orbstack.</p>
+<h4 id="goals">Goals</h4>
+<ul>
+<li>Get GNS3 server running on M2 Apple Silicon CPU.</li>
+<li>Get GNS3 appliance installed on the GNS3 server.</li>
+</ul>
+<h4 id="prerequisites">Prerequisites</h4>
+<ul>
+<li><a href="https://orbstack.dev/"target="_blank" rel="noopener noreferrer"
+>Orbstack</a> installed.</li>
+<li><a href="https://github.com/gns3/gns3-gui/releases"target="_blank" rel="noopener noreferrer"
+>GNS3 GUI/client</a> installed.</li>
+</ul>
+<h4 id="diagram">Diagram</h4>
+<p>I drew a diagram to give you an overview of what we are going to do here.</p>
+<img src="./imgs/image-20250129212031966.png" alt="image-20250129212031966" style="zoom: 50%;" />
+<h2 id="on-mac">On Mac</h2>
+<h3 id="deploy-a-linux-machine">Deploy A Linux Machine</h3>
+<p>With Orbstack, create a new Linux machine with the latest Ubuntu distro.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ orb create --arch amd64 ubuntu gns3-host</span></span></code></pre>
+</figure><p>Then verify the machine is running.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ orb list
+</span></span><span class="line"><span class="cl">NAME       STATE    DISTRO  VERSION   ARCH
+</span></span><span class="line"><span class="cl">----       -----    ------  -------   ----
+</span></span><span class="line"><span class="cl">gns3-host  running  ubuntu  oracular  amd64</span></span></code></pre>
+</figure><p>The Linux machine we just installed will act as the GNS3 server host.</p>
+<h3 id="resources-allocation">Resources Allocation</h3>
+<p>We can allocate CPU and memory resources to limit how much Orbstack machine can use with:</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl"><span class="c1">#Show current configuration</span>
+</span></span><span class="line"><span class="cl">$ orb config show
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="c1">#Set maximum CPU cores for Orbstack to 4 cores</span>
+</span></span><span class="line"><span class="cl">$ orb config <span class="nb">set</span> cpu <span class="m">4</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="c1">#Set maximum memory for Orbstack to 8 GB</span>
+</span></span><span class="line"><span class="cl">$ orb config <span class="nb">set</span> memory_mib <span class="m">8000</span></span></span></code></pre>
+</figure><h2 id="on-the-linux-machine">On the Linux machine</h2>
+<h3 id="hosting-gns3-server">Hosting GNS3 Server</h3>
+<p>From Mac, login into the machine.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ orb -m gns3-host -u root</span></span></code></pre>
+</figure><p>Add the GNS3 repository and install some necessary tools.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">user@gns3 $ sudo add-apt-repository ppa:gns3/ppa
+</span></span><span class="line"><span class="cl">user@gns3 $ sudo apt update
+</span></span><span class="line"><span class="cl">user@gns3 $ sudo apt install software-properties-common
+</span></span><span class="line"><span class="cl">user@gns3 $ sudo apt install qemu-system-x86
+</span></span><span class="line"><span class="cl">user@gns3 $ sudo apt install telnet
+</span></span><span class="line"><span class="cl">user@gns3 $ sudo apt install gns3-server</span></span></code></pre>
+</figure><p>In the middle way, select &ldquo;yes&rdquo; when you prompted with something like this.</p>
+<img src="./imgs/image-20250129214423431.png" alt="image-20250129214423431" style="zoom:50%;" />
+<p>If you missed the prompt, run the following.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl"><span class="c1">#Add ubridge group to the gns3 user</span>
+</span></span><span class="line"><span class="cl">user@gns3 $ sudo usermod -aG ubridge gns3</span></span></code></pre>
+</figure><p>Verify the GNS3 server installation.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">user@gns3 $ systemctl status gns3-server</span></span></code></pre>
+</figure><p>Or by visiting &ldquo;http://localhost:3080&rdquo;.</p>
+<h3 id="change-working-directory">Change Working Directory</h3>
+<p>This is optional. I would like to move the default working directory of GNS3 at <code>/var/lib/gns3-server/GNS3/</code> to <code>/opt/gns3/</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl"><span class="c1">#Create new dir config</span>
+</span></span><span class="line"><span class="cl">user@gns3 $ sudo mkdir /opt/gns3
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="c1">#Copy old dir config to new dir config</span>
+</span></span><span class="line"><span class="cl">user@gns3 $ sudo cp -r /var/lib/gns3-server/GNS3/* /opt/gns3
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="c1">#Change ownership </span>
+</span></span><span class="line"><span class="cl">user@gns3 $ sudo chown -R gns3:gns3 /opt/gns3
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="c1">#Change default home directory</span>
+</span></span><span class="line"><span class="cl">user@gns3 $ sudo usermod -d /opt/gns3 gns3</span></span></code></pre>
+</figure><h3 id="configure-gns3-server">Configure GNS3 Server</h3>
+<p>Since KVM is not supported inside the orbstack machine, we need to make some adjustments for GNS3 server config. Edit the config at <code>/opt/gns3/.config/GNS3/2.2/gns3_server.conf</code> as follows:</p>
+<figure class="highlight">
+    <pre tabindex="0"><code class="language-" data-lang="">[Server]
+host = 0.0.0.0
+port = 3080
+images_path = /opt/gns3/images
+appliances_path = /opt/gns3/appliances
+configs_path = /opt/gns3/configs
+projects_path = /opt/gns3/projects
+symbols_path = /opt/gns3/symbols
+
+report_errors = True
+
+; First console port of the range allocated to devices
+console_start_port_range = 5000
+; Last console port of the range allocated to devices
+console_end_port_range = 10000
+
+; First VNC console port of the range allocated to devices.
+; The value MUST BE &gt;= 5900 and &lt;= 65535
+vnc_console_start_port_range = 5900
+; Last VNC console port of the range allocated to devices
+; The value MUST BE &gt;= 5900 and &lt;= 65535
+vnc_console_end_port_range = 10000
+
+; First port of the range allocated for inter-device communication. Two ports are allocated per link.
+udp_start_port_range = 10000
+; Last port of the range allocated for inter-device communication. Two ports are allocated per link
+udp_end_port_range = 20000
+
+; Only allow these interfaces to be used by GNS3, for the Cloud node for example (Linux/OSX only)
+; Do not forget to allow virbr0 in order for the NAT node to work
+allowed_interfaces = virbr0
+
+; Enable the built-in templates
+enable_builtin_templates = True
+
+; check if hardware virtualization is used by other emulators (KVM, VMware or VirtualBox)
+hardware_virtualization_check = False
+
+[Dynamips]
+allocate_aux_console_ports = False
+mmap_support = True
+sparse_memory_support = True
+ghost_ios_support = True
+
+[IOU]
+iourc_path = /opt/gns3/iourc
+license_check = True
+
+[Qemu]
+enable_kvm = False
+require_kvm = False
+enable_hardware_acceleration = False
+require_hardware_acceleration = False</code></pre>
+</figure><p>If the config directory don&rsquo;t exist do the following (inside the orbstack VM):</p>
+<ol>
+<li>Run <code>systemctl stop gns3-server</code>.</li>
+<li>Run <code>gns3server</code> manually for a minute and stop it.</li>
+<li>Start again with <code>systemctl start gns3-server</code>.</li>
+<li>Look up again under <code>/var/lib/gns3-server/GNS3/.config</code> or <code>/opt/gns3/.config</code> if you follow the step 3.</li>
+</ol>
+<p>We&rsquo;re done with the server here.</p>
+<h2 id="setting-up-gns3-client">Setting Up GNS3 Client</h2>
+<h3 id="gns3-client">GNS3 Client</h3>
+<p>GNS3 Client should detect the server automatically, if not, try open <strong>the GNS3 Client &gt; Settings &gt; Server</strong> and point the GNS3 server to the Linux machine.</p>
+<p><div class="img-container"><img src="./imgs/image-20250129223723294.png" alt="image-20250129223723294"  /></div>
+</p>
+<p>Verify the connection.</p>
+<h3 id="appliances-installation">Appliances Installation</h3>
+<p>The network appliances now can be installed normally.</p>
+<h2 id="the-results">The results</h2>
+<h3 id="testing-initial-setup">Testing Initial Setup</h3>
+<p>So far, excluding the ATM and Frame relay switches, I&rsquo;ve tested the basic appliances and everything works as it should except for the Cloud appliance.</p>
+<img src="./imgs/image-20250129230112734.png" alt="image-20250129230112734" style="zoom:50%;" />
+<h3 id="performances">Performances</h3>
+<p>I allocated 4 CPUs and 4 GB of memory to Orbstack for the initial lab setup. Despite adding two more routers, everything runs smoothly and fast, with no choppy performance at all.</p>
+<img src="./imgs/image-20250130222443482.png" alt="image-20250130222443482" style="zoom:50%;" />
+<h2 id="conclusion">Conclusion</h2>
+<p>At this point, GNS3 hosted within Orbstack Linux machine ran seamlessly on my M2 Mac. This should be enough for creating or simulating networking projects. However, I still wanted my network appliances could communicate with the LAN on my Mac, which I will dig into it in the next section.</p>
+<h2 id="dig-into-network-limitation">Dig into Network Limitation</h2>
+<p><strong>Accessing GNS3 Appliances from Mac LAN</strong></p>
+<p>According to <a href="https://docs.orbstack.dev/machines/network"target="_blank" rel="noopener noreferrer"
+>the documentation</a>, all Orbstack Linux machines are connected to the same network bridge with a fixed IPv4 address of <code>198.19.249.0/24</code>. On Mac, this network bridge displayed as <code>bridge100</code> and the Linux machines connected to that bridge via its <code>eth0</code>.</p>
+<p>My goal is, let&rsquo;s say Winbox on Mac, will able to communicate with the GNS3 Mikrotik through the Cloud appliance via <code>eth0</code> of GNS3 server. Here&rsquo;s the diagram.</p>
+<img src="./imgs/image-20250201125922492.png" alt="image-20250201125922492" style="zoom: 33%;" />
+<p>Unfortunately, the Cloud appliance here did not list the <code>eth0</code> interface.</p>
+<img src="./imgs/image-20250130225807891.png" alt="image-20250130225807891" style="zoom: 25%;" />
+<p>In the image above,  <code>virbr0</code>  and <code>gns3tap0-0</code> are the interfaces that GNS3 use for the NAT appliances (<a href="https://gns3.com/how-the-nat-node-in-gns3-works"target="_blank" rel="noopener noreferrer"
+>source</a>). When I ran the script that populates the interfaces on the GNS3 server manually, the output states that <code>eth0</code> cannot be used on this server.</p>
+<img src="./imgs/image-20250131005043784.png" alt="image-20250131005043784" style="zoom:50%;" />
+<p>After taking another look at the code, I figured out where the issue was. You guys probably have noticed it. 😂</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-python" data-lang="python"><span class="line"><span class="cl"><span class="o">...</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="k">if</span> <span class="ow">not</span> <span class="n">sys</span><span class="o">.</span><span class="n">platform</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&#34;win&#34;</span><span class="p">):</span>
+</span></span><span class="line"><span class="cl">        <span class="n">allowed_interfaces</span> <span class="o">=</span> <span class="n">Config</span><span class="o">.</span><span class="n">instance</span><span class="p">()</span><span class="o">.</span><span class="n">get_section_config</span><span class="p">(</span><span class="s2">&#34;Server&#34;</span><span class="p">)</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">&#34;allowed_interfaces&#34;</span><span class="p">,</span> <span class="kc">None</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">        <span class="k">if</span> <span class="n">allowed_interfaces</span><span class="p">:</span>
+</span></span><span class="line"><span class="cl">            <span class="n">allowed_interfaces</span> <span class="o">=</span> <span class="n">allowed_interfaces</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39;,&#39;</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">        <span class="n">net_if_addrs</span> <span class="o">=</span> <span class="n">psutil</span><span class="o">.</span><span class="n">net_if_addrs</span><span class="p">()</span>
+</span></span><span class="line"><span class="cl">        <span class="k">for</span> <span class="n">interface</span> <span class="ow">in</span> <span class="nb">sorted</span><span class="p">(</span><span class="n">net_if_addrs</span><span class="o">.</span><span class="n">keys</span><span class="p">()):</span>
+</span></span><span class="line"><span class="cl">            <span class="k">if</span> <span class="n">allowed_interfaces</span> <span class="ow">and</span> <span class="n">interface</span> <span class="ow">not</span> <span class="ow">in</span> <span class="n">allowed_interfaces</span> <span class="ow">and</span> <span class="ow">not</span> <span class="n">interface</span><span class="o">.</span><span class="n">startswith</span><span class="p">(</span><span class="s2">&#34;gns3tap&#34;</span><span class="p">):</span>
+</span></span><span class="line"><span class="cl">                <span class="n">log</span><span class="o">.</span><span class="n">warning</span><span class="p">(</span><span class="s2">&#34;Interface &#39;</span><span class="si">{}</span><span class="s2">&#39; is not allowed to be used on this server&#34;</span><span class="o">.</span><span class="n">format</span><span class="p">(</span><span class="n">interface</span><span class="p">))</span>
+</span></span><span class="line"><span class="cl">                <span class="k">continue</span>
+</span></span><span class="line"><span class="cl"><span class="o">...</span></span></span></code></pre>
+</figure><p>Yeah, it&rsquo;s on the step 3, about the server config! I just need to add the interface I want to be allowed there. Haha.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-ini" data-lang="ini"><span class="line"><span class="cl"><span class="c1">; Only allow these interfaces to be used by GNS3, for the Cloud node for example (Linux/OSX only)</span>
+</span></span><span class="line"><span class="cl"><span class="c1">; Do not forget to allow virbr0 in order for the NAT node to work</span>
+</span></span><span class="line"><span class="cl"><span class="na">allowed_interfaces</span> <span class="o">=</span> <span class="s">virbr0,eth0 </span>
+</span></span><span class="line"><span class="cl"><span class="c1">; ^ I added eth0</span></span></span></code></pre>
+</figure><p>After that, pinging from Mac (192.19.249.3) to the Mikrotik appliance (192.19.249.150) is reachable.</p>
+<img src="./imgs/image-20250201140538579.png" alt="image-20250201140538579" style="zoom: 33%;" />
+<p>But it&rsquo;s not over yet, I&rsquo;m still unable to access the services like for example Mikrotik Winbox on port 8291 or WebFig on port 80. It results the same with the GNS3 server.</p>
+<img src="./imgs/image-20250202135153641.png" alt="image-20250202135153641" style="zoom: 33%;" />
+<p>Inspecting the traffic with Wireshark, I saw that no TCP handshake was performed between my Mac and the Mikrotik appliance. I gave up! Orbstack network implementation is beyond my understanding, so I don&rsquo;t know what exactly it does under the hood.</p>
+<img src="./imgs/image-20250201163513432.png" alt="image-20250201163513432" style="zoom: 33%;" />
+<p>It seems I have to wait for Orbstack to fully support bridged networking. In the meantime, I will take a look for other options like UTM, or even move to PNET Lab. Personally, I liked Orbstack more, it almost similar to WSL but on Mac.</p>
+<p><strong>UPDATE</strong></p>
+<p>I tried to deploy PNETLab on Google Cloud, check <a href="/articles/deploy-pnetlab-on-gcp/"target="_blank" rel="noopener noreferrer"
+>this out</a>.</p>
+<p>That&rsquo;s all, see you in the next post!</p>
+]]></content:encoded>
+    </item>
+    
+    <item>
+      <title>Kali Linux Setup for Playing HackTheBox</title>
+      <link>https://fahmifj.github.io/blog/kali-setup-for-hackthebox/</link>
+      <pubDate>Fri, 09 Jul 2021 07:45:19 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/blog/kali-setup-for-hackthebox/</guid>
+      <description>Initial setup for starting boot2root by me</description>
+      <content:encoded><![CDATA[<p>After using Kali 2019.4 for almost 2 years, I finally upgraded to  version 2021.2 (fresh install). As a result, I had to reapply my  settings and configurations on this newer version for playing HackTheBox (which I believe is applicable to other boot2root platforms as well).  Therefore, I think it’s better to document my basic setup online. Hope  it helps you as well.</p>
+<p>Okay that’s enough for the intro, let’s set it up!</p>
+<h2 id="displaying-ip-in-prompt">Displaying IP in Prompt</h2>
+<p>First, I would like to add an IP address in the shell prompt. Adding IP  address in your prompt would be really helpful as it lets you copy the IP faster for reverse shell. To do so, we’ll need to modify the <code>.zshrc</code> file.</p>
+<p>Before performing any modification, consider to make a backup of your original file using the following command:</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ cp ~/.zshrc<span class="o">{</span>,.bak<span class="o">}</span> </span></span></code></pre>
+</figure><p>And then let’s create a custom section within the file using comments (I suggest placing it at the top).</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-sh" data-lang="sh"><span class="line"><span class="cl"><span class="c1"># START CUSTOM</span>
+</span></span><span class="line"><span class="cl">...<span class="o">[</span>custom script here<span class="o">]</span>...
+</span></span><span class="line"><span class="cl"><span class="c1"># END CUSTOM</span></span></span></code></pre>
+</figure><p>Now add the following function to your <code>.zshrc</code> file.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-sh" data-lang="sh"><span class="line"><span class="cl"><span class="c1"># START CUSTOM</span>
+</span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...
+</span></span><span class="line"><span class="cl"><span class="k">function</span> get_ip<span class="o">(){</span>
+</span></span><span class="line"><span class="cl">   <span class="c1"># It can be thm or htb IP</span>
+</span></span><span class="line"><span class="cl">   <span class="nv">tunnel_ip</span><span class="o">=</span><span class="sb">`</span>ifconfig tun0 2&gt;/dev/null <span class="p">|</span> grep netmask <span class="p">|</span> awk <span class="s1">&#39;{print $2}&#39;</span><span class="sb">`</span> 
+</span></span><span class="line"><span class="cl">   <span class="c1"># Use eth0 as default IP,</span>
+</span></span><span class="line"><span class="cl">   <span class="nv">default_ip</span><span class="o">=</span><span class="sb">`</span>ifconfig eth0 2&gt;/dev/null <span class="p">|</span> grep netmask <span class="p">|</span> awk <span class="s1">&#39;{print $2}&#39;</span><span class="sb">`</span>
+</span></span><span class="line"><span class="cl">   <span class="k">if</span> <span class="o">[[</span> <span class="nv">$tunnel_ip</span> <span class="o">==</span> *<span class="s2">&#34;10.&#34;</span>* <span class="o">]]</span><span class="p">;</span> <span class="k">then</span>
+</span></span><span class="line"><span class="cl">      <span class="nb">echo</span> <span class="nv">$tunnel_ip</span>
+</span></span><span class="line"><span class="cl">   <span class="k">else</span>
+</span></span><span class="line"><span class="cl">      <span class="nb">echo</span> <span class="nv">$default_ip</span>
+</span></span><span class="line"><span class="cl">   <span class="k">fi</span>
+</span></span><span class="line"><span class="cl"><span class="o">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...
+</span></span><span class="line"><span class="cl"><span class="c1"># END CUSTOM</span></span></span></code></pre>
+</figure><p>The function assumes <code>tun0</code> is the VPN interface to connect to HackTheBox network and <code>eth0</code> is your default interface to connect to the Internet.</p>
+<p>Then, find the following lines:</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="line"><span class="cl">...
+</span></span><span class="line"><span class="cl"><span class="k">case</span> <span class="s2">&#34;</span><span class="nv">$PROMPT_ALTERNATIVE</span><span class="s2">&#34;</span> in
+</span></span><span class="line"><span class="cl">        twoline<span class="o">)</span>
+</span></span><span class="line"><span class="cl">...</span></span></code></pre>
+</figure><p>Under these lines,  replace the entire <code>PROMPT</code> variable with the following line:</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl"><span class="nv">PROMPT</span><span class="o">=</span><span class="s1">$&#39;%F{%(#.blue.green)}┌──${debian_chroot:+($debian_chroot)─}${VIRTUAL_ENV:+($(basename $VIRTUAL_ENV))─}(%B%F{%(#.red.blue)}%n$prompt_symbol%m%b%F{%(#.blue.green)})-[%B%F{reset}%(6~.%-1~/…/%4~.%5~)%b%F{%(#.blue.green)}]-%B%F{152}[`get_ip`]%b%f%F{%(#.blue.green)}\n└─%B%(#.%F{red}#.%F{blue}$)%b%F{reset} &#39;</span></span></span></code></pre>
+</figure><p>Reopen your terminal or type one of the following commands in the terminal.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ zsh
+</span></span><span class="line"><span class="cl">$ <span class="nb">source</span> ~/.zshrc</span></span></code></pre>
+</figure><p>And we’re done with displaying IP address in the shell prompt.</p>
+<p><div class="img-container"><img src="imgs/image-20210709054914243.png" alt="image-20210709054914243"  /></div>
+</p>
+<h2 id="openvpn-connection-with-alias">OpenVPN Connection with Alias</h2>
+<p>It&rsquo;s tiring when you have to type</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ openvpn /path/to/config/file.ovpn</span></span></code></pre>
+</figure><p>each time you want to connect to the VPN. So to make this easier we can leverage the <code>alias</code> command!</p>
+<p>First let’s create a folder called <code>.ovpnconfig</code> in the home directory.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ mkdir -p ~/.ovpnconfig</span></span></code></pre>
+</figure><p>Then put all of your OpenVPN configuration files into that folder.</p>
+<p><div class="img-container"><img src="imgs/image-20210709063528132.png" alt="image-20210709063528132"  /></div>
+</p>
+<p>Finally, add some aliases into your <code>.zshrc</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="line"><span class="cl"><span class="nb">alias</span> <span class="nv">htbon</span><span class="o">=</span><span class="s1">&#39;openvpn ~/ovpnconfig/htb-sg.ovpn 1&gt;/dev/null &amp;&#39;</span>
+</span></span><span class="line"><span class="cl"><span class="nb">alias</span> <span class="nv">htbfort</span><span class="o">=</span><span class="s1">&#39;openvpn ~/ovpnconfig/htb-fortress.ovpn 1&gt;/dev/null &amp;&#39;</span>
+</span></span><span class="line"><span class="cl"><span class="nb">alias</span> <span class="nv">htbrel</span><span class="o">=</span><span class="s1">&#39;openvpn ~/ovpnconfig/htb-release.ovpn 1&gt;/dev/null &amp;&#39;</span>
+</span></span><span class="line"><span class="cl"><span class="nb">alias</span> <span class="nv">kvpn</span><span class="o">=</span><span class="s1">&#39;pkill openvpn&#39;</span></span></span></code></pre>
+</figure><p>Now we can type <code>$ htbon</code> or <code>$ thmon</code> in the command prompt to connect to the VPN.</p>
+<p>Want to turn off the VPN? Simply type <code>$ kvpn</code> !</p>
+<h2 id="a-problem-with-alias">A Problem with Alias</h2>
+<p>In this Kali Linux version (non-root login), the only problem is that <code>openvpn</code> must be executed with <code>sudo</code>, because it needs administrative permission to create a network interface (that’s the <code>tun0</code>) .</p>
+<p>Because of how alias <a href="https://zsh.sourceforge.io/Doc/Release/Shell-Grammar.html#Aliasing"target="_blank" rel="noopener noreferrer"
+>works</a> in Zsh:</p>
+<blockquote>
+<p>Every eligible <em>word</em> in the shell input is checked to see if there is an alias defined for it. If so, it is replaced by the text of the alias if it is in command position (if it could be <strong>the first word</strong> of a simple command), or if the alias is global. <strong>If the replacement text ends with a space, the next word in the shell input is always eligible for purposes of alias expansion.</strong></p>
+</blockquote>
+<p>When you run <code>$ sudo htbon</code>, it will not expand the aliased command to <code>$ sudo openvpn ~/ovpnconfig/htb-sg.ovpn 1&gt;/dev/null &amp;</code>, instead it will return something like <code>sudo: htbon: command not found</code>.</p>
+<p>Therefore, the solution to overcome this is by also aliasing the <code>sudo </code>command.</p>
+<p>Add the following alias to your <code>.zshrc</code> file.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl"><span class="nb">alias</span> <span class="nv">sudo</span><span class="o">=</span><span class="s1">&#39;sudo &#39;</span></span></span></code></pre>
+</figure><p>Additionally, if you want to use <code>sudo</code> with no password for the default user <code>kali</code>, we can create a new sudoers file by running the following command.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ sudo visudo /etc/sudoers.d/kali</span></span></code></pre>
+</figure><p>Then add the following line to gives user <strong>kali</strong> sudo permission with no password.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">kali  <span class="nv">ALL</span><span class="o">=</span>NOPASSWD: ALL</span></span></code></pre>
+</figure><p>This time, we can run the alias command with <code>sudo</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ sudo &lt;alias-command&gt;
+</span></span><span class="line"><span class="cl">$ sudo htbon</span></span></code></pre>
+</figure><h2 id="tools-transfer">Tools Transfer</h2>
+<p>Just like the OpenVPN files, I like to keep the essential tools to be centralized in one folder and so it can be hosted immediately. Again, we can create a folder called <code>tools</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ mkdir -p ~/tools</span></span></code></pre>
+</figure><p>Put your tools inside the folder. The following are some of the tools that I think to be essential (including web-shell).</p>
+<p><div class="img-container"><img src="imgs/image-20210709065944915.png" alt="image-20210709065944915"  /></div>
+</p>
+<p>Next, add another alias to host these tools immediately with one command, feel free to create alias for yourself. Mine called <code>hostit</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl"><span class="nb">alias</span> <span class="nv">hostit</span><span class="o">=</span><span class="s1">&#39;python3 -m http.server -d ~/tools 8000&#39;</span></span></span></code></pre>
+</figure><p>If you watch <a href="https://www.youtube.com/c/ippsec/videos"target="_blank" rel="noopener noreferrer"
+>ippsec</a>, he prefers keeping the tools with the associated pwned machines (in <code>www</code> directory). So it&rsquo;s up to you.</p>
+<h2 id="note-template">Note Template</h2>
+<p>My current note template is available on <del><a href="https://github.com/fahmifj/HackTheBox-notes/tree/main/machines/note-template"target="_blank" rel="noopener noreferrer"
+>GitHub</a></del>. I&rsquo;m using the following function to recreate the directory structure:</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl"><span class="k">function</span> mknote<span class="o">(){</span>
+</span></span><span class="line"><span class="cl">  mkdir nmap gobuster loot logs exploits ssh-keys post-exploits
+</span></span><span class="line"><span class="cl"><span class="o">}</span></span></span></code></pre>
+</figure><ul>
+<li>
+<p><strong>nmap:</strong> each nmap scan goes here.</p>
+</li>
+<li>
+<p><strong>gobuster:</strong> each gobuster scan goes here.</p>
+</li>
+<li>
+<p><strong>loot:</strong> each interesting file for further analysis goes here.</p>
+</li>
+<li>
+<p><strong>logs:</strong> If you like to log your activity with <code>$ script</code> , put them here.</p>
+</li>
+<li>
+<p><strong>exploits:</strong> exploit script goes here.</p>
+</li>
+<li>
+<p><strong>ssh-keys:</strong> obtained ssh-key goes here, not loot.</p>
+</li>
+<li>
+<p><strong>post-exploits:</strong> post-compromise loot goes here.</p>
+</li>
+</ul>
+<p>Usage is simple:</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ <span class="nb">cd</span> htb-machine-folder/
+</span></span><span class="line"><span class="cl">$ mknote
+</span></span><span class="line"><span class="cl">$ tree
+</span></span><span class="line"><span class="cl">.
+</span></span><span class="line"><span class="cl">├── exploits
+</span></span><span class="line"><span class="cl">├── gobuster
+</span></span><span class="line"><span class="cl">├── logs
+</span></span><span class="line"><span class="cl">├── loot
+</span></span><span class="line"><span class="cl">├── nmap
+</span></span><span class="line"><span class="cl">├── post-exploits
+</span></span><span class="line"><span class="cl">└── ssh-keys</span></span></code></pre>
+</figure><h2 id="ssh-configuration">SSH Configuration</h2>
+<p>I have always use a separate SSH keys for CTF. My SSH key for CTF is using ed25519. You can create one using the following command:</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ ssh-keygen -a <span class="m">100</span> -t ed25519 -f ~/.ssh/ctf_ssh</span></span></code></pre>
+</figure><p>After that, register your private key to SSH agent.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ <span class="nb">eval</span> <span class="s2">&#34;</span><span class="k">$(</span>ssh-agent -s<span class="k">)</span><span class="s2">&#34;</span>
+</span></span><span class="line"><span class="cl">$ ssh-add ~/.ssh/ctf_ssh</span></span></code></pre>
+</figure><p>Since HackTheBox machine starts with IP address of <code>10.10.*</code>, add these lines to your SSH config (<code>~/.ssh/config</code>). Create one if you don&rsquo;t have it.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">Host 10.10.*
+</span></span><span class="line"><span class="cl">  IdentityFile ~/.ssh/ctf_ssh</span></span></code></pre>
+</figure><p>With the config above, whenever I injected my public key (<code>/.ssh/ctf_ssh.pub</code>) to HackTheBox machine for <a href="https://fahmifj.github.io/blog/linux-backdoors-and-where-to-find-them/"target="_blank" rel="noopener noreferrer"
+>persistence access</a>, I don&rsquo;t have to specify <code>-i /path/to/ssh/private/key</code> anymore, but just with  <code>$ ssh machine-name@hostname</code>.</p>
+<h2 id="qterminal-configuration">QTerminal Configuration</h2>
+<p>Unfortunately I&rsquo;m not a tmux user here. Tmux is rich in features, but I&rsquo;m not comfortable with its prefix key. So far, I&rsquo;ve always used the default QTerminal application and leveraged its shortcut feature to &rsquo;navigate&rsquo; a slightly faster in terminal.</p>
+<p>If you&rsquo;re a Windows Terminal user, you&rsquo;ll familiar with some of these shortcuts:</p>
+<ul>
+<li><strong><code>ALT + Arrows</code></strong>: Move cursor in subterminal</li>
+<li><strong><code>CTRL + TAB</code></strong>: Navigate between tabs</li>
+<li><strong><code>CTRL + Arrow Left</code></strong>:  Previous tab</li>
+<li><strong><code>CTRL + Arrow Right</code></strong>: Next tab</li>
+<li><strong><code>CTRL + N</code></strong> : New terminal tab</li>
+<li><strong><code>CTRL + SHIFT + W</code></strong> : Close current subterminal</li>
+<li><strong><code>CTRL + SHIFT + =</code></strong> : Split terminal vertically</li>
+<li><strong><code>CTRL + SHIFT + -</code></strong> : Split terminal horizontally</li>
+<li><strong><code>CTRL + SHIFT + F</code></strong> : Open search bar in terminal</li>
+<li><strong><code>CTRL + =</code></strong> : Zoom in</li>
+<li><strong><code>CTRL + -</code></strong> : Zoom out</li>
+</ul>
+<p>For me, the only limitation here is that there is no shortcut for resizing a subterminal.</p>
+<h2 id="bundle-them-with-omz-plugin">Bundle Them with OMZ Plugin</h2>
+<p>If you&rsquo;re a <a href="https://ohmyz.sh/#install"target="_blank" rel="noopener noreferrer"
+>Oh My Zsh</a> user like me, we can add these configurations (excluding SSH and QTerminal configurations) into a custom plugin.</p>
+<p>Save the following script to  <code>/home/&lt;username&gt;/.oh-my-zsh/custom/plugins/ctf/ctf.plugin.zsh</code>:</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="line"><span class="cl"><span class="cp">#!/bin/bash
+</span></span></span><span class="line"><span class="cl"><span class="cp"></span>
+</span></span><span class="line"><span class="cl"><span class="k">function</span> get_ip<span class="o">(){</span>
+</span></span><span class="line"><span class="cl">   <span class="c1"># It can be thm or htb IP</span>
+</span></span><span class="line"><span class="cl">   <span class="nv">tunnel_ip</span><span class="o">=</span><span class="sb">`</span>ifconfig tun0 2&gt;/dev/null <span class="p">|</span> grep netmask <span class="p">|</span> awk <span class="s1">&#39;{print $2}&#39;</span><span class="sb">`</span> 
+</span></span><span class="line"><span class="cl">   <span class="c1"># Use eth0 as default IP,</span>
+</span></span><span class="line"><span class="cl">   <span class="nv">default_ip</span><span class="o">=</span><span class="sb">`</span>ifconfig eth0 2&gt;/dev/null <span class="p">|</span> grep netmask <span class="p">|</span> awk <span class="s1">&#39;{print $2}&#39;</span><span class="sb">`</span>
+</span></span><span class="line"><span class="cl">   <span class="k">if</span> <span class="o">[[</span> <span class="nv">$tunnel_ip</span> <span class="o">==</span> *<span class="s2">&#34;10.&#34;</span>* <span class="o">]]</span><span class="p">;</span> <span class="k">then</span>
+</span></span><span class="line"><span class="cl">      <span class="nb">echo</span> <span class="nv">$tunnel_ip</span>
+</span></span><span class="line"><span class="cl">   <span class="k">else</span>
+</span></span><span class="line"><span class="cl">      <span class="nb">echo</span> <span class="nv">$default_ip</span>
+</span></span><span class="line"><span class="cl">   <span class="k">fi</span>
+</span></span><span class="line"><span class="cl"><span class="o">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="k">function</span> mknote<span class="o">(){</span>
+</span></span><span class="line"><span class="cl">  mkdir nmap gobuster loot logs exploits ssh-keys dump post-exploits
+</span></span><span class="line"><span class="cl"><span class="o">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="c1"># https://askubuntu.com/questions/750419/how-do-i-run-a-sudo-command-needing-password-input-in-the-background</span>
+</span></span><span class="line"><span class="cl"><span class="nb">alias</span> <span class="nv">sudo</span><span class="o">=</span><span class="s1">&#39;sudo -v; [ $? ] &amp;&amp; sudo &#39;</span>
+</span></span><span class="line"><span class="cl"><span class="nb">alias</span> <span class="nv">htbon</span><span class="o">=</span><span class="s1">&#39;openvpn ~/ovpnconfig/htb-sg.ovpn 1&gt;/dev/null &amp;&#39;</span>
+</span></span><span class="line"><span class="cl"><span class="nb">alias</span> <span class="nv">htbfort</span><span class="o">=</span><span class="s1">&#39;openvpn ~/ovpnconfig/htb-fortress.ovpn 1&gt;/dev/null &amp;&#39;</span>
+</span></span><span class="line"><span class="cl"><span class="nb">alias</span> <span class="nv">htbrel</span><span class="o">=</span><span class="s1">&#39;openvpn ~/ovpnconfig/htb-release.ovpn 1&gt;/dev/null &amp;&#39;</span>
+</span></span><span class="line"><span class="cl"><span class="nb">alias</span> <span class="nv">thmon</span><span class="o">=</span><span class="s1">&#39;openvpn ~/ovpnconfig/thm.ovpn 1&gt;/dev/null &amp;&#39;</span>
+</span></span><span class="line"><span class="cl"><span class="nb">alias</span> <span class="nv">thmwreath</span><span class="o">=</span><span class="s1">&#39;openvpn ~/ovpnconfig/thm-wreath.ovpn 1&gt;/dev/null &amp;&#39;</span>
+</span></span><span class="line"><span class="cl"><span class="nb">alias</span> <span class="nv">kvpn</span><span class="o">=</span><span class="s1">&#39;pkill openvpn&#39;</span>
+</span></span><span class="line"><span class="cl"><span class="nb">alias</span> <span class="nv">hostit</span><span class="o">=</span><span class="s1">&#39;python3 -m http.server -d ~/tools 8000&#39;</span></span></span></code></pre>
+</figure><p>The next step depends on your theme. I use a theme called <code>robbyrussell</code>.</p>
+<p>I created a copy of the theme in <code> /home/kali/.oh-my-zsh/custom/themes/robbyrussell.zsh-theme</code>. Then I modified the theme to display IP address and switched to two lines prompt.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl"><span class="nv">NEWLINE</span><span class="o">=</span><span class="s1">$&#39;\n$&#39;</span> 
+</span></span><span class="line"><span class="cl"><span class="nv">PROMPT</span><span class="o">=</span><span class="s1">&#39;%(?:%{$fg_bold[green]%}→:%{$fg_bold[red]%}→)&#39;</span>
+</span></span><span class="line"><span class="cl"><span class="nv">PROMPT</span><span class="o">+=</span><span class="s1">&#39; %F{4}%n@%m %{$fg[cyan]%}«%c»%{$reset_color%}&#39;</span>
+</span></span><span class="line"><span class="cl"><span class="nv">PROMPT</span><span class="o">+=</span><span class="s1">&#39; %B%F{152}«$(get_ip)»%f%b $(git_prompt_info)&#39;</span>
+</span></span><span class="line"><span class="cl"><span class="nv">PROMPT</span><span class="o">+=</span><span class="s2">&#34;%F{31}</span><span class="si">${</span><span class="nv">NEWLINE</span><span class="si">}</span><span class="s2"> %f&#34;</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="nv">ZSH_THEME_GIT_PROMPT_PREFIX</span><span class="o">=</span><span class="s2">&#34;%{</span><span class="nv">$fg_bold</span><span class="s2">[blue]%}git:(%{</span><span class="nv">$fg</span><span class="s2">[red]%}&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="nv">ZSH_THEME_GIT_PROMPT_SUFFIX</span><span class="o">=</span><span class="s2">&#34;%{</span><span class="nv">$reset_color</span><span class="s2">%} &#34;</span>
+</span></span><span class="line"><span class="cl"><span class="nv">ZSH_THEME_GIT_PROMPT_DIRTY</span><span class="o">=</span><span class="s2">&#34;%{</span><span class="nv">$fg</span><span class="s2">[blue]%}) %{</span><span class="nv">$fg</span><span class="s2">[yellow]%}✗&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="nv">ZSH_THEME_GIT_PROMPT_CLEAN</span><span class="o">=</span><span class="s2">&#34;%{</span><span class="nv">$fg</span><span class="s2">[blue]%})&#34;</span></span></span></code></pre>
+</figure><p>Finally, load the <code>ctf</code> plugin we created in <code>.zshrc</code> file.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...
+</span></span><span class="line"><span class="cl"><span class="c1"># Which plugins would you like to load?</span>
+</span></span><span class="line"><span class="cl"><span class="c1"># Standard plugins can be found in $ZSH/plugins/</span>
+</span></span><span class="line"><span class="cl"><span class="c1"># Custom plugins may be added to $ZSH_CUSTOM/plugins/</span>
+</span></span><span class="line"><span class="cl"><span class="c1"># Example format: plugins=(rails git textmate ruby lighthouse)</span>
+</span></span><span class="line"><span class="cl"><span class="c1"># Add wisely, as too many plugins slow down shell startup.</span>
+</span></span><span class="line"><span class="cl"><span class="nv">plugins</span><span class="o">=(</span>git ctf<span class="o">)</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...</span></span></code></pre>
+</figure><p>Restart your terminal and we&rsquo;re done.</p>
+<p><div class="img-container"><img src="imgs/image-20210711221808834.png" alt="image-20210711221808834"  /></div>
+</p>
+<p>And that&rsquo;s all for this post!</p>
+]]></content:encoded>
+    </item>
+    
+    <item>
+      <title>Exposing an SMB Server to the Internet in Azure</title>
+      <link>https://fahmifj.github.io/blog/exposing-smb-server-to-internet-in-azure/</link>
+      <pubDate>Sun, 04 Jul 2021 19:45:21 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/blog/exposing-smb-server-to-internet-in-azure/</guid>
+      <description>And wait for bad things to happen</description>
+      <content:encoded><![CDATA[<p>Last month, I was asked to setup a Samba/SMB server to be accessible over the Internet. The server will only be used temporarily, which then I decided to deploy an Azure Virtual Machine (VM) using my student subscription instead of buying a new dedicated VPS.</p>
+<p>In the end, the server is not being used, so I will just dump my documentation about it here.</p>
+<p>Before proceeding further, I will state that:</p>
+<p>Exposing the SMB Server directly to the Internet is not considered a &ldquo;best practice&rdquo;. The safest way to make it accessible over the Internet is to set up a VPN server and place the server inside the VPN network.</p>
+<h4 id="goals">Goals</h4>
+<p>By the end of this post, you should be able to:</p>
+<ul>
+<li>Deploy an Ubuntu server in Azure</li>
+<li>Setup and Configure a Samba server</li>
+<li>Exposing Samba server over Internet</li>
+</ul>
+<h4 id="prerequisites">Prerequisites</h4>
+<ul>
+<li>Azure Account</li>
+<li>Basic knowledge of Azure, at least menu navigation and creating a resource group.</li>
+<li>Basic knowledge of Linux</li>
+</ul>
+<h2 id="vm-configuration--deployment">VM Configuration &amp; Deployment</h2>
+<h3 id="create-vm">Create VM</h3>
+<p>At this step, I already have a resource group called <code>IAMF_SMB-TEST</code> and I&rsquo;ll be creating a VM instance inside this resource. It&rsquo;s a small server used by 4-5 users, so B1s will be enough. You&rsquo;re free to customize the VM.</p>
+<p>The VM details of mine can be seen in the following image:</p>
+<img src="imgs/image-20210513170545346.png" alt="image-20210513170545346" style="zoom: 50%;" />
+<p>For authentication to the server, I&rsquo;ll be using an SSH public key here instead of a password. The account for server administration is called <code>azure-smb</code>. Since the authentication is SSH, this VM will have an SSH port open publicly (internet).</p>
+<img src="imgs/image-20210513170638603.png" alt="image-20210513170638603" style="zoom:50%;" />
+<p>In the following section, I&rsquo;ll use a standard SSD and leave the other settings at their defaults.</p>
+<img src="imgs/image-20210513170710958.png" alt="image-20210513170710958" style="zoom:50%;" />
+<p>In the <strong>Networking</strong> section, I&rsquo;ll just create a new virtual network. See the following image for details:</p>
+<img src="imgs/image-20210513170824172.png" alt="image-20210513170824172" style="zoom:50%;" />
+<p>In the <strong>Management</strong> section, I&rsquo;ll just disable the boot diagnostics.</p>
+<img src="imgs/image-20210513171009570.png" alt="image-20210513171009570" style="zoom:50%;" />
+<p>I&rsquo;ll leave the <strong>Advanced</strong> with the default settings and skip the <strong>Tags</strong> section.</p>
+<p>The last section is <strong>Review + Create</strong>, which basically a section to review the VM configuration. After I finish the review, I&rsquo;ll press the <strong>Create</strong> button.</p>
+<img src="imgs/image-20210513171153896.png" alt="image-20210513171153896" style="zoom:50%;" />
+<p>When the <strong>Create</strong> button is clicked, the VM will be deployed automatically.</p>
+<img src="imgs/image-20210513171501031.png" alt="image-20210513171501031" style="zoom:50%;" />
+<h3 id="access-vm">Access VM</h3>
+<p>Once the machine or VM has been deployed. Log into it using SSH. The public IP of the VM instance can be found at the <code>Dashboard</code> &gt; <code>RESOURCE_GROUP_NAME</code> &gt; <code>PUBLIC_IP_NAME</code>. In my case, it is <code>Dashboard</code> &gt; <code>IAMF_SMB-TEST</code> &gt; <code>smb-server-ip</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ ssh -i private_key azure-smb@PUBLIC_IP_ADDRESS</span></span></code></pre>
+</figure><img src="imgs/image-20210513171606268.png" alt="image-20210513171606268" style="zoom:50%;" />
+<h2 id="samba">Samba</h2>
+<h3 id="repo-update">Repo Update</h3>
+<p>First thing first, let&rsquo;s update the repository list.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">azure-smb@smb-server:~$ sudo apt update</span></span></code></pre>
+</figure><h3 id="install-samba">Install Samba</h3>
+<p>After that, install <code>Samba</code> with the following command.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">azure-smb@smb-server:~$ sudo apt install samba</span></span></code></pre>
+</figure><p>Once the installation is done, check the Samba service daemon status.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">azure-smb@smb-server:~$ sudo systemctl status smbd
+</span></span><span class="line"><span class="cl">● smbd.service - Samba SMB Daemon
+</span></span><span class="line"><span class="cl">   Loaded: loaded <span class="o">(</span>/lib/systemd/system/smbd.service<span class="p">;</span> enabled<span class="p">;</span> vendor preset: enabled<span class="o">)</span>
+</span></span><span class="line"><span class="cl">   Active: active <span class="o">(</span>running<span class="o">)</span> since Thu 2021-05-13 10:17:45 UTC<span class="p">;</span> 3min 48s ago
+</span></span><span class="line"><span class="cl">     Docs: man:smbd<span class="o">(</span>8<span class="o">)</span>
+</span></span><span class="line"><span class="cl">           man:samba<span class="o">(</span>7<span class="o">)</span>
+</span></span><span class="line"><span class="cl">           man:smb.conf<span class="o">(</span>5<span class="o">)</span>
+</span></span><span class="line"><span class="cl"> Main PID: <span class="m">2098</span> <span class="o">(</span>smbd<span class="o">)</span>
+</span></span><span class="line"><span class="cl">   Status: <span class="s2">&#34;smbd: ready to serve connections...&#34;</span>
+</span></span><span class="line"><span class="cl">    Tasks: <span class="m">4</span> <span class="o">(</span>limit: 1056<span class="o">)</span>
+</span></span><span class="line"><span class="cl">   CGroup: /system.slice/smbd.service
+</span></span><span class="line"><span class="cl">           ├─2098 /usr/sbin/smbd --foreground --no-process-group
+</span></span><span class="line"><span class="cl">           ├─2123 /usr/sbin/smbd --foreground --no-process-group
+</span></span><span class="line"><span class="cl">           ├─2124 /usr/sbin/smbd --foreground --no-process-group
+</span></span><span class="line"><span class="cl">           └─2129 /usr/sbin/smbd --foreground --no-process-group
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">May <span class="m">13</span> 10:17:44 smb-server systemd<span class="o">[</span>1<span class="o">]</span>: Starting Samba SMB Daemon...
+</span></span><span class="line"><span class="cl">May <span class="m">13</span> 10:17:45 smb-server systemd<span class="o">[</span>1<span class="o">]</span>: Started Samba SMB Daemon.</span></span></code></pre>
+</figure><p>Samba is ready, and now let&rsquo;s configure the share folder.</p>
+<h3 id="configure-shares">Configure Shares</h3>
+<p>First, let&rsquo;s create a backup file of the original configuration, so we can reset it to the default configuration, just in case something goes wrong.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">azure-smb@smb-server:~$ sudo cp /etc/samba/smb.conf<span class="o">{</span>,.backup<span class="o">}</span></span></span></code></pre>
+</figure><p>Now create a share folder name it <code>sambashare</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">azure-smb@smb-server:~$ mkdir sambashare</span></span></code></pre>
+</figure><p>Then open the samba configuration file with a text editor like <code>nano</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">azure-smb@smb-server:~$ sudo nano /etc/samba/smb.conf</span></span></code></pre>
+</figure><p>Go straight to the bottom of the file and add the following lines.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl"><span class="o">[</span>sambashare<span class="o">]</span>
+</span></span><span class="line"><span class="cl">    <span class="nv">comment</span> <span class="o">=</span> Samba Share
+</span></span><span class="line"><span class="cl">    <span class="nv">path</span> <span class="o">=</span> /home/azure-smb/sambashare
+</span></span><span class="line"><span class="cl">    <span class="nb">read</span> <span class="nv">only</span> <span class="o">=</span> no
+</span></span><span class="line"><span class="cl">    <span class="nv">browsable</span> <span class="o">=</span> yes</span></span></code></pre>
+</figure><blockquote>
+<p>Note: Details for configuring a share can be read <a href="https://www.samba.org/samba/docs/current/man-html/smb.conf.5.html"target="_blank" rel="noopener noreferrer"
+>here</a> or <a href="https://web.mit.edu/rhel-doc/5/RHEL-5-manual/Deployment_Guide-en-US/s1-samba-configuring.html"target="_blank" rel="noopener noreferrer"
+>here</a>.</p>
+</blockquote>
+<p>Save the file and restart the SMB daemon with the following command:</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">azure-smb@smb-server:~$ sudo service smbd restart</span></span></code></pre>
+</figure><p>Lastly, update the firewall to allow network traffic for Samba/SMB.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">azure-smb@smb-server:~$ sudo ufw allow samba</span></span></code></pre>
+</figure><p>This is the basic configuration of creating a Samba share, but from here you can create another share with more complex configuration. Here are my references:</p>
+<ul>
+<li><a href="https://linuxize.com/post/how-to-install-and-configure-samba-on-ubuntu-18-04/"target="_blank" rel="noopener noreferrer"
+>https://linuxize.com/post/how-to-install-and-configure-samba-on-ubuntu-18-04/</a></li>
+<li><a href="https://confluence.jaytaala.com/display/TKB/Create&#43;samba&#43;share&#43;writeable&#43;by&#43;all%2C&#43;group%2C&#43;or&#43;only&#43;a&#43;user"target="_blank" rel="noopener noreferrer"
+>https://confluence.jaytaala.com/display/TKB/Create&#43;samba&#43;share&#43;writeable&#43;by&#43;all%2C&#43;group%2C&#43;or&#43;only&#43;a&#43;user</a></li>
+<li><a href="https://www.digitalocean.com/community/tutorials/how-to-set-up-a-samba-share-for-a-small-organization-on-ubuntu-16-04"target="_blank" rel="noopener noreferrer"
+>https://www.digitalocean.com/community/tutorials/how-to-set-up-a-samba-share-for-a-small-organization-on-ubuntu-16-04</a></li>
+</ul>
+<h3 id="add-samba-user">Add Samba User</h3>
+<p>Currently, our Linux account for administering the server is <code>azure-smb</code> and we shouldn&rsquo;t use this account password to access the SMB shares. So, let&rsquo;s just create a dedicated user for SMB called <code>user1</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">azure-smb@smb-server:~$ sudo useradd --system -s /usr/sbin/nologin user1</span></span></code></pre>
+</figure><p>Assign <code>user1</code> to be the owner of the share</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">azure-smb@smb-server:~$ sudo chown user1 /home/azure-smb/sambashare</span></span></code></pre>
+</figure><p>After that, create a Samba password for <code>user1</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">azure-smb@smb-server:~$ sudo smbpasswd -a user1
+</span></span><span class="line"><span class="cl">New SMB password: 
+</span></span><span class="line"><span class="cl">Retype new SMB password: 
+</span></span><span class="line"><span class="cl">Added user user1.</span></span></code></pre>
+</figure><p>Finally, enable the user.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">azure-smb@smb-server:~$ sudo smbpasswd -e user1
+</span></span><span class="line"><span class="cl">Enabled user user1.</span></span></code></pre>
+</figure><h2 id="expose-smb-to-the-internet">Expose SMB to the Internet</h2>
+<h3 id="allow-inbound-connection">Allow Inbound Connection</h3>
+<p>Now if we want to make the SMB server available on the Internet, we have to go back to the Azure Portal to open the SMB port (port 445) on the NIC Public IP and allow inbound connection through that port. The connection is then forwarded to our SMB port on the NIC Private IP.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">PUBLIC_IP:445 --&gt; PRIVATE_IP:445</span></span></code></pre>
+</figure><p>To do that open up the Networking settings of the SMB VM and click on <strong>Add inbound port rule</strong> button.</p>
+<img src="imgs/image-20210513173838694.png" alt="image-20210513173838694" style="zoom:50%;" />
+<p>On the new Windows, configure the rule to allow any source (incoming IP) and any source port (incoming port) to connect to the SMB port (445). The details configuration is as follows:</p>
+<img src="imgs/image-20210513173858659.png" alt="image-20210513173858659" style="zoom:50%;" />
+<p>At the bottom, the configuration is as follows:</p>
+<img src="imgs/image-20210513173929271.png" alt="image-20210513173929271" style="zoom:50%;" />
+<p>When you&rsquo;re done, click on the <strong>Add</strong> button and the new rule should listed in the <strong>Inbound port rules</strong> section.</p>
+<img src="imgs/image-20210513174018895.png" alt="image-20210513174018895" style="zoom:50%;" />
+<h3 id="verify-public-access">Verify Public Access</h3>
+<p>We can use <code>nmap</code> to see if the SMB port has been opened.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ nmap -p445 -sV VM_PUBLIC_IP</span></span></code></pre>
+</figure><img src="imgs/image-20210513174227862.png" alt="image-20210513174227862" style="zoom:50%;" />
+<p>To interact with the SMB server via CLI, you can use <code>smbclient</code>. Install it with:</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ sudo apt install smbclient</span></span></code></pre>
+</figure><p>Once it installed, connect to the share with following command:</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ smbclient //<span class="o">[</span>IP<span class="o">]</span>/<span class="o">[</span>sharename<span class="o">]</span> </span></span></code></pre>
+</figure><p>Adding <code>-N -L</code> can list all the available shares.</p>
+<img src="imgs/image-20210513174416250.png" alt="image-20210513174416250" style="zoom:50%;" />
+<p>You can also provide the password directly in the terminal:</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ smbclient //<span class="o">[</span>IP<span class="o">]</span>/<span class="o">[</span>sharename<span class="o">]</span> -U <span class="o">[</span>username<span class="o">]</span> <span class="o">[</span>password<span class="o">]</span>
+</span></span><span class="line"><span class="cl">$ smbclient //<span class="o">[</span>IP<span class="o">]</span>/<span class="o">[</span>sharename<span class="o">]</span> -U <span class="s1">&#39;username%password&#39;</span></span></span></code></pre>
+</figure><p>And that&rsquo;s all. It is not that detailed, but I hope you will find it useful.</p>
+]]></content:encoded>
+    </item>
+    
+    <item>
+      <title>Building Virtual Home Lab for Pentesting</title>
+      <link>https://fahmifj.github.io/blog/building-virtual-home-lab-for-pentest/</link>
+      <pubDate>Thu, 17 Jun 2021 14:04:24 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/blog/building-virtual-home-lab-for-pentest/</guid>
+      <description>With 8 gigs!</description>
+      <content:encoded><![CDATA[<p>This is my personal documentation on setting up a basic pentesting lab in a virtual environment to learn some AD attack scenarios, network pivoting, and C2 (command &amp; control) with <code>metasploit</code>.</p>
+<h2 id="prerequisites">Prerequisites</h2>
+<h3 id="knowledge">Knowledge</h3>
+<ul>
+<li>Virtualization and VirtualBox</li>
+<li>Windows OS and Server Installation</li>
+<li>Basics knowledge of Windows/Windows Server (Desktop/GUI version)/</li>
+<li>Basics knowledge of Active Directory:
+<ul>
+<li>AD Domain</li>
+<li>Principle name</li>
+<li>DNS</li>
+</ul>
+</li>
+<li>Basics knowledge of Networking (routing).</li>
+</ul>
+<h3 id="hardware">Hardware</h3>
+<p>The following are the main specifications that I recommend, the list is sorted by priority.</p>
+<ul>
+<li>Storage: 256 GB minimum, SSD is a must for server, or use high speed USB 3.1/ type C drive.</li>
+<li>RAM: 8 GB of minimum, 16 GB recommended dual channel.</li>
+<li>CPU: AMD Ryzen 3 or Intel i3 6th (minimum), AMD Ryzen 5+ with H prefix or i5+ 6th gen with K/H prefix. (recommended).
+<ul>
+<li>4th gen of i7 is still worth though.</li>
+</ul>
+</li>
+</ul>
+<p>For me, I used a single MSI laptop with the minimum requirements, except for the CPU.</p>
+<h3 id="software">Software</h3>
+<ul>
+<li>VirtualBox (<a href="https://www.virtualbox.org/wiki/Downloads"target="_blank" rel="noopener noreferrer"
+>Download</a>)</li>
+<li>Kali Linux image file (<a href="https://www.offensive-security.com/kali-linux-vm-vmware-virtualbox-image-download/#1572305786534-030ce714-cc3b"target="_blank" rel="noopener noreferrer"
+>Download</a>)</li>
+<li>Windows 10 evaluation image file (<a href="https://www.microsoft.com/en-us/evalcenter/"target="_blank" rel="noopener noreferrer"
+>Download</a>)</li>
+<li>Windows Server 2019 evaluation image file (<a href="https://www.microsoft.com/en-us/evalcenter/"target="_blank" rel="noopener noreferrer"
+>Download</a>)</li>
+</ul>
+<h2 id="topology">Topology</h2>
+<p>I know my topology is bad.</p>
+<p><div class="img-container"><img src="imgs/topology.jpg" alt=""  /></div>
+</p>
+<blockquote>
+<p>Note: It&rsquo;s NIC (Network Interface Card) not NC</p>
+</blockquote>
+<p>For pivoting, I removed the Windows 10 inside network range of <code>10.10.10.100/28</code> from AD Domain.</p>
+<h2 id="setup">Setup</h2>
+<h3 id="vm-system-configuration">VM System Configuration</h3>
+<h4 id="system">System</h4>
+<p>Initial for installation</p>
+<ul>
+<li>Server: 2424 MB of RAM</li>
+<li>Client: x2 1280 MB of RAM</li>
+</ul>
+<p>After installation (removed style/desktop/disable junk service)</p>
+<ul>
+<li>Server: 1280 MB of RAM</li>
+<li>Client: 1024 MB of RAM</li>
+<li>Attacking machine: 1024MB of RAM</li>
+</ul>
+<p>Trust me, I use 8 GB to host these VM. 😂</p>
+<ul>
+<li>Windows 2019 = Server</li>
+<li>Windows 10 = Client</li>
+<li>Kali Linux/Armed Ubuntu = Attacker</li>
+</ul>
+<p>For initial setup, the two clients can <strong>stay inside</strong> <code>192.168.1.0/24</code> network.</p>
+<h4 id="network">Network</h4>
+<p>Server Adapter 1:</p>
+<p><div class="img-container"><img src="imgs/image-20210617143401181.png" alt="image-20210617143401181"  /></div>
+</p>
+<h3 id="setting-up-server">Setting up Server</h3>
+<h4 id="initial-setup">Initial setup</h4>
+<ul>
+<li>Admin credentials: <code>administrator:p@$$w0rd!</code></li>
+<li>PC Name: <code>server19-DC</code> (restart after)</li>
+<li>Network (Static):
+<ul>
+<li>Adapter 1: 192.168.1.100/24</li>
+<li>Adapter 2: 10.10.10.100/28</li>
+</ul>
+</li>
+</ul>
+<h4 id="promote-to-domain-controller">Promote to Domain Controller</h4>
+<ul>
+<li>Server Manager &gt; Manage &gt; Add Roles and Features.</li>
+<li>Add Roles and Features Wizard:
+<ul>
+<li>Installation type: &ldquo;<strong>Role-based or feature-based installation</strong>&rdquo;</li>
+<li>Server selection: <code>server19-DC</code></li>
+<li>Server roles: <strong>&ldquo;Active Directory Domain Services&rdquo;</strong> and check the <strong>&ldquo;Include management tools&rdquo;</strong>.</li>
+<li>Features: Check the <strong>&ldquo;Group Policy Management&rdquo;</strong></li>
+<li>Confirmation:  Check on <strong>&ldquo;Restart destination server automatically if required&rdquo;</strong></li>
+<li>Close after it&rsquo;s done.</li>
+</ul>
+</li>
+<li>Server Manager &gt; Notification flag &gt; Click on <strong>&ldquo;Promote this server to a domain controller&rdquo;</strong></li>
+<li>Active Directory Domain Services Configuration Wizard:
+<ul>
+<li>Deployment configuration: <strong>&ldquo;Add a new forest&rdquo;</strong> and set <strong>&ldquo;server19.local&rdquo;</strong> as root domain name</li>
+<li>Domain controller options: set <strong>&ldquo;Windows Server 2016&rdquo;</strong> as FFL (Forest Functional Level) and DFL (Domain Functional Level). Checklist DNS server and set the same admin password for DSRM password.</li>
+<li>Additional options: set NetBIOS domain name to <code>SERVER19</code></li>
+<li>Let the rest options in default state until installation section.</li>
+<li>Restart after installation complete.</li>
+</ul>
+</li>
+</ul>
+<p><div class="img-container"><img src="imgs/server19logon.jpg" alt=""  /></div>
+</p>
+<h4 id="domain-accounts">Domain Accounts</h4>
+<ul>
+<li>John Smith
+<ul>
+<li>User logon name: <code>jsmith@server19.local</code></li>
+<li>Password: <code>jsmith@123</code></li>
+</ul>
+</li>
+<li>Carl Smith
+<ul>
+<li>User logon name: <code>cmisth@server19.local</code></li>
+<li>Password: <code>@csmith@</code></li>
+</ul>
+</li>
+</ul>
+<p>All password is set to never expires.</p>
+<h4 id="service-account">Service Account</h4>
+<p>Fake SQL Service</p>
+<ul>
+<li>User logon name: <code>SQLService@server19.local</code></li>
+<li>Password: <code>Mysql@Password123</code></li>
+</ul>
+<p>Set service principle name:</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">setspn -a SERVER19-DC/SQLService.SERVER19.local:60111 SERVER19\SQLService
+</span></span><span class="line"><span class="cl">setspn -T SERVER19.local -Q */*</span></span></code></pre>
+</figure><h4 id="configure-file-sharing-smb">Configure File Sharing (SMB):</h4>
+<ul>
+<li>Server manager &gt; File and Storage Services &gt; Shares &gt; Task &gt; New Share.</li>
+<li>New Share Wizard:
+<ul>
+<li>Profile: SMB Share Quick</li>
+<li>Share Location: <code>C:\Shares\DATA</code> (Create the Shares folder in C:)</li>
+<li>Other Settings: Allow caching of share</li>
+<li>Permission: Leave it default</li>
+<li>Confirmation and create.</li>
+</ul>
+</li>
+</ul>
+<h3 id="setting-up-client">Setting up Client</h3>
+<h4 id="initial-setup-1">Initial setup</h4>
+<ul>
+<li>Client 1:
+<ul>
+<li>IP: 192.168.1.101 (static)</li>
+<li>PC name: NESCOFFEE</li>
+</ul>
+</li>
+<li>Client 2:
+<ul>
+<li>IP: 192.168.1.102 (static)</li>
+<li>PC name: MILO</li>
+</ul>
+</li>
+</ul>
+<h4 id="local-accounts">Local Accounts</h4>
+<p>Same with domain accounts, but add an <code>L</code> at the end of username/password.</p>
+<ul>
+<li>Username: <code>cmisthL</code>, password: <code>jsmithL@123</code></li>
+<li>Username: <code>jsmithL</code>, password: <code>@csmith@</code></li>
+</ul>
+<h4 id="join-domain">Join Domain</h4>
+<p>Client 1:</p>
+<ul>
+<li>Use Server&rsquo;s IP as DNS server: <code>192.168.1.100</code></li>
+<li>Hit <code>Win+I</code>, type &ldquo;access&rdquo;, click on <strong>Connect</strong>.</li>
+<li>Microsoft account window:
+<ul>
+<li>Click on <strong>&ldquo;Join this device to a local Active Directory domain&rdquo;</strong> under the alternate actions.</li>
+<li>Use the server administrator password to join.</li>
+<li>Skip the <strong>Add an account</strong> section</li>
+<li>Restart</li>
+</ul>
+</li>
+</ul>
+<p>Client 2 has the same steps</p>
+<h4 id="local-admin">Local Admin:</h4>
+<ul>
+<li>Set John Smith (<code>jsmith@server19.local</code>) as local administrator for NESCOFFEE.</li>
+<li>Set Carl Smith (<code>cmisth@server19.local</code>) as local administrator for MILO.</li>
+</ul>
+<h3 id="setting-up-attacking-machine">Setting up Attacking Machine</h3>
+<ul>
+<li>Put it on the same network</li>
+<li>Set static IP: 192.168.1.10</li>
+</ul>
+<h2 id="ad-attack-scenarios">AD Attack Scenarios</h2>
+<p>Here are some attack scenarios:</p>
+<ul>
+<li>LLMNR Poisoning - <a href="https://www.aptive.co.uk/blog/llmnr-nbt-ns-spoofing/"target="_blank" rel="noopener noreferrer"
+>https://www.aptive.co.uk/blog/llmnr-nbt-ns-spoofing/</a></li>
+<li>AS-REP Roasting
+<ul>
+<li>Example attacks: <a href="/tags/asrep-roasting"target="_blank" rel="noopener noreferrer"
+>ASREP-Roasting tags</a></li>
+</ul>
+</li>
+<li>Kerberoasting  - <a href="https://pentestlab.blog/2018/06/12/kerberoast/"target="_blank" rel="noopener noreferrer"
+>https://pentestlab.blog/2018/06/12/kerberoast/</a></li>
+<li>Take Over IPv6 DNS - <a href="https://blog.fox-it.com/2018/01/11/mitm6-compromising-ipv4-networks-via-ipv6/"target="_blank" rel="noopener noreferrer"
+>https://blog.fox-it.com/2018/01/11/mitm6-compromising-ipv4-networks-via-ipv6/</a></li>
+<li>DCSync
+<ul>
+<li>Example attacks: <a href="/tags/dcsync/"target="_blank" rel="noopener noreferrer"
+>DCSync tags</a></li>
+</ul>
+</li>
+</ul>
+<p>Attack scenario(s) that requires two clients online + server:</p>
+<ul>
+<li>SMB Relay - <a href="https://akimboviper.gitbook.io/pentest-everything/everything/everything-windows/attacking-windows/relay-attacks/smb-relay"target="_blank" rel="noopener noreferrer"
+>https://akimboviper.gitbook.io/pentest-everything/everything/everything-windows/attacking-windows/relay-attacks/smb-relay</a>
+<ul>
+<li>Example attacks: <a href="/writeups/hackthebox/htb-apt/"target="_blank" rel="noopener noreferrer"
+>HackTheBox - APT</a></li>
+</ul>
+</li>
+</ul>
+]]></content:encoded>
+    </item>
+    
+  </channel>
+</rss>

