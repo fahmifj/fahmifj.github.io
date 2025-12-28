@@ -1,0 +1,1109 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>Infra on Ef&#39;s log</title>
+    <link>https://fahmifj.github.io/project_group/infra/</link>
+    <description>Recent content in Infra on Ef&#39;s log</description>
+    <generator>Hugo -- gohugo.io</generator>
+    <language>en</language>
+    <lastBuildDate>Sat, 06 Dec 2025 15:33:48 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/project_group/infra/index.xml" rel="self" type="application/rss+xml" />
+    <item>
+      <title>Deploying PNETLab on Google Cloud</title>
+      <link>https://fahmifj.github.io/blog/deploy-pnetlab-on-gcp/</link>
+      <pubDate>Wed, 26 Mar 2025 13:27:29 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/blog/deploy-pnetlab-on-gcp/</guid>
+      <description>In the previous article, I had an issue with either Mac or Orbstack&amp;rsquo;s networking system, that prevented my localhost from communicating with the GNS3 appliances. Instead of spending more time troubleshooting something that is limited by its design, I decided to build a cloud-hosted network lab using PNETLab.
+In this article, I’ll show how to deploy PNETLab on Google Cloud using Terraform for automation, and Tailscale to securely access the lab without exposing it to the public Internet.</description>
+      <content:encoded><![CDATA[<p>In the <a href="/articles/running-gns3-on-apple-m2-orbstack/"target="_blank" rel="noopener noreferrer"
+>previous article</a>, I had an issue with either Mac or Orbstack&rsquo;s networking system, that prevented my localhost from communicating with the GNS3 appliances. Instead of spending more time troubleshooting something that is limited by its design, I decided to build a cloud-hosted network lab using PNETLab.</p>
+<p>In this article, I’ll show how to deploy PNETLab on Google Cloud using Terraform for automation, and Tailscale to securely access the lab without exposing it to the public Internet.</p>
+<p><strong>Goals</strong></p>
+<ul>
+<li>Automate PNETLab server deployment with Terraform.</li>
+<li>Secure access to the lab without exposing it to the public internet.</li>
+<li>Configure a domain for easy access to the lab.</li>
+</ul>
+<p><strong>Prerequisites</strong></p>
+<ul>
+<li>GCP &amp; Tailscale accounts.</li>
+<li>GCP CLI installed.</li>
+<li>Terraform installed.</li>
+<li>Own a domain name (optional).</li>
+</ul>
+<p><strong>Network Diagram Overview</strong></p>
+<p>Here’s an overview of what we’re going to build:</p>
+<img src="./imgs/image-20251028001404879.png" alt="image-20251028001404879" style="zoom:50%;" />
+<h2 id="prepare-the-gcp-project">Prepare the GCP Project</h2>
+<h3 id="create-a-project">Create a Project</h3>
+<p>Before we begin, make sure that you&rsquo;ve <a href="https://docs.cloud.google.com/sdk/gcloud/reference/auth/login"target="_blank" rel="noopener noreferrer"
+>authenticated to GCP</a>. Once done, create a project for our PNETLab deployment.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ <span class="nv">PROJECT_ID</span><span class="o">=</span>pnetlab-<span class="nv">$RANDOM</span>
+</span></span><span class="line"><span class="cl">$ <span class="nb">echo</span> <span class="nv">$PROJECT_ID</span>
+</span></span><span class="line"><span class="cl">pnetlab-xxx
+</span></span><span class="line"><span class="cl">$ mkdir <span class="nv">$PROJECT_ID</span>
+</span></span><span class="line"><span class="cl">$ <span class="nb">cd</span> <span class="nv">$PROJECT_ID</span>
+</span></span><span class="line"><span class="cl">$ gcloud projects create <span class="nv">$PROJECT_ID</span>
+</span></span><span class="line"><span class="cl">$ gcloud config <span class="nb">set</span> project <span class="nv">$PROJECT_ID</span></span></span></code></pre>
+</figure><p>Then, link the project to your <a href="https://cloud.google.com/billing/docs/how-to/create-billing-account"target="_blank" rel="noopener noreferrer"
+>billing account</a>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ gcloud billing accounts list              
+</span></span><span class="line"><span class="cl">ACCOUNT_ID            NAME                OPEN  MASTER_ACCOUNT_ID
+</span></span><span class="line"><span class="cl">AAAAAA-BBBBBB-CCCCCC  My Billing Account  True
+</span></span><span class="line"><span class="cl">$ gcloud billing projects link <span class="nv">$PROJECT_ID</span> --billing-account<span class="o">=</span>AAAAAA-BBBBBB-CCCCCC</span></span></code></pre>
+</figure><h3 id="enable-the-compute-api">Enable the Compute API</h3>
+<p>Before you can use Google Cloud&rsquo;s compute resources, we need to enable the Compute API which allows your project to access and manage VM instances.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ gcloud services <span class="nb">enable</span> compute.googleapis.com</span></span></code></pre>
+</figure><blockquote>
+<p>Note: I&rsquo;m using GCP&rsquo;s free trial credits for this setup, if you&rsquo;re on a paid account, the steps remain the same.</p>
+</blockquote>
+<h2 id="instance-deployment">Instance Deployment</h2>
+<h3 id="preparing-terraform-code">Preparing Terraform Code</h3>
+<p>We&rsquo;ll use the following folder structure.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ tree
+</span></span><span class="line"><span class="cl">.
+</span></span><span class="line"><span class="cl">├── README.MD
+</span></span><span class="line"><span class="cl">└── terraform
+</span></span><span class="line"><span class="cl">    ├── terraforms.tfvars <span class="c1"># sensitive informations goes here (project_id, region, user/keys)</span>
+</span></span><span class="line"><span class="cl">    ├── main.tf <span class="c1"># defined gcp resources</span>
+</span></span><span class="line"><span class="cl">    └── variables.tf
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="m">1</span> directories, <span class="m">4</span> files</span></span></code></pre>
+</figure><p>Within the terraform folder, initialize the terraform working directory.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ terraform init</span></span></code></pre>
+</figure><h4 id="terraformtfvars">terraform.tfvars</h4>
+<p><code>terraforms.tfvars</code> contains the following (make your adjustment):</p>
+<figure class="highlight">
+    <pre tabindex="0"><code class="language-" data-lang="">project_id      = &#34;&#34;
+region          = &#34;&#34;
+zone            = &#34;&#34;
+os_image        = &#34;projects/ubuntu-os-cloud/global/images/ubuntu-1804-bionic-v20240116a&#34;
+ssh_user        = &#34;username&#34;
+ssh_pub_user    = &#34;ssh-ed25519 AAAAC3N... root&#34;
+ssh_pub_ansible = &#34;ssh-ed25519 AAAAC3N... ansible&#34;</code></pre>
+</figure><h4 id="maintf">main.tf</h4>
+<p><code>main.tf</code> file contains the following:</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-json" data-lang="json"><span class="line"><span class="cl"><span class="err">terraform</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">required_providers</span> <span class="err">{</span>
+</span></span><span class="line"><span class="cl">    <span class="err">google</span> <span class="err">=</span> <span class="err">{</span>
+</span></span><span class="line"><span class="cl">      <span class="err">source</span> <span class="err">=</span> <span class="nt">&#34;hashicorp/google&#34;</span>
+</span></span><span class="line"><span class="cl">    <span class="err">version</span> <span class="err">=</span> <span class="s2">&#34;~&gt; 4.5&#34;</span> <span class="p">}</span>
+</span></span><span class="line"><span class="cl">  <span class="err">}</span>
+</span></span><span class="line"><span class="cl"><span class="err">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">provider</span> <span class="s2">&#34;google&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">project</span> <span class="err">=</span> <span class="err">var.project_id</span>
+</span></span><span class="line"><span class="cl">  <span class="err">region</span>  <span class="err">=</span> <span class="err">var.region</span>
+</span></span><span class="line"><span class="cl">  <span class="err">zone</span>    <span class="err">=</span> <span class="err">var.zone</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">#</span> <span class="err">SETUP</span> <span class="err">NETWORK</span> <span class="err">#</span>
+</span></span><span class="line"><span class="cl"><span class="err">resource</span> <span class="s2">&#34;google_compute_network&#34;</span> <span class="s2">&#34;pnetlab_vpc&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">name</span>                    <span class="err">=</span> <span class="nt">&#34;pnetlab-vpc&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="err">auto_create_subnetworks</span> <span class="err">=</span> <span class="kc">false</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">resource</span> <span class="s2">&#34;google_compute_subnetwork&#34;</span> <span class="s2">&#34;pnetlab_subnet&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">name</span>          <span class="err">=</span> <span class="nt">&#34;pnetlab-subnet&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="err">network</span>       <span class="err">=</span> <span class="err">google_compute_network.pnetlab_vpc.id</span>
+</span></span><span class="line"><span class="cl">  <span class="err">ip_cidr_range</span> <span class="err">=</span> <span class="s2">&#34;10.10.1.0/24&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">resource</span> <span class="s2">&#34;google_compute_firewall&#34;</span> <span class="s2">&#34;allow_ssh_access&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">name</span>    <span class="err">=</span> <span class="nt">&#34;allow-ssh&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="err">network</span> <span class="err">=</span> <span class="err">google_compute_network.pnetlab_vpc.id</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">  <span class="err">allow</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="err">protocol</span> <span class="err">=</span> <span class="nt">&#34;tcp&#34;</span>
+</span></span><span class="line"><span class="cl">    <span class="err">ports</span>    <span class="err">=</span> <span class="p">[</span><span class="s2">&#34;22&#34;</span><span class="p">]</span>
+</span></span><span class="line"><span class="cl">  <span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">  <span class="err">source_ranges</span> <span class="err">=</span> <span class="p">[</span> <span class="s2">&#34;0.0.0.0/0&#34;</span> <span class="p">]</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">#</span> <span class="err">NAT</span>
+</span></span><span class="line"><span class="cl"><span class="err">resource</span> <span class="s2">&#34;google_compute_router&#34;</span> <span class="s2">&#34;pnetlab_router&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">name</span> <span class="err">=</span> <span class="nt">&#34;pnetlab-router&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="err">region</span> <span class="err">=</span> <span class="err">var.region</span>
+</span></span><span class="line"><span class="cl">  <span class="err">network</span> <span class="err">=</span> <span class="err">google_compute_network.pnetlab_vpc.id</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">resource</span> <span class="s2">&#34;google_compute_router_nat&#34;</span> <span class="s2">&#34;pnetlab_router_nat&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">name</span> <span class="err">=</span> <span class="nt">&#34;pnetlab-router-nat&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="err">region</span> <span class="err">=</span> <span class="err">var.region</span>
+</span></span><span class="line"><span class="cl">  <span class="err">router</span> <span class="err">=</span> <span class="err">google_compute_router.pnetlab_router.name</span>
+</span></span><span class="line"><span class="cl">  <span class="err">nat_ip_allocate_option</span> <span class="err">=</span> <span class="s2">&#34;AUTO_ONLY&#34;</span> <span class="err">#</span> <span class="err">use</span> <span class="err">dynamic</span> <span class="err">public</span> <span class="err">ip</span> <span class="err">for</span> <span class="err">nat</span>
+</span></span><span class="line"><span class="cl">  <span class="err">source_subnetwork_ip_ranges_to_nat</span> <span class="err">=</span> <span class="s2">&#34;ALL_SUBNETWORKS_ALL_IP_RANGES&#34;</span> <span class="err">#</span> <span class="err">nat</span> <span class="err">any</span> <span class="err">sources</span> <span class="err">ip</span> <span class="err">range</span> <span class="err">available</span> <span class="err">within</span> <span class="err">the</span> <span class="err">vpc</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">#</span> <span class="err">SETUP</span> <span class="err">EXT</span> <span class="err">DISK</span> <span class="err">#</span>
+</span></span><span class="line"><span class="cl"><span class="err">resource</span> <span class="s2">&#34;google_compute_disk&#34;</span> <span class="s2">&#34;additional_disk&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">name</span>   <span class="err">=</span> <span class="nt">&#34;pnetlab-additional-disk&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="err">type</span>   <span class="err">=</span> <span class="s2">&#34;pd-standard&#34;</span>  <span class="err">#</span> <span class="err">Choose</span> <span class="err">disk</span> <span class="err">type</span> <span class="err">(pd-standard</span><span class="p">,</span> <span class="err">pd-ssd,</span> <span class="err">etc.)</span>
+</span></span><span class="line"><span class="cl">  <span class="err">size</span> <span class="err">=</span> <span class="err">100</span> 
+</span></span><span class="line"><span class="cl">  <span class="err">lifecycle</span> <span class="err">{</span>
+</span></span><span class="line"><span class="cl">    <span class="err">prevent_destroy</span> <span class="err">=</span> <span class="err">true</span>
+</span></span><span class="line"><span class="cl">  <span class="p">}</span>
+</span></span><span class="line"><span class="cl"><span class="err">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">#</span> <span class="err">SETUP</span> <span class="err">INSTANCES</span> <span class="err">#</span>
+</span></span><span class="line"><span class="cl"><span class="err">#</span> <span class="err">ubuntu</span><span class="mi">-1804</span><span class="err">-bionic-v</span><span class="mi">20240116</span><span class="err">a</span>                                 <span class="err">ubuntu-os-cloud</span>      <span class="err">ubuntu</span><span class="mi">-1804</span><span class="err">-lts</span>
+</span></span><span class="line"><span class="cl"><span class="err">resource</span> <span class="s2">&#34;google_compute_instance&#34;</span> <span class="s2">&#34;pnetlab_server&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">name</span>         <span class="err">=</span> <span class="nt">&#34;pnetlab-server&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="err">machine_type</span> <span class="err">=</span> <span class="s2">&#34;n2-standard-2&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="err">tags</span>         <span class="err">=</span> <span class="p">[</span><span class="s2">&#34;pnetlab&#34;</span><span class="p">]</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">  <span class="err">boot_disk</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="err">initialize_params</span> <span class="err">{</span>
+</span></span><span class="line"><span class="cl">      <span class="err">image</span> <span class="err">=</span> <span class="err">var.os_image</span> <span class="err">#</span> <span class="err">cloud</span> <span class="err">image</span>
+</span></span><span class="line"><span class="cl">      <span class="err">size</span>  <span class="err">=</span> <span class="err">20</span>                 <span class="err">#</span> <span class="err">assign</span> <span class="err">20gb</span>
+</span></span><span class="line"><span class="cl">      <span class="err">type</span>  <span class="err">=</span> <span class="nt">&#34;pd-standard&#34;</span>
+</span></span><span class="line"><span class="cl">    <span class="p">}</span>
+</span></span><span class="line"><span class="cl">  <span class="p">}</span>
+</span></span><span class="line"><span class="cl">  
+</span></span><span class="line"><span class="cl">  <span class="err">#</span> <span class="err">external</span> <span class="err">disk</span> <span class="mi">100</span><span class="err">gb</span>
+</span></span><span class="line"><span class="cl">  <span class="err">attached_disk</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="err">source</span> <span class="err">=</span> <span class="err">google_compute_disk.additional_disk.id</span>
+</span></span><span class="line"><span class="cl">  <span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">  <span class="err">network_interface</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="err">network</span>    <span class="err">=</span> <span class="err">google_compute_network.pnetlab_vpc.id</span>
+</span></span><span class="line"><span class="cl">    <span class="err">subnetwork</span> <span class="err">=</span> <span class="err">google_compute_subnetwork.pnetlab_subnet.id</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">    <span class="err">#</span> <span class="err">Disable</span> <span class="err">public</span> <span class="err">IP</span>
+</span></span><span class="line"><span class="cl">    <span class="err">#</span> <span class="err">access_config</span> <span class="err">{</span>
+</span></span><span class="line"><span class="cl">    <span class="err">#</span>  <span class="err">network_tier</span> <span class="err">=</span> <span class="nt">&#34;STANDARD&#34;</span>
+</span></span><span class="line"><span class="cl">    <span class="err">#</span> <span class="p">}</span>
+</span></span><span class="line"><span class="cl">  <span class="err">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">  <span class="err">scheduling</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="err">automatic_restart</span>           <span class="err">=</span> <span class="err">true</span>
+</span></span><span class="line"><span class="cl">    <span class="err">on_host_maintenance</span>         <span class="err">=</span> <span class="nt">&#34;MIGRATE&#34;</span>
+</span></span><span class="line"><span class="cl">    <span class="err">preemptible</span>                 <span class="err">=</span> <span class="kc">false</span>
+</span></span><span class="line"><span class="cl">    <span class="err">provisioning_model</span>          <span class="err">=</span> <span class="s2">&#34;STANDARD&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">  <span class="err">advanced_machine_features</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="err">enable_nested_virtualization</span> <span class="err">=</span> <span class="err">true</span>
+</span></span><span class="line"><span class="cl">  <span class="p">}</span>
+</span></span><span class="line"><span class="cl">  
+</span></span><span class="line"><span class="cl">  <span class="err">metadata</span> <span class="err">=</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="err">ssh-keys</span> <span class="err">=</span> <span class="nt">&#34;${var.ssh_user}:${var.ssh_pub_user} \n${var.ssh_user}:${var.ssh_pub_ansible}&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="p">}</span>
+</span></span><span class="line"><span class="cl"><span class="err">}</span></span></span></code></pre>
+</figure><h4 id="variablestf">variables.tf</h4>
+<p><code>variables.tf</code> define the variables we used in the <code>tfvars</code> file, it contains:</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-json" data-lang="json"><span class="line"><span class="cl"><span class="err">variable</span> <span class="s2">&#34;project_id&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">type</span>        <span class="err">=</span> <span class="err">string</span>
+</span></span><span class="line"><span class="cl">  <span class="err">description</span> <span class="err">=</span> <span class="nt">&#34;Project ID&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">variable</span> <span class="s2">&#34;region&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">type</span>        <span class="err">=</span> <span class="err">string</span>
+</span></span><span class="line"><span class="cl">  <span class="err">description</span> <span class="err">=</span> <span class="nt">&#34;Project region&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="err">default</span>     <span class="err">=</span> <span class="s2">&#34;us-central&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">variable</span> <span class="s2">&#34;zone&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">type</span>        <span class="err">=</span> <span class="err">string</span>
+</span></span><span class="line"><span class="cl">  <span class="err">description</span> <span class="err">=</span> <span class="nt">&#34;Project zone&#34;</span>
+</span></span><span class="line"><span class="cl">  <span class="err">default</span>     <span class="err">=</span> <span class="s2">&#34;us-central1-a&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">variable</span> <span class="s2">&#34;os_image&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">type</span>        <span class="err">=</span> <span class="err">string</span>
+</span></span><span class="line"><span class="cl">  <span class="err">description</span> <span class="err">=</span> <span class="nt">&#34;OS family&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">variable</span> <span class="s2">&#34;ssh_user&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">type</span>        <span class="err">=</span> <span class="err">string</span>
+</span></span><span class="line"><span class="cl">  <span class="err">description</span> <span class="err">=</span> <span class="nt">&#34;The sudo user&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">variable</span> <span class="s2">&#34;ssh_pub_user&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">type</span>        <span class="err">=</span> <span class="err">string</span>
+</span></span><span class="line"><span class="cl">  <span class="err">description</span> <span class="err">=</span> <span class="nt">&#34;The public key used for authentication to an instance. Format: [public key] [username]&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="err">variable</span> <span class="s2">&#34;ssh_pub_ansible&#34;</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="err">type</span>        <span class="err">=</span> <span class="err">string</span>
+</span></span><span class="line"><span class="cl">  <span class="err">description</span> <span class="err">=</span> <span class="nt">&#34;The public key used for configuration management. Format: [public key] [username]&#34;</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span></span></span></code></pre>
+</figure><h3 id="run-code">Run Code</h3>
+<p>With all the resource files defined, we will run the following command in the terraform directory.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ terraform fmt         <span class="c1"># Format your Terraform files  </span>
+</span></span><span class="line"><span class="cl">$ terraform validate    <span class="c1"># Check for syntax errors  </span>
+</span></span><span class="line"><span class="cl">$ terraform plan -out pnetlab-deploy       <span class="c1">#Preview the infrastructure changes  </span>
+</span></span><span class="line"><span class="cl">$ terraform apply pnetlab-deploy -auto-approve  <span class="c1"># Deploy the resources  </span></span></span></code></pre>
+</figure><h3 id="verify-deployment">Verify Deployment</h3>
+<p>After it finishes, check if the instance is running:</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ gcloud compute instances list --filter<span class="o">=</span><span class="s2">&#34;name=pnetlab-server&#34;</span> --project<span class="o">=</span><span class="s2">&#34;</span><span class="nv">$PROJECT_ID</span><span class="s2">&#34;</span></span></span></code></pre>
+</figure><h2 id="pnetlab-installation">PNETLab Installation</h2>
+<h3 id="install-pnetlab">Install PNETLab</h3>
+<p>SSH into the instance using <code>gcloud</code> cli.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ gcloud compute ssh INSTANCE_NAME --zone<span class="o">=</span>YOUR_ZONE</span></span></code></pre>
+</figure><p>Add pnetlab repository with the following command.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ <span class="nb">echo</span> <span class="s2">&#34;deb [trusted=yes] http://repo.pnetlab.com ./&#34;</span> <span class="p">|</span> sudo tee -a /etc/apt/sources.list</span></span></code></pre>
+</figure><p>Update the repository and install pnetlab.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# apt-get update
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# apt-get install pnetlab</span></span></code></pre>
+</figure><blockquote>
+<p>Note: I switched my user to root with <code>$ sudo su -</code></p>
+</blockquote>
+<h3 id="configure-the-instance">Configure the Instance</h3>
+<h4 id="swap">Swap</h4>
+<p>Create a swap disk, allocate the size according to your need.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# fallocate -l 1G /swapfile
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# chmod <span class="m">600</span> /swapfile
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# mkswap /swapfile
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# swapon /swapfile
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# cp /etc/fstab<span class="o">{</span>,.bak<span class="o">}</span>
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# <span class="s1">&#39;/swapfile none swap sw 0 0&#39;</span> <span class="p">|</span> sudo tee -a /etc/fstab</span></span></code></pre>
+</figure><h4 id="dns">DNS</h4>
+<p>Edit file <code>/etc/network/interfaces</code> add line <code>dns-nameservers 8.8.8.8</code> to the configuration of interface <code>pnet0</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-toml" data-lang="toml"><span class="line"><span class="cl"><span class="p">...</span>
+</span></span><span class="line"><span class="cl"><span class="c"># The primary network interface</span>
+</span></span><span class="line"><span class="cl"><span class="nx">iface</span> <span class="nx">eth0</span> <span class="nx">inet</span> <span class="nx">manual</span>
+</span></span><span class="line"><span class="cl"><span class="nx">auto</span> <span class="nx">pnet0</span>
+</span></span><span class="line"><span class="cl"><span class="nx">iface</span> <span class="nx">pnet0</span> <span class="nx">inet</span> <span class="nx">dhcp</span>
+</span></span><span class="line"><span class="cl">    <span class="nx">dns-nameservers</span> <span class="mf">8.8</span><span class="p">.</span><span class="mf">8.8</span>
+</span></span><span class="line"><span class="cl">    <span class="nx">bridge_ports</span> <span class="nx">eth0</span>
+</span></span><span class="line"><span class="cl">    <span class="nx">bridge_stp</span> <span class="nx">off</span>
+</span></span><span class="line"><span class="cl"><span class="p">...</span></span></span></code></pre>
+</figure><p>And restart the networking service.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# sudo service networking restart</span></span></code></pre>
+</figure><h4 id="disk">Disk</h4>
+<p>Time to add the additional disk we defined in the terraform resource. The purpose of this disk is to store all the pnetlab project files as well as the images later.</p>
+<p>In my case, the additional disk is available at <code>/dev/sdb</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# lsblk
+</span></span><span class="line"><span class="cl">NAME    MAJ:MIN RM  SIZE RO TYPE MOUNTPOINT
+</span></span><span class="line"><span class="cl">loop0     7:0    <span class="m">0</span> 40.4M  <span class="m">1</span> loop /snap/snapd/20671
+</span></span><span class="line"><span class="cl">loop1     7:1    <span class="m">0</span>  368M  <span class="m">1</span> loop /snap/google-cloud-cli/203
+</span></span><span class="line"><span class="cl">loop2     7:2    <span class="m">0</span> 63.9M  <span class="m">1</span> loop /snap/core20/2105
+</span></span><span class="line"><span class="cl">sda       8:0    <span class="m">0</span>   20G  <span class="m">0</span> disk 
+</span></span><span class="line"><span class="cl">├─sda1    8:1    <span class="m">0</span> 19.9G  <span class="m">0</span> part /
+</span></span><span class="line"><span class="cl">├─sda14   8:14   <span class="m">0</span>    4M  <span class="m">0</span> part 
+</span></span><span class="line"><span class="cl">└─sda15   8:15   <span class="m">0</span>  106M  <span class="m">0</span> part /boot/efi
+</span></span><span class="line"><span class="cl">sdb       8:16   <span class="m">0</span>  100G  <span class="m">0</span> disk </span></span></code></pre>
+</figure><p>We&rsquo;ll create an LVM disk out of it.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# vgcreate /dev/vg01 /dev/sdb
+</span></span><span class="line"><span class="cl">  Volume group <span class="s2">&#34;vg01&#34;</span> successfully created
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# lvcreate -l 100%FREE --name lv01 vg01 
+</span></span><span class="line"><span class="cl">  Logical volume <span class="s2">&#34;lv01&#34;</span> created.
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# mkfs.ext4 /dev/vg01/lv01 
+</span></span><span class="line"><span class="cl">mke2fs 1.44.1 <span class="o">(</span>24-Mar-2018<span class="o">)</span>
+</span></span><span class="line"><span class="cl">Discarding device blocks: <span class="k">done</span>                            
+</span></span><span class="line"><span class="cl">Creating filesystem with <span class="m">26213376</span> 4k blocks and <span class="m">6553600</span> inodes
+</span></span><span class="line"><span class="cl">Filesystem UUID: f1173542-f07c-493f-89e6-188439880465
+</span></span><span class="line"><span class="cl">Superblock backups stored on blocks: 
+</span></span><span class="line"><span class="cl">  32768, 98304, 163840, 229376, 294912, 819200, 884736, 1605632, 2654208, 
+</span></span><span class="line"><span class="cl">  4096000, 7962624, 11239424, 20480000, <span class="m">23887872</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">Allocating group tables: <span class="k">done</span>                            
+</span></span><span class="line"><span class="cl">Writing inode tables: <span class="k">done</span>                            
+</span></span><span class="line"><span class="cl">Creating journal <span class="o">(</span><span class="m">131072</span> blocks<span class="o">)</span>: <span class="k">done</span>
+</span></span><span class="line"><span class="cl">Writing superblocks and filesystem accounting information: <span class="k">done</span></span></span></code></pre>
+</figure><p>Then we set a mount point for the volume we just created.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# mkdir /mnt/unetlab
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# mount /dev/vg01/lv01 /mnt/unetlab</span></span></code></pre>
+</figure><p>Edit the <code>/etc/fstab</code> file and add the following line to mount <code>/mnt/unetlab</code> on boot:</p>
+<figure class="highlight">
+    <pre tabindex="0"><code class="language-" data-lang="">/dev/vg01/lv01  /mnt/unetlab  ext4  defaults  0  0</code></pre>
+</figure><p>Now we&rsquo;ll create a new directory for PNETLab project files and image files in our newly mounted disk.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# mkdir /mnt/unetlab/addons
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# mkdir /mnt/unetlab/labs</span></span></code></pre>
+</figure><p>Next, we&rsquo;ll remove the old directories for project files and image files, and replace them with symbolic links pointing to the new directories on the mounted disk.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# rm -rf /opt/unetlab/addons/ 
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# rm -rf /opt/unetlab/labs/
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# ln -s /mnt/unetlab/addons/ /opt/unetlab/
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# ln -s /mnt/unetlab/labs/ /opt/unetlab/</span></span></code></pre>
+</figure><p>Change ownership of the new labs directory to ensure PNETLab&rsquo;s services can access it back.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# chown -R www-data:www-data /mnt/unetlab/labs/</span></span></code></pre>
+</figure><h4 id="grub">Grub</h4>
+<p>Remove the default grub config.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# rm /etc/default/grub.d/50-cloudimg-settings.cfg
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# update-grub
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# reboot</span></span></code></pre>
+</figure><h4 id="restart-and-verify">Restart and Verify</h4>
+<p>Once all the steps above are complete, restart the server and verify if the pnetlab service is running using the following command and check these ports: <code>80</code>, <code>443</code> for pnetlab web services and <code>4822</code> for guacamole proxy.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# netstat -tlpn  </span></span></code></pre>
+</figure><h3 id="update-version-optional">Update Version (Optional)</h3>
+<p>After the installation completed, we can directly upgrade PNETLab to the latest version. It&rsquo;s an optional, so I will just put the official guide link on how to upgrade the lab version: <a href="https://pnetlab.com/pages/releases"target="_blank" rel="noopener noreferrer"
+>go here</a>.</p>
+<h2 id="setup-tailscale-vpn">Setup Tailscale VPN</h2>
+<p>For this step, I will assume that you already generated an auth key in the Tailscale <a href="https://login.tailscale.com/admin/settings/keys"target="_blank" rel="noopener noreferrer"
+>admin console</a>.</p>
+<h3 id="install-tailscale">Install Tailscale</h3>
+<p>First, install Tailscale by executing the install script.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# curl -fsSL https://tailscale.com/install.sh <span class="p">|</span> sh </span></span></code></pre>
+</figure><h3 id="configure-subnet-router">Configure Subnet Router</h3>
+<p>We will configure the instance as a <a href="https://tailscale.com/kb/1019/subnets"target="_blank" rel="noopener noreferrer"
+>subnet router</a>, simply turning the server into a <strong>router</strong>. This will enable direct access between PNETLab appliances network and our local network via the Tailscale network.</p>
+<p>To achieve that, we first need to enable IP forwarding on the server.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# <span class="nb">echo</span> <span class="s1">&#39;net.ipv4.ip_forward = 1&#39;</span> <span class="p">|</span> sudo tee -a /etc/sysctl.d/99-tailscale.conf
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# <span class="nb">echo</span> <span class="s1">&#39;net.ipv6.conf.all.forwarding = 1&#39;</span> <span class="p">|</span> sudo tee -a /etc/sysctl.d/99-tailscale.conf
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# sudo sysctl -p /etc/sysctl.d/99-tailscale.conf</span></span></code></pre>
+</figure><p>To register your instance as a node in your Tailscale network and enable it to act as a subnet router, run the following command:</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# tailscale up --auth-key<span class="o">=</span>tskey-auth-XXXXX  --advertise-route<span class="o">=</span>10.0.10.0/24</span></span></code></pre>
+</figure><blockquote>
+<p>Note:</p>
+<ul>
+<li>
+<p>Replace <code>tskey-auth-XXXXX</code> with your actual auth key and <code>10.0.10.0/24</code> with your designated local network on the PNETLAB server:</p>
+</li>
+<li>
+<p>The <code>--advertise-routes=10.0.10.0/24</code> option tells the instance to advertise the subnet <code>10.0.10.0/24</code> to your Tailscale network. Once advertised, other devices in your Tailscale network can route traffic to this subnet through this instance.</p>
+</li>
+</ul>
+</blockquote>
+<p>Revisit your Tailscale&rsquo;s admin console. You should see a <code>Subnets</code> label on the pnetlab node.</p>
+<img src="./imgs/image-20250326110623945.png" alt="image-20250326110623945" style="zoom:50%;" />
+<p>Open the node settings, select &ldquo;<strong>edit route settings&hellip;</strong>&rdquo; and tick your network there.</p>
+<img src="./imgs/image-20250326100421964.png" alt="image-20250326100421964" style="zoom: 50%;" />
+<h3 id="verify-routing">Verify Routing</h3>
+<p>To verify, you can simply ping any interface IP of the instance that you have advertised. The image below is an example of mine, where I&rsquo;m pinging the Docker interface.</p>
+<img src="./imgs/image-20251028003923861.png" alt="image-20251028003923861" style="zoom:50%;" />
+<h2 id="configure-domain-name">Configure Domain Name</h2>
+<p>We can use a custom domain name to access PNETLab. To do so, we will obtain a LetsEncrypt&rsquo;s certificate to replace the self-signed one and then configure a new DNS record: <code>pnetlab.yourdomain.com</code>. This record will be pointing to Tailscale IP of our instance.</p>
+<p>For this step, I will assume that you already own a domain and know how to complete an ACME DNS challenge (proving control over a domain).</p>
+<h3 id="obtain-letsencrypt-ssl">Obtain LetsEncrypt SSL</h3>
+<p>Within the instance, install <code>certbot</code> and prepare the work folder.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# sudo apt install -y certbot
+</span></span><span class="line"><span class="cl">root@pnetlab-server:~# mkdir letsencrypt/work letsencrypt/config letsencrypt/logs</span></span></code></pre>
+</figure><p>We can obtain a Let&rsquo;s Encrypt certificate with the following command.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# certbot certonly --agree-tos --email admin@yourdomain.com --manual --preferred-challenges<span class="o">=</span>dns -d <span class="se">\*</span>.yourdomain.com --config-dir ./letsencrypt/config --work-dir ./letsencrypt/work --logs-dir ./letsencrypt/logs</span></span></code></pre>
+</figure><p>Complete the ACME DNS challenge on your DNS provider (NameCheap, Hostinger, etc). After successful validation, the CA (Let&rsquo;s Encrypt) will issue the certificate, which should be available at <code>./letsencrypt/config/live/yourdomain.com</code>.</p>
+<p>Next, edit <code>/etc/apache2/sites-available/pnetlabs.conf</code> and change these values with your certificate path.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">SSLCertificateFile   /path/to/your/cert/cert1.pem
+</span></span><span class="line"><span class="cl">SSLCertificateKeyFile /path/to/your/certkey/privkey1.pem</span></span></code></pre>
+</figure><p>Restart the apache services</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">root@pnetlab-server:~# systemctl restart apache2</span></span></code></pre>
+</figure><h3 id="create-dns-a-record">Create DNS A record</h3>
+<p>Go to your DNS hosting provider and add a new records with the following data:</p>
+<ul>
+<li>Type: <code>A</code></li>
+<li>Hostname/Domain Name: <code>pnetlab.yourdomain.com</code></li>
+<li>IPv4: <code>pnetlab-tailscale-ip</code></li>
+</ul>
+<p>Here&rsquo;s an example of mine, where I&rsquo;m using Cloudflare for DNS management.</p>
+<img src="./imgs/image-20250326102815535.png" alt="image-20250326102815535" style="zoom: 33%;" />
+<blockquote>
+<p><code>100.126.1.2</code> is the tailscale node IP of my pnetlab server.</p>
+</blockquote>
+<p>Verify if your domain is mapped correctly using the <code>dig</code> command or <a href="https://toolbox.googleapps.com/apps/dig/#A/"target="_blank" rel="noopener noreferrer"
+>Google Toolbox</a>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ dig pnetlab.gcp.fahmifj.space                         
+</span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...
+</span></span><span class="line"><span class="cl"><span class="p">;;</span> QUESTION SECTION:
+</span></span><span class="line"><span class="cl"><span class="p">;</span>pnetlab.fahmifj.space.	IN	A
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="p">;;</span> ANSWER SECTION:
+</span></span><span class="line"><span class="cl">pnetlab.fahmifj.space. 300	IN	A	100.126.1.2
+</span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...</span></span></code></pre>
+</figure><p>Once you done and get connected to Tailscale network, you should be able to access PNETLab at <code>pnetlab.yourdomain.com</code>.</p>
+<h2 id="troubleshoot">Troubleshoot</h2>
+<p>If you happen to meet these errors, try the following solutions.</p>
+<h3 id="cannot-install-packages">Cannot install packages</h3>
+<p>Try disable/comment this whole url line from the repository.</p>
+<figure class="highlight">
+    <pre tabindex="0"><code class="language-" data-lang="">#deb [trusted=yes] http://i-share.top/repo ./
+#deb [trusted=yes] http://repo.pnetlab.com ./</code></pre>
+</figure><h3 id="cloud-appliance-dhcp-not-working">Cloud Appliance: DHCP not working</h3>
+<p>Verify <code>udhcpd</code> service is running and enabled.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ service udhcpd status
+</span></span><span class="line"><span class="cl">$ cat /etc/default/udhcpd <span class="p">|</span> grep ENABLED</span></span></code></pre>
+</figure><p>Update to enabled and restart and see if it&rsquo;s working.</p>
+<h2 id="conclusion">Conclusion</h2>
+<p>We&rsquo;ve completed all the necessary steps to deploy a PNETLab server on Google Cloud. With this setup, we can do our networking stuff in the lab safely without exposing it to the internet.</p>
+<p>That&rsquo;s all, see you in the next post!</p>
+]]></content:encoded>
+    </item>
+    
+    <item>
+      <title>Building Virtual Home Lab for Pentesting</title>
+      <link>https://fahmifj.github.io/blog/building-virtual-home-lab-for-pentest/</link>
+      <pubDate>Thu, 17 Jun 2021 14:04:24 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/blog/building-virtual-home-lab-for-pentest/</guid>
+      <description>Virtual home lab for offensive security practice, with 8 gigs!</description>
+      <content:encoded><![CDATA[<p>This article documents a virtual Active Directory lab I built to learn some Active Directory attacks, network pivoting, and basic Command and Control (<code>C2</code>) using Metasploit.</p>
+<p>The lab is designed to resemble a small enterprise Windows environment with minimal requirements that enough to run on a mid-range specification.</p>
+<h2 id="assumptions--threat-model">Assumptions &amp; Threat Model</h2>
+<p>This lab assumes:</p>
+<ul>
+<li>An internal attacker with network access</li>
+<li>Minimal internal monitoring</li>
+<li>Default or weak Windows security configurations</li>
+<li>Misconfigured behavior</li>
+</ul>
+<h2 id="prerequisites">Prerequisites</h2>
+<h3 id="knowledge">Knowledge</h3>
+<ul>
+<li>Virtualization (VirtualBox)</li>
+<li>Windows and Windows Server installation</li>
+<li>Basic Active Directory concepts (Domain, DNS, SPNs)</li>
+<li>Basic networking and routing</li>
+</ul>
+<h3 id="hardware">Hardware</h3>
+<p>Recommended minimum (sorted by priority):</p>
+<ul>
+<li><strong>Storage</strong>: 256 GB SSD (or high-speed USB 3.x)</li>
+<li><strong>RAM</strong>: 8 GB minimum, 16 GB recommended</li>
+<li><strong>CPU</strong>:
+<ul>
+<li>Minimum: Intel i3 6th gen / Ryzen 3</li>
+<li>Recommended: i5 / Ryzen 5 (H or K variants)</li>
+</ul>
+</li>
+</ul>
+<blockquote>
+<p>The lab was built and tested on an 8 GB system by aggressively disabling unused services after installation.</p>
+</blockquote>
+<h3 id="software">Software</h3>
+<ul>
+<li>VirtualBox (<a href="https://www.virtualbox.org/wiki/Downloads"target="_blank" rel="noopener noreferrer"
+>Download</a>)</li>
+<li>Kali Linux (attacker)  (<a href="https://www.offensive-security.com/kali-linux-vm-vmware-virtualbox-image-download/#1572305786534-030ce714-cc3b"target="_blank" rel="noopener noreferrer"
+>Download</a>)</li>
+<li>Windows 10 evaluation image file (<a href="https://www.microsoft.com/en-us/evalcenter/"target="_blank" rel="noopener noreferrer"
+>Download</a>)</li>
+<li>Windows Server 2019 evaluation image file (<a href="https://www.microsoft.com/en-us/evalcenter/"target="_blank" rel="noopener noreferrer"
+>Download</a>)</li>
+</ul>
+<h2 id="topology-overview">Topology Overview</h2>
+<p>The environment consists of:</p>
+<ul>
+<li>1 Domain Controller</li>
+<li>2 Domain-joined Windows clients</li>
+<li>1 Attacker machine (Kali Linux)</li>
+</ul>
+<p>Two network segments are used:</p>
+<ul>
+<li><code>192.168.1.0/24</code> – Internal domain network</li>
+<li><code>10.10.10.96/28</code> – Segmented network used for pivoting scenarios</li>
+</ul>
+<p><div class="img-container"><img src="imgs/topology.jpg" alt=""  /></div>
+</p>
+<blockquote>
+<p>Note: It&rsquo;s NIC (Network Interface Card) not NC</p>
+</blockquote>
+<h2 id="network-segments">Network Segments</h2>
+<p>This lab intentionally uses two network segments to simulate an internal enterprise environment and to enable <strong>pivoting scenarios</strong> later on.</p>
+<table>
+<thead>
+<tr>
+<th>Segment</th>
+<th>CIDR</th>
+<th>Name</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><code>192.168.1.0/24</code></td>
+<td>windows_domain</td>
+<td>Main internal network (initial setup &amp; attacker access)</td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>10.10.10.96/28</code></td>
+<td>internal_windows</td>
+<td>Restricted internal segment (pivoting target)</td>
+</tr>
+</tbody>
+</table>
+<h2 id="virtualbox-setup">VirtualBox Setup</h2>
+<h3 id="system-configuration">System Configuration</h3>
+<p>Initial installation:</p>
+<ul>
+<li>Server: <code>2424 MB</code></li>
+<li>Clients: <code>1280 MB</code> each</li>
+</ul>
+<p>Post-installation (after disabling unnecessary services):</p>
+<ul>
+<li>Server: <code>1280 MB</code></li>
+<li>Clients: <code>1024 MB</code></li>
+<li>Attacker: <code>1024 MB</code></li>
+</ul>
+<p>This configuration allows all VMs to run concurrently on an 8 GB host. For initial setup, the two clients can stay inside <code>192.168.1.0/24</code> network.</p>
+<h3 id="network-configuration">Network Configuration</h3>
+<p>For each VM (initial setup):</p>
+<ul>
+<li>Adapter 1
+<ul>
+<li>Type: <code>Internal Network</code></li>
+<li>Name: <code>windows_domain</code></li>
+<li>IP Range: <code>192.168.1.0/24</code></li>
+</ul>
+</li>
+</ul>
+<p>For the Domain Controller only:</p>
+<ul>
+<li>Adapter 2
+<ul>
+<li>Name: <code>internal_windows</code></li>
+<li>IP Range: <code>10.10.10.96/28</code></li>
+</ul>
+</li>
+</ul>
+<p>This makes the Domain Controller act as a bridge between segments.</p>
+<p><div class="img-container"><img src="imgs/image-20210617143401181.png" alt="image-20210617143401181"  /></div>
+</p>
+<h2 id="active-directory-setup">Active Directory Setup</h2>
+<h3 id="server">Server</h3>
+<h4 id="initial-setup">Initial Setup</h4>
+<ul>
+<li>Admin credentials: <code>administrator:p@$$w0rd!</code></li>
+<li>PC Name: <code>server19-DC</code> (restart after)</li>
+<li>Network (Static):
+<ul>
+<li>Adapter 1: <code>192.168.1.100/24</code></li>
+<li>Adapter 2: <code>10.10.10.100/28</code></li>
+</ul>
+</li>
+</ul>
+<h4 id="promote-server-to-domain-controller">Promote Server to Domain Controller</h4>
+<ul>
+<li>Server Manager &gt; Manage &gt; Add Roles and Features.</li>
+<li>Add Roles and Features Wizard:
+<ul>
+<li>Installation type: &ldquo;<strong>Role-based or feature-based installation</strong>&rdquo;</li>
+<li>Server selection: <code>server19-DC</code></li>
+<li>Server roles: <strong>&ldquo;Active Directory Domain Services&rdquo;</strong> and check the <strong>&ldquo;Include management tools&rdquo;</strong>.</li>
+<li>Features: Check the <strong>&ldquo;Group Policy Management&rdquo;</strong></li>
+<li>Confirmation:  Check on <strong>&ldquo;Restart destination server automatically if required&rdquo;</strong></li>
+<li>Close after it&rsquo;s done.</li>
+</ul>
+</li>
+<li>Server Manager &gt; Notification flag &gt; Click on <strong>&ldquo;Promote this server to a domain controller&rdquo;</strong></li>
+<li>Active Directory Domain Services Configuration Wizard:
+<ul>
+<li>Deployment configuration: <strong>&ldquo;Add a new forest&rdquo;</strong> and set <strong>&ldquo;server19.local&rdquo;</strong> as root domain name</li>
+<li>Domain controller options: set <strong>&ldquo;Windows Server 2016&rdquo;</strong> as FFL (Forest Functional Level) and DFL (Domain Functional Level). Checklist DNS server and set the same admin password for DSRM password.</li>
+<li>Additional options: set NetBIOS domain name to <code>SERVER19</code></li>
+<li>Let the rest options in default state until installation section.</li>
+<li>Restart after installation complete.</li>
+</ul>
+</li>
+</ul>
+<p><div class="img-container"><img src="imgs/server19logon.jpg" alt=""  /></div>
+</p>
+<h4 id="create-domain-accounts">Create Domain Accounts</h4>
+<ul>
+<li>John Smith
+<ul>
+<li>User logon name: <code>jsmith@server19.local</code></li>
+<li>Password: <code>jsmith@123</code></li>
+</ul>
+</li>
+<li>Carl Smith
+<ul>
+<li>User logon name: <code>cmisth@server19.local</code></li>
+<li>Password: <code>@csmith@</code></li>
+</ul>
+</li>
+</ul>
+<p>All password is set to never expires.</p>
+<h4 id="create-fake-service-account">Create Fake Service Account</h4>
+<p>Fake SQL Service</p>
+<ul>
+<li>User logon name: <code>SQLService@server19.local</code></li>
+<li>Password: <code>Mysql@Password123</code></li>
+</ul>
+<p>Set service principle name:</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">setspn -a SERVER19-DC/SQLService.SERVER19.local:60111 SERVER19\SQLService
+</span></span><span class="line"><span class="cl">setspn -T SERVER19.local -Q */*</span></span></code></pre>
+</figure><h4 id="configure-file-sharing-smb">Configure File Sharing (SMB):</h4>
+<ul>
+<li>Server manager &gt; File and Storage Services &gt; Shares &gt; Task &gt; New Share.</li>
+<li>New Share Wizard:
+<ul>
+<li>Profile: SMB Share Quick</li>
+<li>Share Location: <code>C:\Shares\DATA</code> (Create the shares folder in C:)</li>
+<li>Other Settings: Allow caching of share</li>
+<li>Permission: Leave it default</li>
+<li>Confirmation and create.</li>
+</ul>
+</li>
+</ul>
+<h3 id="clients">Clients</h3>
+<h4 id="initial-setup-1">Initial Setup</h4>
+<ul>
+<li>Client 1:
+<ul>
+<li>IP: <code>192.168.1.101/24</code> (static)</li>
+<li>PC name: NESCOFFEE</li>
+</ul>
+</li>
+<li>Client 2:
+<ul>
+<li>IP: <code>192.168.1.102/24</code> (static)</li>
+<li>PC name: MILO</li>
+</ul>
+</li>
+</ul>
+<p>For pivoting</p>
+<ul>
+<li>Client 2:
+<ul>
+<li>IP: <code>10.10.10.101/28</code>(static)</li>
+</ul>
+</li>
+</ul>
+<h4 id="create-local-accounts">Create Local Accounts</h4>
+<p>Same with domain accounts, but add an <code>L</code> at the end of username/password.</p>
+<ul>
+<li>Username: <code>cmisthL</code>, password: <code>jsmithL@123</code></li>
+<li>Username: <code>jsmithL</code>, password: <code>@csmith@</code></li>
+</ul>
+<h4 id="joining-domain">Joining Domain</h4>
+<p>Client 1:</p>
+<ul>
+<li>Use Server&rsquo;s IP as DNS server: <code>192.168.1.100</code></li>
+<li>Hit <code>Win+I</code>, type &ldquo;access&rdquo;, click on <strong>Connect</strong>.</li>
+<li>Microsoft account window:
+<ul>
+<li>Click on <strong>&ldquo;Join this device to a local Active Directory domain&rdquo;</strong> under the alternate actions.</li>
+<li>Use the server administrator password to join.</li>
+<li>Skip the <strong>Add an account</strong> section</li>
+<li>Restart</li>
+</ul>
+</li>
+</ul>
+<p>Client 2 has the same steps</p>
+<h4 id="create-local-admin">Create Local Admin</h4>
+<ul>
+<li>Set John Smith (<code>jsmith@server19.local</code>) as local administrator for NESCOFFEE.</li>
+<li>Set Carl Smith (<code>cmisth@server19.local</code>) as local administrator for MILO.</li>
+</ul>
+<h3 id="attacker">Attacker</h3>
+<h4 id="initial-setup-2">Initial Setup</h4>
+<ul>
+<li>Put it on the same network</li>
+<li>Set static IP: <code>192.168.1.10/24</code></li>
+<li>Perform ping test</li>
+</ul>
+<h2 id="attack-scenarios">Attack Scenarios</h2>
+<p>Here are some attack scenarios that can be reproduced using this lab:</p>
+<ul>
+<li>
+<p>LLMNR Poisoning</p>
+<ul>
+<li>Example: <a href="https://www.aptive.co.uk/blog/llmnr-nbt-ns-spoofing/"target="_blank" rel="noopener noreferrer"
+>https://www.aptive.co.uk/blog/llmnr-nbt-ns-spoofing/</a></li>
+</ul>
+</li>
+<li>
+<p>AS-REP Roasting</p>
+<ul>
+<li>Example: <a href="/tags/asrep-roasting"target="_blank" rel="noopener noreferrer"
+>ASREP-Roasting tags</a></li>
+</ul>
+</li>
+<li>
+<p>Kerberoasting</p>
+<ul>
+<li>Example: <a href="https://pentestlab.blog/2018/06/12/kerberoast/"target="_blank" rel="noopener noreferrer"
+>https://pentestlab.blog/2018/06/12/kerberoast/</a></li>
+</ul>
+</li>
+<li>
+<p>Take Over IPv6 DNS</p>
+<ul>
+<li>Example:  <a href="https://blog.fox-it.com/2018/01/11/mitm6-compromising-ipv4-networks-via-ipv6/"target="_blank" rel="noopener noreferrer"
+>https://blog.fox-it.com/2018/01/11/mitm6-compromising-ipv4-networks-via-ipv6/</a></li>
+</ul>
+</li>
+<li>
+<p>DCSync</p>
+<ul>
+<li>Example: <a href="/tags/dcsync/"target="_blank" rel="noopener noreferrer"
+>DCSync tags</a></li>
+</ul>
+</li>
+</ul>
+<p>Attack scenario(s) that requires two clients online + server:</p>
+<ul>
+<li>SMB Relay
+<ul>
+<li>Examples: <a href="/writeups/hackthebox/htb-apt/"target="_blank" rel="noopener noreferrer"
+>HackTheBox - APT</a>, <a href="https://akimboviper.gitbook.io/pentest-everything/everything/everything-windows/attacking-windows/relay-attacks/smb-relay"target="_blank" rel="noopener noreferrer"
+>SMB Relay Attack</a></li>
+</ul>
+</li>
+</ul>
+]]></content:encoded>
+    </item>
+    
+    <item>
+      <title>Using Cloudflare Workers to Mirror My Blog</title>
+      <link>https://fahmifj.github.io/blog/mirror-website-using-cloudflare-workers/</link>
+      <pubDate>Sat, 06 Dec 2025 15:33:48 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/blog/mirror-website-using-cloudflare-workers/</guid>
+      <description>I want to host my blog on a custom domain that I own (fahmifj.space) instead of using the GitHub Pages domain (fahmifj.github.io).
+However, migrating a site to another domain could negatively impact SEO. Although I&amp;rsquo;m not really concerned about it, I think it&amp;rsquo;s a great opportunity to learn something from this case.
+So, instead of moving everything, I keep GH Pages as the primary site and let the custom domain act as a mirror.</description>
+      <content:encoded><![CDATA[<p>I want to host my blog on a custom domain that I own (<code>fahmifj.space</code>) instead of using the GitHub Pages domain (<code>fahmifj.github.io</code>).</p>
+<p>However, migrating a site to another domain could negatively impact SEO. Although I&rsquo;m not really concerned about it, I think it&rsquo;s a great opportunity to learn something from this case.</p>
+<p>So, instead of moving everything, I keep GH Pages as the primary site and let the custom domain act as a mirror. Both domains serve the same content without redirecting one to the other.</p>
+<p>This post documents the setup and explains why keeping GitHub Pages as the primary works better for me.</p>
+<h2 id="cloudflare-workers-as-reverse-proxy">Cloudflare Workers as Reverse Proxy</h2>
+<p>Cloudflare provides a feature called Workers. It allows you to write and run serverless code, similar in concept to Google Cloud Functions.</p>
+<p>Using this feature, I write a Worker that acts as a reverse proxy. Its job is to fetch my GitHub Pages content and serve it back on the custom domain.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">                       ┌──────────────────────────┐
+</span></span><span class="line"><span class="cl">                       │   fahmifj.github.io      │
+</span></span><span class="line"><span class="cl">                       │    (upstream hosting)    │
+</span></span><span class="line"><span class="cl">                       └──────────┬───────────────┘
+</span></span><span class="line"><span class="cl">                                  │ GitHub Pages origin
+</span></span><span class="line"><span class="cl">                                  ▼
+</span></span><span class="line"><span class="cl">                          Cloudflare Worker
+</span></span><span class="line"><span class="cl">                          (proxy + rewrite)
+</span></span><span class="line"><span class="cl">                                  │
+</span></span><span class="line"><span class="cl">                                  ▼
+</span></span><span class="line"><span class="cl">                            fahmifj.space
+</span></span><span class="line"><span class="cl">                           (custom domain)</span></span></code></pre>
+</figure><h3 id="create-worker-v1">Create Worker (v1)</h3>
+<p>This first version of the Worker functions purely as a content fetcher.</p>
+<figure class="highlight">
+    <figcaption>
+        <span class="hl-filename">worker.js</span>
+    </figcaption>
+    <pre tabindex="0" class="chroma"><code class="language-javascript" data-lang="javascript"><span class="line"><span class="cl"><span class="kr">export</span> <span class="k">default</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="kr">async</span> <span class="nx">fetch</span><span class="p">(</span><span class="nx">request</span><span class="p">)</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="kr">const</span> <span class="nx">url</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">URL</span><span class="p">(</span><span class="nx">request</span><span class="p">.</span><span class="nx">url</span><span class="p">);</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">    <span class="c1">// Force everything to fetch from GitHub Pages 
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>    <span class="nx">url</span><span class="p">.</span><span class="nx">hostname</span> <span class="o">=</span> <span class="s2">&#34;fahmifj.github.io&#34;</span><span class="p">;</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">    <span class="kr">const</span> <span class="nx">response</span> <span class="o">=</span> <span class="kr">await</span> <span class="nx">fetch</span><span class="p">(</span><span class="nx">url</span><span class="p">.</span><span class="nx">toString</span><span class="p">(),</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">      <span class="nx">headers</span><span class="o">:</span> <span class="nx">request</span><span class="p">.</span><span class="nx">headers</span><span class="p">,</span>
+</span></span><span class="line"><span class="cl">      <span class="nx">redirect</span><span class="o">:</span> <span class="s2">&#34;follow&#34;</span>
+</span></span><span class="line"><span class="cl">    <span class="p">});</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">    <span class="c1">// Copy GitHub response and serve it
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>    <span class="k">return</span> <span class="k">new</span> <span class="nx">Response</span><span class="p">(</span><span class="nx">response</span><span class="p">.</span><span class="nx">body</span><span class="p">,</span> <span class="nx">response</span><span class="p">);</span>
+</span></span><span class="line"><span class="cl">  <span class="p">}</span>
+</span></span><span class="line"><span class="cl"><span class="p">};</span></span></span></code></pre>
+</figure><p>The result is straightforward, it serves the same content as GitHub Pages.</p>
+<p><div class="img-container"><img src="./imgs/image-20251208204713163.png" alt="image-20251208204713163"  /></div>
+</p>
+<h3 id="attach-custom-domain-to-worker">Attach Custom Domain to Worker</h3>
+<p>Next, I attach my custom domain to the Worker (<code>Workers &amp; Pages</code> &gt; <code>My Worker</code> &gt; <code>Settings</code> &gt; <code>Domain &amp; Routers</code>).</p>
+<img src="./imgs/image-20251209003601514.png" alt="image-20251209003601514" style="zoom: 50%;" />
+<p>At this point, <code>fahmifj.space</code> is already serving the same content as <code>fahmifj.github.io</code>.</p>
+<h3 id="worker-with-url-rewriter-v2">Worker with URL Rewriter (v2)</h3>
+<p>Hugo builds my site with absolute URLs based on my GH Pages domain, which is <code>fahmifj.github.io</code>. Because of this, clicking most links on the custom domain sends users back to GH Pages.</p>
+<p>To fix that, I need to make an adjustment on the Worker to rewrite all the GitHub Pages URLs and replace them with the custom domain. With the help of ChatGPT, I also add a condition to:</p>
+<ul>
+<li>Block search engines indexing bot.</li>
+<li>Return 404 for the sitemap.</li>
+<li>Remove canonical link before the contents are served on the custom domain.</li>
+</ul>
+<figure class="highlight">
+    <figcaption>
+        <span class="hl-filename">worker.js</span>
+    </figcaption>
+    <pre tabindex="0" class="chroma"><code class="language-javascript" data-lang="javascript"><span class="line"><span class="cl"><span class="kr">export</span> <span class="k">default</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="kr">async</span> <span class="nx">fetch</span><span class="p">(</span><span class="nx">request</span><span class="p">)</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="kr">const</span> <span class="nx">upstream</span> <span class="o">=</span> <span class="s2">&#34;fahmifj.github.io&#34;</span><span class="p">;</span> <span class="c1">// GitHub Pages domain
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>    <span class="kr">const</span> <span class="nx">mirror</span> <span class="o">=</span> <span class="s2">&#34;fahmifj.space&#34;</span><span class="p">;</span> <span class="c1">// Custom domain
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>
+</span></span><span class="line"><span class="cl">    <span class="kr">const</span> <span class="nx">url</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">URL</span><span class="p">(</span><span class="nx">request</span><span class="p">.</span><span class="nx">url</span><span class="p">);</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">    <span class="c1">// Prevent indexing by googlebot
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>
+</span></span><span class="line"><span class="cl">    <span class="kr">const</span> <span class="nx">ua</span> <span class="o">=</span> <span class="nx">request</span><span class="p">.</span><span class="nx">headers</span><span class="p">.</span><span class="nx">get</span><span class="p">(</span><span class="s2">&#34;user-agent&#34;</span><span class="p">)</span><span class="o">?</span><span class="p">.</span><span class="nx">toLowerCase</span><span class="p">()</span> <span class="o">||</span> <span class="s2">&#34;&#34;</span><span class="p">;</span>
+</span></span><span class="line"><span class="cl">    <span class="kr">const</span> <span class="nx">bots</span> <span class="o">=</span> <span class="p">[</span>
+</span></span><span class="line"><span class="cl">        <span class="s2">&#34;googlebot&#34;</span><span class="p">,</span> 
+</span></span><span class="line"><span class="cl">        <span class="s2">&#34;bingbot&#34;</span><span class="p">,</span> 
+</span></span><span class="line"><span class="cl">        <span class="s2">&#34;slurp&#34;</span><span class="p">,</span> 
+</span></span><span class="line"><span class="cl">        <span class="s2">&#34;duckduckbot&#34;</span><span class="p">,</span> 
+</span></span><span class="line"><span class="cl">        <span class="s2">&#34;baiduspider&#34;</span><span class="p">,</span> 
+</span></span><span class="line"><span class="cl">        <span class="s2">&#34;yandex&#34;</span>
+</span></span><span class="line"><span class="cl">    <span class="p">];</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">    <span class="k">if</span> <span class="p">(</span><span class="nx">bots</span><span class="p">.</span><span class="nx">some</span><span class="p">(</span><span class="nx">bot</span> <span class="p">=&gt;</span> <span class="nx">ua</span><span class="p">.</span><span class="nx">includes</span><span class="p">(</span><span class="nx">bot</span><span class="p">)))</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">      <span class="k">return</span> <span class="k">new</span> <span class="nx">Response</span><span class="p">(</span><span class="s2">&#34;Not for indexing&#34;</span><span class="p">,</span> <span class="p">{</span> <span class="nx">status</span><span class="o">:</span> <span class="mi">403</span> <span class="p">});</span>
+</span></span><span class="line"><span class="cl">    <span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">    <span class="c1">// Do not serve sitemap
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>    <span class="k">if</span> <span class="p">(</span><span class="nx">url</span><span class="p">.</span><span class="nx">pathname</span> <span class="o">===</span> <span class="s2">&#34;/sitemap.xml&#34;</span><span class="p">)</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">      <span class="k">return</span> <span class="k">new</span> <span class="nx">Response</span><span class="p">(</span><span class="s2">&#34;&#34;</span><span class="p">,</span> <span class="p">{</span> <span class="nx">status</span><span class="o">:</span> <span class="mi">404</span> <span class="p">});</span>
+</span></span><span class="line"><span class="cl">    <span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">    <span class="nx">url</span><span class="p">.</span><span class="nx">hostname</span> <span class="o">=</span> <span class="nx">upstream</span><span class="p">;</span>
+</span></span><span class="line"><span class="cl">    
+</span></span><span class="line"><span class="cl">    <span class="c1">// Read HTML response
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>    <span class="kr">const</span> <span class="nx">upstreamResponse</span> <span class="o">=</span> <span class="kr">await</span> <span class="nx">fetch</span><span class="p">(</span><span class="nx">url</span><span class="p">.</span><span class="nx">toString</span><span class="p">(),</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">      <span class="nx">headers</span><span class="o">:</span> <span class="nx">request</span><span class="p">.</span><span class="nx">headers</span><span class="p">,</span>
+</span></span><span class="line"><span class="cl">      <span class="nx">redirect</span><span class="o">:</span> <span class="s2">&#34;follow&#34;</span><span class="p">,</span>
+</span></span><span class="line"><span class="cl">    <span class="p">});</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">    <span class="kr">const</span> <span class="nx">contentType</span> <span class="o">=</span> <span class="nx">upstreamResponse</span><span class="p">.</span><span class="nx">headers</span><span class="p">.</span><span class="nx">get</span><span class="p">(</span><span class="s2">&#34;content-type&#34;</span><span class="p">)</span> <span class="o">||</span> <span class="s2">&#34;&#34;</span><span class="p">;</span>
+</span></span><span class="line"><span class="cl">    <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="nx">contentType</span><span class="p">.</span><span class="nx">includes</span><span class="p">(</span><span class="s2">&#34;text/html&#34;</span><span class="p">))</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">      <span class="k">return</span> <span class="nx">upstreamResponse</span><span class="p">;</span>
+</span></span><span class="line"><span class="cl">    <span class="p">}</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">    <span class="c1">// Add no-index header (no crawling on my custom domain)
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>    <span class="kr">const</span> <span class="nx">headers</span> <span class="o">=</span> <span class="k">new</span> <span class="nx">Headers</span><span class="p">(</span><span class="nx">upstreamResponse</span><span class="p">.</span><span class="nx">headers</span><span class="p">);</span>
+</span></span><span class="line"><span class="cl">    <span class="nx">headers</span><span class="p">.</span><span class="nx">set</span><span class="p">(</span><span class="s2">&#34;X-Robots-Tag&#34;</span><span class="p">,</span> <span class="s2">&#34;noindex, nofollow&#34;</span><span class="p">);</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">    <span class="c1">//  Rewrite all URLs from upstream → custom domain
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>    <span class="k">return</span> <span class="k">new</span> <span class="nx">HTMLRewriter</span><span class="p">()</span>
+</span></span><span class="line"><span class="cl">      <span class="c1">// Rewrite links
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>      <span class="p">.</span><span class="nx">on</span><span class="p">(</span><span class="s2">&#34;a[href]&#34;</span><span class="p">,</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">        <span class="nx">element</span><span class="p">(</span><span class="nx">el</span><span class="p">)</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">          <span class="nx">rewriteAttr</span><span class="p">(</span><span class="nx">el</span><span class="p">,</span> <span class="s2">&#34;href&#34;</span><span class="p">,</span> <span class="nx">upstream</span><span class="p">,</span> <span class="nx">mirror</span><span class="p">);</span>
+</span></span><span class="line"><span class="cl">        <span class="p">}</span>
+</span></span><span class="line"><span class="cl">      <span class="p">})</span>
+</span></span><span class="line"><span class="cl">      <span class="c1">// Rewrite assets
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>      <span class="p">.</span><span class="nx">on</span><span class="p">(</span><span class="s2">&#34;img[src], script[src], link[href]&#34;</span><span class="p">,</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">        <span class="nx">element</span><span class="p">(</span><span class="nx">el</span><span class="p">)</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">          <span class="nx">rewriteAttr</span><span class="p">(</span><span class="nx">el</span><span class="p">,</span> <span class="s2">&#34;src&#34;</span><span class="p">,</span> <span class="nx">upstream</span><span class="p">,</span> <span class="nx">mirror</span><span class="p">);</span>
+</span></span><span class="line"><span class="cl">          <span class="nx">rewriteAttr</span><span class="p">(</span><span class="nx">el</span><span class="p">,</span> <span class="s2">&#34;href&#34;</span><span class="p">,</span> <span class="nx">upstream</span><span class="p">,</span> <span class="nx">mirror</span><span class="p">);</span>
+</span></span><span class="line"><span class="cl">        <span class="p">}</span>
+</span></span><span class="line"><span class="cl">      <span class="p">})</span>
+</span></span><span class="line"><span class="cl">      <span class="c1">// Remove canonical tag
+</span></span></span><span class="line"><span class="cl"><span class="c1"></span>      <span class="p">.</span><span class="nx">on</span><span class="p">(</span><span class="s2">&#34;link[rel=&#39;canonical&#39;]&#34;</span><span class="p">,</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">        <span class="nx">element</span><span class="p">(</span><span class="nx">el</span><span class="p">)</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">          <span class="nx">el</span><span class="p">.</span><span class="nx">remove</span><span class="p">();</span>
+</span></span><span class="line"><span class="cl">        <span class="p">}</span>
+</span></span><span class="line"><span class="cl">      <span class="p">})</span>
+</span></span><span class="line"><span class="cl">      <span class="p">.</span><span class="nx">transform</span><span class="p">(</span><span class="k">new</span> <span class="nx">Response</span><span class="p">(</span><span class="nx">upstreamResponse</span><span class="p">.</span><span class="nx">body</span><span class="p">,</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">        <span class="nx">status</span><span class="o">:</span> <span class="nx">upstreamResponse</span><span class="p">.</span><span class="nx">status</span><span class="p">,</span>
+</span></span><span class="line"><span class="cl">        <span class="nx">headers</span>
+</span></span><span class="line"><span class="cl">      <span class="p">}));</span>
+</span></span><span class="line"><span class="cl">  <span class="p">}</span>
+</span></span><span class="line"><span class="cl"><span class="p">};</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="cm">/* ---- Helper ---- */</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="kd">function</span> <span class="nx">rewriteAttr</span><span class="p">(</span><span class="nx">element</span><span class="p">,</span> <span class="nx">attr</span><span class="p">,</span> <span class="nx">upstream</span><span class="p">,</span> <span class="nx">mirror</span><span class="p">)</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">  <span class="kr">const</span> <span class="nx">value</span> <span class="o">=</span> <span class="nx">element</span><span class="p">.</span><span class="nx">getAttribute</span><span class="p">(</span><span class="nx">attr</span><span class="p">);</span>
+</span></span><span class="line"><span class="cl">  <span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="nx">value</span><span class="p">)</span> <span class="k">return</span><span class="p">;</span>
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">  <span class="k">if</span> <span class="p">(</span><span class="nx">value</span><span class="p">.</span><span class="nx">includes</span><span class="p">(</span><span class="nx">upstream</span><span class="p">))</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="nx">element</span><span class="p">.</span><span class="nx">setAttribute</span><span class="p">(</span>
+</span></span><span class="line"><span class="cl">      <span class="nx">attr</span><span class="p">,</span>
+</span></span><span class="line"><span class="cl">      <span class="nx">value</span><span class="p">.</span><span class="nx">replace</span><span class="p">(</span><span class="sb">`https://</span><span class="si">${</span><span class="nx">upstream</span><span class="si">}</span><span class="sb">`</span><span class="p">,</span> <span class="sb">`https://</span><span class="si">${</span><span class="nx">mirror</span><span class="si">}</span><span class="sb">`</span><span class="p">)</span>
+</span></span><span class="line"><span class="cl">    <span class="p">);</span>
+</span></span><span class="line"><span class="cl">  <span class="p">}</span>
+</span></span><span class="line"><span class="cl"><span class="p">}</span></span></span></code></pre>
+</figure><h2 id="conclusion">Conclusion</h2>
+<p>With this setup, the custom domain acting as a mirror can coexist with GH Pages.</p>
+<p>You might think that it is odd to keep using GitHub pages even though I already have a custom domain. The reason is simple: I want my blog to stay online as long as possible by relying on a free service provided by GitHub itself.</p>
+<p>If I used my custom domain as the primary site, I would be responsible for maintaining that domain (or even server). The custom domain can expire in one or two year and I might forget renewing it or even I decide to switch to another TLD. These all could negatively impact SEO*.</p>
+<blockquote>
+<p>*or .. maybe I&rsquo;m just a lazy sysadmin.</p>
+</blockquote>
+<p>But with GitHub Pages as the primary site, I don&rsquo;t have to worry about maintaining a domain. GitHub handles everything and the canonical URL stays consistent. This way, I will still have the freedom to change my custom domain in the future without worrying about SEO.</p>
+<p>Okay that&rsquo;s it. See you in the next post!</p>
+]]></content:encoded>
+    </item>
+    
+    <item>
+      <title>Exposing an SMB Server to the Internet in Azure</title>
+      <link>https://fahmifj.github.io/blog/exposing-smb-server-to-internet-in-azure/</link>
+      <pubDate>Sun, 04 Jul 2021 19:45:21 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/blog/exposing-smb-server-to-internet-in-azure/</guid>
+      <description>And wait for bad things to happen</description>
+      <content:encoded><![CDATA[<p>Last month, I was asked to set up a Samba/SMB server that could be accessed over the Internet. Since the requirement was temporary, I chose to deploy it on an Azure Virtual Machine using my student subscription instead of renting a dedicated VPS.</p>
+<p>Although the server ended up not being used, this article documents the setup process during the deployment.</p>
+<p>Before going further, I have to say that exposing the SMB Server directly to the Internet is not considered &ldquo;best practice&rdquo;. A safer approach would be to place the server behind a VPN and only allow access through that private network.</p>
+<h4 id="goals">Goals</h4>
+<ul>
+<li>Deploy an Ubuntu server in Azure</li>
+<li>Set up and Configure a Samba server</li>
+<li>Expose the Samba server over the Internet using IP whitelisting</li>
+</ul>
+<h4 id="prerequisites">Prerequisites</h4>
+<ul>
+<li>Azure Account</li>
+<li>Basic knowledge of Azure, at least menu navigation and creating a resource group.</li>
+<li>Basic knowledge of Linux</li>
+</ul>
+<h2 id="vm-configuration--deployment">VM Configuration &amp; Deployment</h2>
+<p>The VM setup choices here made to support a small number of temporary users as well as keeping costs low.</p>
+<h3 id="create-vm">Create VM</h3>
+<p>At this step, I already have a resource group called <code>IAMF_SMB-TEST</code> and I&rsquo;ll be creating a VM instance inside this resource. I used a B1s instance since the server was intended for 4–5 concurrent users and only basic file sharing workloads.</p>
+<p>The VM details of mine can be seen in the following image:</p>
+<img src="imgs/image-20210513170545346.png" alt="image-20210513170545346" style="zoom: 50%;" />
+<p>For authentication to the server, I&rsquo;ll be using an SSH public key here instead of a password. The account for server administration is called <code>azure-smb</code>. Since the authentication is SSH, this VM will have an SSH port open publicly (internet).</p>
+<img src="imgs/image-20210513170638603.png" alt="image-20210513170638603" style="zoom:50%;" />
+<p>In the following section, I&rsquo;ll use a standard SSD and leave the other settings at their defaults.</p>
+<img src="imgs/image-20210513170710958.png" alt="image-20210513170710958" style="zoom:50%;" />
+<p>In the <strong>Networking</strong> section, I&rsquo;ll just create a new virtual network. See the following image for details:</p>
+<img src="imgs/image-20210513170824172.png" alt="image-20210513170824172" style="zoom:50%;" />
+<p>In the <strong>Management</strong> section, I&rsquo;ll just disable the boot diagnostics.</p>
+<img src="imgs/image-20210513171009570.png" alt="image-20210513171009570" style="zoom:50%;" />
+<p>I&rsquo;ll leave the <strong>Advanced</strong> with the default settings and skip the <strong>Tags</strong> section.</p>
+<p>The last section is <strong>Review + Create</strong>, which basically a section to review the VM configuration. After I finish the review, I&rsquo;ll press the <strong>Create</strong> button.</p>
+<img src="imgs/image-20210513171153896.png" alt="image-20210513171153896" style="zoom:50%;" />
+<p>When the <strong>Create</strong> button is clicked, the VM will be deployed automatically.</p>
+<img src="imgs/image-20210513171501031.png" alt="image-20210513171501031" style="zoom:50%;" />
+<h3 id="access-vm">Access VM</h3>
+<p>Once the machine or VM has been deployed. Log into it using SSH. The public IP of the VM instance can be found at the <code>Dashboard</code> &gt; <code>RESOURCE_GROUP_NAME</code> &gt; <code>PUBLIC_IP_NAME</code>. In my case, it is <code>Dashboard</code> &gt; <code>IAMF_SMB-TEST</code> &gt; <code>smb-server-ip</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ ssh -i private_key azure-smb@PUBLIC_IP_ADDRESS</span></span></code></pre>
+</figure><img src="imgs/image-20210513171606268.png" alt="image-20210513171606268" style="zoom:50%;" />
+<h2 id="samba">Samba</h2>
+<h3 id="repo-update">Repo Update</h3>
+<p>First thing first, let&rsquo;s update the repository list.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">azure-smb@smb-server:~$ sudo apt update</span></span></code></pre>
+</figure><h3 id="install-samba">Install Samba</h3>
+<p>After that, install <code>Samba</code> with the following command.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">azure-smb@smb-server:~$ sudo apt install samba</span></span></code></pre>
+</figure><p>Once the installation is done, check the Samba service daemon status.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">azure-smb@smb-server:~$ sudo systemctl status smbd
+</span></span><span class="line"><span class="cl">● smbd.service - Samba SMB Daemon
+</span></span><span class="line"><span class="cl">   Loaded: loaded <span class="o">(</span>/lib/systemd/system/smbd.service<span class="p">;</span> enabled<span class="p">;</span> vendor preset: enabled<span class="o">)</span>
+</span></span><span class="line"><span class="cl">   Active: active <span class="o">(</span>running<span class="o">)</span> since Thu 2021-05-13 10:17:45 UTC<span class="p">;</span> 3min 48s ago
+</span></span><span class="line"><span class="cl">     Docs: man:smbd<span class="o">(</span>8<span class="o">)</span>
+</span></span><span class="line"><span class="cl">           man:samba<span class="o">(</span>7<span class="o">)</span>
+</span></span><span class="line"><span class="cl">           man:smb.conf<span class="o">(</span>5<span class="o">)</span>
+</span></span><span class="line"><span class="cl"> Main PID: <span class="m">2098</span> <span class="o">(</span>smbd<span class="o">)</span>
+</span></span><span class="line"><span class="cl">   Status: <span class="s2">&#34;smbd: ready to serve connections...&#34;</span>
+</span></span><span class="line"><span class="cl">    Tasks: <span class="m">4</span> <span class="o">(</span>limit: 1056<span class="o">)</span>
+</span></span><span class="line"><span class="cl">   CGroup: /system.slice/smbd.service
+</span></span><span class="line"><span class="cl">           ├─2098 /usr/sbin/smbd --foreground --no-process-group
+</span></span><span class="line"><span class="cl">           ├─2123 /usr/sbin/smbd --foreground --no-process-group
+</span></span><span class="line"><span class="cl">           ├─2124 /usr/sbin/smbd --foreground --no-process-group
+</span></span><span class="line"><span class="cl">           └─2129 /usr/sbin/smbd --foreground --no-process-group
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">May <span class="m">13</span> 10:17:44 smb-server systemd<span class="o">[</span>1<span class="o">]</span>: Starting Samba SMB Daemon...
+</span></span><span class="line"><span class="cl">May <span class="m">13</span> 10:17:45 smb-server systemd<span class="o">[</span>1<span class="o">]</span>: Started Samba SMB Daemon.</span></span></code></pre>
+</figure><p>Samba is ready, and now let&rsquo;s configure the share folder.</p>
+<h3 id="configure-shares">Configure Shares</h3>
+<p>First, let&rsquo;s create a backup file of the original configuration, so we can reset it to the default configuration, just in case something goes wrong.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">azure-smb@smb-server:~$ sudo cp /etc/samba/smb.conf<span class="o">{</span>,.backup<span class="o">}</span></span></span></code></pre>
+</figure><p>Now create a share folder name it <code>sambashare</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">azure-smb@smb-server:~$ mkdir sambashare</span></span></code></pre>
+</figure><p>Then open the samba configuration file with a text editor like <code>nano</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">azure-smb@smb-server:~$ sudo nano /etc/samba/smb.conf</span></span></code></pre>
+</figure><p>Go straight to the bottom of the file and add the following lines.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl"><span class="o">[</span>sambashare<span class="o">]</span>
+</span></span><span class="line"><span class="cl">    <span class="nv">comment</span> <span class="o">=</span> Samba Share
+</span></span><span class="line"><span class="cl">    <span class="nv">path</span> <span class="o">=</span> /home/azure-smb/sambashare
+</span></span><span class="line"><span class="cl">    <span class="nb">read</span> <span class="nv">only</span> <span class="o">=</span> no
+</span></span><span class="line"><span class="cl">    <span class="nv">browsable</span> <span class="o">=</span> yes</span></span></code></pre>
+</figure><blockquote>
+<p>Note: Details for configuring a share can be read <a href="https://www.samba.org/samba/docs/current/man-html/smb.conf.5.html"target="_blank" rel="noopener noreferrer"
+>here</a> or <a href="https://web.mit.edu/rhel-doc/5/RHEL-5-manual/Deployment_Guide-en-US/s1-samba-configuring.html"target="_blank" rel="noopener noreferrer"
+>here</a>.</p>
+</blockquote>
+<p>Save the file and restart the SMB daemon with the following command:</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">azure-smb@smb-server:~$ sudo service smbd restart</span></span></code></pre>
+</figure><p>Lastly, update the firewall to allow network traffic for Samba/SMB.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">azure-smb@smb-server:~$ sudo ufw allow samba</span></span></code></pre>
+</figure><p>This is the basic configuration of creating a Samba share, but from here you can create another share with more complex configuration. Here are my references:</p>
+<ul>
+<li><a href="https://linuxize.com/post/how-to-install-and-configure-samba-on-ubuntu-18-04/"target="_blank" rel="noopener noreferrer"
+>https://linuxize.com/post/how-to-install-and-configure-samba-on-ubuntu-18-04/</a></li>
+<li><a href="https://confluence.jaytaala.com/display/TKB/Create&#43;samba&#43;share&#43;writeable&#43;by&#43;all%2C&#43;group%2C&#43;or&#43;only&#43;a&#43;user"target="_blank" rel="noopener noreferrer"
+>https://confluence.jaytaala.com/display/TKB/Create&#43;samba&#43;share&#43;writeable&#43;by&#43;all%2C&#43;group%2C&#43;or&#43;only&#43;a&#43;user</a></li>
+<li><a href="https://www.digitalocean.com/community/tutorials/how-to-set-up-a-samba-share-for-a-small-organization-on-ubuntu-16-04"target="_blank" rel="noopener noreferrer"
+>https://www.digitalocean.com/community/tutorials/how-to-set-up-a-samba-share-for-a-small-organization-on-ubuntu-16-04</a></li>
+</ul>
+<h3 id="add-samba-user">Add Samba User</h3>
+<p>Currently, our Linux account for administering the server is <code>azure-smb</code> and we shouldn&rsquo;t use this account password to access the SMB shares. So, let&rsquo;s just create a dedicated user for SMB called <code>user1</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">azure-smb@smb-server:~$ sudo useradd --system -s /usr/sbin/nologin user1</span></span></code></pre>
+</figure><p>Assign <code>user1</code> to be the owner of the share</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">azure-smb@smb-server:~$ sudo chown user1 /home/azure-smb/sambashare</span></span></code></pre>
+</figure><p>After that, create a Samba password for <code>user1</code>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">azure-smb@smb-server:~$ sudo smbpasswd -a user1
+</span></span><span class="line"><span class="cl">New SMB password: 
+</span></span><span class="line"><span class="cl">Retype new SMB password: 
+</span></span><span class="line"><span class="cl">Added user user1.</span></span></code></pre>
+</figure><p>Finally, enable the user.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">azure-smb@smb-server:~$ sudo smbpasswd -e user1
+</span></span><span class="line"><span class="cl">Enabled user user1.</span></span></code></pre>
+</figure><h2 id="expose-smb-to-the-internet">Expose SMB to the Internet</h2>
+<h3 id="allow-inbound-connection">Allow Inbound Connection</h3>
+<p>Now if we want to make the SMB server available on the Internet, we have to go back to the Azure Portal to open the SMB port (port 445) on the NIC Public IP and allow inbound connection through that port. The connection is then forwarded to our SMB port on the NIC Private IP.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">PUBLIC_IP:445 --&gt; PRIVATE_IP:445</span></span></code></pre>
+</figure><p>To do that open up the Networking settings of the SMB VM and click on <strong>Add inbound port rule</strong> button.</p>
+<img src="imgs/image-20210513173838694.png" alt="image-20210513173838694" style="zoom:50%;" />
+<p>On the new Windows, configure the rule to allow any source (incoming IP) for <strong>non-whitelist</strong> or <strong>input the whitelisted IP</strong> in the Source section. Then, for source port ranges (incoming port) let it be asterisk (<code>*</code>) to allow any port to connect to our SMB services(port <code>445</code>).</p>
+<p>The configuration is as follows:</p>
+<img src="imgs/image-20210513173858659.png" alt="image-20210513173858659" style="zoom:50%;" />
+<p>At the bottom, the configuration is as follows:</p>
+<img src="imgs/image-20210513173929271.png" alt="image-20210513173929271" style="zoom:50%;" />
+<p>Once done, click on the <strong>Add</strong> button and the new rule should listed in the <strong>Inbound port rules</strong> section.</p>
+<img src="imgs/image-20210513174018895.png" alt="image-20210513174018895" style="zoom:50%;" />
+<h3 id="verify-public-access">Verify Public Access</h3>
+<p>We can use <code>nmap</code> to see if the SMB port has been opened.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ nmap -p445 -sV VM_PUBLIC_IP</span></span></code></pre>
+</figure><img src="imgs/image-20210513174227862.png" alt="image-20210513174227862" style="zoom:50%;" />
+<p>To interact with the SMB server via CLI, you can use <code>smbclient</code>. Install it with:</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ sudo apt install smbclient</span></span></code></pre>
+</figure><p>Once it installed, connect to the share with following command:</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ smbclient //<span class="o">[</span>IP<span class="o">]</span>/<span class="o">[</span>sharename<span class="o">]</span> </span></span></code></pre>
+</figure><p>Adding <code>-N -L</code> can list all the available shares.</p>
+<img src="imgs/image-20210513174416250.png" alt="image-20210513174416250" style="zoom:50%;" />
+<p>You can also provide the password directly in the terminal:</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ smbclient //<span class="o">[</span>IP<span class="o">]</span>/<span class="o">[</span>sharename<span class="o">]</span> -U <span class="o">[</span>username<span class="o">]</span> <span class="o">[</span>password<span class="o">]</span>
+</span></span><span class="line"><span class="cl">$ smbclient //<span class="o">[</span>IP<span class="o">]</span>/<span class="o">[</span>sharename<span class="o">]</span> -U <span class="s1">&#39;username%password&#39;</span></span></span></code></pre>
+</figure><p>This setup worked as expected for the original requirement, although it was not used. If I were to implement this again, I would place the SMB server behind a VPN and avoid exposing port 445 directly to the Internet.</p>
+]]></content:encoded>
+    </item>
+    
+  </channel>
+</rss>

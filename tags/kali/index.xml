@@ -8,6 +8,324 @@
     <language>en</language>
     <lastBuildDate>Fri, 09 Jul 2021 07:45:19 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/tags/kali/index.xml" rel="self" type="application/rss+xml" />
     <item>
+      <title>Building Virtual Home Lab for Pentesting</title>
+      <link>https://fahmifj.github.io/blog/building-virtual-home-lab-for-pentest/</link>
+      <pubDate>Thu, 17 Jun 2021 14:04:24 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/blog/building-virtual-home-lab-for-pentest/</guid>
+      <description>Virtual home lab for offensive security practice, with 8 gigs!</description>
+      <content:encoded><![CDATA[<p>This article documents a virtual Active Directory lab I built to learn some Active Directory attacks, network pivoting, and basic Command and Control (<code>C2</code>) using Metasploit.</p>
+<p>The lab is designed to resemble a small enterprise Windows environment with minimal requirements that enough to run on a mid-range specification.</p>
+<h2 id="assumptions--threat-model">Assumptions &amp; Threat Model</h2>
+<p>This lab assumes:</p>
+<ul>
+<li>An internal attacker with network access</li>
+<li>Minimal internal monitoring</li>
+<li>Default or weak Windows security configurations</li>
+<li>Misconfigured behavior</li>
+</ul>
+<h2 id="prerequisites">Prerequisites</h2>
+<h3 id="knowledge">Knowledge</h3>
+<ul>
+<li>Virtualization (VirtualBox)</li>
+<li>Windows and Windows Server installation</li>
+<li>Basic Active Directory concepts (Domain, DNS, SPNs)</li>
+<li>Basic networking and routing</li>
+</ul>
+<h3 id="hardware">Hardware</h3>
+<p>Recommended minimum (sorted by priority):</p>
+<ul>
+<li><strong>Storage</strong>: 256 GB SSD (or high-speed USB 3.x)</li>
+<li><strong>RAM</strong>: 8 GB minimum, 16 GB recommended</li>
+<li><strong>CPU</strong>:
+<ul>
+<li>Minimum: Intel i3 6th gen / Ryzen 3</li>
+<li>Recommended: i5 / Ryzen 5 (H or K variants)</li>
+</ul>
+</li>
+</ul>
+<blockquote>
+<p>The lab was built and tested on an 8 GB system by aggressively disabling unused services after installation.</p>
+</blockquote>
+<h3 id="software">Software</h3>
+<ul>
+<li>VirtualBox (<a href="https://www.virtualbox.org/wiki/Downloads"target="_blank" rel="noopener noreferrer"
+>Download</a>)</li>
+<li>Kali Linux (attacker)  (<a href="https://www.offensive-security.com/kali-linux-vm-vmware-virtualbox-image-download/#1572305786534-030ce714-cc3b"target="_blank" rel="noopener noreferrer"
+>Download</a>)</li>
+<li>Windows 10 evaluation image file (<a href="https://www.microsoft.com/en-us/evalcenter/"target="_blank" rel="noopener noreferrer"
+>Download</a>)</li>
+<li>Windows Server 2019 evaluation image file (<a href="https://www.microsoft.com/en-us/evalcenter/"target="_blank" rel="noopener noreferrer"
+>Download</a>)</li>
+</ul>
+<h2 id="topology-overview">Topology Overview</h2>
+<p>The environment consists of:</p>
+<ul>
+<li>1 Domain Controller</li>
+<li>2 Domain-joined Windows clients</li>
+<li>1 Attacker machine (Kali Linux)</li>
+</ul>
+<p>Two network segments are used:</p>
+<ul>
+<li><code>192.168.1.0/24</code> – Internal domain network</li>
+<li><code>10.10.10.96/28</code> – Segmented network used for pivoting scenarios</li>
+</ul>
+<p><div class="img-container"><img src="imgs/topology.jpg" alt=""  /></div>
+</p>
+<blockquote>
+<p>Note: It&rsquo;s NIC (Network Interface Card) not NC</p>
+</blockquote>
+<h2 id="network-segments">Network Segments</h2>
+<p>This lab intentionally uses two network segments to simulate an internal enterprise environment and to enable <strong>pivoting scenarios</strong> later on.</p>
+<table>
+<thead>
+<tr>
+<th>Segment</th>
+<th>CIDR</th>
+<th>Name</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><code>192.168.1.0/24</code></td>
+<td>windows_domain</td>
+<td>Main internal network (initial setup &amp; attacker access)</td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>10.10.10.96/28</code></td>
+<td>internal_windows</td>
+<td>Restricted internal segment (pivoting target)</td>
+</tr>
+</tbody>
+</table>
+<h2 id="virtualbox-setup">VirtualBox Setup</h2>
+<h3 id="system-configuration">System Configuration</h3>
+<p>Initial installation:</p>
+<ul>
+<li>Server: <code>2424 MB</code></li>
+<li>Clients: <code>1280 MB</code> each</li>
+</ul>
+<p>Post-installation (after disabling unnecessary services):</p>
+<ul>
+<li>Server: <code>1280 MB</code></li>
+<li>Clients: <code>1024 MB</code></li>
+<li>Attacker: <code>1024 MB</code></li>
+</ul>
+<p>This configuration allows all VMs to run concurrently on an 8 GB host. For initial setup, the two clients can stay inside <code>192.168.1.0/24</code> network.</p>
+<h3 id="network-configuration">Network Configuration</h3>
+<p>For each VM (initial setup):</p>
+<ul>
+<li>Adapter 1
+<ul>
+<li>Type: <code>Internal Network</code></li>
+<li>Name: <code>windows_domain</code></li>
+<li>IP Range: <code>192.168.1.0/24</code></li>
+</ul>
+</li>
+</ul>
+<p>For the Domain Controller only:</p>
+<ul>
+<li>Adapter 2
+<ul>
+<li>Name: <code>internal_windows</code></li>
+<li>IP Range: <code>10.10.10.96/28</code></li>
+</ul>
+</li>
+</ul>
+<p>This makes the Domain Controller act as a bridge between segments.</p>
+<p><div class="img-container"><img src="imgs/image-20210617143401181.png" alt="image-20210617143401181"  /></div>
+</p>
+<h2 id="active-directory-setup">Active Directory Setup</h2>
+<h3 id="server">Server</h3>
+<h4 id="initial-setup">Initial Setup</h4>
+<ul>
+<li>Admin credentials: <code>administrator:p@$$w0rd!</code></li>
+<li>PC Name: <code>server19-DC</code> (restart after)</li>
+<li>Network (Static):
+<ul>
+<li>Adapter 1: <code>192.168.1.100/24</code></li>
+<li>Adapter 2: <code>10.10.10.100/28</code></li>
+</ul>
+</li>
+</ul>
+<h4 id="promote-server-to-domain-controller">Promote Server to Domain Controller</h4>
+<ul>
+<li>Server Manager &gt; Manage &gt; Add Roles and Features.</li>
+<li>Add Roles and Features Wizard:
+<ul>
+<li>Installation type: &ldquo;<strong>Role-based or feature-based installation</strong>&rdquo;</li>
+<li>Server selection: <code>server19-DC</code></li>
+<li>Server roles: <strong>&ldquo;Active Directory Domain Services&rdquo;</strong> and check the <strong>&ldquo;Include management tools&rdquo;</strong>.</li>
+<li>Features: Check the <strong>&ldquo;Group Policy Management&rdquo;</strong></li>
+<li>Confirmation:  Check on <strong>&ldquo;Restart destination server automatically if required&rdquo;</strong></li>
+<li>Close after it&rsquo;s done.</li>
+</ul>
+</li>
+<li>Server Manager &gt; Notification flag &gt; Click on <strong>&ldquo;Promote this server to a domain controller&rdquo;</strong></li>
+<li>Active Directory Domain Services Configuration Wizard:
+<ul>
+<li>Deployment configuration: <strong>&ldquo;Add a new forest&rdquo;</strong> and set <strong>&ldquo;server19.local&rdquo;</strong> as root domain name</li>
+<li>Domain controller options: set <strong>&ldquo;Windows Server 2016&rdquo;</strong> as FFL (Forest Functional Level) and DFL (Domain Functional Level). Checklist DNS server and set the same admin password for DSRM password.</li>
+<li>Additional options: set NetBIOS domain name to <code>SERVER19</code></li>
+<li>Let the rest options in default state until installation section.</li>
+<li>Restart after installation complete.</li>
+</ul>
+</li>
+</ul>
+<p><div class="img-container"><img src="imgs/server19logon.jpg" alt=""  /></div>
+</p>
+<h4 id="create-domain-accounts">Create Domain Accounts</h4>
+<ul>
+<li>John Smith
+<ul>
+<li>User logon name: <code>jsmith@server19.local</code></li>
+<li>Password: <code>jsmith@123</code></li>
+</ul>
+</li>
+<li>Carl Smith
+<ul>
+<li>User logon name: <code>cmisth@server19.local</code></li>
+<li>Password: <code>@csmith@</code></li>
+</ul>
+</li>
+</ul>
+<p>All password is set to never expires.</p>
+<h4 id="create-fake-service-account">Create Fake Service Account</h4>
+<p>Fake SQL Service</p>
+<ul>
+<li>User logon name: <code>SQLService@server19.local</code></li>
+<li>Password: <code>Mysql@Password123</code></li>
+</ul>
+<p>Set service principle name:</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">setspn -a SERVER19-DC/SQLService.SERVER19.local:60111 SERVER19\SQLService
+</span></span><span class="line"><span class="cl">setspn -T SERVER19.local -Q */*</span></span></code></pre>
+</figure><h4 id="configure-file-sharing-smb">Configure File Sharing (SMB):</h4>
+<ul>
+<li>Server manager &gt; File and Storage Services &gt; Shares &gt; Task &gt; New Share.</li>
+<li>New Share Wizard:
+<ul>
+<li>Profile: SMB Share Quick</li>
+<li>Share Location: <code>C:\Shares\DATA</code> (Create the shares folder in C:)</li>
+<li>Other Settings: Allow caching of share</li>
+<li>Permission: Leave it default</li>
+<li>Confirmation and create.</li>
+</ul>
+</li>
+</ul>
+<h3 id="clients">Clients</h3>
+<h4 id="initial-setup-1">Initial Setup</h4>
+<ul>
+<li>Client 1:
+<ul>
+<li>IP: <code>192.168.1.101/24</code> (static)</li>
+<li>PC name: NESCOFFEE</li>
+</ul>
+</li>
+<li>Client 2:
+<ul>
+<li>IP: <code>192.168.1.102/24</code> (static)</li>
+<li>PC name: MILO</li>
+</ul>
+</li>
+</ul>
+<p>For pivoting</p>
+<ul>
+<li>Client 2:
+<ul>
+<li>IP: <code>10.10.10.101/28</code>(static)</li>
+</ul>
+</li>
+</ul>
+<h4 id="create-local-accounts">Create Local Accounts</h4>
+<p>Same with domain accounts, but add an <code>L</code> at the end of username/password.</p>
+<ul>
+<li>Username: <code>cmisthL</code>, password: <code>jsmithL@123</code></li>
+<li>Username: <code>jsmithL</code>, password: <code>@csmith@</code></li>
+</ul>
+<h4 id="joining-domain">Joining Domain</h4>
+<p>Client 1:</p>
+<ul>
+<li>Use Server&rsquo;s IP as DNS server: <code>192.168.1.100</code></li>
+<li>Hit <code>Win+I</code>, type &ldquo;access&rdquo;, click on <strong>Connect</strong>.</li>
+<li>Microsoft account window:
+<ul>
+<li>Click on <strong>&ldquo;Join this device to a local Active Directory domain&rdquo;</strong> under the alternate actions.</li>
+<li>Use the server administrator password to join.</li>
+<li>Skip the <strong>Add an account</strong> section</li>
+<li>Restart</li>
+</ul>
+</li>
+</ul>
+<p>Client 2 has the same steps</p>
+<h4 id="create-local-admin">Create Local Admin</h4>
+<ul>
+<li>Set John Smith (<code>jsmith@server19.local</code>) as local administrator for NESCOFFEE.</li>
+<li>Set Carl Smith (<code>cmisth@server19.local</code>) as local administrator for MILO.</li>
+</ul>
+<h3 id="attacker">Attacker</h3>
+<h4 id="initial-setup-2">Initial Setup</h4>
+<ul>
+<li>Put it on the same network</li>
+<li>Set static IP: <code>192.168.1.10/24</code></li>
+<li>Perform ping test</li>
+</ul>
+<h2 id="attack-scenarios">Attack Scenarios</h2>
+<p>Here are some attack scenarios that can be reproduced using this lab:</p>
+<ul>
+<li>
+<p>LLMNR Poisoning</p>
+<ul>
+<li>Example: <a href="https://www.aptive.co.uk/blog/llmnr-nbt-ns-spoofing/"target="_blank" rel="noopener noreferrer"
+>https://www.aptive.co.uk/blog/llmnr-nbt-ns-spoofing/</a></li>
+</ul>
+</li>
+<li>
+<p>AS-REP Roasting</p>
+<ul>
+<li>Example: <a href="/tags/asrep-roasting"target="_blank" rel="noopener noreferrer"
+>ASREP-Roasting tags</a></li>
+</ul>
+</li>
+<li>
+<p>Kerberoasting</p>
+<ul>
+<li>Example: <a href="https://pentestlab.blog/2018/06/12/kerberoast/"target="_blank" rel="noopener noreferrer"
+>https://pentestlab.blog/2018/06/12/kerberoast/</a></li>
+</ul>
+</li>
+<li>
+<p>Take Over IPv6 DNS</p>
+<ul>
+<li>Example:  <a href="https://blog.fox-it.com/2018/01/11/mitm6-compromising-ipv4-networks-via-ipv6/"target="_blank" rel="noopener noreferrer"
+>https://blog.fox-it.com/2018/01/11/mitm6-compromising-ipv4-networks-via-ipv6/</a></li>
+</ul>
+</li>
+<li>
+<p>DCSync</p>
+<ul>
+<li>Example: <a href="/tags/dcsync/"target="_blank" rel="noopener noreferrer"
+>DCSync tags</a></li>
+</ul>
+</li>
+</ul>
+<p>Attack scenario(s) that requires two clients online + server:</p>
+<ul>
+<li>SMB Relay
+<ul>
+<li>Examples: <a href="/writeups/hackthebox/htb-apt/"target="_blank" rel="noopener noreferrer"
+>HackTheBox - APT</a>, <a href="https://akimboviper.gitbook.io/pentest-everything/everything/everything-windows/attacking-windows/relay-attacks/smb-relay"target="_blank" rel="noopener noreferrer"
+>SMB Relay Attack</a></li>
+</ul>
+</li>
+</ul>
+]]></content:encoded>
+    </item>
+    
+    <item>
       <title>Kali Linux Setup for Playing HackTheBox</title>
       <link>https://fahmifj.github.io/blog/kali-setup-for-hackthebox/</link>
       <pubDate>Fri, 09 Jul 2021 07:45:19 +0700</pubDate>
@@ -248,244 +566,6 @@
 <p><div class="img-container"><img src="imgs/image-20210711221808834.png" alt="image-20210711221808834"  /></div>
 </p>
 <p>And that&rsquo;s all for this post!</p>
-]]></content:encoded>
-    </item>
-    
-    <item>
-      <title>Building Virtual Home Lab for Pentesting</title>
-      <link>https://fahmifj.github.io/blog/building-virtual-home-lab-for-pentest/</link>
-      <pubDate>Thu, 17 Jun 2021 14:04:24 +0700</pubDate>
-      
-      <guid>https://fahmifj.github.io/blog/building-virtual-home-lab-for-pentest/</guid>
-      <description>With 8 gigs!</description>
-      <content:encoded><![CDATA[<p>This is my personal documentation on setting up a basic pentesting lab in a virtual environment to learn some AD attack scenarios, network pivoting, and C2 (command &amp; control) with <code>metasploit</code>.</p>
-<h2 id="prerequisites">Prerequisites</h2>
-<h3 id="knowledge">Knowledge</h3>
-<ul>
-<li>Virtualization and VirtualBox</li>
-<li>Windows OS and Server Installation</li>
-<li>Basics knowledge of Windows/Windows Server (Desktop/GUI version)/</li>
-<li>Basics knowledge of Active Directory:
-<ul>
-<li>AD Domain</li>
-<li>Principle name</li>
-<li>DNS</li>
-</ul>
-</li>
-<li>Basics knowledge of Networking (routing).</li>
-</ul>
-<h3 id="hardware">Hardware</h3>
-<p>The following are the main specifications that I recommend, the list is sorted by priority.</p>
-<ul>
-<li>Storage: 256 GB minimum, SSD is a must for server, or use high speed USB 3.1/ type C drive.</li>
-<li>RAM: 8 GB of minimum, 16 GB recommended dual channel.</li>
-<li>CPU: AMD Ryzen 3 or Intel i3 6th (minimum), AMD Ryzen 5+ with H prefix or i5+ 6th gen with K/H prefix. (recommended).
-<ul>
-<li>4th gen of i7 is still worth though.</li>
-</ul>
-</li>
-</ul>
-<p>For me, I used a single MSI laptop with the minimum requirements, except for the CPU.</p>
-<h3 id="software">Software</h3>
-<ul>
-<li>VirtualBox (<a href="https://www.virtualbox.org/wiki/Downloads"target="_blank" rel="noopener noreferrer"
->Download</a>)</li>
-<li>Kali Linux image file (<a href="https://www.offensive-security.com/kali-linux-vm-vmware-virtualbox-image-download/#1572305786534-030ce714-cc3b"target="_blank" rel="noopener noreferrer"
->Download</a>)</li>
-<li>Windows 10 evaluation image file (<a href="https://www.microsoft.com/en-us/evalcenter/"target="_blank" rel="noopener noreferrer"
->Download</a>)</li>
-<li>Windows Server 2019 evaluation image file (<a href="https://www.microsoft.com/en-us/evalcenter/"target="_blank" rel="noopener noreferrer"
->Download</a>)</li>
-</ul>
-<h2 id="topology">Topology</h2>
-<p>I know my topology is bad.</p>
-<p><div class="img-container"><img src="imgs/topology.jpg" alt=""  /></div>
-</p>
-<blockquote>
-<p>Note: It&rsquo;s NIC (Network Interface Card) not NC</p>
-</blockquote>
-<p>For pivoting, I removed the Windows 10 inside network range of <code>10.10.10.100/28</code> from AD Domain.</p>
-<h2 id="setup">Setup</h2>
-<h3 id="vm-system-configuration">VM System Configuration</h3>
-<h4 id="system">System</h4>
-<p>Initial for installation</p>
-<ul>
-<li>Server: 2424 MB of RAM</li>
-<li>Client: x2 1280 MB of RAM</li>
-</ul>
-<p>After installation (removed style/desktop/disable junk service)</p>
-<ul>
-<li>Server: 1280 MB of RAM</li>
-<li>Client: 1024 MB of RAM</li>
-<li>Attacking machine: 1024MB of RAM</li>
-</ul>
-<p>Trust me, I use 8 GB to host these VM. 😂</p>
-<ul>
-<li>Windows 2019 = Server</li>
-<li>Windows 10 = Client</li>
-<li>Kali Linux/Armed Ubuntu = Attacker</li>
-</ul>
-<p>For initial setup, the two clients can <strong>stay inside</strong> <code>192.168.1.0/24</code> network.</p>
-<h4 id="network">Network</h4>
-<p>Server Adapter 1:</p>
-<p><div class="img-container"><img src="imgs/image-20210617143401181.png" alt="image-20210617143401181"  /></div>
-</p>
-<h3 id="setting-up-server">Setting up Server</h3>
-<h4 id="initial-setup">Initial setup</h4>
-<ul>
-<li>Admin credentials: <code>administrator:p@$$w0rd!</code></li>
-<li>PC Name: <code>server19-DC</code> (restart after)</li>
-<li>Network (Static):
-<ul>
-<li>Adapter 1: 192.168.1.100/24</li>
-<li>Adapter 2: 10.10.10.100/28</li>
-</ul>
-</li>
-</ul>
-<h4 id="promote-to-domain-controller">Promote to Domain Controller</h4>
-<ul>
-<li>Server Manager &gt; Manage &gt; Add Roles and Features.</li>
-<li>Add Roles and Features Wizard:
-<ul>
-<li>Installation type: &ldquo;<strong>Role-based or feature-based installation</strong>&rdquo;</li>
-<li>Server selection: <code>server19-DC</code></li>
-<li>Server roles: <strong>&ldquo;Active Directory Domain Services&rdquo;</strong> and check the <strong>&ldquo;Include management tools&rdquo;</strong>.</li>
-<li>Features: Check the <strong>&ldquo;Group Policy Management&rdquo;</strong></li>
-<li>Confirmation:  Check on <strong>&ldquo;Restart destination server automatically if required&rdquo;</strong></li>
-<li>Close after it&rsquo;s done.</li>
-</ul>
-</li>
-<li>Server Manager &gt; Notification flag &gt; Click on <strong>&ldquo;Promote this server to a domain controller&rdquo;</strong></li>
-<li>Active Directory Domain Services Configuration Wizard:
-<ul>
-<li>Deployment configuration: <strong>&ldquo;Add a new forest&rdquo;</strong> and set <strong>&ldquo;server19.local&rdquo;</strong> as root domain name</li>
-<li>Domain controller options: set <strong>&ldquo;Windows Server 2016&rdquo;</strong> as FFL (Forest Functional Level) and DFL (Domain Functional Level). Checklist DNS server and set the same admin password for DSRM password.</li>
-<li>Additional options: set NetBIOS domain name to <code>SERVER19</code></li>
-<li>Let the rest options in default state until installation section.</li>
-<li>Restart after installation complete.</li>
-</ul>
-</li>
-</ul>
-<p><div class="img-container"><img src="imgs/server19logon.jpg" alt=""  /></div>
-</p>
-<h4 id="domain-accounts">Domain Accounts</h4>
-<ul>
-<li>John Smith
-<ul>
-<li>User logon name: <code>jsmith@server19.local</code></li>
-<li>Password: <code>jsmith@123</code></li>
-</ul>
-</li>
-<li>Carl Smith
-<ul>
-<li>User logon name: <code>cmisth@server19.local</code></li>
-<li>Password: <code>@csmith@</code></li>
-</ul>
-</li>
-</ul>
-<p>All password is set to never expires.</p>
-<h4 id="service-account">Service Account</h4>
-<p>Fake SQL Service</p>
-<ul>
-<li>User logon name: <code>SQLService@server19.local</code></li>
-<li>Password: <code>Mysql@Password123</code></li>
-</ul>
-<p>Set service principle name:</p>
-<figure class="highlight">
-    <pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">setspn -a SERVER19-DC/SQLService.SERVER19.local:60111 SERVER19\SQLService
-</span></span><span class="line"><span class="cl">setspn -T SERVER19.local -Q */*</span></span></code></pre>
-</figure><h4 id="configure-file-sharing-smb">Configure File Sharing (SMB):</h4>
-<ul>
-<li>Server manager &gt; File and Storage Services &gt; Shares &gt; Task &gt; New Share.</li>
-<li>New Share Wizard:
-<ul>
-<li>Profile: SMB Share Quick</li>
-<li>Share Location: <code>C:\Shares\DATA</code> (Create the Shares folder in C:)</li>
-<li>Other Settings: Allow caching of share</li>
-<li>Permission: Leave it default</li>
-<li>Confirmation and create.</li>
-</ul>
-</li>
-</ul>
-<h3 id="setting-up-client">Setting up Client</h3>
-<h4 id="initial-setup-1">Initial setup</h4>
-<ul>
-<li>Client 1:
-<ul>
-<li>IP: 192.168.1.101 (static)</li>
-<li>PC name: NESCOFFEE</li>
-</ul>
-</li>
-<li>Client 2:
-<ul>
-<li>IP: 192.168.1.102 (static)</li>
-<li>PC name: MILO</li>
-</ul>
-</li>
-</ul>
-<h4 id="local-accounts">Local Accounts</h4>
-<p>Same with domain accounts, but add an <code>L</code> at the end of username/password.</p>
-<ul>
-<li>Username: <code>cmisthL</code>, password: <code>jsmithL@123</code></li>
-<li>Username: <code>jsmithL</code>, password: <code>@csmith@</code></li>
-</ul>
-<h4 id="join-domain">Join Domain</h4>
-<p>Client 1:</p>
-<ul>
-<li>Use Server&rsquo;s IP as DNS server: <code>192.168.1.100</code></li>
-<li>Hit <code>Win+I</code>, type &ldquo;access&rdquo;, click on <strong>Connect</strong>.</li>
-<li>Microsoft account window:
-<ul>
-<li>Click on <strong>&ldquo;Join this device to a local Active Directory domain&rdquo;</strong> under the alternate actions.</li>
-<li>Use the server administrator password to join.</li>
-<li>Skip the <strong>Add an account</strong> section</li>
-<li>Restart</li>
-</ul>
-</li>
-</ul>
-<p>Client 2 has the same steps</p>
-<h4 id="local-admin">Local Admin:</h4>
-<ul>
-<li>Set John Smith (<code>jsmith@server19.local</code>) as local administrator for NESCOFFEE.</li>
-<li>Set Carl Smith (<code>cmisth@server19.local</code>) as local administrator for MILO.</li>
-</ul>
-<h3 id="setting-up-attacking-machine">Setting up Attacking Machine</h3>
-<ul>
-<li>Put it on the same network</li>
-<li>Set static IP: 192.168.1.10</li>
-</ul>
-<h2 id="ad-attack-scenarios">AD Attack Scenarios</h2>
-<p>Here are some attack scenarios:</p>
-<ul>
-<li>LLMNR Poisoning - <a href="https://www.aptive.co.uk/blog/llmnr-nbt-ns-spoofing/"target="_blank" rel="noopener noreferrer"
->https://www.aptive.co.uk/blog/llmnr-nbt-ns-spoofing/</a></li>
-<li>AS-REP Roasting
-<ul>
-<li>Example attacks: <a href="/tags/asrep-roasting"target="_blank" rel="noopener noreferrer"
->ASREP-Roasting tags</a></li>
-</ul>
-</li>
-<li>Kerberoasting  - <a href="https://pentestlab.blog/2018/06/12/kerberoast/"target="_blank" rel="noopener noreferrer"
->https://pentestlab.blog/2018/06/12/kerberoast/</a></li>
-<li>Take Over IPv6 DNS - <a href="https://blog.fox-it.com/2018/01/11/mitm6-compromising-ipv4-networks-via-ipv6/"target="_blank" rel="noopener noreferrer"
->https://blog.fox-it.com/2018/01/11/mitm6-compromising-ipv4-networks-via-ipv6/</a></li>
-<li>DCSync
-<ul>
-<li>Example attacks: <a href="/tags/dcsync/"target="_blank" rel="noopener noreferrer"
->DCSync tags</a></li>
-</ul>
-</li>
-</ul>
-<p>Attack scenario(s) that requires two clients online + server:</p>
-<ul>
-<li>SMB Relay - <a href="https://akimboviper.gitbook.io/pentest-everything/everything/everything-windows/attacking-windows/relay-attacks/smb-relay"target="_blank" rel="noopener noreferrer"
->https://akimboviper.gitbook.io/pentest-everything/everything/everything-windows/attacking-windows/relay-attacks/smb-relay</a>
-<ul>
-<li>Example attacks: <a href="/writeups/hackthebox/htb-apt/"target="_blank" rel="noopener noreferrer"
->HackTheBox - APT</a></li>
-</ul>
-</li>
-</ul>
 ]]></content:encoded>
     </item>
     
