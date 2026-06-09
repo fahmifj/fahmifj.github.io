@@ -6,7 +6,7 @@
     <description>Recent content in Home Lab on Ef&#39;s log</description>
     <generator>Hugo -- gohugo.io</generator>
     <language>en</language>
-    <lastBuildDate>Wed, 26 Mar 2025 13:27:29 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/threads/home-lab/index.xml" rel="self" type="application/rss+xml" />
+    <lastBuildDate>Tue, 09 Jun 2026 17:08:00 +0700</lastBuildDate><atom:link href="https://fahmifj.github.io/threads/home-lab/index.xml" rel="self" type="application/rss+xml" />
     <item>
       <title>PNETLab on Google Cloud – Part 1: Server Deployment</title>
       <link>https://fahmifj.github.io/blog/deploy-pnetlab-on-gcp-part-1/</link>
@@ -882,6 +882,266 @@ os_image        = &#34;projects/ubuntu-os-cloud/global/images/ubuntu-1804-bionic
     </item>
     
     <item>
+      <title>PNETLab on Google Cloud - Part 2: Remote Access with Tailscale</title>
+      <link>https://fahmifj.github.io/blog/deploy-pnetlab-on-gcp-part-2-remote-access-tailscale/</link>
+      <pubDate>Tue, 09 Jun 2026 17:08:00 +0700</pubDate>
+      
+      <guid>https://fahmifj.github.io/blog/deploy-pnetlab-on-gcp-part-2-remote-access-tailscale/</guid>
+      <description>Introduction In the first part, we went through the deployment process of PNETLab on Google Cloud Platform using Terraform. The server was intentionally configured without Public IP address, preventing it accessible from the internet.
+With this approach, we still need a way to access it securely. Normally, we would deploy a VPN server and configure it manually. However, we will use a zero configuration VPN solution from Tailscale.
+This articles covers the Tailscale setup, advertise the appliance network to the Tailnet, and sharing the lab with other users within the Tailnet with least privilege principle.</description>
+      <content:encoded><![CDATA[<h2 id="introduction">Introduction</h2>
+<p>In the <a href="/articles/deploy-pnetlab-on-gcp-part-1/"target="_blank" rel="noopener noreferrer"
+>first part</a>, we went through the deployment process of PNETLab on Google Cloud Platform using Terraform. The server was intentionally configured without Public IP address, preventing it accessible from the internet.</p>
+<p>With this approach, we still need a way to access it securely. Normally, we would deploy a VPN server and configure it manually. However, we will use a zero configuration VPN solution from Tailscale.</p>
+<p>This articles covers the Tailscale setup, advertise the appliance network to the Tailnet, and sharing the lab with other users within the Tailnet with least privilege principle. We will also configure a custom domain on the lab web interface.</p>
+<h3 id="goals">Goals</h3>
+<ul>
+<li>Secure access to the lab without exposing it to the public internet.</li>
+<li>Configure a domain name for easier access to the lab.</li>
+</ul>
+<h3 id="prerequisites">Prerequisites</h3>
+<ul>
+<li>Tailscale accounts.</li>
+<li>Own a custom domain name.</li>
+</ul>
+<h2 id="architecture-overview">Architecture Overview</h2>
+<img src="./imgs/image-20251028001404879.png" alt="image-20251028001404879" style="zoom:50%;" />
+<p>The setup consists of:</p>
+<ul>
+<li>Terraform for infrastructure automation</li>
+<li>A GCP compute instance running PNETLab</li>
+<li>A private VPC network</li>
+<li>Cloud Router for outbound internet access (dynamic IP)</li>
+<li><strong>Tailscale for secure remote access to PNETLab instance</strong></li>
+</ul>
+<h2 id="tailscale-installation">Tailscale Installation</h2>
+<p>To use the Tailscale VPN service, we need an agent like software to be installed in our server and your home devices that you are going to use to access the lab.</p>
+<h3 id="install-tailscale">Install Tailscale</h3>
+<p>From the pnetlab server, install Tailscale with:</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ sudo curl -fsSL https://tailscale.com/install.sh <span class="p">|</span> sh </span></span></code></pre>
+</figure><p>Verify installation</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ sudo systemctl status tailscaled <span class="p">|</span> grep active</span></span></code></pre>
+</figure><p>Expected outputs:</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">Active: active (running) since Thu 2026-05-28 15:54:08 UTC; 3min 25s ago</span></span></code></pre>
+</figure><h2 id="joining-tailscale-network">Joining Tailscale Network</h2>
+<p>We will add the server to our Tailnet and get a private IP address assigned to it. You will also need to join your home devices to Tailnet!</p>
+<h3 id="add-server-to-tailscale-network">Add Server to Tailscale Network</h3>
+<p>From the server, login into your <a href="https://login.tailscale.com"target="_blank" rel="noopener noreferrer"
+>Tailscale</a> account via CLI:</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ sudo tailscale up</span></span></code></pre>
+</figure><p>Expected outputs:</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">To authenticate, visit:
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">	https://login.tailscale.com/a/random-string</span></span></code></pre>
+</figure><p>Open the URL in a browser and perform the authentication with your Tailscale account.</p>
+<img src="./imgs/image-20260528230531568.png" alt="image-20260528230531568" style="zoom:40%;" />
+<p>After completing authentication process, the server will  join the Tailnet and receive a private Tailscale IP address and to see the assigned IP address, visit <a href="https://login.tailscale.com/admin"target="_blank" rel="noopener noreferrer"
+>https://login.tailscale.com/admin</a>.</p>
+<p><div class="img-container"><img src="./imgs/image-20260528231028302.png" alt="image-20260528231028302"  /></div>
+</p>
+<h3 id="advertise-pnetlab-network">Advertise PNETLab Network</h3>
+<p>By default, Tailscale only provides connectivity to the server itself. However, PNETLab appliances run within their own subnet. Therefore, to allow devices connected to the tailnet to reach those appliances directly, the PNETLab server need to be configured as a <a href="https://tailscale.com/kb/1019/subnets"target="_blank" rel="noopener noreferrer"
+>subnet router</a> or simply turning the server into a <strong>router</strong>.</p>
+<p>This will enable direct access between PNETLab appliances network (including docker) and our local network via the Tailscale network.</p>
+<p>In this deployment, <code>10.177.0.0/16</code> is the internal network used by PNETLab for Docker containers. As an example, to advertise that subnet within the tailnet, we run the following command.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ sudo tailscale up --advertise-route<span class="o">=</span>10.177.0.0/16</span></span></code></pre>
+</figure><blockquote>
+<p>Note:</p>
+<ul>
+<li>The <code>--advertise-routes=&quot;10.177.0.0/16&quot;</code> option tells the instance to advertise the subnet <code>10.177.0.0/16</code> to your Tailscale network. Once approved and advertised, other devices in your Tailscale network can access the whole subnet through this instance.</li>
+</ul>
+</blockquote>
+<p>Visit your Tailscale admin panel and will see a <code>Subnets</code> label on the pnetlab server.</p>
+<p><div class="img-container"><img src="./imgs/image-20260528231822588.png" alt="image-20260528231822588"  /></div>
+</p>
+<p>Open the node settings, select &ldquo;<strong>edit route settings&hellip;</strong>&rdquo; and tick the subnet.</p>
+<img src="./imgs/image-20260528232015004.png" alt="image-20260528232015004" style="zoom: 50%;" />
+<p>From the PNETLab server, we then must enable the IP forwarding.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ <span class="nb">echo</span> <span class="s1">&#39;net.ipv4.ip_forward = 1&#39;</span> <span class="p">|</span> sudo tee -a /etc/sysctl.d/99-tailscale.conf
+</span></span><span class="line"><span class="cl">$ <span class="nb">echo</span> <span class="s1">&#39;net.ipv6.conf.all.forwarding = 1&#39;</span> <span class="p">|</span> sudo tee -a /etc/sysctl.d/99-tailscale.conf
+</span></span><span class="line"><span class="cl">$ sudo sysctl -p /etc/sysctl.d/99-tailscale.conf</span></span></code></pre>
+</figure><h3 id="verify">Verify</h3>
+<p>Now verify the subnet routing is working, try pinging the appliances subnet gateway from a device connected to the Tailnet.  If the route succeeds, we should get the reply indicating the appliances subnet is reachable through Tailnet via PNETLab server.</p>
+<img src="./imgs/image-20251028003923861.png" alt="image-20251028003923861" style="zoom: 33%;" />
+<p>Now we can also access the PNETLab web interface either using the tailscale private IP address or the subnet you desired.</p>
+<img src="./imgs/image-20260528233456866.png" alt="image-20260528233456866" style="zoom:33%;" />
+<blockquote>
+<p>Note: I won&rsquo;t go deep into neither the PNETLab web configuration nor appliance installation.</p>
+</blockquote>
+<h2 id="sharing-access-with-other-users">Sharing Access with Other Users</h2>
+<p>One of the reasons of using Tailscale is I can easily share access with other users for collaboration purposes.</p>
+<p>The access itself can be controlled using ACLs, allowing users to access only the PNETLab server while restricting access to other devices within the Tailnet.</p>
+<h3 id="example-acls">Example ACLs</h3>
+<p>In this example, User A is the Tailnet owner and User B is a collaborator. The goal is to allow User B to access the PNETLab only and lab appliances (within the advertised route). This could be simplified using the permission table below.</p>
+<table>
+<thead>
+<tr>
+<th>Resource</th>
+<th>User A (Owner)</th>
+<th>User B (Collaborator)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PNETLab Web Interface</td>
+<td>✅</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>PNETLab Appliances Network (10.177.0.0/16)</td>
+<td>✅</td>
+<td>✅</td>
+</tr>
+<tr>
+<td>Other Tailnet Devices</td>
+<td>✅</td>
+<td>❌</td>
+</tr>
+<tr>
+<td>Tailnet Administration</td>
+<td>✅</td>
+<td>❌</td>
+</tr>
+</tbody>
+</table>
+<p>First, invite User B to the Tailnet from the Tailscale <a href="https://login.tailscale.com/admin/users"target="_blank" rel="noopener noreferrer"
+>admin console</a>. Once the invitation is accepted, create a <code>collaborator</code> group and add User B to it from the <a href="https://login.tailscale.com/admin/acls/file"target="_blank" rel="noopener noreferrer"
+>Access Control</a> section.</p>
+<figure class="highlight">
+    <figcaption>
+        <span class="hl-filename">groups block</span>
+    </figcaption>
+    <pre tabindex="0" class="chroma"><code class="language-json" data-lang="json"><span class="line"><span class="cl"><span class="s2">&#34;groups&#34;</span><span class="err">:</span> 
+</span></span><span class="line"><span class="cl"><span class="p">{</span> 
+</span></span><span class="line"><span class="cl">  <span class="nt">&#34;group:collaborator&#34;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&#34;UserB@mail.com&#34;</span><span class="p">]</span> 
+</span></span><span class="line"><span class="cl"><span class="p">}</span></span></span></code></pre>
+</figure><p>Next, create a  <code>lab</code> tag</p>
+<figure class="highlight">
+    <figcaption>
+        <span class="hl-filename">tagOwners block</span>
+    </figcaption>
+    <pre tabindex="0" class="chroma"><code class="language-json" data-lang="json"><span class="line"><span class="cl"> <span class="s2">&#34;tagOwners&#34;</span><span class="err">:</span> <span class="p">{</span>
+</span></span><span class="line"><span class="cl">    <span class="nt">&#34;tag:lab&#34;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&#34;autogroup:owner&#34;</span><span class="p">]</span>
+</span></span><span class="line"><span class="cl">  <span class="p">}</span></span></span></code></pre>
+</figure><p>Assign the  <code>tag:lab</code> to the PNETLab node from the admin console.</p>
+<img src="./imgs/image-20260607232829657.png" alt="image-20260607232829657" style="zoom: 33%;" />
+<p>Then we grant members of the <code>group:collaborator</code> to access only devices tagged with <code>tag:lab</code>.</p>
+<figure class="highlight">
+    <figcaption>
+        <span class="hl-filename">grants block</span>
+    </figcaption>
+    <pre tabindex="0" class="chroma"><code class="language-json" data-lang="json"><span class="line"><span class="cl">  <span class="s2">&#34;grants&#34;</span><span class="err">:</span> <span class="p">[</span>
+</span></span><span class="line"><span class="cl">    <span class="p">{</span>
+</span></span><span class="line"><span class="cl">      <span class="nt">&#34;src&#34;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&#34;group:collaborator&#34;</span><span class="p">],</span>
+</span></span><span class="line"><span class="cl">      <span class="nt">&#34;dst&#34;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&#34;tag:lab&#34;</span><span class="p">],</span>
+</span></span><span class="line"><span class="cl">      <span class="nt">&#34;ip&#34;</span><span class="p">:</span> <span class="p">[</span><span class="s2">&#34;*&#34;</span><span class="p">]</span>
+</span></span><span class="line"><span class="cl">    <span class="p">}</span>
+</span></span><span class="line"><span class="cl">  <span class="p">]</span></span></span></code></pre>
+</figure><p>This ACLs rules ensure that the collaborator like user B would never reach anything outside the lab.</p>
+<h2 id="configure-domain-name">Configure Domain Name</h2>
+<p>This step is generally similar to configuring a custom domain for websites deployment. I will assume that you already own a custom domain and understand how to complete an ACME DNS challenge (proving control over a domain).</p>
+<p>We will use SSL certificates from LetsEncrypts and then configure a new DNS record for a custom domain like: <code>pnetlab.yourdomain.com</code>. It&rsquo;s just the record will be pointing to the Tailscale private IP of our PNETLab server.</p>
+<h3 id="obtain-letsencrypt-ssl">Obtain LetsEncrypt SSL</h3>
+<p>First, install <code>certbot</code> and prepare the work folder.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ sudo apt install -y certbot</span></span></code></pre>
+</figure><p>Next, get LetsEncrypt certificates by running the following command.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ sudo certbot certonly --agree-tos --email admin@yourmail.com --manual --preferred-challenges<span class="o">=</span>dns -d pnetlab.yourdomain.com</span></span></code></pre>
+</figure><p>Expected results:</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">Plugins selected: Authenticator manual, Installer None
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+</span></span><span class="line"><span class="cl">Would you be willing to share your email address with the Electronic Frontier
+</span></span><span class="line"><span class="cl">Foundation, a founding partner of the Let&#39;s Encrypt project and the non-profit
+</span></span><span class="line"><span class="cl">organization that develops Certbot? We&#39;d like to send you email about our work
+</span></span><span class="line"><span class="cl">encrypting the web, EFF news, campaigns, and ways to support digital freedom.
+</span></span><span class="line"><span class="cl">- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+</span></span><span class="line"><span class="cl">(Y)es/(N)o: no
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">... [SNIP] ...
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">Please deploy a DNS TXT record under the name
+</span></span><span class="line"><span class="cl">_acme-challenge.pnetlab.yourdomain.com with the following value:
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">dUQSpAWIqR10KEbL-VCyZzRmK9JJpM4vBd_FScBCfnI
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl">Before continuing, verify the record is deployed.
+</span></span><span class="line"><span class="cl">- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+</span></span><span class="line"><span class="cl">Press Enter to Continue</span></span></code></pre>
+</figure><p>This step requires you to complete a ACME DNS challenge on your DNS provider (NameCheap, Hostinger, etc).</p>
+<figure>
+    <img src="./imgs/image-20260529165147636.png"
+         alt="DNS TXT record"/> <figcaption>
+            <p>DNS TXT record
+            </p>
+        </figcaption>
+</figure>
+
+<p>After successful validation, the CA (LetsEncrypt) will issue the certificates, which should be available at <code>./letsencrypt/config/live/yourdomain.com/</code> or <code>/etc/letsencrypt/live/yourdomain.com/</code>.</p>
+<h3 id="configure-a-new-dns-record">Configure a New DNS record</h3>
+<p>Go to your DNS hosting provider and add a new record with the following data:</p>
+<ul>
+<li>Type: <code>A</code></li>
+<li>Hostname/Domain Name: <code>pnetlab.yourdomain.com</code></li>
+<li>IPv4: <code>[PNETLAB TAILSCALE IP]</code></li>
+</ul>
+<p>Here&rsquo;s an example of mine, where I&rsquo;m using Cloudflare for DNS management.</p>
+<img src="./imgs/image-20250326102815535.png" alt="image-20250326102815535" style="zoom: 33%;" />
+<p><code>100.126.1.2</code> is the tailscale node IP of my pnetlab server.</p>
+<p>Verify if your domain is mapped correctly using the <code>dig</code> command or <a href="https://toolbox.googleapps.com/apps/dig/#A/"target="_blank" rel="noopener noreferrer"
+>Google Toolbox</a>.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ dig pnetlab.fahmifj.space                         
+</span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...
+</span></span><span class="line"><span class="cl"><span class="p">;;</span> QUESTION SECTION:
+</span></span><span class="line"><span class="cl"><span class="p">;</span>pnetlab.fahmifj.space.	IN	A
+</span></span><span class="line"><span class="cl">
+</span></span><span class="line"><span class="cl"><span class="p">;;</span> ANSWER SECTION:
+</span></span><span class="line"><span class="cl">pnetlab.fahmifj.space. 300	IN	A	100.126.1.2
+</span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...</span></span></code></pre>
+</figure><h3 id="configure-ssl-certificates">Configure SSL Certificates</h3>
+<p>Now we have obtained the SSL certificates and pointing a custom domain to the PNETLab private IP, it&rsquo;s time to configure the web server.</p>
+<p>Open and edit the apache web config file: <code>/etc/apache2/sites-available/pnetlabs.conf</code>, then change these values with your certificate path.</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-ini" data-lang="ini"><span class="line"><span class="cl"><span class="na">SSLCertificateFile   /etc/letsencrypt/live/pnetlab.yourdomain.com/cert.pem</span>
+</span></span><span class="line"><span class="cl"><span class="na">SSLCertificateKeyFile /etc/letsencrypt/live/pnetlab.yourdomain.com/privkey.pem</span></span></span></code></pre>
+</figure><p>Restart the apache services</p>
+<figure class="highlight">
+    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ sudo systemctl restart apache2</span></span></code></pre>
+</figure><h3 id="verify-1">Verify</h3>
+<p>With all the required steps has been completed, we can verify the domain name configuration by accessing the PNETLab web interface device connected to the tailscale network.</p>
+<figure>
+    <img src="./imgs/image-20260529171044814.png"
+         alt="Accessing PNETLab using Domain Name"/> <figcaption>
+            <p>Accessing PNETLab using Domain Name
+            </p>
+        </figcaption>
+</figure>
+
+<h2 id="troubleshoot">Troubleshoot</h2>
+<p>If you&rsquo;re unable to install Tailscale, try removing these repo list from the apt sources:</p>
+<figure class="highlight">
+    <pre tabindex="0"><code class="language-" data-lang="">$ sudo vi /etc/apt/sources.list
+...
+#deb [trusted=yes] http://repo.pnetlab.com ./
+#deb [trusted=yes] http://i-share.top/repo ./</code></pre>
+</figure><h2 id="conclusion">Conclusion</h2>
+<p>With Tailscale, we have secured access to the PNETLab server without the need to manage a dedicated VPN server. We only allow access to the lab from authorized devices.</p>
+<p>Tailscale also makes it easy to share the lab with other users or colleagues. By enforcing ACL rules, access can be restricted to only the resources required for collaboration. This follows the least privilege principle where access is granted based on identity.</p>
+]]></content:encoded>
+    </item>
+    
+    <item>
       <title>How to Run GNS3 Server on Apple M2 Using OrbStack</title>
       <link>https://fahmifj.github.io/blog/running-gns3-on-apple-m2-orbstack/</link>
       <pubDate>Wed, 29 Jan 2025 20:36:34 +0700</pubDate>
@@ -1126,250 +1386,6 @@ os_image        = &#34;projects/ubuntu-os-cloud/global/images/ubuntu-1804-bionic
 <h2 id="conclusion">Conclusion</h2>
 <p>I&rsquo;m so impressed by how easy it is to deploy a Linux machine using OrbStack. It&rsquo;s like running a headless vm but in container ways. If we put the network limitation issue aside,  this is more than enough for simulating networking projects locally in your Apple Silicon Mac.</p>
 <p>That&rsquo;s all, see you in the next post!</p>
-]]></content:encoded>
-    </item>
-    
-    <item>
-      <title>Kali Linux Setup for Playing HackTheBox</title>
-      <link>https://fahmifj.github.io/blog/kali-setup-for-hackthebox/</link>
-      <pubDate>Fri, 09 Jul 2021 07:45:19 +0700</pubDate>
-      
-      <guid>https://fahmifj.github.io/blog/kali-setup-for-hackthebox/</guid>
-      <description>Initial setup for starting boot2root by me</description>
-      <content:encoded><![CDATA[<p>After using Kali 2019.4 for almost 2 years, I finally upgraded to  version 2021.2 (fresh install). As a result, I had to reapply my  settings and configurations on this newer version for playing HackTheBox (which I believe is applicable to other boot2root platforms as well).  Therefore, I think it’s better to document my basic setup online. Hope  it helps you as well.</p>
-<p>Okay that’s enough for the intro, let’s set it up!</p>
-<h2 id="displaying-ip-in-prompt">Displaying IP in Prompt</h2>
-<p>First, I would like to add an IP address in the shell prompt. Adding IP  address in your prompt would be really helpful as it lets you copy the IP faster for reverse shell. To do so, we’ll need to modify the <code>.zshrc</code> file.</p>
-<p>Before performing any modification, consider to make a backup of your original file using the following command:</p>
-<figure class="highlight">
-    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ cp ~/.zshrc<span class="o">{</span>,.bak<span class="o">}</span> </span></span></code></pre>
-</figure><p>And then let’s create a custom section within the file using comments (I suggest placing it at the top).</p>
-<figure class="highlight">
-    <pre tabindex="0" class="chroma"><code class="language-sh" data-lang="sh"><span class="line"><span class="cl"><span class="c1"># START CUSTOM</span>
-</span></span><span class="line"><span class="cl">...<span class="o">[</span>custom script here<span class="o">]</span>...
-</span></span><span class="line"><span class="cl"><span class="c1"># END CUSTOM</span></span></span></code></pre>
-</figure><p>Now add the following function to your <code>.zshrc</code> file.</p>
-<figure class="highlight">
-    <pre tabindex="0" class="chroma"><code class="language-sh" data-lang="sh"><span class="line"><span class="cl"><span class="c1"># START CUSTOM</span>
-</span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...
-</span></span><span class="line"><span class="cl"><span class="k">function</span> get_ip<span class="o">(){</span>
-</span></span><span class="line"><span class="cl">   <span class="c1"># It can be thm or htb IP</span>
-</span></span><span class="line"><span class="cl">   <span class="nv">tunnel_ip</span><span class="o">=</span><span class="sb">`</span>ifconfig tun0 2&gt;/dev/null <span class="p">|</span> grep netmask <span class="p">|</span> awk <span class="s1">&#39;{print $2}&#39;</span><span class="sb">`</span> 
-</span></span><span class="line"><span class="cl">   <span class="c1"># Use eth0 as default IP,</span>
-</span></span><span class="line"><span class="cl">   <span class="nv">default_ip</span><span class="o">=</span><span class="sb">`</span>ifconfig eth0 2&gt;/dev/null <span class="p">|</span> grep netmask <span class="p">|</span> awk <span class="s1">&#39;{print $2}&#39;</span><span class="sb">`</span>
-</span></span><span class="line"><span class="cl">   <span class="k">if</span> <span class="o">[[</span> <span class="nv">$tunnel_ip</span> <span class="o">==</span> *<span class="s2">&#34;10.&#34;</span>* <span class="o">]]</span><span class="p">;</span> <span class="k">then</span>
-</span></span><span class="line"><span class="cl">      <span class="nb">echo</span> <span class="nv">$tunnel_ip</span>
-</span></span><span class="line"><span class="cl">   <span class="k">else</span>
-</span></span><span class="line"><span class="cl">      <span class="nb">echo</span> <span class="nv">$default_ip</span>
-</span></span><span class="line"><span class="cl">   <span class="k">fi</span>
-</span></span><span class="line"><span class="cl"><span class="o">}</span>
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...
-</span></span><span class="line"><span class="cl"><span class="c1"># END CUSTOM</span></span></span></code></pre>
-</figure><p>The function assumes <code>tun0</code> is the VPN interface to connect to HackTheBox network and <code>eth0</code> is your default interface to connect to the Internet.</p>
-<p>Then, find the following lines:</p>
-<figure class="highlight">
-    <pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="line"><span class="cl">...
-</span></span><span class="line"><span class="cl"><span class="k">case</span> <span class="s2">&#34;</span><span class="nv">$PROMPT_ALTERNATIVE</span><span class="s2">&#34;</span> in
-</span></span><span class="line"><span class="cl">        twoline<span class="o">)</span>
-</span></span><span class="line"><span class="cl">...</span></span></code></pre>
-</figure><p>Under these lines,  replace the entire <code>PROMPT</code> variable with the following line:</p>
-<figure class="highlight">
-    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl"><span class="nv">PROMPT</span><span class="o">=</span><span class="s1">$&#39;%F{%(#.blue.green)}┌──${debian_chroot:+($debian_chroot)─}${VIRTUAL_ENV:+($(basename $VIRTUAL_ENV))─}(%B%F{%(#.red.blue)}%n$prompt_symbol%m%b%F{%(#.blue.green)})-[%B%F{reset}%(6~.%-1~/…/%4~.%5~)%b%F{%(#.blue.green)}]-%B%F{152}[`get_ip`]%b%f%F{%(#.blue.green)}\n└─%B%(#.%F{red}#.%F{blue}$)%b%F{reset} &#39;</span></span></span></code></pre>
-</figure><p>Reopen your terminal or type one of the following commands in the terminal.</p>
-<figure class="highlight">
-    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ zsh
-</span></span><span class="line"><span class="cl">$ <span class="nb">source</span> ~/.zshrc</span></span></code></pre>
-</figure><p>And we’re done with displaying IP address in the shell prompt.</p>
-<p><div class="img-container"><img src="imgs/image-20210709054914243.png" alt="image-20210709054914243"  /></div>
-</p>
-<h2 id="openvpn-connection-with-alias">OpenVPN Connection with Alias</h2>
-<p>It&rsquo;s tiring when you have to type</p>
-<figure class="highlight">
-    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ openvpn /path/to/config/file.ovpn</span></span></code></pre>
-</figure><p>each time you want to connect to the VPN. So to make this easier we can leverage the <code>alias</code> command!</p>
-<p>First let’s create a folder called <code>.ovpnconfig</code> in the home directory.</p>
-<figure class="highlight">
-    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ mkdir -p ~/.ovpnconfig</span></span></code></pre>
-</figure><p>Then put all of your OpenVPN configuration files into that folder.</p>
-<p><div class="img-container"><img src="imgs/image-20210709063528132.png" alt="image-20210709063528132"  /></div>
-</p>
-<p>Finally, add some aliases into your <code>.zshrc</code>.</p>
-<figure class="highlight">
-    <pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="line"><span class="cl"><span class="nb">alias</span> <span class="nv">htbon</span><span class="o">=</span><span class="s1">&#39;openvpn ~/ovpnconfig/htb-sg.ovpn 1&gt;/dev/null &amp;&#39;</span>
-</span></span><span class="line"><span class="cl"><span class="nb">alias</span> <span class="nv">htbfort</span><span class="o">=</span><span class="s1">&#39;openvpn ~/ovpnconfig/htb-fortress.ovpn 1&gt;/dev/null &amp;&#39;</span>
-</span></span><span class="line"><span class="cl"><span class="nb">alias</span> <span class="nv">htbrel</span><span class="o">=</span><span class="s1">&#39;openvpn ~/ovpnconfig/htb-release.ovpn 1&gt;/dev/null &amp;&#39;</span>
-</span></span><span class="line"><span class="cl"><span class="nb">alias</span> <span class="nv">kvpn</span><span class="o">=</span><span class="s1">&#39;pkill openvpn&#39;</span></span></span></code></pre>
-</figure><p>Now we can type <code>$ htbon</code> or <code>$ thmon</code> in the command prompt to connect to the VPN.</p>
-<p>Want to turn off the VPN? Simply type <code>$ kvpn</code> !</p>
-<h2 id="a-problem-with-alias">A Problem with Alias</h2>
-<p>In this Kali Linux version (non-root login), the only problem is that <code>openvpn</code> must be executed with <code>sudo</code>, because it needs administrative permission to create a network interface (that’s the <code>tun0</code>) .</p>
-<p>Because of how alias <a href="https://zsh.sourceforge.io/Doc/Release/Shell-Grammar.html#Aliasing"target="_blank" rel="noopener noreferrer"
->works</a> in Zsh:</p>
-<blockquote>
-<p>Every eligible <em>word</em> in the shell input is checked to see if there is an alias defined for it. If so, it is replaced by the text of the alias if it is in command position (if it could be <strong>the first word</strong> of a simple command), or if the alias is global. <strong>If the replacement text ends with a space, the next word in the shell input is always eligible for purposes of alias expansion.</strong></p>
-</blockquote>
-<p>When you run <code>$ sudo htbon</code>, it will not expand the aliased command to <code>$ sudo openvpn ~/ovpnconfig/htb-sg.ovpn 1&gt;/dev/null &amp;</code>, instead it will return something like <code>sudo: htbon: command not found</code>.</p>
-<p>Therefore, the solution to overcome this is by also aliasing the <code>sudo </code>command.</p>
-<p>Add the following alias to your <code>.zshrc</code> file.</p>
-<figure class="highlight">
-    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl"><span class="nb">alias</span> <span class="nv">sudo</span><span class="o">=</span><span class="s1">&#39;sudo &#39;</span></span></span></code></pre>
-</figure><p>Additionally, if you want to use <code>sudo</code> with no password for the default user <code>kali</code>, we can create a new sudoers file by running the following command.</p>
-<figure class="highlight">
-    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ sudo visudo /etc/sudoers.d/kali</span></span></code></pre>
-</figure><p>Then add the following line to gives user <strong>kali</strong> sudo permission with no password.</p>
-<figure class="highlight">
-    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">kali  <span class="nv">ALL</span><span class="o">=</span>NOPASSWD: ALL</span></span></code></pre>
-</figure><p>This time, we can run the alias command with <code>sudo</code>.</p>
-<figure class="highlight">
-    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ sudo &lt;alias-command&gt;
-</span></span><span class="line"><span class="cl">$ sudo htbon</span></span></code></pre>
-</figure><h2 id="tools-transfer">Tools Transfer</h2>
-<p>Just like the OpenVPN files, I like to keep the essential tools to be centralized in one folder and so it can be hosted immediately. Again, we can create a folder called <code>tools</code>.</p>
-<figure class="highlight">
-    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ mkdir -p ~/tools</span></span></code></pre>
-</figure><p>Put your tools inside the folder. The following are some of the tools that I think to be essential (including web-shell).</p>
-<p><div class="img-container"><img src="imgs/image-20210709065944915.png" alt="image-20210709065944915"  /></div>
-</p>
-<p>Next, add another alias to host these tools immediately with one command, feel free to create alias for yourself. Mine called <code>hostit</code>.</p>
-<figure class="highlight">
-    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl"><span class="nb">alias</span> <span class="nv">hostit</span><span class="o">=</span><span class="s1">&#39;python3 -m http.server -d ~/tools 8000&#39;</span></span></span></code></pre>
-</figure><p>If you watch <a href="https://www.youtube.com/c/ippsec/videos"target="_blank" rel="noopener noreferrer"
->ippsec</a>, he prefers keeping the tools with the associated pwned machines (in <code>www</code> directory). So it&rsquo;s up to you.</p>
-<h2 id="note-template">Note Template</h2>
-<p>My current note template is available on <del><a href="https://github.com/fahmifj/HackTheBox-notes/tree/main/machines/note-template"target="_blank" rel="noopener noreferrer"
->GitHub</a></del>. I&rsquo;m using the following function to recreate the directory structure:</p>
-<figure class="highlight">
-    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl"><span class="k">function</span> mknote<span class="o">(){</span>
-</span></span><span class="line"><span class="cl">  mkdir nmap gobuster loot logs exploits ssh-keys post-exploits
-</span></span><span class="line"><span class="cl"><span class="o">}</span></span></span></code></pre>
-</figure><ul>
-<li>
-<p><strong>nmap:</strong> each nmap scan goes here.</p>
-</li>
-<li>
-<p><strong>gobuster:</strong> each gobuster scan goes here.</p>
-</li>
-<li>
-<p><strong>loot:</strong> each interesting file for further analysis goes here.</p>
-</li>
-<li>
-<p><strong>logs:</strong> If you like to log your activity with <code>$ script</code> , put them here.</p>
-</li>
-<li>
-<p><strong>exploits:</strong> exploit script goes here.</p>
-</li>
-<li>
-<p><strong>ssh-keys:</strong> obtained ssh-key goes here, not loot.</p>
-</li>
-<li>
-<p><strong>post-exploits:</strong> post-compromise loot goes here.</p>
-</li>
-</ul>
-<p>Usage is simple:</p>
-<figure class="highlight">
-    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ <span class="nb">cd</span> htb-machine-folder/
-</span></span><span class="line"><span class="cl">$ mknote
-</span></span><span class="line"><span class="cl">$ tree
-</span></span><span class="line"><span class="cl">.
-</span></span><span class="line"><span class="cl">├── exploits
-</span></span><span class="line"><span class="cl">├── gobuster
-</span></span><span class="line"><span class="cl">├── logs
-</span></span><span class="line"><span class="cl">├── loot
-</span></span><span class="line"><span class="cl">├── nmap
-</span></span><span class="line"><span class="cl">├── post-exploits
-</span></span><span class="line"><span class="cl">└── ssh-keys</span></span></code></pre>
-</figure><h2 id="ssh-configuration">SSH Configuration</h2>
-<p>I have always use a separate SSH keys for CTF. My SSH key for CTF is using ed25519. You can create one using the following command:</p>
-<figure class="highlight">
-    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ ssh-keygen -a <span class="m">100</span> -t ed25519 -f ~/.ssh/ctf_ssh</span></span></code></pre>
-</figure><p>After that, register your private key to SSH agent.</p>
-<figure class="highlight">
-    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">$ <span class="nb">eval</span> <span class="s2">&#34;</span><span class="k">$(</span>ssh-agent -s<span class="k">)</span><span class="s2">&#34;</span>
-</span></span><span class="line"><span class="cl">$ ssh-add ~/.ssh/ctf_ssh</span></span></code></pre>
-</figure><p>Since HackTheBox machine starts with IP address of <code>10.10.*</code>, add these lines to your SSH config (<code>~/.ssh/config</code>). Create one if you don&rsquo;t have it.</p>
-<figure class="highlight">
-    <pre tabindex="0" class="chroma"><code class="language-text" data-lang="text"><span class="line"><span class="cl">Host 10.10.*
-</span></span><span class="line"><span class="cl">  IdentityFile ~/.ssh/ctf_ssh</span></span></code></pre>
-</figure><p>With the config above, whenever I injected my public key (<code>/.ssh/ctf_ssh.pub</code>) to HackTheBox machine for <a href="https://fahmifj.github.io/blog/linux-backdoors-and-where-to-find-them/"target="_blank" rel="noopener noreferrer"
->persistence access</a>, I don&rsquo;t have to specify <code>-i /path/to/ssh/private/key</code> anymore, but just with  <code>$ ssh machine-name@hostname</code>.</p>
-<h2 id="qterminal-configuration">QTerminal Configuration</h2>
-<p>Unfortunately I&rsquo;m not a tmux user here. Tmux is rich in features, but I&rsquo;m not comfortable with its prefix key. So far, I&rsquo;ve always used the default QTerminal application and leveraged its shortcut feature to &rsquo;navigate&rsquo; a slightly faster in terminal.</p>
-<p>If you&rsquo;re a Windows Terminal user, you&rsquo;ll familiar with some of these shortcuts:</p>
-<ul>
-<li><strong><code>ALT + Arrows</code></strong>: Move cursor in subterminal</li>
-<li><strong><code>CTRL + TAB</code></strong>: Navigate between tabs</li>
-<li><strong><code>CTRL + Arrow Left</code></strong>:  Previous tab</li>
-<li><strong><code>CTRL + Arrow Right</code></strong>: Next tab</li>
-<li><strong><code>CTRL + N</code></strong> : New terminal tab</li>
-<li><strong><code>CTRL + SHIFT + W</code></strong> : Close current subterminal</li>
-<li><strong><code>CTRL + SHIFT + =</code></strong> : Split terminal vertically</li>
-<li><strong><code>CTRL + SHIFT + -</code></strong> : Split terminal horizontally</li>
-<li><strong><code>CTRL + SHIFT + F</code></strong> : Open search bar in terminal</li>
-<li><strong><code>CTRL + =</code></strong> : Zoom in</li>
-<li><strong><code>CTRL + -</code></strong> : Zoom out</li>
-</ul>
-<p>For me, the only limitation here is that there is no shortcut for resizing a subterminal.</p>
-<h2 id="bundle-them-with-omz-plugin">Bundle Them with OMZ Plugin</h2>
-<p>If you&rsquo;re a <a href="https://ohmyz.sh/#install"target="_blank" rel="noopener noreferrer"
->Oh My Zsh</a> user like me, we can add these configurations (excluding SSH and QTerminal configurations) into a custom plugin.</p>
-<p>Save the following script to  <code>/home/&lt;username&gt;/.oh-my-zsh/custom/plugins/ctf/ctf.plugin.zsh</code>:</p>
-<figure class="highlight">
-    <pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="line"><span class="cl"><span class="cp">#!/bin/bash
-</span></span></span><span class="line"><span class="cl"><span class="cp"></span>
-</span></span><span class="line"><span class="cl"><span class="k">function</span> get_ip<span class="o">(){</span>
-</span></span><span class="line"><span class="cl">   <span class="c1"># It can be thm or htb IP</span>
-</span></span><span class="line"><span class="cl">   <span class="nv">tunnel_ip</span><span class="o">=</span><span class="sb">`</span>ifconfig tun0 2&gt;/dev/null <span class="p">|</span> grep netmask <span class="p">|</span> awk <span class="s1">&#39;{print $2}&#39;</span><span class="sb">`</span> 
-</span></span><span class="line"><span class="cl">   <span class="c1"># Use eth0 as default IP,</span>
-</span></span><span class="line"><span class="cl">   <span class="nv">default_ip</span><span class="o">=</span><span class="sb">`</span>ifconfig eth0 2&gt;/dev/null <span class="p">|</span> grep netmask <span class="p">|</span> awk <span class="s1">&#39;{print $2}&#39;</span><span class="sb">`</span>
-</span></span><span class="line"><span class="cl">   <span class="k">if</span> <span class="o">[[</span> <span class="nv">$tunnel_ip</span> <span class="o">==</span> *<span class="s2">&#34;10.&#34;</span>* <span class="o">]]</span><span class="p">;</span> <span class="k">then</span>
-</span></span><span class="line"><span class="cl">      <span class="nb">echo</span> <span class="nv">$tunnel_ip</span>
-</span></span><span class="line"><span class="cl">   <span class="k">else</span>
-</span></span><span class="line"><span class="cl">      <span class="nb">echo</span> <span class="nv">$default_ip</span>
-</span></span><span class="line"><span class="cl">   <span class="k">fi</span>
-</span></span><span class="line"><span class="cl"><span class="o">}</span>
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="k">function</span> mknote<span class="o">(){</span>
-</span></span><span class="line"><span class="cl">  mkdir nmap gobuster loot logs exploits ssh-keys dump post-exploits
-</span></span><span class="line"><span class="cl"><span class="o">}</span>
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="c1"># https://askubuntu.com/questions/750419/how-do-i-run-a-sudo-command-needing-password-input-in-the-background</span>
-</span></span><span class="line"><span class="cl"><span class="nb">alias</span> <span class="nv">sudo</span><span class="o">=</span><span class="s1">&#39;sudo -v; [ $? ] &amp;&amp; sudo &#39;</span>
-</span></span><span class="line"><span class="cl"><span class="nb">alias</span> <span class="nv">htbon</span><span class="o">=</span><span class="s1">&#39;openvpn ~/ovpnconfig/htb-sg.ovpn 1&gt;/dev/null &amp;&#39;</span>
-</span></span><span class="line"><span class="cl"><span class="nb">alias</span> <span class="nv">htbfort</span><span class="o">=</span><span class="s1">&#39;openvpn ~/ovpnconfig/htb-fortress.ovpn 1&gt;/dev/null &amp;&#39;</span>
-</span></span><span class="line"><span class="cl"><span class="nb">alias</span> <span class="nv">htbrel</span><span class="o">=</span><span class="s1">&#39;openvpn ~/ovpnconfig/htb-release.ovpn 1&gt;/dev/null &amp;&#39;</span>
-</span></span><span class="line"><span class="cl"><span class="nb">alias</span> <span class="nv">thmon</span><span class="o">=</span><span class="s1">&#39;openvpn ~/ovpnconfig/thm.ovpn 1&gt;/dev/null &amp;&#39;</span>
-</span></span><span class="line"><span class="cl"><span class="nb">alias</span> <span class="nv">thmwreath</span><span class="o">=</span><span class="s1">&#39;openvpn ~/ovpnconfig/thm-wreath.ovpn 1&gt;/dev/null &amp;&#39;</span>
-</span></span><span class="line"><span class="cl"><span class="nb">alias</span> <span class="nv">kvpn</span><span class="o">=</span><span class="s1">&#39;pkill openvpn&#39;</span>
-</span></span><span class="line"><span class="cl"><span class="nb">alias</span> <span class="nv">hostit</span><span class="o">=</span><span class="s1">&#39;python3 -m http.server -d ~/tools 8000&#39;</span></span></span></code></pre>
-</figure><p>The next step depends on your theme. I use a theme called <code>robbyrussell</code>.</p>
-<p>I created a copy of the theme in <code> /home/kali/.oh-my-zsh/custom/themes/robbyrussell.zsh-theme</code>. Then I modified the theme to display IP address and switched to two lines prompt.</p>
-<figure class="highlight">
-    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl"><span class="nv">NEWLINE</span><span class="o">=</span><span class="s1">$&#39;\n$&#39;</span> 
-</span></span><span class="line"><span class="cl"><span class="nv">PROMPT</span><span class="o">=</span><span class="s1">&#39;%(?:%{$fg_bold[green]%}→:%{$fg_bold[red]%}→)&#39;</span>
-</span></span><span class="line"><span class="cl"><span class="nv">PROMPT</span><span class="o">+=</span><span class="s1">&#39; %F{4}%n@%m %{$fg[cyan]%}«%c»%{$reset_color%}&#39;</span>
-</span></span><span class="line"><span class="cl"><span class="nv">PROMPT</span><span class="o">+=</span><span class="s1">&#39; %B%F{152}«$(get_ip)»%f%b $(git_prompt_info)&#39;</span>
-</span></span><span class="line"><span class="cl"><span class="nv">PROMPT</span><span class="o">+=</span><span class="s2">&#34;%F{31}</span><span class="si">${</span><span class="nv">NEWLINE</span><span class="si">}</span><span class="s2"> %f&#34;</span>
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl"><span class="nv">ZSH_THEME_GIT_PROMPT_PREFIX</span><span class="o">=</span><span class="s2">&#34;%{</span><span class="nv">$fg_bold</span><span class="s2">[blue]%}git:(%{</span><span class="nv">$fg</span><span class="s2">[red]%}&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="nv">ZSH_THEME_GIT_PROMPT_SUFFIX</span><span class="o">=</span><span class="s2">&#34;%{</span><span class="nv">$reset_color</span><span class="s2">%} &#34;</span>
-</span></span><span class="line"><span class="cl"><span class="nv">ZSH_THEME_GIT_PROMPT_DIRTY</span><span class="o">=</span><span class="s2">&#34;%{</span><span class="nv">$fg</span><span class="s2">[blue]%}) %{</span><span class="nv">$fg</span><span class="s2">[yellow]%}✗&#34;</span>
-</span></span><span class="line"><span class="cl"><span class="nv">ZSH_THEME_GIT_PROMPT_CLEAN</span><span class="o">=</span><span class="s2">&#34;%{</span><span class="nv">$fg</span><span class="s2">[blue]%})&#34;</span></span></span></code></pre>
-</figure><p>Finally, load the <code>ctf</code> plugin we created in <code>.zshrc</code> file.</p>
-<figure class="highlight">
-    <pre tabindex="0" class="chroma"><code class="language-shell" data-lang="shell"><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...
-</span></span><span class="line"><span class="cl"><span class="c1"># Which plugins would you like to load?</span>
-</span></span><span class="line"><span class="cl"><span class="c1"># Standard plugins can be found in $ZSH/plugins/</span>
-</span></span><span class="line"><span class="cl"><span class="c1"># Custom plugins may be added to $ZSH_CUSTOM/plugins/</span>
-</span></span><span class="line"><span class="cl"><span class="c1"># Example format: plugins=(rails git textmate ruby lighthouse)</span>
-</span></span><span class="line"><span class="cl"><span class="c1"># Add wisely, as too many plugins slow down shell startup.</span>
-</span></span><span class="line"><span class="cl"><span class="nv">plugins</span><span class="o">=(</span>git ctf<span class="o">)</span>
-</span></span><span class="line"><span class="cl">
-</span></span><span class="line"><span class="cl">...<span class="o">[</span>SNIP<span class="o">]</span>...</span></span></code></pre>
-</figure><p>Restart your terminal and we&rsquo;re done.</p>
-<p><div class="img-container"><img src="imgs/image-20210711221808834.png" alt="image-20210711221808834"  /></div>
-</p>
-<p>And that&rsquo;s all for this post!</p>
 ]]></content:encoded>
     </item>
     
